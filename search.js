@@ -54,3 +54,243 @@
  * @module search
  * @requires core
  */
+
+/* ==========================================================================
+   MODULE SETUP & LIFECYCLE
+
+   Search module registration, state, and lifecycle hooks.
+   ========================================================================== */
+
+/**
+ * Search/filter screen module.
+ * @namespace
+ */
+const Search = {
+    /**
+     * DOM element references.
+     * @type {Object}
+     * @private
+     */
+    _els: {},
+
+    /**
+     * Initializes the search module.
+     * Called once during app startup.
+     */
+    init() {
+        // Cache DOM elements
+        this._els = {
+            textInput: App.$('filter-text'),
+            dateStart: App.$('filter-date-start'),
+            dateEnd: App.$('filter-date-end'),
+            ratingInput: App.$('filter-rating'),
+            emojiBtn: App.$('btn-emoji-picker'),
+            applyBtn: App.$('btn-apply-filter'),
+            clearBtn: App.$('btn-clear-filter')
+        };
+
+        // Bind button events
+        this._bindEvents();
+    },
+
+    /**
+     * Called when entering the search screen.
+     * Populates form fields from current filter state.
+     */
+    onEnter() {
+        this._populateForm();
+        // Focus the text input for quick typing
+        this._els.textInput.focus();
+    },
+
+    /**
+     * Called when leaving the search screen.
+     */
+    onLeave() {
+        // Nothing to clean up
+    },
+
+    /**
+     * Binds event listeners for form controls.
+     * @private
+     */
+    _bindEvents() {
+        // Apply filter button
+        this._els.applyBtn.addEventListener('click', () => this._applyFilter());
+
+        // Clear filter button
+        this._els.clearBtn.addEventListener('click', () => this._clearFilter());
+
+        // Emoji picker button
+        this._els.emojiBtn.addEventListener('click', () => {
+            App.showEmojiPicker((emoji) => {
+                this._els.ratingInput.value += emoji;
+                this._els.ratingInput.focus();
+            });
+        });
+
+        // Allow Enter key to apply filter from text input
+        this._els.textInput.addEventListener('keydown', (e) => {
+            if (e.key === 'Enter') {
+                e.preventDefault();
+                this._applyFilter();
+            }
+        });
+    },
+
+    /* ----------------------------------------------------------------------
+       FORM POPULATION & READING
+
+       Populating form from filter state and reading form values.
+       ---------------------------------------------------------------------- */
+
+    /**
+     * Populates form fields from the current filter state.
+     * @private
+     */
+    _populateForm() {
+        const filter = App.getFilter();
+
+        if (filter) {
+            this._els.textInput.value = filter.text || '';
+            this._els.dateStart.value = filter.dateStart || '';
+            this._els.dateEnd.value = filter.dateEnd || '';
+            this._els.ratingInput.value = filter.rating || '';
+        } else {
+            this._clearForm();
+        }
+    },
+
+    /**
+     * Clears all form fields.
+     * @private
+     */
+    _clearForm() {
+        this._els.textInput.value = '';
+        this._els.dateStart.value = '';
+        this._els.dateEnd.value = '';
+        this._els.ratingInput.value = '';
+    },
+
+    /**
+     * Reads form values and returns a filter object.
+     * Returns null if all fields are empty.
+     * @returns {Object|null} Filter object or null
+     * @private
+     */
+    _readForm() {
+        const text = this._els.textInput.value.trim();
+        const dateStart = this._els.dateStart.value;
+        const dateEnd = this._els.dateEnd.value;
+        const rating = this._els.ratingInput.value.trim();
+
+        // Return null if all fields are empty
+        if (!text && !dateStart && !dateEnd && !rating) {
+            return null;
+        }
+
+        return {
+            text: text || null,
+            dateStart: dateStart || null,
+            dateEnd: dateEnd || null,
+            rating: rating || null
+        };
+    },
+
+    /**
+     * Checks if the form has any values entered.
+     * @returns {boolean} True if any field has a value
+     * @private
+     */
+    _hasFormValues() {
+        return !!(
+            this._els.textInput.value.trim() ||
+            this._els.dateStart.value ||
+            this._els.dateEnd.value ||
+            this._els.ratingInput.value.trim()
+        );
+    },
+
+    /* ----------------------------------------------------------------------
+       FILTER ACTIONS
+
+       Apply, clear, and validate filter.
+       ---------------------------------------------------------------------- */
+
+    /**
+     * Validates the current form values.
+     * @returns {{valid: boolean, message: string|null}} Validation result
+     * @private
+     */
+    _validate() {
+        const dateStart = this._els.dateStart.value;
+        const dateEnd = this._els.dateEnd.value;
+
+        // Check date range validity
+        if (dateStart && dateEnd) {
+            const start = new Date(dateStart);
+            const end = new Date(dateEnd);
+            if (start > end) {
+                return {
+                    valid: false,
+                    message: 'Start date cannot be after end date'
+                };
+            }
+        }
+
+        return { valid: true, message: null };
+    },
+
+    /**
+     * Shows a validation error to the user.
+     * @param {string} message - Error message to display
+     * @private
+     */
+    _showError(message) {
+        // For now, use a simple alert. Could be replaced with inline error display.
+        alert(message);
+    },
+
+    /**
+     * Applies the current filter and returns to gallery.
+     * @private
+     */
+    _applyFilter() {
+        // Validate
+        const validation = this._validate();
+        if (!validation.valid) {
+            this._showError(validation.message);
+            return;
+        }
+
+        // Read form and set filter
+        // Gallery subscribes to filterChanged event and will reload automatically
+        const filter = this._readForm();
+        App.setFilter(filter);
+
+        // Navigate to gallery
+        App.showGallery();
+    },
+
+    /**
+     * Clears the filter and optionally returns to gallery.
+     * @param {boolean} [navigateToGallery=true] - Whether to navigate after clearing
+     * @private
+     */
+    _clearFilter(navigateToGallery = true) {
+        // Clear form fields
+        this._clearForm();
+
+        // Clear app filter state
+        // Gallery subscribes to filterChanged event and will reload automatically
+        App.clearFilter();
+
+        // Navigate to gallery if requested
+        if (navigateToGallery) {
+            App.showGallery();
+        }
+    }
+};
+
+// Register module with App
+App.registerModule('search', Search);

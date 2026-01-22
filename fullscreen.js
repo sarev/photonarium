@@ -335,14 +335,25 @@ const Fullscreen = {
     /**
      * Handles mouse wheel for zooming.
      * Zooms centered on cursor position.
+     * Supports both scroll wheel and trackpad pinch gestures.
      * @param {WheelEvent} e
      * @private
      */
     _handleWheel(e) {
         e.preventDefault();
 
-        const delta = e.deltaY > 0 ? -1 : 1;
-        const factor = delta > 0 ? this.ZOOM_STEP : 1 / this.ZOOM_STEP;
+        let factor;
+
+        // Trackpad pinch gestures have ctrlKey set and need proportional zoom
+        if (e.ctrlKey) {
+            // Pinch gesture - use proportional zoom based on deltaY
+            // Smaller multiplier for smoother response
+            factor = 1 - (e.deltaY * 0.01);
+        } else {
+            // Regular scroll wheel - use fixed step
+            const delta = e.deltaY > 0 ? -1 : 1;
+            factor = delta > 0 ? this.ZOOM_STEP : 1 / this.ZOOM_STEP;
+        }
 
         this._zoomAtPoint(factor, e.clientX, e.clientY);
     },

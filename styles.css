@@ -582,6 +582,7 @@ a:hover {
     align-items: center;
     padding: 2rem;
     overflow-y: auto;
+    background-color: var(--color-bg-primary);
 }
 
 .database-container {
@@ -719,6 +720,7 @@ a:hover {
     align-items: center;
     padding: 2rem;
     overflow-y: auto;
+    background-color: var(--color-bg-primary);
 }
 
 .search-container {
@@ -812,6 +814,7 @@ a:hover {
 
 #screen-duplicates {
     flex-direction: column;
+    background-color: var(--color-bg-primary);
 }
 
 .duplicates-container {
@@ -911,6 +914,69 @@ a:hover {
 
    Modals, buttons, and reusable UI elements.
    ========================================================================== */
+
+/* Loading overlay */
+.loading-overlay {
+    position: fixed;
+    inset: 0;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 1rem;
+    background-color: rgba(0, 0, 0, 0.5);
+    z-index: 9999;
+    opacity: 0;
+    visibility: hidden;
+    transition: opacity 0.2s, visibility 0.2s;
+}
+
+.loading-overlay.visible {
+    opacity: 1;
+    visibility: visible;
+}
+
+.loading-spinner {
+    width: 40px;
+    height: 40px;
+    border: 3px solid var(--color-border);
+    border-top-color: var(--color-accent);
+    border-radius: 50%;
+    animation: spin 0.8s linear infinite;
+}
+
+@keyframes spin {
+    to { transform: rotate(360deg); }
+}
+
+.loading-message {
+    color: #fff;
+    font-size: 0.95rem;
+}
+
+/* Error toast */
+.error-toast {
+    position: fixed;
+    bottom: 2rem;
+    left: 50%;
+    transform: translateX(-50%) translateY(1rem);
+    padding: 0.875rem 1.5rem;
+    background-color: var(--color-danger, #dc3545);
+    color: #fff;
+    border-radius: 8px;
+    box-shadow: var(--shadow-lg);
+    font-size: 0.9rem;
+    z-index: 10000;
+    opacity: 0;
+    visibility: hidden;
+    transition: opacity 0.2s, visibility 0.2s, transform 0.2s;
+}
+
+.error-toast.visible {
+    opacity: 1;
+    visibility: visible;
+    transform: translateX(-50%) translateY(0);
+}
 
 /* Dialog (modal) base */
 dialog {

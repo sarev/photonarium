@@ -807,8 +807,11 @@ const App = {
         if (endpoint.startsWith('/scan/') && method === 'GET') {
             return { status: 'complete', progress: 100 };
         }
-        if (endpoint === '/duplicates' && method === 'GET') {
-            return this._mockDuplicates;
+        if (endpoint.startsWith('/duplicates') && method === 'GET') {
+            // Parse level from query string
+            const levelMatch = endpoint.match(/level=(\d)/);
+            const level = levelMatch ? parseInt(levelMatch[1], 10) : 0;
+            return this._getMockDuplicates(level);
         }
         if (endpoint.startsWith('/images/') && method === 'GET') {
             const id = endpoint.split('/')[2];
@@ -869,15 +872,128 @@ const App = {
     ],
 
     /**
-     * Mock duplicate groups for development.
-     * @type {Object}
+     * Returns mock duplicate groups for a given similarity level.
+     * @param {number} level - Similarity level (0=identical, 1=perceptual, 2=similar, 3=related)
+     * @returns {Object} Mock response with groups array
      * @private
      */
-    _mockDuplicates: {
-        identical: [],
-        perceptual: [],
-        similar: [['1', '2']],
-        related: [['1', '2', '3']]
+    _getMockDuplicates(level) {
+        // Helper to create image objects with duplicate-relevant fields
+        const img = (id, basename, path, width, height, size, laplacian, lossless = false) => ({
+            id, basename, path, width, height, size,
+            laplacian_variance: laplacian,
+            lossless,
+            timestamp: '2024-06-15T12:00:00'
+        });
+
+        // Level 0: Identical (same checksum) - exact copies
+        const identical = [
+            {
+                images: [
+                    img('101', 'sunset.jpg', 'photos/sunset.jpg', 1920, 1080, 245000, 850, false),
+                    img('102', 'sunset_copy.jpg', 'backup/sunset_copy.jpg', 1920, 1080, 245000, 850, false),
+                ]
+            },
+            {
+                images: [
+                    img('103', 'beach.jpg', 'photos/beach.jpg', 1920, 1080, 220000, 720, false),
+                    img('104', 'beach (1).jpg', 'downloads/beach (1).jpg', 1920, 1080, 220000, 720, false),
+                    img('105', 'beach_backup.jpg', 'backup/beach_backup.jpg', 1920, 1080, 220000, 720, false),
+                ]
+            }
+        ];
+
+        // Level 1: Perceptual (same image, different encoding/size)
+        const perceptual = [
+            ...identical,
+            {
+                images: [
+                    img('201', 'mountain_4k.png', 'photos/mountain_4k.png', 3840, 2160, 8500000, 920, true),
+                    img('202', 'mountain_hd.jpg', 'photos/mountain_hd.jpg', 1920, 1080, 380000, 890, false),
+                    img('203', 'mountain_thumb.jpg', 'thumbs/mountain_thumb.jpg', 640, 360, 45000, 650, false),
+                ]
+            },
+            {
+                images: [
+                    img('204', 'flower_raw.png', 'raw/flower_raw.png', 4000, 4000, 12000000, 980, true),
+                    img('205', 'flower.jpg', 'photos/flower.jpg', 1200, 1200, 125000, 870, false),
+                ]
+            },
+            {
+                images: [
+                    img('206', 'cityscape_original.tiff', 'archive/cityscape_original.tiff', 4096, 2730, 15000000, 950, true),
+                    img('207', 'cityscape.jpg', 'photos/cityscape.jpg', 2048, 1365, 420000, 920, false),
+                    img('208', 'cityscape_web.jpg', 'web/cityscape_web.jpg', 1024, 683, 95000, 780, false),
+                    img('209', 'cityscape_social.jpg', 'social/cityscape_social.jpg', 800, 533, 65000, 720, false),
+                ]
+            }
+        ];
+
+        // Level 2: Similar (shot sequences, minor variations)
+        const similar = [
+            ...perceptual,
+            {
+                images: [
+                    img('301', 'portrait_001.jpg', 'session/portrait_001.jpg', 2560, 1707, 520000, 890, false),
+                    img('302', 'portrait_002.jpg', 'session/portrait_002.jpg', 2560, 1707, 515000, 920, false),
+                    img('303', 'portrait_003.jpg', 'session/portrait_003.jpg', 2560, 1707, 518000, 850, false),
+                    img('304', 'portrait_004.jpg', 'session/portrait_004.jpg', 2560, 1707, 522000, 880, false),
+                    img('305', 'portrait_005.jpg', 'session/portrait_005.jpg', 2560, 1707, 510000, 910, false),
+                ]
+            },
+            {
+                images: [
+                    img('306', 'sunset_wide.jpg', 'photos/sunset_wide.jpg', 2560, 1080, 380000, 870, false),
+                    img('307', 'sunset_cropped.jpg', 'photos/sunset_cropped.jpg', 1920, 1080, 290000, 860, false),
+                ]
+            },
+            {
+                images: [
+                    img('308', 'product_angle1.jpg', 'products/product_angle1.jpg', 2000, 2000, 450000, 950, false),
+                    img('309', 'product_angle2.jpg', 'products/product_angle2.jpg', 2000, 2000, 460000, 940, false),
+                    img('310', 'product_angle3.jpg', 'products/product_angle3.jpg', 2000, 2000, 455000, 960, false),
+                ]
+            }
+        ];
+
+        // Level 3: Related (thematically similar)
+        const related = [
+            ...similar,
+            {
+                images: [
+                    img('401', 'beach_hawaii.jpg', 'vacation/beach_hawaii.jpg', 1920, 1080, 245000, 850, false),
+                    img('402', 'beach_florida.jpg', 'vacation/beach_florida.jpg', 2048, 1152, 280000, 870, false),
+                    img('403', 'beach_caribbean.jpg', 'vacation/beach_caribbean.jpg', 1800, 1200, 260000, 830, false),
+                    img('404', 'beach_california.jpg', 'vacation/beach_california.jpg', 1920, 1280, 290000, 880, false),
+                ]
+            },
+            {
+                images: [
+                    img('405', 'cat_sleeping.jpg', 'pets/cat_sleeping.jpg', 1600, 1200, 185000, 780, false),
+                    img('406', 'cat_yawning.jpg', 'pets/cat_yawning.jpg', 1600, 1200, 195000, 820, false),
+                    img('407', 'cat_playing.jpg', 'pets/cat_playing.jpg', 1920, 1080, 210000, 750, false),
+                ]
+            },
+            {
+                images: [
+                    img('408', 'coffee_latte.jpg', 'food/coffee_latte.jpg', 1200, 1200, 145000, 890, false),
+                    img('409', 'coffee_cappuccino.jpg', 'food/coffee_cappuccino.jpg', 1200, 1200, 150000, 910, false),
+                ]
+            },
+            {
+                images: [
+                    img('410', 'autumn_park.jpg', 'seasons/autumn_park.jpg', 2560, 1440, 420000, 920, false),
+                    img('411', 'autumn_forest.jpg', 'seasons/autumn_forest.jpg', 2560, 1440, 450000, 940, false),
+                    img('412', 'autumn_road.jpg', 'seasons/autumn_road.jpg', 1920, 1080, 310000, 880, false),
+                    img('413', 'autumn_leaves.jpg', 'seasons/autumn_leaves.jpg', 1800, 1200, 280000, 850, false),
+                    img('414', 'autumn_bench.jpg', 'seasons/autumn_bench.jpg', 2048, 1365, 360000, 900, false),
+                    img('415', 'autumn_lake.jpg', 'seasons/autumn_lake.jpg', 2560, 1600, 480000, 930, false),
+                ]
+            }
+        ];
+
+        const levelGroups = [identical, perceptual, similar, related];
+        return { groups: levelGroups[level] || [] };
     },
 
     /* ----------------------------------------------------------------------
@@ -950,11 +1066,8 @@ const App = {
      * @private
      */
     _handleFilterClick() {
-        if (this.hasActiveFilter()) {
-            this.clearFilter();
-        } else {
-            this.showSearch();
-        }
+        // Always open search screen - user can clear or refine filter there
+        this.showSearch();
     },
 
     /**
@@ -1030,11 +1143,8 @@ const App = {
     _updateFilterButton() {
         const btn = document.getElementById('btn-filter');
         if (btn) {
+            // Toggle active class to indicate filter is active (styling only)
             btn.classList.toggle('active', this.hasActiveFilter());
-            const icon = btn.querySelector('.material-symbols-outlined');
-            if (icon) {
-                icon.textContent = this.hasActiveFilter() ? 'filter_alt_off' : 'filter_alt';
-            }
         }
     },
 
@@ -1050,6 +1160,65 @@ const App = {
                 icon.textContent = this.state.theme === 'light' ? 'dark_mode' : 'light_mode';
             }
         }
+    },
+
+    /* ----------------------------------------------------------------------
+       STATUS & NOTIFICATIONS
+
+       Loading indicators and error messages.
+       ---------------------------------------------------------------------- */
+
+    /**
+     * Shows a loading indicator with optional message.
+     * @param {string} [message='Loading…'] - Message to display
+     */
+    showLoading(message = 'Loading…') {
+        let overlay = document.getElementById('loading-overlay');
+        if (!overlay) {
+            overlay = document.createElement('div');
+            overlay.id = 'loading-overlay';
+            overlay.className = 'loading-overlay';
+            overlay.innerHTML = `
+                <div class="loading-spinner"></div>
+                <div class="loading-message"></div>
+            `;
+            document.body.appendChild(overlay);
+        }
+        overlay.querySelector('.loading-message').textContent = message;
+        overlay.classList.add('visible');
+    },
+
+    /**
+     * Hides the loading indicator.
+     */
+    hideLoading() {
+        const overlay = document.getElementById('loading-overlay');
+        if (overlay) {
+            overlay.classList.remove('visible');
+        }
+    },
+
+    /**
+     * Shows an error message to the user.
+     * @param {string} message - Error message to display
+     * @param {number} [duration=4000] - How long to show the message in ms
+     */
+    showError(message, duration = 4000) {
+        let toast = document.getElementById('error-toast');
+        if (!toast) {
+            toast = document.createElement('div');
+            toast.id = 'error-toast';
+            toast.className = 'error-toast';
+            document.body.appendChild(toast);
+        }
+        toast.textContent = message;
+        toast.classList.add('visible');
+
+        // Auto-hide after duration
+        clearTimeout(toast._hideTimeout);
+        toast._hideTimeout = setTimeout(() => {
+            toast.classList.remove('visible');
+        }, duration);
     },
 
     /* ----------------------------------------------------------------------
