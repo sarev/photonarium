@@ -1,0 +1,139 @@
+Below is an outline of an application I want to build.
+
+I want to create a GUI tool, that will form the basis of a local image (generally photos) catalogue and management tool.
+
+The program should run locally, without cloud services/components. I'm willing to accept one-time online processes (such as inital Torch model downloads from Huggingface). Any systems, models, or components required by it should be FOSS.
+
+For implementation, I'm thinking Python backend and Flask, with the GUI written in HTML/CSS/JS. It will make use of OpenCLIP for semantic image searches. CSS should use the following font-family declaration: Noto Sans, Urbanist, Arial, sans-serif, "Apple Color Emoji", "Segoe UI Emoji". Toolbar buttons should use Google Material Symbols. The application should support both a light and dark theme. I'll use a dedicated Python venv for this project, and base it on Python 3.11..
+
+Some example functionality it should provide:
+
+* Finding all of the duplicate and essentially-duplicate (e.g. down-scaled) images in my collection to help me remove them.
+* Finding near-duplicate images (e.g. shot sequences) so I can potentially delete any that I don't want to keep, or just keep the 'best' one from a given sequence.
+* I'd like to be able to easily search for images by various means, including textual descriptions (hence OpenCLIP) or date ranges.
+
+I think the GUI will require at least the following screens:
+
+1. Gallery (default, unless the database is empty)
+    - Displays a grid of image thumbnails along with their basename in some sort ordering
+    - Toolbar across top for navigation:
+        - Plus/Minus thumbnail size adjustment buttons
+        - View selected image full-screen (shaded if there isn't exactly one image selected)
+        - Manage database (moves to Database screen)
+        - "Duplicate" mode (moves to Duplicates screen)
+        - Filter toggle (moves to Search screen if no filter is active, otherwise clears filter)
+        - Sort ordering toggles (newest/oldest first, by rating, by content - i.e. OpenCLIP embedding score)
+        - Select all/clear selection
+    - Panel at side contains image information
+        - Essentially, everything in the database for this image
+        - Allows 'Description' and 'Rating' to be edited
+            - Rating is a string containing zero or more emoji - requires an on-screen emoji keyboard while editing
+    - Navigate betweeen images
+    - Viewing image full-screen (e.g. by double-clicking it)
+    - Selecting images
+        - Taps or left clicks clear selection and select the image that was tapped/clicked
+        - Tap-and-hold adds image to selection
+        - Right click inverts selected state of clicked image, leaving remaining selection unchanged
+        - Including dragbox selection (left-drag selects/adds to selection, right-drag inverts selection)
+    - Deleting selected image(s)
+        - With an "Are you sure?" dialogue
+2. Full-screen view
+    - Image initially zoomed to fill screen while preserving aspect ratio
+    - Screen background filled with black
+    - Temporarily overlay canonical filename at bottom of screen
+    - Navigate between images with left/right cursor keys
+        - Automaticallym wrap to first after last, and vice versa
+    - Zoom in/out with origin at mouse/touch coordinates (mouse scroll wheel, touchscreen pinch)
+    - Press escape or double-click/double-tap to return to Gallery view
+3. Database (default if the database is empty)
+    - Add and remove folders to/from list of those in the database
+    - Start a rescan of all folders in the database
+    - Includes a progress bar for scan progress (rescan or scan due to adding a folder)
+    - Toolbar across the top:
+        - Return to "Gallery" screen
+4. Search
+    - Provides UI elements to allow the user to create a filter on the gallery view, e.g.
+        - Plain text description
+        - Start and end of date range (or exact date if both same date)
+        - Rating(s) - one or more emoji
+    - Toolbar across the top:
+        - Return to "Gallery" screen
+5. Duplicates
+    - Looks a bit like the gallery, but each thumbnail grid slot contains a stack of images for each candidate duplicate group
+        - Doesn't show any images that aren't considered part of a duplicate group
+    - Toolbar across the top:
+        - Plus/Minus thumbnail size adjustment buttons
+        - Slider control with discrete positions for 'nearness' in the duplicate finding:
+            - Maximum setting is: identical (filesize & checksum)
+            - Next setting includes images that are essentially duplicates, but downscaled, or reduced compression quality (same/similar perceptual hash)
+            - Lower settings are varying degrees of 'nearness' (cosine similarity) in OpenCLIP embedding score
+            - Changing this setting dynamically updates the thumbnail grid
+        - Return to "Gallery" screen
+    - Each stack has the number of images in the group in place of the basename string
+    - Double-clicking a stack will open the gallery, filtered such that only the images in the stack are visible
+        - The 'best' image is selected by default (highest resolution, best Laplacian variance score - most in focus, lossless compression preferred)
+        - Clicking the "Duplicate" tool icon in the Gallery returns to the Duplicate view with scroll offsets as they were
+
+Using the Database screen:
+
+- User can add image sources (local folders) and the program will look for all images within (recursive)
+- Each root image directory is stored in database
+- Each image is scanned and added to a database
+    - If the image is already in the database (same canonical pathname and basename), then it is checked
+      for updates (has timestamp or size changed?) - if so, the image is fully rescanned and its database
+      entry is updated as required
+- Database entries contain:
+    - Canonical path (string)
+    - Basename (string)
+    - File size (bytes)
+    - File sha256 checksum (string)
+    - Image dimensions (pixels)
+    - Image timestamp candidates:
+        1. EXIF "DateTimeOriginal" tag (datetime or None)
+        2. EXIF "DateTime" tag (datetime or None)
+        3. FS creation time (datetime or None)
+        4. FS modified time (datetime or None)
+        5. timestamp guessed from file path (datetime or None)
+    - Image best guess timestamp - first non-None from above (datetime or None)
+    - Perceptual hash (string)
+    - Laplacian variance score (float)
+    - Lossless compression (bool)
+    - Description (initially empty string)
+    - Rating (string)
+    - OpenCLIP embedding score (torch.Tensor)
+
+- User can rescan the database
+    - Program will look for changes in each of the root image directories
+    - Any changes are added/removed/updated in the database
+    - Spotting a changed file uses same approach as above (timestamp or size)
+
+If the database is empty (contains no image information) when the application starts, it will start on the Database screen so the user can add one or more folders to be scanned. If there are images catalogued in the database when the application starts, it will start on the Gallery screen.
+
+Initial project structure:
+
+- env : Python venv
+- index.html : the single page for this application, includes all JS and CSS files, as required
+- styles.css : the CSS rules, including both light and dark colour schemes - all use of colour indirects through the active scheme in CSS (not JS)
+- core.js : the main JavaScript for the central framework of the application UI, all common aspects used across multiple screens implemented here
+- gallery.js : any JavaScript that's specific to the Gallery screen
+- fullscreen.js : any JavaScript that's specific to the Fullscreen (image view) screen
+- database.js : any JavaScript that's specific to the Database screen
+- search.js : any JavaScript that's specific to the Search screen
+- duplicates.js : any JavaScript that's specific to the Duplicates screen
+- app.py : The backend Flask application
+- imagedb.py : The code & class(es) relating to building and managing the image database
+- README.md : overarching documentation aimed at helping users & developers of this code
+- LICENSE : the license file (Apache 2.0)
+
+Here's my plan:
+
+I want to develop this incrementally, with key areas as isolated as reasonably possible to minimise external contextual information that is required in order to develop them. I want them to be written in a future-proof manner, so adding each new feature & functionality can be done with minimal churn. I want everything to be well commented - specifically the JS and Python.
+
+The batting order will be:
+
+1. HTML
+2. Outline what goes into each of the JS files
+3. Flesh-out each screen JS in turn, updating the core.js and styles.css as we go
+4. Add a mocking layer into core.js to test without the Python backend
+5. Implement the Python backend
+6. I'll probably do the README last!

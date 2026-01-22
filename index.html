@@ -1,0 +1,316 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Imaginary</title>
+
+    <!-- Google Material Symbols for toolbar icons -->
+    <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:opsz,wght,FILL,GRAD@24,400,0,0" />
+
+    <!-- Google Fonts: Noto Sans and Urbanist -->
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Noto+Sans:wght@400;500;600;700&family=Urbanist:wght@400;500;600;700&display=swap" />
+
+    <!-- Application stylesheet -->
+    <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+    <!--
+        Main application container.
+        The 'data-screen' attribute controls which screen is visible.
+        The 'data-theme' attribute controls light/dark theme.
+    -->
+    <div id="app" data-theme="light">
+
+        <!-- ============================================================
+             TOOLBAR
+             Common toolbar across Gallery, Database, Search, Duplicates.
+             Hidden in Full-screen view.
+             ============================================================ -->
+        <header id="toolbar">
+            <!-- Left section: screen-specific controls -->
+            <div class="toolbar-left">
+                <!-- Gallery controls (visible when data-screen="gallery") -->
+                <div class="toolbar-group" data-for-screen="gallery">
+                    <button id="btn-thumb-smaller" class="toolbar-btn" title="Smaller thumbnails">
+                        <span class="material-symbols-outlined">remove</span>
+                    </button>
+                    <button id="btn-thumb-larger" class="toolbar-btn" title="Larger thumbnails">
+                        <span class="material-symbols-outlined">add</span>
+                    </button>
+                    <button id="btn-fullscreen" class="toolbar-btn" title="View full-screen" disabled>
+                        <span class="material-symbols-outlined">fullscreen</span>
+                    </button>
+                </div>
+
+                <!-- Duplicates controls (visible when data-screen="duplicates") -->
+                <div class="toolbar-group" data-for-screen="duplicates">
+                    <button id="btn-dup-thumb-smaller" class="toolbar-btn" title="Smaller thumbnails">
+                        <span class="material-symbols-outlined">remove</span>
+                    </button>
+                    <button id="btn-dup-thumb-larger" class="toolbar-btn" title="Larger thumbnails">
+                        <span class="material-symbols-outlined">add</span>
+                    </button>
+                    <div class="similarity-control">
+                        <label for="similarity-slider">Similarity:</label>
+                        <input type="range" id="similarity-slider" min="0" max="3" value="0" step="1">
+                        <span id="similarity-label">Identical</span>
+                    </div>
+                </div>
+
+                <!-- Database controls (visible when data-screen="database") -->
+                <div class="toolbar-group" data-for-screen="database">
+                    <!-- Database screen has no left toolbar controls -->
+                </div>
+
+                <!-- Search controls (visible when data-screen="search") -->
+                <div class="toolbar-group" data-for-screen="search">
+                    <!-- Search screen has no left toolbar controls -->
+                </div>
+            </div>
+
+            <!-- Center section: navigation and mode buttons -->
+            <div class="toolbar-center">
+                <button id="btn-database" class="toolbar-btn" title="Manage database">
+                    <span class="material-symbols-outlined">database</span>
+                </button>
+                <button id="btn-duplicates" class="toolbar-btn" title="Find duplicates">
+                    <span class="material-symbols-outlined">filter_none</span>
+                </button>
+                <button id="btn-filter" class="toolbar-btn" title="Search/Filter">
+                    <span class="material-symbols-outlined">filter_alt</span>
+                </button>
+            </div>
+
+            <!-- Right section: gallery view controls -->
+            <div class="toolbar-right">
+                <div class="toolbar-group" data-for-screen="gallery">
+                    <!-- Sort controls -->
+                    <div class="sort-controls">
+                        <button id="btn-sort-date" class="toolbar-btn active" title="Sort by date">
+                            <span class="material-symbols-outlined">calendar_month</span>
+                        </button>
+                        <button id="btn-sort-rating" class="toolbar-btn" title="Sort by rating">
+                            <span class="material-symbols-outlined">star</span>
+                        </button>
+                        <button id="btn-sort-content" class="toolbar-btn" title="Sort by content similarity">
+                            <span class="material-symbols-outlined">image_search</span>
+                        </button>
+                        <button id="btn-sort-direction" class="toolbar-btn" title="Toggle sort direction">
+                            <span class="material-symbols-outlined">arrow_downward</span>
+                        </button>
+                    </div>
+                    <div class="toolbar-separator"></div>
+                    <!-- Selection controls -->
+                    <button id="btn-select-all" class="toolbar-btn" title="Select all">
+                        <span class="material-symbols-outlined">select_all</span>
+                    </button>
+                    <button id="btn-clear-selection" class="toolbar-btn" title="Clear selection">
+                        <span class="material-symbols-outlined">deselect</span>
+                    </button>
+                </div>
+
+                <!-- Back to gallery button (visible on database, search, duplicates screens) -->
+                <div class="toolbar-group" data-for-screen="database search duplicates">
+                    <button id="btn-back-gallery" class="toolbar-btn" title="Back to gallery">
+                        <span class="material-symbols-outlined">photo_library</span>
+                    </button>
+                </div>
+
+                <!-- Theme toggle (always visible in toolbar) -->
+                <div class="toolbar-separator"></div>
+                <button id="btn-theme" class="toolbar-btn" title="Toggle theme">
+                    <span class="material-symbols-outlined">dark_mode</span>
+                </button>
+            </div>
+        </header>
+
+        <!-- ============================================================
+             GALLERY SCREEN
+             Main view showing thumbnail grid with info panel.
+             ============================================================ -->
+        <main id="screen-gallery" class="screen">
+            <div class="gallery-container">
+                <!-- Thumbnail grid -->
+                <div id="gallery-grid" class="gallery-grid">
+                    <!-- Thumbnails are dynamically inserted here -->
+                </div>
+
+                <!-- Info panel (right side) -->
+                <aside id="info-panel" class="info-panel">
+                    <h2>Image Information</h2>
+                    <div id="info-content">
+                        <!-- Populated when an image is selected -->
+                        <p class="info-placeholder">Select an image to view details</p>
+                    </div>
+                </aside>
+            </div>
+        </main>
+
+        <!-- ============================================================
+             FULL-SCREEN VIEW
+             Displays a single image with zoom/pan capabilities.
+             ============================================================ -->
+        <div id="screen-fullscreen" class="screen">
+            <div id="fullscreen-container">
+                <img id="fullscreen-image" src="" alt="">
+            </div>
+            <!-- Filename overlay (shown temporarily) -->
+            <div id="fullscreen-filename" class="fullscreen-overlay"></div>
+        </div>
+
+        <!-- ============================================================
+             DATABASE SCREEN
+             Manage image source folders and trigger scans.
+             ============================================================ -->
+        <main id="screen-database" class="screen">
+            <div class="database-container">
+                <section class="database-section">
+                    <h2>Image Source Folders</h2>
+                    <div class="folder-controls">
+                        <button id="btn-add-folder" class="action-btn">
+                            <span class="material-symbols-outlined">create_new_folder</span>
+                            Add Folder
+                        </button>
+                    </div>
+                    <ul id="folder-list" class="folder-list">
+                        <!-- Folder entries are dynamically inserted here -->
+                    </ul>
+                </section>
+
+                <section class="database-section">
+                    <h2>Database Status</h2>
+                    <div id="db-status" class="db-status">
+                        <p><span class="status-label">Total Images:</span> <span id="status-total">0</span></p>
+                    </div>
+                    <div class="scan-controls">
+                        <button id="btn-rescan" class="action-btn">
+                            <span class="material-symbols-outlined">refresh</span>
+                            Rescan All Folders
+                        </button>
+                    </div>
+                    <!-- Progress bar (visible during scan) -->
+                    <div id="scan-progress" class="progress-container" hidden>
+                        <div class="progress-bar">
+                            <div id="progress-fill" class="progress-fill"></div>
+                        </div>
+                        <p id="progress-text" class="progress-text">Scanning...</p>
+                    </div>
+                </section>
+            </div>
+        </main>
+
+        <!-- ============================================================
+             SEARCH SCREEN
+             Create filters for the gallery view.
+             ============================================================ -->
+        <main id="screen-search" class="screen">
+            <div class="search-container">
+                <section class="search-section">
+                    <h2>Search Filters</h2>
+
+                    <!-- Text description search -->
+                    <div class="filter-group">
+                        <label for="filter-text">Description</label>
+                        <input type="text" id="filter-text" placeholder="Search by description...">
+                    </div>
+
+                    <!-- Date range filter -->
+                    <div class="filter-group">
+                        <label>Date Range</label>
+                        <div class="date-range">
+                            <input type="date" id="filter-date-start" placeholder="Start date">
+                            <span class="date-separator">to</span>
+                            <input type="date" id="filter-date-end" placeholder="End date">
+                        </div>
+                    </div>
+
+                    <!-- Rating filter -->
+                    <div class="filter-group">
+                        <label for="filter-rating">Rating</label>
+                        <div class="rating-filter">
+                            <input type="text" id="filter-rating" placeholder="Enter emoji ratings...">
+                            <button id="btn-emoji-picker" class="toolbar-btn" title="Open emoji picker">
+                                <span class="material-symbols-outlined">add_reaction</span>
+                            </button>
+                        </div>
+                    </div>
+
+                    <!-- Filter actions -->
+                    <div class="filter-actions">
+                        <button id="btn-apply-filter" class="action-btn primary">
+                            <span class="material-symbols-outlined">search</span>
+                            Apply Filter
+                        </button>
+                        <button id="btn-clear-filter" class="action-btn">
+                            <span class="material-symbols-outlined">clear</span>
+                            Clear Filter
+                        </button>
+                    </div>
+                </section>
+            </div>
+        </main>
+
+        <!-- ============================================================
+             DUPLICATES SCREEN
+             Shows groups of duplicate/similar images as stacks.
+             ============================================================ -->
+        <main id="screen-duplicates" class="screen">
+            <div class="duplicates-container">
+                <div id="duplicates-grid" class="duplicates-grid">
+                    <!-- Duplicate stacks are dynamically inserted here -->
+                </div>
+
+                <!-- Empty state message -->
+                <div id="duplicates-empty" class="empty-state" hidden>
+                    <span class="material-symbols-outlined">check_circle</span>
+                    <p>No duplicates found at the current similarity level.</p>
+                </div>
+            </div>
+        </main>
+
+        <!-- ============================================================
+             DIALOGS / MODALS
+             ============================================================ -->
+
+        <!-- Confirmation dialog (e.g., delete confirmation) -->
+        <dialog id="dialog-confirm">
+            <div class="dialog-content">
+                <h3 id="dialog-confirm-title">Confirm Action</h3>
+                <p id="dialog-confirm-message">Are you sure?</p>
+                <div class="dialog-actions">
+                    <button id="dialog-confirm-cancel" class="action-btn">Cancel</button>
+                    <button id="dialog-confirm-ok" class="action-btn primary">OK</button>
+                </div>
+            </div>
+        </dialog>
+
+        <!-- Emoji picker dialog -->
+        <dialog id="dialog-emoji">
+            <div class="dialog-content">
+                <h3>Select Emoji</h3>
+                <div id="emoji-grid" class="emoji-grid">
+                    <!-- Emoji buttons are dynamically inserted here -->
+                </div>
+                <div class="dialog-actions">
+                    <button id="dialog-emoji-close" class="action-btn">Close</button>
+                </div>
+            </div>
+        </dialog>
+
+    </div><!-- end #app -->
+
+    <!-- ============================================================
+         JAVASCRIPT
+         Load order: core.js first (framework), then screen-specific modules.
+         ============================================================ -->
+    <script src="core.js"></script>
+    <script src="gallery.js"></script>
+    <script src="fullscreen.js"></script>
+    <script src="database.js"></script>
+    <script src="search.js"></script>
+    <script src="duplicates.js"></script>
+</body>
+</html>
