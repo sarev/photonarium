@@ -3,7 +3,7 @@
  *
  * This module handles the Duplicates screen where users find and manage
  * duplicate or near-duplicate images. It registers with the core App module
- * and provides a specialized view for duplicate group management.
+ * and provides a specialised view for duplicate group management.
  *
  * RESPONSIBILITIES:
  *
@@ -72,7 +72,7 @@ const Duplicates = {
      * @type {string[]}
      * @constant
      */
-    SIMILARITY_LABELS: ['Identical', 'Perceptual', 'Similar', 'Related'],
+    SIMILARITY_LABELS: ['Identical', 'Near-identical', 'Similar', 'Related'],
 
     /**
      * Local state for the duplicates screen.
@@ -101,7 +101,7 @@ const Duplicates = {
     _els: {},
 
     /**
-     * Initializes the duplicates module.
+     * Initialises the duplicates module.
      * Called once during app startup.
      */
     init() {
@@ -116,8 +116,6 @@ const Duplicates = {
             btnLarger: App.$('btn-dup-thumb-larger')
         };
 
-        this._els.grid.style.setProperty('--thumb-size', App.getThumbnailSize() + 'px');
-
         // Bind events
         this._bindEvents();
 
@@ -126,6 +124,9 @@ const Duplicates = {
 
         // Subscribe to relevant app events
         this._subscribeToEvents();
+
+        // Keep duplicates grid thumbnail size in sync with the global thumbnail size
+        this._applyThumbSize(App.getThumbnailSize());
     },
 
     /**
@@ -165,10 +166,7 @@ const Duplicates = {
             this._els.sliderLabel.textContent = this.SIMILARITY_LABELS[level];
             this._setLevel(level);
         });
-
-        // Thumbnail size buttons
-        // this._els.btnSmaller.addEventListener('click', () => this._adjustThumbSize(-1));
-        // this._els.btnLarger.addEventListener('click', () => this._adjustThumbSize(1));
+        // Thumbnail size buttons are handled globally by the toolbar (App.setThumbnailSize)
 
         // Grid click events (delegated)
         this._els.grid.addEventListener('dblclick', (e) => this._handleDoubleClick(e));
@@ -179,15 +177,34 @@ const Duplicates = {
      * @private
      */
     _subscribeToEvents() {
-        App.on('thumbnailSizeChanged', (size) => {
-          this._els.grid.style.setProperty('--thumb-size', size + 'px');
-        });
+        // Thumbnail size sync
+        App.on('thumbnailSizeChanged', (size) => this._applyThumbSize(size));
 
         // Database changes require refresh
         App.on('databaseChanged', () => {
             this.state.needsRefresh = true;
             this.state.groupCache = {};
         });
+    },
+
+    /**
+     * Applies the global thumbnail size to the duplicates grid.
+     * The duplicates layout uses the CSS custom property --thumb-size.
+     * @param {number} sizePx
+     */
+    _applyThumbSize(sizePx) {
+        if (!this._els || !this._els.grid) {
+            return;
+        }
+
+        const n = Number(sizePx);
+        if (!Number.isFinite(n)) {
+            return;
+        }
+
+        // Keep within a sensible range to avoid breaking layout.
+        const clamped = Math.max(60, Math.min(260, Math.round(n)));
+        this._els.grid.style.setProperty('--thumb-size', `${clamped}px`);
     },
 
     /**
@@ -362,24 +379,31 @@ Duplicates._renderGroups = function() {
     const grid = this._els.grid;
     const empty = this._els.empty;
 
+    // Clear existing content
     grid.innerHTML = '';
 
+    // Show empty state if no groups
     if (this.state.groups.length === 0) {
         grid.hidden = true;
         empty.hidden = false;
 
         const p = empty.querySelector('p');
-        const msg = `No ${this.SIMILARITY_LABELS[this.state.currentLevel].toLowerCase()} duplicates found`;
-        if (p) p.textContent = msg;
+        if (p) {
+            p.textContent = `No ${this.SIMILARITY_LABELS[this.state.currentLevel].toLowerCase()} duplicates found at the current similarity level.`;
+        }
         return;
     }
 
+    // Hide empty state, show grid
     empty.hidden = true;
     grid.hidden = false;
 
+    // Create stack elements for each group
     this.state.groups.forEach((group, index) => {
         const stack = this._createStackElement(group, index);
         grid.appendChild(stack);
+
+        // Observe for lazy loading
         this.state.lazyLoader.observe(stack);
     });
 };
@@ -396,25 +420,16 @@ Duplicates._createStackElement = function(group, index) {
     stack.className = 'duplicate-stack';
     stack.dataset.groupIndex = index;
 
-    // Placeholder thumbnail (loaded lazily)
-    const thumb = document.createElement('div');
-    thumb.className = 'stack-thumbnail';
-    thumb.dataset.imageId = group.bestImage?.id || '';
+    // Best image preview (loaded lazily)
+    const img = document.createElement('img');
+    img.alt = group.bestImage?.basename || 'Duplicate group preview';
+    img.dataset.imageId = group.bestImage?.id || '';
+    stack.appendChild(img);
 
-    // Stack shadow layers for visual depth
-    const shadow1 = document.createElement('div');
-    shadow1.className = 'stack-shadow stack-shadow-1';
-    const shadow2 = document.createElement('div');
-    shadow2.className = 'stack-shadow stack-shadow-2';
-
-    // Count badge
+    // Count label
     const count = document.createElement('div');
-    count.className = 'stack-count';
+    count.className = 'duplicate-stack-count';
     count.textContent = `${group.images.length} images`;
-
-    stack.appendChild(shadow2);
-    stack.appendChild(shadow1);
-    stack.appendChild(thumb);
     stack.appendChild(count);
 
     return stack;
@@ -427,24 +442,20 @@ Duplicates._createStackElement = function(group, index) {
  * @private
  */
 Duplicates._loadStackThumbnail = function(stack) {
-    const thumb = stack.querySelector('.stack-thumbnail');
-    const imageId = thumb.dataset.imageId;
+    const img = stack.querySelector('img');
+    const imageId = img?.dataset.imageId;
 
-    if (!imageId) {
-      thumb.classList.add('error');
-      return;
+    if (!img || !imageId) {
+        stack.classList.add('error');
+        return;
     }
 
-    const img = document.createElement('img');
-    img.alt = 'Duplicate group preview';
-
     img.onload = () => {
-      thumb.appendChild(img);
-      thumb.classList.add('loaded');
+        stack.classList.add('loaded');
     };
 
     img.onerror = () => {
-      thumb.classList.add('error');
+        stack.classList.add('error');
     };
 
     img.src = App.thumbnailUrl(imageId);
@@ -456,21 +467,9 @@ Duplicates._loadStackThumbnail = function(stack) {
  * @private
  */
 Duplicates._adjustThumbSize = function(delta) {
-    // Get current size from CSS variable or use default
-    const root = document.documentElement;
-    const currentSize = parseInt(
-        getComputedStyle(root).getPropertyValue('--dup-thumb-size') || '150',
-        10
-    );
-
-    // Calculate new size with bounds
-    const minSize = 100;
-    const maxSize = 300;
-    const step = 25;
-    const newSize = Math.max(minSize, Math.min(maxSize, currentSize + delta * step));
-
-    // Apply new size
-    root.style.setProperty('--dup-thumb-size', `${newSize}px`);
+    // Deprecated: toolbar buttons call App.setThumbnailSize directly.
+    const step = 50;
+    App.setThumbnailSize(App.getThumbnailSize() + delta * step);
 };
 
 /* ==========================================================================
@@ -487,30 +486,33 @@ Duplicates._adjustThumbSize = function(delta) {
  */
 Duplicates._handleDoubleClick = function(e) {
     const stack = e.target.closest('.duplicate-stack');
-    if (!stack) {
-        return;
-    }
+    if (!stack) return;
 
     const index = parseInt(stack.dataset.groupIndex, 10);
     const group = this.state.groups[index];
 
-    if (!group || !group.images || group.images.length === 0) {
-        return;
-    }
+    if (!group?.images?.length) return;
 
     // Save scroll position before leaving
     this.state.scrollTop = this._els.container.scrollTop;
 
-    // Get image paths for the group
-    const paths = group.images.map((img) => img.path);
+    const imageIds = group.images.map(img => img.id).filter(Boolean);
+    if (imageIds.length === 0) return;
 
-    // Navigate to gallery with this group as the filter
-    // Pre-select the best image
-    App.showGalleryWithFilter({
+    const bestId = group.bestImage?.id;
+    const selection = bestId ? [bestId] : [imageIds[0]];
+
+    // Set a gallery filter to show only this group's images
+    App.setFilter({
         type: 'duplicates',
-        paths: paths,
-        selectedPath: group.bestImage?.path
+        imageIds,
+        sourceLevel: this.state.currentLevel
     });
+
+    // Pre-select the best image for convenience
+    App.setSelectedImages(selection);
+
+    App.showGallery();
 };
 
 // Register module with App

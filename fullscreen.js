@@ -106,7 +106,7 @@ const Fullscreen = {
     _handlers: {},
 
     /**
-     * Initializes the fullscreen module.
+     * Initialises the fullscreen module.
      * Called once during app startup.
      */
     init() {

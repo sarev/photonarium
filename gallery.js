@@ -95,7 +95,7 @@ const Gallery = {
     _els: {},
 
     /**
-     * Initializes the gallery module.
+     * Initialises the gallery module.
      * Called once during app startup.
      */
     init() {
@@ -200,6 +200,12 @@ const Gallery = {
         const filter = App.getFilter();
         if (!filter) return images;
 
+        // Duplicates filter: show only a specific set of image IDs
+        if (filter.type === 'duplicates' && Array.isArray(filter.imageIds)) {
+            const idSet = new Set(filter.imageIds.map(String));
+            return images.filter(img => idSet.has(String(img.id)));
+        }
+
         return images.filter(img => {
             // Text filter (description)
             if (filter.text && !img.description.toLowerCase().includes(filter.text.toLowerCase())) {
@@ -277,7 +283,8 @@ const Gallery = {
      * @private
      */
     _selectAll() {
-        const allIds = this.state.images.map(img => img.id);
+        const visible = this._filterImages(this.state.images);
+        const allIds = visible.map(img => img.id);
         App.setSelectedImages(allIds);
     },
 
@@ -379,7 +386,7 @@ const Gallery = {
     },
 
     /**
-     * Initializes the IntersectionObserver for lazy loading.
+     * Initialises the IntersectionObserver for lazy loading.
      * @private
      */
     _initLazyLoader() {
@@ -891,6 +898,11 @@ const Gallery = {
      * @private
      */
     _handleKeyDown(e) {
+        // If a modal dialog is open, let it handle Escape and focus.
+        if (document.querySelector('dialog[open]')) {
+            return;
+        }
+
         // Ignore if typing in an input field
         if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA') {
             return;

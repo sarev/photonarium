@@ -2,7 +2,7 @@
  * @fileoverview Core framework for the Imaginary application.
  *
  * This module provides the central infrastructure that all screen-specific
- * modules depend on. It initializes first and exposes a global `App` object
+ * modules depend on. It initialises first and exposes a global `App` object
  * that other modules register with.
  *
  * RESPONSIBILITIES:
@@ -868,7 +868,7 @@ const App = {
      * @private
      */
     _mockFolders: [
-        { path: 'photos', count: 20 }
+        { path: 'photos', count: 59 }
     ],
 
     /**
@@ -993,7 +993,31 @@ const App = {
         ];
 
         const levelGroups = [identical, perceptual, similar, related];
-        return { groups: levelGroups[level] || [] };
+        const groups = levelGroups[level] || [];
+
+        // Ensure any mock duplicates returned are also present in the /images list,
+        // otherwise the Gallery screen cannot display them when filtering by IDs.
+        for (const group of groups) {
+            for (const imgObj of (group.images || [])) {
+                if (!imgObj || !imgObj.id) continue;
+                const exists = this._mockImages.some(i => String(i.id) === String(imgObj.id));
+                if (!exists) {
+                    this._mockImages.push({
+                        id: imgObj.id,
+                        basename: imgObj.basename,
+                        path: imgObj.path,
+                        width: imgObj.width,
+                        height: imgObj.height,
+                        size: imgObj.size,
+                        timestamp: imgObj.timestamp,
+                        description: '',
+                        rating: ''
+                    });
+                }
+            }
+        }
+
+        return { groups };
     },
 
     /* ----------------------------------------------------------------------
@@ -1003,7 +1027,7 @@ const App = {
        ---------------------------------------------------------------------- */
 
     /**
-     * Initializes toolbar event listeners.
+     * Initialises toolbar event listeners.
      * Called once during app initialization.
      * @private
      */
@@ -1304,58 +1328,122 @@ const App = {
      * @private
      */
     _populateEmojiGrid(grid) {
-        const emojiDescriptions = {
-          '❤️': 'Red heart',
-          '🧡': 'Orange heart',
-          '💛': 'Yellow heart',
-          '💚': 'Green heart',
-          '💙': 'Blue heart',
-          '💜': 'Purple heart',
+        const sections = [
+            {
+                title: 'Hearts',
+                items: {
+                    '❤️': 'Red heart',
+                    '🧡': 'Orange heart',
+                    '💛': 'Yellow heart',
+                    '💚': 'Green heart',
+                    '💙': 'Blue heart',
+                    '💜': 'Purple heart'
+                }
+            },
+            {
+                title: 'Reactions',
+                items: {
+                    '👍': 'Thumbs up',
+                    '👎': 'Thumbs down',
+                    '👌': 'OK hand',
+                    '🔥': 'Fire / hot',
+                    '✅': 'Check mark / success',
+                    '❌': 'Cross mark / failure',
+                    '❓': 'Question mark / unknown'
+                }
+            },
+            {
+                title: 'Creative',
+                items: {
+                    '📸': 'Camera / photography',
+                    '🎨': 'Artist palette / art',
+                    '🏆': 'Trophy / winner',
+                    '💎': 'Gem / diamond',
+                    '🎉': 'Party popper / celebration'
+                }
+            },
+            {
+                title: 'Faces',
+                items: {
+                    '😀': 'Grinning face',
+                    '😍': 'Smiling face with heart-eyes',
+                    '🤩': 'Star-struck',
+                    '😎': 'Smiling face with sunglasses',
+                    '👶': 'Baby'
+                }
+            },
+            {
+                title: 'Nature',
+                items: {
+                    '🌅': 'Sunrise',
+                    '🌄': 'Sunrise over mountains',
+                    '🏔️': 'Snow-capped mountain',
+                    '🌊': 'Ocean wave',
+                    '☀️': 'Sunny',
+                    '🌤️': 'Partly sunny',
+                    '⛅': 'Sun behind cloud',
+                    '☁️': 'Cloudy',
+                    '🌧️': 'Rain',
+                    '⛈️': 'Thunderstorm',
+                    '🌩️': 'Lightning',
+                    '❄️': 'Snowflake',
+                    '🌈': 'Rainbow',
+                    '🌙': 'Crescent moon',
+                    '⭐': 'Star'
+                }
+            },
+            {
+                title: 'Sports',
+                items: {
+                    '🏈': 'American football',
+                    '🏹': 'Archery',
+                    '🏸': 'Badminton',
+                    '⚾': 'Baseball',
+                    '🏀': 'Basketball',
+                    '🎳': 'Bowling',
+                    '🥊': 'Boxing',
+                    '🏏': 'Cricket',
+                    '🚴': 'Cycling',
+                    '🏑': 'Field hockey',
+                    '⚽': 'Football / soccer',
+                    '⛳': 'Golf',
+                    '🏒': 'Ice hockey',
+                    '🥋': 'Martial arts',
+                    '🚣': 'Rowing',
+                    '🏉': 'Rugby',
+                    '🏃': 'Running',
+                    '⛷️': 'Skiing',
+                    '🏂': 'Snowboarding',
+                    '🏄': 'Surfing',
+                    '🏊': 'Swimming',
+                    '🏓': 'Table tennis',
+                    '🎾': 'Tennis',
+                    '🏐': 'Volleyball',
+                    '🏋️': 'Weightlifting'
+                }
+            }
+        ];
 
-          '👍': 'Thumbs up',
-          '👎': 'Thumbs down',
-          '👌': 'oK hand',
-          '🔥': 'Fire / hot',
-          '✅': 'Check mark / success',
-          '❌': 'Cross mark / failure',
-          '❓': 'Question mark / unknown',
+        grid.innerHTML = '';
 
-          '📸': 'Camera / photography',
-          '🎨': 'Artist palette / art',
-          '🏆': 'Trophy / winner',
-          '💎': 'Gem / diamond',
-          '🎉': 'Party popper / celebration',
+        for (let i = 0; i < sections.length; i++) {
+            const section = sections[i];
 
-          '😀': 'Grinning face',
-          '😍': 'Smiling face with heart-eyes',
-          '🤩': 'Star-struck',
-          '😎': 'Smiling face with sunglasses',
+            if (i > 0) {
+                const divider = document.createElement('div');
+                divider.className = 'emoji-divider';
+                divider.textContent = section.title;
+                grid.appendChild(divider);
+            }
 
-          '🌅': 'Sunrise',
-          '🌄': 'Sunrise over mountains',
-          '🏔️': 'Snow-capped mountain',
-          '🌊': 'Ocean wave',
-
-          '☀️': 'Sunny',
-          '🌤️': 'Partly sunny',
-          '⛅': 'Sun behind cloud',
-          '☁️': 'Cloudy',
-          '🌧️': 'Rain',
-          '⛈️': 'Thunderstorm',
-          '🌩️': 'Lightning',
-          '❄️': 'Snowflake',
-          '🌈': 'Rainbow',
-          '🌙': 'Crescent moon',
-          '⭐': 'Star'
-        };
-
-        for (const [e, desc] of Object.entries(emojiDescriptions)) {
-            const btn = document.createElement('button');
-            btn.type = 'button';
-            btn.className = 'emoji-btn';
-            btn.textContent = e;
-            btn.title = desc;
-            grid.appendChild(btn);
+            for (const [e, desc] of Object.entries(section.items)) {
+                const btn = document.createElement('button');
+                btn.type = 'button';
+                btn.className = 'emoji-btn';
+                btn.textContent = e;
+                btn.title = desc;
+                grid.appendChild(btn);
+            }
         }
     },
 
@@ -1456,7 +1544,7 @@ const App = {
     },
 
     /**
-     * Formats a date string or timestamp to a localized string.
+     * Formats a date string or timestamp to a localised string.
      * @param {string|number|Date} date - Date to format
      * @returns {string} Formatted date
      */
@@ -1555,7 +1643,7 @@ const App = {
     },
 
     /**
-     * Initializes the application.
+     * Initialises the application.
      * Called once when DOM is ready.
      * @private
      */
@@ -1563,10 +1651,16 @@ const App = {
         // Load persisted state
         this._loadPersistedState();
 
+        // Prime mock data so Gallery has a stable dataset from the outset.
+        // Level 3 includes all lower levels in the current mock generator.
+        if (this.mockMode) {
+            this._getMockDuplicates(3);
+        }
+
         // Apply initial theme
         document.getElementById('app').dataset.theme = this.state.theme;
 
-        // Initialize toolbar
+        // Initialise toolbar
         this._initToolbar();
 
         // Update initial toolbar states
@@ -1575,7 +1669,7 @@ const App = {
         this._updateFilterButton();
         this._updateToolbarStates();
 
-        // Initialize registered modules
+        // Initialise registered modules
         for (const [name, module] of Object.entries(this._modules)) {
             if (typeof module.init === 'function') {
                 try {
@@ -1600,7 +1694,7 @@ const App = {
         }
         this._readyCallbacks = [];
 
-        console.log('Imaginary initialized', this.mockMode ? '(mock mode)' : '');
+        console.log('Imaginary initialised', this.mockMode ? '(mock mode)' : '');
     },
 
     /**

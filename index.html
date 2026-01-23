@@ -73,6 +73,12 @@
 
             <!-- Center section: navigation and mode buttons -->
             <div class="toolbar-center">
+                <!-- Back to gallery button (visible on database, search, duplicates screens) -->
+                <div class="toolbar-group" data-for-screen="database search duplicates">
+                    <button id="btn-back-gallery" class="toolbar-btn" title="Back to gallery">
+                        <span class="material-symbols-outlined">photo_library</span>
+                    </button>
+                </div>
                 <button id="btn-database" class="toolbar-btn" title="Manage database">
                     <span class="material-symbols-outlined">database</span>
                 </button>
@@ -109,13 +115,6 @@
                     </button>
                     <button id="btn-clear-selection" class="toolbar-btn" title="Clear selection">
                         <span class="material-symbols-outlined">deselect</span>
-                    </button>
-                </div>
-
-                <!-- Back to gallery button (visible on database, search, duplicates screens) -->
-                <div class="toolbar-group" data-for-screen="database search duplicates">
-                    <button id="btn-back-gallery" class="toolbar-btn" title="Back to gallery">
-                        <span class="material-symbols-outlined">photo_library</span>
                     </button>
                 </div>
 
