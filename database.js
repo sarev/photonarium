@@ -50,6 +50,10 @@
  * @requires core
  */
 
+/**
+ * Database management screen module.
+ * @namespace
+ */
 const Database = {
     /**
      * DOM element references.
