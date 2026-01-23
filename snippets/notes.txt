@@ -1,0 +1,151 @@
+
+The user can add directories to the database as and when they like. These must be canonicalised before they are stored. It's possible one might be a subdirectory of another, but this is fine. For example, they might add:
+
+    - a/b/c
+    - a/b/d
+    - a
+    - e
+    - f/g/h
+    - f/g/i
+
+When the user adds a directory, the app will quickly recurse through it and add all of the imgages it finds onto a queue for a background process to pick up. It might be an idea to avoid recursing into directories which were already in the database at this point, so we're not wasting time checking files that are already known. The background process is what checks whether a file is already in the database and adds its info if not, or updates its info if it looks like that file has changed (different modified date, size, or sha256 checksum).
+
+When the user *removes* a directory from the database, we need to follow these steps:
+
+    1. Remove that directory from the list of directories in the database
+    2. Block the background image ingestion process
+    3. Iterate over the image ingestion queue
+        3.1. If the queued image's isn't within any of the remaining directories, then remove that image from the queue
+    4. Resume the background image ingestion process
+    5. Iterate over all images in the database:
+        5.1. If the image's isn't within any of the remaining directories, then mark that image as 'deleted' in the database - thus, we keep its metadata, but don't display it anywhere in the UI (if the user ever puts that image back, we won't end up losing the description text by doing this - the downside is that the database will essentially 'leak' deleted files. We might add a 'compact' feature later)
+
+Note: given the UI is asynchronous with the backend, we need to be careful to correctly manage the possibility of the user adding/removing multiple directories while the backend is still processing an earlier request - ideally without blocking the front-end.
+
+We also need to somehow signal from the backend to the front-end whenever the directory removal process completes and whenever the image ingestion queue becomes empty (ingestion complete). At the very least, the front-end will likely want to refresh its cached list of images and the current view/screen (as required).
+
+Note:
+
+The background image ingestion process will calculate and store *nearly* all of the image information, one image at a time:
+
+    - id: unique identifier
+    - path: full file path (canonicalised)
+    - basename: filename only
+    - size: file size in bytes
+    - width, height: dimensions in pixels
+    - timestamp: best-guess date (EXIF or filesystem - details below)
+    - checksum: SHA256 hash
+    - perceptual_hash: for duplicate detection (level 0-1)
+    - laplacian_variance: focus/sharpness score
+    - lossless: boolean (e.g. PNG/TIFF vs JPEG)
+    - description: user-editable text
+    - rating: user-editable text + emoji string
+    - embedding: OpenCLIP vector
+    - deleted: boolean (becomes True if the file is ever found to me missing on the file system)
+
+Obtaining the timestamp is a convoluted process, requiring various levels of attempting to derive this information, from reliable to pure guesswork (favour the first that isn't None):
+
+    1. EXIF "DateTimeOriginal" tag (datetime or None)
+    2. EXIF "DateTime" tag (datetime or None)
+    3. FS creation time (datetime or None)
+    4. FS modified time (datetime or None)
+    5. timestamp guessed from file path (datetime or None)
+
+Guessing the timestamp from the filename is done by looking at the complete, canonicalised filename (including its path), searching for groups of two or more contiguous digits, and then doing the following:
+
+      - A date appears as one of:
+            • A contiguous numeric string of 8 digits (YYYYMMDD), or
+            • A contiguous numeric string of 6 digits (YYMMDD), or
+            • Three separate groups corresponding to YYYY, MM, DD or YY, MM, DD (with no more than one character separating each group).
+      - A time, if present, appears as one of:
+            • A contiguous numeric string of 6 digits (HHMMSS),
+            • A contiguous numeric string of 4 digits (HHMM, with seconds defaulted to 00), or
+            • Two or three separate groups (each 2 digits) that join to form HHMM or HHMMSS (with no more than one character separating each group).
+      - If two sequences match as candidates for both date and time, the first (earlier in the string) is assumed to be the date and the second (later in the string) the time.
+      - If no valid time candidate is found, the time 00:00:00 is assumed.
+
+If no timestamp can be guessed, then it should be set to None.
+
+Note, in the GUI, the timestamp display in the "info-panel" of the Gallery screen should be presented as an editable field (similar to the ones in the Search screen), along with a date picker, so that the user can override the timestamp with a manually entered value, if they wish. This isn't currently implemented.
+
+
+
+
+
+
+Q 1. Duplicate detection timing
+  The notes mention computing perceptual_hash and embedding during ingestion. When should duplicate groups be computed?
+  - Option A: On-demand when user opens Duplicates screen (slower first load, always fresh)
+  - Option B: After each ingestion batch completes (pre-computed, faster UI)
+  - Option C: Background job that runs periodically
+
+Answer: Option B makes most sense to me. In this case, we don't report that the ingestion operation has completed to the front-end until the duplicate computations are complete.
+
+
+Q 2. Subdirectory overlap handling
+  If user adds a/ then later adds a/b/c/, should we:
+  - Skip a/b/c/ as redundant (already covered by a/)?
+  - Allow it (user might later remove a/ but keep a/b/c/)?
+  - Warn but allow?
+
+Answer: allow without warning. Also, the process of queuing images for ingestion should end up spotting that there's no need to queue anything for this use case.
+
+
+Q 3. "Deleted" image cleanup
+  You mention a future "compact" feature. Should deleted images also stop appearing in duplicate groups, or remain there (greyed out) so the user sees the relationship?
+
+Answer: They should be completely hidden in the UI. We only keep them in the database in the hope that at some point they may reappear (think: removable storage).
+
+
+Q 4. Timestamp editability
+  The notes say timestamp should be editable in the info panel. Should we store both:
+  - timestamp_auto (computed value)
+  - timestamp_override (user value, nullable)
+
+  ...so we can revert to auto if user clears their override?
+
+Answer: no. When we ingest, we attempt to find a timestamp. Once the user overrides that, we just run with their choice from there on. As such, there's no need (IMO) for multiple timestamp candidate fields it the database entry for an image; we just need the current timestamp.
+
+  Suggestions
+
+  1. Add timestamp_source field
+  Store which method yielded the timestamp (exif_original, exif_datetime, fs_created, fs_modified, filename_parsed, user_override). Useful for debugging and showing
+  confidence in the UI.
+
+Answer: not worth it - see above.
+
+
+  2. Queue persistence
+  If the app crashes mid-ingestion, the queue is lost. Consider persisting the queue to SQLite (a simple ingestion_queue table) so it survives restarts.
+
+Answer: not required. I would prefer the app to rescan the directories in the database every time it starts, just in case.
+
+
+  3. Frontend notification mechanism
+  For signaling ingestion completion, I'd suggest Server-Sent Events (SSE) over polling:
+  @app.route('/api/events')
+  def event_stream():
+      def generate():
+          while True:
+              event = event_queue.get()  # blocks
+              yield f"data: {json.dumps(event)}\n\n"
+      return Response(generate(), mimetype='text/event-stream')
+  Lightweight, real-time, and simpler than WebSockets.
+
+Answer: fine by me.
+
+
+Q 4. Batch embedding computation
+  OpenCLIP is much faster when processing images in batches (GPU utilization). Consider:
+  - Queue accumulates images
+  - Background worker processes in batches of 16-32
+  - Single images processed immediately if queue is small
+
+Answer: interesting. I was thinking it would run in a different background thread and you've now reinforced that feeling. Like the ingestion queue, the app should check all images in the database at startup and queue the OpenCLIP processing for any where it's missing.
+
+
+Q 5. File watcher (future)
+  Consider noting that a future enhancement could use watchdog to detect file changes without manual rescans.
+
+Answer: noted. Agreed this is for the perfect future solution and not now.
+
