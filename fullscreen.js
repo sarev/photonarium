@@ -11,7 +11,8 @@
  *   - Loads and displays the full-resolution image
  *   - Initially scales image to fit screen while preserving aspect ratio
  *   - Sets screen background to black for optimal viewing
- *   - Shows canonical filename overlay at bottom (fades out after delay)
+ *   - Shows overlays (close button and filename) that fade after 3 seconds
+ *   - Overlays reappear on any user interaction (mouse, keyboard, zoom, pan)
  *
  * Zoom Controls:
  *   - Mouse scroll wheel zooms in/out centered on cursor position
@@ -92,11 +93,11 @@ const Fullscreen = {
     _els: {},
 
     /**
-     * Timeout for hiding the filename overlay.
+     * Timeout for hiding overlays (close button and filename).
      * @type {number|null}
      * @private
      */
-    _filenameTimeout: null,
+    _overlayTimeout: null,
 
     /**
      * Bound event handler references for cleanup.
@@ -115,8 +116,14 @@ const Fullscreen = {
             screen: App.$('screen-fullscreen'),
             container: App.$('fullscreen-container'),
             image: App.$('fullscreen-image'),
-            filename: App.$('fullscreen-filename')
+            filename: App.$('fullscreen-filename'),
+            closeBtn: App.$('fullscreen-close')
         };
+
+        // Bind close button click (permanent, not per-session)
+        this._els.closeBtn.addEventListener('click', () => {
+            App.hideFullscreen();
+        });
     },
 
     /**
@@ -145,10 +152,10 @@ const Fullscreen = {
         // Unbind event listeners
         this._unbindEvents();
 
-        // Clear filename timeout
-        if (this._filenameTimeout) {
-            clearTimeout(this._filenameTimeout);
-            this._filenameTimeout = null;
+        // Clear overlay timeout
+        if (this._overlayTimeout) {
+            clearTimeout(this._overlayTimeout);
+            this._overlayTimeout = null;
         }
 
         // Clear image source to free memory
@@ -271,17 +278,31 @@ const Fullscreen = {
             text += ` (${width} × ${height})`;
         }
         el.textContent = text;
-        el.classList.remove('hidden');
+
+        // Show all overlays
+        this._showOverlays();
+    },
+
+    /**
+     * Shows all overlays (close button and filename) and schedules them to hide.
+     * Called on user interaction to keep overlays visible while active.
+     * @private
+     */
+    _showOverlays() {
+        // Show overlays
+        this._els.filename.classList.remove('hidden');
+        this._els.closeBtn.classList.remove('hidden');
 
         // Clear any existing timeout
-        if (this._filenameTimeout) {
-            clearTimeout(this._filenameTimeout);
+        if (this._overlayTimeout) {
+            clearTimeout(this._overlayTimeout);
         }
 
         // Schedule hide
-        this._filenameTimeout = setTimeout(() => {
-            el.classList.add('hidden');
-            this._filenameTimeout = null;
+        this._overlayTimeout = setTimeout(() => {
+            this._els.filename.classList.add('hidden');
+            this._els.closeBtn.classList.add('hidden');
+            this._overlayTimeout = null;
         }, this.FILENAME_DISPLAY_MS);
     },
 
@@ -349,6 +370,9 @@ const Fullscreen = {
      */
     _handleWheel(e) {
         e.preventDefault();
+
+        // Show overlays on zoom interaction
+        this._showOverlays();
 
         let factor;
 
@@ -455,6 +479,9 @@ const Fullscreen = {
      * @private
      */
     _handleMouseDown(e) {
+        // Show overlays on click
+        this._showOverlays();
+
         // Only pan with left button when zoomed in
         if (e.button !== 0 || this.state.zoom <= 1) return;
 
@@ -470,11 +497,15 @@ const Fullscreen = {
     },
 
     /**
-     * Handles mouse move during panning.
+     * Handles mouse move - shows overlays and handles panning.
      * @param {MouseEvent} e
      * @private
      */
     _handleMouseMove(e) {
+        // Show overlays on mouse movement
+        this._showOverlays();
+
+        // Handle panning if active
         if (!this.state.isPanning || !this._panStart) return;
 
         this.state.panX = e.clientX - this._panStart.x;
@@ -562,6 +593,9 @@ const Fullscreen = {
      * @private
      */
     _handleKeyDown(e) {
+        // Show overlays on any key interaction
+        this._showOverlays();
+
         switch (e.key) {
             case 'Escape':
                 e.preventDefault();

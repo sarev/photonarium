@@ -36,7 +36,7 @@ Drag selection should auto-scroll when the user is trying to drag off the top or
 
 We should support ctrl-click and shift-click selection models, as per how Windows does these.
 
-## GUI consistency
+## GUI consistency - DONE
 
 The similarity sliders for the filters have loose on the left, and strict on the right. For the duplicate finder screen, the slider has exact on the left, and related on the right. Can we reverse the order of the duplicate finder slider so that it's logically consistent with the filter sliders?
 

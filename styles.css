@@ -630,6 +630,39 @@ a:hover {
     opacity: 0;
 }
 
+/* Close button overlay */
+#fullscreen-close {
+    position: absolute;
+    top: 1rem;
+    right: 1rem;
+    width: 2.5rem;
+    height: 2.5rem;
+    border: none;
+    border-radius: 50%;
+    background: rgba(0, 0, 0, 0.5);
+    color: #fff;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    opacity: 1;
+    transition: opacity 0.3s, background-color 0.2s;
+    z-index: 10;
+}
+
+#fullscreen-close:hover {
+    background: rgba(0, 0, 0, 0.8);
+}
+
+#fullscreen-close .material-symbols-outlined {
+    font-size: 1.5rem;
+}
+
+#fullscreen-close.hidden {
+    opacity: 0;
+    pointer-events: none;
+}
+
 
 /* ==========================================================================
    DATABASE SCREEN
