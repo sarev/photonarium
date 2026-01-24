@@ -676,6 +676,14 @@ CREATE TABLE IF NOT EXISTS duplicate_groups (
 )
 """
 
+# SQL schema for tracking one-time migrations
+_SQL_CREATE_MIGRATIONS = """
+CREATE TABLE IF NOT EXISTS migrations (
+    id          TEXT PRIMARY KEY,
+    applied_at  TEXT NOT NULL
+)
+"""
+
 # Index definitions for performance
 _SQL_CREATE_INDEXES = [
     "CREATE INDEX IF NOT EXISTS idx_images_path ON images(path)",
@@ -732,6 +740,7 @@ def init_database(db_path: Path | str) -> sqlite3.Connection:
     conn.execute(_SQL_CREATE_FOLDERS)
     conn.execute(_SQL_CREATE_IMAGES)
     conn.execute(_SQL_CREATE_DUPLICATE_GROUPS)
+    conn.execute(_SQL_CREATE_MIGRATIONS)
 
     # Create indexes
     for index_sql in _SQL_CREATE_INDEXES:
@@ -749,6 +758,37 @@ def init_database(db_path: Path | str) -> sqlite3.Connection:
 
     logger.info('Database initialisation complete')
     return conn
+
+
+def has_migration_run(conn: sqlite3.Connection, migration_id: str) -> bool:
+    """Check if a one-time migration has already been applied.
+
+    Args:
+        conn: Database connection.
+        migration_id: Unique identifier for the migration.
+
+    Returns:
+        True if migration has been applied, False otherwise.
+    """
+    cursor = conn.execute(
+        'SELECT 1 FROM migrations WHERE id = ?',
+        (migration_id,)
+    )
+    return cursor.fetchone() is not None
+
+
+def record_migration(conn: sqlite3.Connection, migration_id: str) -> None:
+    """Record that a one-time migration has been applied.
+
+    Args:
+        conn: Database connection.
+        migration_id: Unique identifier for the migration.
+    """
+    conn.execute(
+        'INSERT OR REPLACE INTO migrations (id, applied_at) VALUES (?, datetime("now"))',
+        (migration_id,)
+    )
+    conn.commit()
 
 
 def row_to_dict(row: sqlite3.Row | None) -> dict[str, Any] | None:
@@ -3310,6 +3350,9 @@ class ImageDatabase:
             # Access the clip_model property to trigger loading
             _ = self._embedding_thread.clip_model
 
+        # Run one-time migrations
+        self._migrate_recalculate_timestamps()
+
         # Backfill description embeddings for images with descriptions but no embedding
         self._backfill_description_embeddings()
 
@@ -3360,6 +3403,54 @@ class ImageDatabase:
 
         self.conn.commit()
         logger.info(f'        Backfilled {count} description embeddings')
+
+    def _migrate_recalculate_timestamps(self) -> None:
+        """One-time migration to recalculate timestamps using improved logic.
+
+        This migration re-derives timestamps for all existing images using the
+        updated timestamp derivation order (filename before filesystem) and
+        support for partial dates (year-only defaults to January 1st).
+
+        Only runs once; tracked via the migrations table.
+        """
+        migration_id = 'recalculate_timestamps_v1'
+
+        if has_migration_run(self.conn, migration_id):
+            return
+
+        # Get all non-deleted images
+        cursor = self.conn.execute("""
+            SELECT id, path
+            FROM images
+            WHERE deleted = 0
+        """)
+        rows = cursor.fetchall()
+
+        if not rows:
+            record_migration(self.conn, migration_id)
+            return
+
+        logger.info(f'Recalculating timestamps for {len(rows)} images (one-time migration)...')
+
+        updated = 0
+        for row in rows:
+            image_id = row['id']
+            path = row['path']
+
+            try:
+                new_timestamp = derive_timestamp(path)
+                if new_timestamp:
+                    self.conn.execute(
+                        'UPDATE images SET timestamp = ? WHERE id = ?',
+                        (new_timestamp.isoformat(), image_id)
+                    )
+                    updated += 1
+            except Exception as e:
+                logger.warning(f'Failed to recalculate timestamp for {path}: {e}')
+
+        self.conn.commit()
+        record_migration(self.conn, migration_id)
+        logger.info(f'        Updated {updated} image timestamps')
 
     def _rescan_all_folders(self) -> None:
         """Rescan all registered folders for new/changed/deleted files."""
