@@ -117,12 +117,20 @@ const Fullscreen = {
             container: App.$('fullscreen-container'),
             image: App.$('fullscreen-image'),
             filename: App.$('fullscreen-filename'),
-            closeBtn: App.$('fullscreen-close')
+            closeBtn: App.$('fullscreen-close'),
+            prevBtn: App.$('fullscreen-prev'),
+            nextBtn: App.$('fullscreen-next')
         };
 
-        // Bind close button click (permanent, not per-session)
+        // Bind button clicks (permanent, not per-session)
         this._els.closeBtn.addEventListener('click', () => {
             App.hideFullscreen();
+        });
+        this._els.prevBtn.addEventListener('click', () => {
+            this._navigatePrev();
+        });
+        this._els.nextBtn.addEventListener('click', () => {
+            this._navigateNext();
         });
     },
 
@@ -284,7 +292,7 @@ const Fullscreen = {
     },
 
     /**
-     * Shows all overlays (close button and filename) and schedules them to hide.
+     * Shows all overlays (close button, nav buttons, filename) and schedules them to hide.
      * Called on user interaction to keep overlays visible while active.
      * @private
      */
@@ -292,6 +300,8 @@ const Fullscreen = {
         // Show overlays
         this._els.filename.classList.remove('hidden');
         this._els.closeBtn.classList.remove('hidden');
+        this._els.prevBtn.classList.remove('hidden');
+        this._els.nextBtn.classList.remove('hidden');
 
         // Clear any existing timeout
         if (this._overlayTimeout) {
@@ -302,6 +312,8 @@ const Fullscreen = {
         this._overlayTimeout = setTimeout(() => {
             this._els.filename.classList.add('hidden');
             this._els.closeBtn.classList.add('hidden');
+            this._els.prevBtn.classList.add('hidden');
+            this._els.nextBtn.classList.add('hidden');
             this._overlayTimeout = null;
         }, this.FILENAME_DISPLAY_MS);
     },

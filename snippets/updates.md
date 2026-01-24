@@ -90,7 +90,7 @@ When we're on the Gallery screen, the related toolbar button (for going to the G
 
 I'd like to double-check what happens when the user clicks on "Rescan all folders" in the Database screen. Please outline everything it will do as plain English bullet points.
 
-## Rotate buttons
+## Rotate buttons - DONE
 
 In the gallery toolbar, we have a button for going into full-screen mode. This is shaded if there isn't exactly one imgae selected. It's good. I'd like two buttons next to it: for rotating all selected images anti-clockwise, or clockwise. It will be shaded if no images are selected.
 
