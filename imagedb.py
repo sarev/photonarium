@@ -3864,6 +3864,8 @@ class ImageDatabase:
 
         # Create locks for thread safety
         self._db_lock = threading.RLock()  # Reentrant lock for nested calls
+        self._image_locks: dict[str, threading.Lock] = {}  # Per-image locks for rotation
+        self._image_locks_lock = threading.Lock()  # Lock for the locks dict
 
         # Create queues
         self._ingestion_queue: queue.Queue[Path] = queue.Queue()
@@ -4356,12 +4358,30 @@ class ImageDatabase:
 
         return {'results': results, 'rotated': rotated}
 
+    def _get_image_lock(self, image_id: str) -> threading.Lock:
+        """Get or create a lock for a specific image.
+
+        Used to prevent concurrent operations on the same image file.
+
+        Args:
+            image_id: UUID of the image.
+
+        Returns:
+            Lock for the specified image.
+        """
+        with self._image_locks_lock:
+            if image_id not in self._image_locks:
+                self._image_locks[image_id] = threading.Lock()
+            return self._image_locks[image_id]
+
     def _rotate_single_image(self, image_id: str, direction: str) -> bool:
         """Rotate a single image file and update its metadata.
 
         Performs lossless rotation for JPEG files when possible.
         Updates the database with new checksum, size, and mtime.
         Deletes old cached thumbnails.
+
+        Uses a per-image lock to prevent concurrent rotations of the same image.
 
         Args:
             image_id: UUID of the image to rotate.
@@ -4370,64 +4390,69 @@ class ImageDatabase:
         Returns:
             True if rotation succeeded, False otherwise.
         """
-        # Get current image info
-        image = get_image(self.conn, image_id)
-        if image is None:
-            logger.warning(f'rotate_image: Image not found: {image_id}')
-            return False
+        # Get per-image lock to prevent concurrent rotations of the same image
+        image_lock = self._get_image_lock(image_id)
 
-        path = Path(image['path'])
-        if not path.exists():
-            logger.error(f'rotate_image: File not found: {path}')
-            return False
+        with image_lock:
+            # Get current image info (inside lock to ensure consistent read)
+            image = get_image(self.conn, image_id)
+            if image is None:
+                logger.warning(f'rotate_image: Image not found: {image_id}')
+                return False
 
-        old_checksum = image.get('checksum')
+            path = Path(image['path'])
+            if not path.exists():
+                logger.error(f'rotate_image: File not found: {path}')
+                return False
 
-        # Rotate the image file
-        if not rotate_image_file(path, direction):
-            logger.error(f'rotate_image: Rotation failed for: {path}')
-            return False
+            old_checksum = image.get('checksum')
 
-        # Delete old thumbnails (based on old checksum)
-        if old_checksum:
-            deleted_count = delete_thumbnails_for_checksum(old_checksum, self.thumbnail_dir)
-            logger.debug(f'Deleted {deleted_count} old thumbnails for checksum {old_checksum[:8]}...')
+            # Rotate the image file
+            if not rotate_image_file(path, direction):
+                logger.error(f'rotate_image: Rotation failed for: {path}')
+                return False
 
-        # Compute new metadata
-        try:
-            new_checksum = compute_checksum(path)
-            stat = path.stat()
-            new_size = stat.st_size
-            new_mtime = stat.st_mtime
+            # Delete old thumbnails (based on old checksum)
+            if old_checksum:
+                deleted_count = delete_thumbnails_for_checksum(old_checksum, self.thumbnail_dir)
+                logger.debug(f'Deleted {deleted_count} old thumbnails for checksum {old_checksum[:8]}...')
 
-            # Get new dimensions
-            with Image.open(path) as img:
-                new_width, new_height = img.size
-        except Exception as e:
-            logger.error(f'rotate_image: Failed to compute new metadata: {e}')
-            return False
+            # Compute new metadata
+            try:
+                new_checksum = compute_checksum(path)
+                stat = path.stat()
+                new_size = stat.st_size
+                new_mtime = stat.st_mtime
 
-        # Update database
-        try:
-            self.conn.execute(
-                '''UPDATE images SET
-                    checksum = ?,
-                    size = ?,
-                    width = ?,
-                    height = ?,
-                    mtime = ?,
-                    updated_at = ?
-                WHERE id = ?''',
-                (new_checksum, new_size, new_width, new_height, new_mtime,
-                 datetime.now().isoformat(), image_id)
-            )
-            self.conn.commit()
-        except Exception as e:
-            logger.error(f'rotate_image: Failed to update database: {e}')
-            return False
+                # Get new dimensions
+                with Image.open(path) as img:
+                    new_width, new_height = img.size
+            except Exception as e:
+                logger.error(f'rotate_image: Failed to compute new metadata: {e}')
+                return False
 
-        logger.info(f'Rotated image {direction}: {path.name}')
-        return True
+            # Update database (with db lock for thread safety)
+            try:
+                with self._db_lock:
+                    self.conn.execute(
+                        '''UPDATE images SET
+                            checksum = ?,
+                            size = ?,
+                            width = ?,
+                            height = ?,
+                            mtime = ?,
+                            updated_at = ?
+                        WHERE id = ?''',
+                        (new_checksum, new_size, new_width, new_height, new_mtime,
+                         datetime.now().isoformat(), image_id)
+                    )
+                    self.conn.commit()
+            except Exception as e:
+                logger.error(f'rotate_image: Failed to update database: {e}')
+                return False
+
+            logger.info(f'Rotated image {direction}: {path.name}')
+            return True
 
     def search_images(
         self,
