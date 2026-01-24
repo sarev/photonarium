@@ -918,7 +918,9 @@ const Gallery = {
             startY: e.clientY - rect.top + this._els.grid.scrollTop,
             isRightButton: e.button === 2,
             dragged: false,
-            box: null
+            box: null,
+            autoScrollInterval: null,
+            lastMouseEvent: null
         };
 
         // Create selection box element
@@ -934,13 +936,26 @@ const Gallery = {
     },
 
     /**
-     * Handles drag move - updates selection box.
+     * Handles drag move - updates selection box and auto-scrolls near edges.
      * @param {MouseEvent} e
      * @private
      */
     _handleDragMove(e) {
         if (!this.state.dragState) return;
 
+        // Store last mouse event for auto-scroll updates
+        this.state.dragState.lastMouseEvent = e;
+
+        this._updateDragBox(e);
+        this._updateAutoScroll(e);
+    },
+
+    /**
+     * Updates the drag selection box position.
+     * @param {MouseEvent} e
+     * @private
+     */
+    _updateDragBox(e) {
         const rect = this._els.grid.getBoundingClientRect();
         const currentX = e.clientX - rect.left + this._els.grid.scrollLeft;
         const currentY = e.clientY - rect.top + this._els.grid.scrollTop;
@@ -964,6 +979,92 @@ const Gallery = {
     },
 
     /**
+     * Edge zone size in pixels for auto-scroll trigger.
+     * @type {number}
+     * @private
+     */
+    _autoScrollEdge: 50,
+
+    /**
+     * Auto-scroll speed in pixels per interval.
+     * @type {number}
+     * @private
+     */
+    _autoScrollSpeed: 15,
+
+    /**
+     * Updates auto-scroll based on mouse position near container edges.
+     * @param {MouseEvent} e
+     * @private
+     */
+    _updateAutoScroll(e) {
+        const container = this._els.grid?.closest('.gallery-container');
+        if (!container) return;
+
+        const rect = container.getBoundingClientRect();
+        const mouseY = e.clientY;
+
+        // Calculate distance from edges
+        const distFromTop = mouseY - rect.top;
+        const distFromBottom = rect.bottom - mouseY;
+
+        let scrollDirection = 0;
+        if (distFromTop < this._autoScrollEdge && distFromTop >= 0) {
+            // Near top edge - scroll up
+            scrollDirection = -1;
+        } else if (distFromBottom < this._autoScrollEdge && distFromBottom >= 0) {
+            // Near bottom edge - scroll down
+            scrollDirection = 1;
+        }
+
+        if (scrollDirection !== 0) {
+            // Start auto-scroll if not already running
+            if (!this.state.dragState.autoScrollInterval) {
+                this.state.dragState.autoScrollInterval = setInterval(() => {
+                    this._performAutoScroll();
+                }, 16); // ~60fps
+            }
+            this.state.dragState.scrollDirection = scrollDirection;
+        } else {
+            // Stop auto-scroll
+            this._stopAutoScroll();
+        }
+    },
+
+    /**
+     * Performs one step of auto-scrolling during drag.
+     * @private
+     */
+    _performAutoScroll() {
+        if (!this.state.dragState) return;
+
+        const container = this._els.grid?.closest('.gallery-container');
+        if (!container) return;
+
+        const direction = this.state.dragState.scrollDirection || 0;
+        if (direction === 0) return;
+
+        // Scroll the container
+        container.scrollTop += direction * this._autoScrollSpeed;
+
+        // Update the drag box to account for new scroll position
+        if (this.state.dragState.lastMouseEvent) {
+            this._updateDragBox(this.state.dragState.lastMouseEvent);
+        }
+    },
+
+    /**
+     * Stops auto-scrolling.
+     * @private
+     */
+    _stopAutoScroll() {
+        if (this.state.dragState?.autoScrollInterval) {
+            clearInterval(this.state.dragState.autoScrollInterval);
+            this.state.dragState.autoScrollInterval = null;
+        }
+    },
+
+    /**
      * Handles drag end - selects items in box.
      * @param {MouseEvent} e
      * @private
@@ -971,6 +1072,9 @@ const Gallery = {
     _handleDragEnd(e) {
         document.removeEventListener('mousemove', this._onDragMove);
         document.removeEventListener('mouseup', this._onDragEnd);
+
+        // Stop any auto-scrolling
+        this._stopAutoScroll();
 
         if (!this.state.dragState) return;
 

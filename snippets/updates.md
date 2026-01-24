@@ -16,15 +16,15 @@ In the "Image information" pane of the gallery screen, I'd like to have the time
 
 I've realised I made a significant error in the image timestamp derivation rules. We should do the filename stuff _before_ the filesystem create/modified stuff (but still after the EXIF stuff), because often files are moved and copied around with file system datestamps being messed up, but if the photo is in a folder called "2014" then we should really assume it's from 2014 sometime. On a related note, where we cannot determine the complete date (e.g. we have the year but we're missing the month and day, or just the day), we should assume "01 January" for the missing parts.
 
-## Fix existing database
+## Fix existing database - DONE
 
 After fixing the timestamp calculation above, we'll probably need to do a (one-time) sweep through all of the images currently in the database to fix their timestamps!
 
-## Multiple image selection bug
+## Multiple image selection bug - DONE
 
 When multiple images are selected, the "Image information" shouldn't be showing information about the selected image (it currently seems to display info about one of them) - it should just stick with the info about how many are selected.
 
-## Gallery background updates
+## Gallery background updates - DONE
 
 Also, it'd be nice if the gallery screen updated from time to time while the database is in an "Updating" state. So long as it doesn't mess up the scroll position and selection, it would be good to have the newly added images appear in the gallery.
 
