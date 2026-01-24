@@ -97,7 +97,10 @@ const App = {
         filter: null,
         selectedImages: [],
         currentImageId: null,
-        scrollPositions: {}
+        scrollPositions: {},
+        // Image cache for efficient incremental updates
+        imageCache: null,       // Map of id -> image object
+        imageCacheEpoch: null,  // Last sync timestamp
     },
 
     /**
@@ -769,6 +772,87 @@ const App = {
      */
     async apiDelete(endpoint) {
         return this.api(endpoint, { method: 'DELETE' });
+    },
+
+    /* ----------------------------------------------------------------------
+       Image Cache (for efficient incremental updates)
+       ---------------------------------------------------------------------- */
+
+    /**
+     * Gets all images, using cache with delta updates for efficiency.
+     * On first call, fetches all images and caches them.
+     * On subsequent calls, fetches only changes since last sync.
+     * @returns {Promise<Array<Object>>} Array of image objects
+     */
+    async getImages() {
+        if (this.state.imageCache === null) {
+            // First load - fetch all images
+            return this._loadAllImages();
+        } else {
+            // Incremental update - fetch only changes
+            return this._loadImagesDelta();
+        }
+    },
+
+    /**
+     * Forces a full reload of the image cache.
+     * Use this when cache may be stale (e.g., after major changes).
+     * @returns {Promise<Array<Object>>} Array of image objects
+     */
+    async reloadImages() {
+        this.state.imageCache = null;
+        this.state.imageCacheEpoch = null;
+        return this._loadAllImages();
+    },
+
+    /**
+     * Loads all images and initializes the cache.
+     * @returns {Promise<Array<Object>>} Array of image objects
+     * @private
+     */
+    async _loadAllImages() {
+        const response = await this.apiGet('/images');
+
+        // Build cache map from response
+        this.state.imageCache = new Map();
+        for (const img of response.images) {
+            this.state.imageCache.set(img.id, img);
+        }
+        this.state.imageCacheEpoch = response.epoch;
+
+        return Array.from(this.state.imageCache.values());
+    },
+
+    /**
+     * Loads image changes since last sync and updates cache.
+     * @returns {Promise<Array<Object>>} Array of all cached image objects
+     * @private
+     */
+    async _loadImagesDelta() {
+        const response = await this.apiGet(`/images?since=${encodeURIComponent(this.state.imageCacheEpoch)}`);
+
+        // Apply updates to cache
+        for (const img of response.updated) {
+            this.state.imageCache.set(img.id, img);
+        }
+
+        // Remove deleted images from cache
+        for (const id of response.deleted_ids) {
+            this.state.imageCache.delete(id);
+        }
+
+        // Update epoch
+        this.state.imageCacheEpoch = response.epoch;
+
+        return Array.from(this.state.imageCache.values());
+    },
+
+    /**
+     * Gets the current cached image count without fetching.
+     * @returns {number} Number of cached images, or 0 if cache not loaded
+     */
+    getCachedImageCount() {
+        return this.state.imageCache ? this.state.imageCache.size : 0;
     },
 
     /* ----------------------------------------------------------------------

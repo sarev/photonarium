@@ -79,21 +79,39 @@ const Gallery = {
      * Local state for the gallery screen.
      * @type {Object}
      * @property {Array<Object>} images - Current image list (sorted/filtered)
+     * @property {Array<Object>} filteredImages - Currently filtered/displayed images
      * @property {boolean} needsRefresh - Whether grid needs to reload on next enter
-     * @property {IntersectionObserver|null} lazyLoader - Observer for lazy loading
      * @property {Object|null} dragState - Current drag selection state
      * @property {Object|null} contentSimilarities - Similarity scores by image ID for content sort
      * @property {string|null} contentReferenceId - Reference image ID for content sort
      */
     state: {
         images: [],
+        filteredImages: [],
         needsRefresh: true,
-        lazyLoader: null,
         dragState: null,
         contentSimilarities: null,
         contentReferenceId: null,
         refreshIntervalId: null,
         lastImageCount: 0
+    },
+
+    /**
+     * Virtual scrolling configuration.
+     * @type {Object}
+     * @private
+     */
+    _virtualScroll: {
+        itemHeight: 0,      // Height of each item including gap
+        itemWidth: 0,       // Width of each item including gap
+        itemsPerRow: 0,     // Number of items per row
+        visibleRows: 0,     // Number of visible rows
+        bufferRows: 3,      // Extra rows to pre-render above/below viewport
+        retainRows: 30,     // Extra rows to keep cached once rendered (configurable)
+        startIndex: 0,      // First rendered item index
+        endIndex: 0,        // Last rendered item index
+        renderedItems: new Map(), // Cache of rendered DOM elements by image ID
+        scrollHandler: null // Bound scroll handler for cleanup
     },
 
     /**
@@ -118,8 +136,8 @@ const Gallery = {
             similarityValue: App.$('gallery-similarity-value')
         };
 
-        // Set up lazy loading observer
-        this._initLazyLoader();
+        // Set up virtual scrolling
+        this._initVirtualScroll();
 
         // Set up selection handlers
         this._initSelection();
@@ -142,6 +160,9 @@ const Gallery = {
     onEnter(data) {
         if (this.state.needsRefresh) {
             this._loadImages();
+        } else {
+            // Re-attach scroll listener (removed in onLeave)
+            this._attachScrollListener();
         }
         // Bind keyboard events
         this._bindKeyboard();
@@ -157,6 +178,31 @@ const Gallery = {
         this._unbindKeyboard();
         // Stop background refresh
         this._stopBackgroundRefresh();
+        // Remove scroll listener from grid
+        this._detachScrollListener();
+    },
+
+    /**
+     * Attaches the scroll listener for virtual scrolling.
+     * @private
+     */
+    _attachScrollListener() {
+        const grid = this._els.grid;
+        if (grid && this._virtualScroll.scrollHandler) {
+            grid.removeEventListener('scroll', this._virtualScroll.scrollHandler);
+            grid.addEventListener('scroll', this._virtualScroll.scrollHandler, { passive: true });
+        }
+    },
+
+    /**
+     * Detaches the scroll listener for virtual scrolling.
+     * @private
+     */
+    _detachScrollListener() {
+        const grid = this._els.grid;
+        if (grid && this._virtualScroll.scrollHandler) {
+            grid.removeEventListener('scroll', this._virtualScroll.scrollHandler);
+        }
     },
 
     /**
@@ -171,17 +217,36 @@ const Gallery = {
      * @private
      */
     async _loadImages() {
+        console.time('_loadImages total');
+
+        // Show loading indicator only on first load (cache empty)
+        if (this._els.grid && App.getCachedImageCount() === 0) {
+            this._els.grid.innerHTML = '<div class="gallery-loading">Loading images...</div>';
+        }
+
         try {
-            const images = await App.apiGet('/images');
+            // Use cached images with delta updates for efficiency
+            console.time('_loadImages fetch');
+            const images = await App.getImages();
+            console.timeEnd('_loadImages fetch');
+            console.log(`_loadImages: fetched ${images.length} images`);
+
+            console.time('_loadImages sort');
             this.state.images = this._sortImages(images);
+            console.timeEnd('_loadImages sort');
+
             this.state.lastImageCount = images.length;
             this._renderGrid();
             this.state.needsRefresh = false;
         } catch (error) {
             console.error('Failed to load images:', error);
             this.state.images = [];
-            this._renderGrid();
+            if (this._els.grid) {
+                this._els.grid.innerHTML = '<div class="gallery-loading">Failed to load images</div>';
+            }
         }
+
+        console.timeEnd('_loadImages total');
     },
 
     /**
@@ -192,10 +257,10 @@ const Gallery = {
         // Don't start if already running
         if (this.state.refreshIntervalId) return;
 
-        // Poll every 5 seconds
+        // Poll every 30 seconds
         this.state.refreshIntervalId = setInterval(() => {
             this._checkForNewImages();
-        }, 5000);
+        }, 30000);
     },
 
     /**
@@ -212,6 +277,7 @@ const Gallery = {
     /**
      * Checks if new images are available and refreshes while preserving state.
      * Only refreshes when database is in updating state.
+     * Uses delta updates for efficiency.
      * @private
      */
     async _checkForNewImages() {
@@ -222,17 +288,17 @@ const Gallery = {
                 return; // Only refresh while updating
             }
 
-            // Fetch latest images
-            const images = await App.apiGet('/images');
+            // Fetch latest images using delta updates
+            const images = await App.getImages();
 
-            // Only refresh if there are new images
+            // Only refresh if image count changed
             if (images.length === this.state.lastImageCount) {
                 return;
             }
 
             // Preserve current state
-            const scrollTop = this._els.grid?.closest('.gallery-container')?.scrollTop || 0;
-            const currentSelection = App.getSelection();
+            const scrollTop = this._els.grid?.scrollTop || 0;
+            const currentSelection = App.getSelectedImages();
 
             // Update images
             this.state.images = this._sortImages(images);
@@ -242,16 +308,15 @@ const Gallery = {
             this._renderGrid();
 
             // Restore scroll position
-            const container = this._els.grid?.closest('.gallery-container');
-            if (container) {
-                container.scrollTop = scrollTop;
+            if (this._els.grid) {
+                this._els.grid.scrollTop = scrollTop;
             }
 
             // Restore selection (filter to still-existing image IDs)
             const existingIds = new Set(this.state.images.map(img => img.id));
             const validSelection = currentSelection.filter(id => existingIds.has(id));
             if (validSelection.length > 0) {
-                App.setSelection(validSelection);
+                App.setSelectedImages(validSelection);
             }
 
         } catch (error) {
@@ -426,6 +491,7 @@ const Gallery = {
      */
     _onThumbnailSizeChanged() {
         this._updateGridStyle();
+        // Recalculate dimensions and re-render with new size
         this._reloadThumbnails();
     },
 
@@ -490,9 +556,10 @@ const Gallery = {
      * @private
      */
     _scrollToTop() {
-        const container = this._els.grid?.closest('.gallery-container');
-        if (container) {
-            container.scrollTop = 0;
+        if (this._els.grid) {
+            this._els.grid.scrollTop = 0;
+            // Ensure visible items are updated immediately
+            this._updateVisibleItems(0);
         }
     },
 
@@ -502,7 +569,7 @@ const Gallery = {
      * @private
      */
     _onSelectionChanged(selection) {
-        // Update visual selection state on thumbnails
+        // Update visual selection state on currently rendered thumbnails
         const items = this._els.grid.querySelectorAll('.gallery-item');
         for (const item of items) {
             item.classList.toggle('selected', selection.includes(item.dataset.id));
@@ -516,67 +583,290 @@ const Gallery = {
      * @private
      */
     _selectAll() {
-        const visible = this._filterImages(this.state.images);
-        const allIds = visible.map(img => img.id);
+        const allIds = this.state.filteredImages.map(img => img.id);
         App.setSelectedImages(allIds);
     },
 
     /* ----------------------------------------------------------------------
-       THUMBNAIL GRID
+       THUMBNAIL GRID - VIRTUAL SCROLLING
 
-       Rendering, lazy loading, and grid management.
+       Only renders visible items plus a buffer for smooth scrolling.
+       This is essential for handling 30,000+ images without lag.
        ---------------------------------------------------------------------- */
 
     /**
-     * Renders the thumbnail grid.
+     * Initializes virtual scrolling.
+     * @private
+     */
+    _initVirtualScroll() {
+        // Create spacer elements for virtual scrolling
+        this._topSpacer = document.createElement('div');
+        this._topSpacer.className = 'virtual-spacer';
+        this._bottomSpacer = document.createElement('div');
+        this._bottomSpacer.className = 'virtual-spacer';
+
+        // Load retention setting from localStorage (default: 30 rows)
+        // Can be changed via browser console: localStorage.setItem('imaginary-retainRows', '50')
+        const savedRetain = localStorage.getItem('imaginary-retainRows');
+        if (savedRetain) {
+            const retain = parseInt(savedRetain, 10);
+            if (!isNaN(retain) && retain >= 0) {
+                this._virtualScroll.retainRows = retain;
+            }
+        }
+
+        // Bind scroll handler
+        this._virtualScroll.scrollHandler = this._onScroll.bind(this);
+
+        // Handle window resize
+        this._resizeHandler = App.debounce(() => {
+            if (App.getScreen() === 'gallery' && this.state.filteredImages.length > 0) {
+                const grid = this._els.grid;
+                if (grid) {
+                    this._calculateVirtualDimensions(grid);
+                    // Force re-render
+                    this._virtualScroll.startIndex = -1;
+                    this._virtualScroll.endIndex = -1;
+                    this._updateVisibleItems(grid.scrollTop);
+                }
+            }
+        }, 100);
+        window.addEventListener('resize', this._resizeHandler);
+    },
+
+    /**
+     * Renders the thumbnail grid using virtual scrolling.
+     * Only renders visible items plus a buffer.
      * @private
      */
     _renderGrid() {
+        console.time('_renderGrid total');
         const grid = this._els.grid;
-        grid.innerHTML = '';
 
         // Apply filter
-        const filtered = this._filterImages(this.state.images);
+        console.time('_renderGrid filter');
+        this.state.filteredImages = this._filterImages(this.state.images);
+        console.timeEnd('_renderGrid filter');
+        console.log(`_renderGrid: ${this.state.filteredImages.length} images (virtual scroll)`);
+
+        // Clear grid and cache
+        grid.innerHTML = '';
+        this._virtualScroll.renderedItems.clear();
+        this._virtualScroll.startIndex = -1;
+        this._virtualScroll.endIndex = -1;
 
         // Handle empty state
-        if (filtered.length === 0) {
+        if (this.state.filteredImages.length === 0) {
             grid.innerHTML = '<div class="empty-state"><span class="material-symbols-outlined">photo_library</span><p>No images to display</p></div>';
+            console.timeEnd('_renderGrid total');
             return;
         }
 
         // Update grid CSS for thumbnail size
         this._updateGridStyle();
 
-        // Create thumbnail items
-        const fragment = document.createDocumentFragment();
-        for (const img of filtered) {
-            fragment.appendChild(this._createThumbnailItem(img));
-        }
-        grid.appendChild(fragment);
+        // Calculate virtual scroll dimensions (grid is the scroll container)
+        this._calculateVirtualDimensions(grid);
 
-        // Observe all images for lazy loading
-        const images = grid.querySelectorAll('.gallery-item img');
-        for (const img of images) {
-            this.state.lazyLoader.observe(img);
+        // Add spacers
+        grid.appendChild(this._topSpacer);
+        grid.appendChild(this._bottomSpacer);
+
+        // Render initial visible items
+        this._updateVisibleItems(grid.scrollTop);
+
+        // Attach scroll listener
+        this._attachScrollListener();
+
+        console.timeEnd('_renderGrid total');
+    },
+
+    /**
+     * Calculates dimensions for virtual scrolling.
+     * Matches CSS grid's auto-fill calculation: repeat(auto-fill, minmax(thumb-size, 1fr))
+     * @param {HTMLElement} container - The scroll container
+     * @private
+     */
+    _calculateVirtualDimensions(container) {
+        const thumbSize = App.getThumbnailSize();
+        const gap = 16; // 1rem gap (from CSS)
+        const padding = 16; // 1rem padding (from CSS)
+        const itemPadding = 8; // 0.5rem padding on .gallery-item
+
+        // Calculate items per row matching CSS grid auto-fill behavior
+        // CSS: repeat(auto-fill, minmax(thumbSize, 1fr))
+        const availableWidth = container.clientWidth - padding * 2;
+        const minItemWidth = thumbSize + itemPadding * 2; // Item includes its padding
+
+        // auto-fill fits as many minItemWidth columns as possible
+        this._virtualScroll.itemsPerRow = Math.max(1, Math.floor((availableWidth + gap) / (minItemWidth + gap)));
+
+        // Actual item width when using 1fr (fills remaining space)
+        const actualItemWidth = (availableWidth - gap * (this._virtualScroll.itemsPerRow - 1)) / this._virtualScroll.itemsPerRow;
+
+        // Item height: thumbnail (aspect-ratio: 1) + label margin + label height
+        // Thumbnail width = actualItemWidth - itemPadding*2, height = same (square)
+        const thumbnailHeight = actualItemWidth - itemPadding * 2;
+        const labelHeight = 24; // Approximate: 0.8rem font + 0.5rem margin
+        const itemHeight = thumbnailHeight + labelHeight + itemPadding * 2;
+
+        this._virtualScroll.itemWidth = actualItemWidth;
+        this._virtualScroll.itemHeight = itemHeight + gap;
+
+        // Calculate visible rows
+        const containerHeight = container.clientHeight;
+        this._virtualScroll.visibleRows = Math.ceil(containerHeight / this._virtualScroll.itemHeight) + 1;
+
+        // Calculate total height
+        const totalRows = Math.ceil(this.state.filteredImages.length / this._virtualScroll.itemsPerRow);
+        this._virtualScroll.totalHeight = totalRows * this._virtualScroll.itemHeight;
+    },
+
+    /**
+     * Handles scroll events for virtual scrolling.
+     * @param {Event} e - Scroll event
+     * @private
+     */
+    _onScroll(e) {
+        // Throttle scroll updates
+        if (this._scrollRAF) return;
+        // Capture scrollTop immediately - event object may be recycled by RAF callback
+        const scrollTop = e.target.scrollTop;
+        this._scrollRAF = requestAnimationFrame(() => {
+            this._scrollRAF = null;
+            this._updateVisibleItems(scrollTop);
+        });
+    },
+
+    /**
+     * Updates visible items based on scroll position.
+     * Uses a retention cache to keep previously-rendered items in DOM longer.
+     * @param {number} scrollTop - Current scroll position
+     * @private
+     */
+    _updateVisibleItems(scrollTop) {
+        const vs = this._virtualScroll;
+        const filtered = this.state.filteredImages;
+        const grid = this._els.grid;
+
+        if (filtered.length === 0) return;
+
+        const totalRows = Math.ceil(filtered.length / vs.itemsPerRow);
+        const firstVisibleRow = Math.floor(scrollTop / vs.itemHeight);
+
+        // Render zone: must have these items in DOM for smooth scrolling
+        const renderStartRow = Math.max(0, firstVisibleRow - vs.bufferRows);
+        const renderEndRow = Math.min(totalRows, firstVisibleRow + vs.visibleRows + vs.bufferRows);
+
+        // Retain zone: keep these items cached (larger buffer)
+        const retainStartRow = Math.max(0, firstVisibleRow - vs.retainRows);
+        const retainEndRow = Math.min(totalRows, firstVisibleRow + vs.visibleRows + vs.retainRows);
+
+        // Convert to item indices
+        const renderStart = renderStartRow * vs.itemsPerRow;
+        const renderEnd = Math.min(renderEndRow * vs.itemsPerRow, filtered.length);
+        const retainStart = retainStartRow * vs.itemsPerRow;
+        const retainEnd = Math.min(retainEndRow * vs.itemsPerRow, filtered.length);
+
+        // Track what we need
+        const neededIds = new Set();
+        for (let i = renderStart; i < renderEnd; i++) {
+            neededIds.add(filtered[i].id);
         }
+
+        // Remove items outside retain zone
+        const currentItems = grid.querySelectorAll('.gallery-item');
+        for (const item of currentItems) {
+            const id = item.dataset.id;
+            const idx = filtered.findIndex(img => img.id === id);
+            if (idx === -1 || idx < retainStart || idx >= retainEnd) {
+                vs.renderedItems.delete(id);
+                item.remove();
+            }
+        }
+
+        // Add missing items in render zone
+        const selectedImages = App.getSelectedImages();
+        for (let i = renderStart; i < renderEnd; i++) {
+            const img = filtered[i];
+            if (!vs.renderedItems.has(img.id)) {
+                const item = this._createThumbnailItem(img, selectedImages);
+                vs.renderedItems.set(img.id, item);
+                this._insertItemAtPosition(item, i);
+            }
+        }
+
+        // Update spacer heights based on actual rendered range
+        // Find the actual min/max rendered indices
+        let minRenderedIdx = Infinity;
+        let maxRenderedIdx = -1;
+        for (const [id] of vs.renderedItems) {
+            const idx = filtered.findIndex(img => img.id === id);
+            if (idx !== -1) {
+                minRenderedIdx = Math.min(minRenderedIdx, idx);
+                maxRenderedIdx = Math.max(maxRenderedIdx, idx);
+            }
+        }
+
+        if (minRenderedIdx !== Infinity) {
+            const topRow = Math.floor(minRenderedIdx / vs.itemsPerRow);
+            const bottomRow = Math.floor(maxRenderedIdx / vs.itemsPerRow) + 1;
+            const topHeight = topRow * vs.itemHeight;
+            const bottomHeight = Math.max(0, (totalRows - bottomRow) * vs.itemHeight);
+
+            this._topSpacer.style.height = topHeight + 'px';
+            this._bottomSpacer.style.height = bottomHeight + 'px';
+        }
+
+        vs.startIndex = renderStart;
+        vs.endIndex = renderEnd;
+    },
+
+    /**
+     * Inserts an item at the correct position in the grid based on its index.
+     * @param {HTMLElement} item - The item to insert
+     * @param {number} targetIndex - The index in filteredImages
+     * @private
+     */
+    _insertItemAtPosition(item, targetIndex) {
+        const grid = this._els.grid;
+        const filtered = this.state.filteredImages;
+
+        // Find the right position among existing items
+        const existingItems = grid.querySelectorAll('.gallery-item');
+        let insertBefore = this._bottomSpacer;
+
+        for (const existing of existingItems) {
+            const existingId = existing.dataset.id;
+            const existingIdx = filtered.findIndex(img => img.id === existingId);
+            if (existingIdx > targetIndex) {
+                insertBefore = existing;
+                break;
+            }
+        }
+
+        grid.insertBefore(item, insertBefore);
     },
 
     /**
      * Creates a thumbnail item element.
      * @param {Object} img - Image data object
+     * @param {Array<string>} [selectedImages] - Currently selected image IDs
      * @returns {HTMLElement} The thumbnail item element
      * @private
      */
-    _createThumbnailItem(img) {
+    _createThumbnailItem(img, selectedImages) {
+        selectedImages = selectedImages || App.getSelectedImages();
+
         const item = App.createElement('div', {
             className: 'gallery-item',
             dataId: img.id
         });
 
-        // Thumbnail image (src set by lazy loader)
+        // Thumbnail image - load immediately since we only render visible items
         const thumb = App.createElement('img', {
             alt: img.basename,
-            dataSrc: App.thumbnailUrl(img.id)
+            src: App.thumbnailUrl(img.id)
         });
 
         // Basename label
@@ -586,7 +876,7 @@ const Gallery = {
         item.appendChild(label);
 
         // Selection state
-        if (App.getSelectedImages().includes(img.id)) {
+        if (selectedImages.includes(img.id)) {
             item.classList.add('selected');
         }
 
@@ -603,107 +893,23 @@ const Gallery = {
     },
 
     /**
-     * Reloads all thumbnail images with new size.
+     * Reloads thumbnails when size changes.
+     * With virtual scrolling, we just re-render visible items.
      * @private
      */
     _reloadThumbnails() {
-        const images = this._els.grid.querySelectorAll('.gallery-item img');
-        for (const img of images) {
-            const id = img.closest('.gallery-item').dataset.id;
-            if (img.src && !img.src.startsWith('data:')) {
-                img.src = App.thumbnailUrl(id);
-            } else {
-                img.dataset.src = App.thumbnailUrl(id);
+        const grid = this._els.grid;
+        if (grid && this.state.filteredImages.length > 0) {
+            this._calculateVirtualDimensions(grid);
+            // Clear cache and force re-render (thumbnail URLs change with size)
+            this._virtualScroll.renderedItems.clear();
+            const items = grid.querySelectorAll('.gallery-item');
+            for (const item of items) {
+                item.remove();
             }
-        }
-    },
-
-    /**
-     * Initialises the IntersectionObserver for lazy loading.
-     * Uses LIFO ordering so the most recently viewed images load first.
-     * @private
-     */
-    _initLazyLoader() {
-        // Pending images to load (LIFO - process from end)
-        this._pendingLoads = [];
-        this._loadScheduled = false;
-
-        // Track currently visible images
-        this._visibleImages = new Set();
-
-        this.state.lazyLoader = new IntersectionObserver((entries) => {
-            for (const entry of entries) {
-                const img = entry.target;
-                if (entry.isIntersecting) {
-                    // Image entered viewport - add to pending queue
-                    if (img.dataset.src) {
-                        this._visibleImages.add(img);
-                        // Remove if already in queue, then add to end (LIFO priority)
-                        const idx = this._pendingLoads.indexOf(img);
-                        if (idx !== -1) this._pendingLoads.splice(idx, 1);
-                        this._pendingLoads.push(img);
-                    }
-                } else {
-                    // Image left viewport - remove from visible set
-                    this._visibleImages.delete(img);
-                }
-            }
-            this._scheduleLoad();
-        }, {
-            root: this._els.grid?.closest('.gallery-container') || null,
-            rootMargin: '100px'
-        });
-    },
-
-    /**
-     * Schedules processing of the pending load queue.
-     * @private
-     */
-    _scheduleLoad() {
-        if (this._loadScheduled) return;
-        this._loadScheduled = true;
-
-        // Small delay to let scrolling settle, then load in LIFO order
-        requestAnimationFrame(() => {
-            this._loadScheduled = false;
-            this._processLoadQueue();
-        });
-    },
-
-    /**
-     * Processes the pending load queue in LIFO order.
-     * Prioritizes images that are still visible.
-     * @private
-     */
-    _processLoadQueue() {
-        // Load up to N images per frame to avoid jank
-        const BATCH_SIZE = 4;
-        let loaded = 0;
-
-        // Process from end of queue (LIFO) - most recently viewed first
-        while (this._pendingLoads.length > 0 && loaded < BATCH_SIZE) {
-            const img = this._pendingLoads.pop();
-
-            // Skip if already loaded or no longer has data-src
-            if (!img.dataset.src) continue;
-
-            // Prioritize if still visible, otherwise put back at front (low priority)
-            if (!this._visibleImages.has(img)) {
-                this._pendingLoads.unshift(img);
-                continue;
-            }
-
-            // Load this image
-            img.src = img.dataset.src;
-            delete img.dataset.src;
-            this.state.lazyLoader.unobserve(img);
-            this._visibleImages.delete(img);
-            loaded++;
-        }
-
-        // If more pending, schedule another batch
-        if (this._pendingLoads.length > 0) {
-            this._scheduleLoad();
+            this._virtualScroll.startIndex = -1;
+            this._virtualScroll.endIndex = -1;
+            this._updateVisibleItems(grid.scrollTop);
         }
     },
 
@@ -866,12 +1072,13 @@ const Gallery = {
 
     /**
      * Selects all images in the range between two image IDs (inclusive).
+     * Uses filteredImages to match the displayed order.
      * @param {string} anchorId - Starting image ID
      * @param {string} targetId - Ending image ID
      * @private
      */
     _selectRange(anchorId, targetId) {
-        const images = this.state.images;
+        const images = this.state.filteredImages;
         const anchorIdx = images.findIndex(img => img.id === anchorId);
         const targetIdx = images.findIndex(img => img.id === targetId);
 
@@ -1066,10 +1273,10 @@ const Gallery = {
      * @private
      */
     _updateAutoScroll(e) {
-        const container = this._els.grid?.closest('.gallery-container');
-        if (!container) return;
+        const grid = this._els.grid;
+        if (!grid) return;
 
-        const rect = container.getBoundingClientRect();
+        const rect = grid.getBoundingClientRect();
         const mouseY = e.clientY;
 
         // Calculate distance from edges
@@ -1106,14 +1313,14 @@ const Gallery = {
     _performAutoScroll() {
         if (!this.state.dragState) return;
 
-        const container = this._els.grid?.closest('.gallery-container');
-        if (!container) return;
+        const grid = this._els.grid;
+        if (!grid) return;
 
         const direction = this.state.dragState.scrollDirection || 0;
         if (direction === 0) return;
 
-        // Scroll the container
-        container.scrollTop += direction * this._autoScrollSpeed;
+        // Scroll the grid
+        grid.scrollTop += direction * this._autoScrollSpeed;
 
         // Update the drag box to account for new scroll position
         if (this.state.dragState.lastMouseEvent) {
@@ -1244,12 +1451,25 @@ const Gallery = {
 
     /**
      * Renders the info panel for a single selected image.
+     * Fetches full details from the API since the gallery list only has minimal fields.
      * @param {string} imageId - Image ID to display
      * @private
      */
     async _renderInfoPanel(imageId) {
         const content = this._els.infoContent;
-        const img = this.state.images.find(i => i.id === imageId);
+
+        // Show loading state
+        content.innerHTML = '<p class="info-placeholder">Loading...</p>';
+
+        // Fetch full image details from API
+        let img;
+        try {
+            img = await App.apiGet(`/images/${imageId}`);
+        } catch (error) {
+            console.error('Failed to load image details:', error);
+            content.innerHTML = '<p class="info-placeholder">Failed to load details</p>';
+            return;
+        }
 
         if (!img) {
             content.innerHTML = '<p class="info-placeholder">Image not found</p>';
@@ -1462,7 +1682,7 @@ const Gallery = {
      * @private
      */
     _navigateSelection(delta) {
-        const filtered = this._filterImages(this.state.images);
+        const filtered = this.state.filteredImages;
         if (filtered.length === 0) return;
 
         const selected = App.getSelectedImages();
@@ -1478,7 +1698,7 @@ const Gallery = {
         if (newIndex >= filtered.length) newIndex = 0;
 
         App.setSelectedImages([filtered[newIndex].id]);
-        this._scrollToItem(filtered[newIndex].id);
+        this._scrollToItem(filtered[newIndex].id, newIndex);
     },
 
     /**
@@ -1487,14 +1707,11 @@ const Gallery = {
      * @private
      */
     _navigateSelectionVertical(delta) {
-        const filtered = this._filterImages(this.state.images);
+        const filtered = this.state.filteredImages;
         if (filtered.length === 0) return;
 
-        // Calculate items per row based on grid
-        const gridWidth = this._els.grid.clientWidth;
-        const thumbSize = App.getThumbnailSize();
-        const gap = 16; // Approximate gap
-        const itemsPerRow = Math.floor(gridWidth / (thumbSize + gap)) || 1;
+        // Use virtual scroll's calculated items per row
+        const itemsPerRow = this._virtualScroll.itemsPerRow || 1;
 
         const selected = App.getSelectedImages();
         let currentIndex = -1;
@@ -1509,18 +1726,42 @@ const Gallery = {
         if (newIndex >= filtered.length) newIndex = filtered.length - 1;
 
         App.setSelectedImages([filtered[newIndex].id]);
-        this._scrollToItem(filtered[newIndex].id);
+        this._scrollToItem(filtered[newIndex].id, newIndex);
     },
 
     /**
      * Scrolls the grid to ensure an item is visible.
+     * With virtual scrolling, calculates position from index.
      * @param {string} id - Image ID to scroll to
+     * @param {number} [index] - Optional index in filteredImages for faster lookup
      * @private
      */
-    _scrollToItem(id) {
-        const item = this._getItemElement(id);
-        if (item) {
-            item.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+    _scrollToItem(id, index) {
+        const grid = this._els.grid;
+        if (!grid) return;
+
+        // Find index if not provided
+        if (index === undefined) {
+            index = this.state.filteredImages.findIndex(img => img.id === id);
+        }
+        if (index === -1) return;
+
+        // Calculate row and scroll position
+        const vs = this._virtualScroll;
+        const row = Math.floor(index / vs.itemsPerRow);
+        const targetY = row * vs.itemHeight;
+
+        // Check if item is already visible
+        const viewTop = grid.scrollTop;
+        const viewBottom = viewTop + grid.clientHeight;
+        const itemBottom = targetY + vs.itemHeight;
+
+        if (targetY < viewTop) {
+            // Item is above viewport - scroll up
+            grid.scrollTo({ top: targetY, behavior: 'smooth' });
+        } else if (itemBottom > viewBottom) {
+            // Item is below viewport - scroll down
+            grid.scrollTo({ top: itemBottom - grid.clientHeight, behavior: 'smooth' });
         }
     },
 

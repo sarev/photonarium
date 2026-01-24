@@ -64,6 +64,12 @@ I'm not checked, but can you confirm that if I edit an image description string 
 
 I gave an image a description (string). None of the others have. This image now appears first in all semantic searches (filter results) for reasons I cannot determine! The string is "Ste & Karen in Valmezo garden" and the search term is "Swans" or "Cat in box" yet still it's displayed first...
 
+## Serious performance problem - DONE
+
+I now have ~ 30,000 images in the database (maybe half of my collection) but starting the gallery just hangs the page for around 20 seconds - long enough for the browser to say the page has stopped responding. I suspect it's the core JS asking the backend for a list of image info.
+
+We need to have this mechanism work in a more scalable way, so a database with 100,000 images doesn't stop the UI from performing reasonably smoothly. I don't mind the odd modal progress indicator, which could *also* be helpful, but we need to get to the bottom of the core issue (which I believe is due to front-end/backend roundtrips taking ages when the database is of non-trivial size).
+
 ## Slow image ingestion
 
 During the ingestion process, for indexing and embedding new images, this seems to run a lot slower than I was hoping. I think the indexing can and should be run across a thread pool, not just on a single thread. I can see why having the embedding running in a single thread makes sense - stick with that part. The size of the thread pool should probably be a persisted config option.

@@ -150,16 +150,35 @@ def serve_index():
 
 @app.route('/api/images', methods=['GET'])
 def get_images():
-    """List all images in the database with their metadata.
+    """List images with support for incremental updates.
 
-    The response includes all image metadata needed for the gallery view.
-    Results can be filtered and sorted by the frontend.
+    If 'since' query parameter is provided, returns only changes since that
+    epoch (timestamp), allowing efficient incremental updates. Otherwise
+    returns all images.
+
+    Query Parameters:
+        since: Optional ISO timestamp. If provided, returns delta update with
+               only images changed since that time.
 
     Returns:
-        JSON array of image objects.
+        Without 'since': JSON object with 'epoch' and 'images' array.
+        With 'since': JSON object with 'epoch', 'updated' array, and
+                      'deleted_ids' array for incremental sync.
     """
-    images = get_db().get_all_images()
-    return jsonify(images)
+    since = request.args.get('since')
+
+    if since:
+        # Delta update - return only changes since the given epoch
+        delta = get_db().get_images_delta(since)
+        return jsonify(delta)
+    else:
+        # Full load - return all images with current epoch
+        images = get_db().get_all_images_lightweight()
+        epoch = get_db().get_current_epoch()
+        return jsonify({
+            'epoch': epoch,
+            'images': images,
+        })
 
 
 @app.route('/api/images/<image_id>', methods=['GET'])

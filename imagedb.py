@@ -1264,6 +1264,97 @@ def get_all_images(
     return rows_to_dicts(cursor.fetchall())
 
 
+def get_all_images_lightweight(conn: sqlite3.Connection) -> list[dict[str, Any]]:
+    """Get all images with minimal fields for gallery grid display.
+
+    Returns only the fields needed for rendering the thumbnail grid and
+    basic filtering/sorting. Use get_image() to fetch full details for
+    a specific image.
+
+    Args:
+        conn: Database connection.
+
+    Returns:
+        List of image dictionaries with minimal fields:
+        id, basename, width, height, timestamp, rating, description.
+    """
+    cursor = conn.execute("""
+        SELECT id, basename, width, height, timestamp, rating, description
+        FROM images
+        WHERE deleted = 0
+        ORDER BY timestamp DESC, path ASC
+    """)
+
+    return rows_to_dicts(cursor.fetchall())
+
+
+def get_images_delta(
+    conn: sqlite3.Connection,
+    since: str,
+) -> dict[str, Any]:
+    """Get image changes since a given timestamp for incremental updates.
+
+    Returns images that have been added, updated, or deleted since the
+    specified timestamp. The frontend can use this to efficiently update
+    its cache without fetching all images.
+
+    Args:
+        conn: Database connection.
+        since: ISO timestamp string. Only changes after this time are returned.
+
+    Returns:
+        Dictionary with:
+        - epoch: Current max updated_at timestamp (for next delta request)
+        - updated: List of added/modified images (lightweight fields + deleted flag)
+        - deleted_ids: List of IDs for images that are now deleted
+    """
+    # Get current epoch (max updated_at)
+    epoch_cursor = conn.execute("SELECT MAX(updated_at) as epoch FROM images")
+    epoch_row = epoch_cursor.fetchone()
+    current_epoch = epoch_row['epoch'] if epoch_row and epoch_row['epoch'] else since
+
+    # Get all images changed since the given timestamp
+    cursor = conn.execute("""
+        SELECT id, basename, width, height, timestamp, rating, description, deleted, updated_at
+        FROM images
+        WHERE updated_at > ?
+        ORDER BY updated_at ASC
+    """, (since,))
+
+    updated = []
+    deleted_ids = []
+
+    for row in cursor.fetchall():
+        img = dict(row)
+        if img['deleted']:
+            deleted_ids.append(img['id'])
+        else:
+            # Remove internal fields from response
+            del img['deleted']
+            del img['updated_at']
+            updated.append(img)
+
+    return {
+        'epoch': current_epoch,
+        'updated': updated,
+        'deleted_ids': deleted_ids,
+    }
+
+
+def get_current_epoch(conn: sqlite3.Connection) -> str | None:
+    """Get the current epoch (max updated_at timestamp).
+
+    Args:
+        conn: Database connection.
+
+    Returns:
+        ISO timestamp string of the most recent update, or None if no images.
+    """
+    cursor = conn.execute("SELECT MAX(updated_at) as epoch FROM images")
+    row = cursor.fetchone()
+    return row['epoch'] if row else None
+
+
 def get_image(conn: sqlite3.Connection, image_id: str) -> dict[str, Any] | None:
     """Get a single image by ID.
 
@@ -3875,6 +3966,18 @@ class ImageDatabase:
     def get_all_images(self, include_deleted: bool = False) -> list[dict[str, Any]]:
         """Get all images."""
         return get_all_images(self.conn, include_deleted)
+
+    def get_all_images_lightweight(self) -> list[dict[str, Any]]:
+        """Get all images with minimal fields for gallery grid."""
+        return get_all_images_lightweight(self.conn)
+
+    def get_images_delta(self, since: str) -> dict[str, Any]:
+        """Get image changes since a given timestamp."""
+        return get_images_delta(self.conn, since)
+
+    def get_current_epoch(self) -> str | None:
+        """Get the current epoch (max updated_at timestamp)."""
+        return get_current_epoch(self.conn)
 
     def get_image(self, image_id: str) -> dict[str, Any] | None:
         """Get a single image by ID."""

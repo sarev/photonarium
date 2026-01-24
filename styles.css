@@ -424,6 +424,24 @@ a:hover {
     white-space: nowrap;
 }
 
+/* Virtual scroll spacers */
+.virtual-spacer {
+    grid-column: 1 / -1;
+    width: 100%;
+    pointer-events: none;
+}
+
+/* Loading indicator */
+.gallery-loading {
+    grid-column: 1 / -1;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 4rem 2rem;
+    color: var(--color-text-secondary);
+    font-size: 1.1rem;
+}
+
 /* Selection box (drag select) */
 .selection-box {
     position: absolute;
