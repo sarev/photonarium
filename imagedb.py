@@ -181,6 +181,7 @@ import open_clip
 import os
 import queue
 import random
+from concurrent.futures import ThreadPoolExecutor, Future
 import re
 import shutil
 import signal
@@ -267,6 +268,15 @@ similarity_threshold_level2: 0.95
 # Cosine similarity threshold for "related" images (level 3)
 # Range: 0.0-1.0, higher = stricter matching. Recommended: 0.80-0.90
 similarity_threshold_level3: 0.85
+
+# ------------------------------------------------------------------------------
+# Performance
+# ------------------------------------------------------------------------------
+
+# Number of threads for parallel image indexing (1-16)
+# Higher values speed up initial scanning but use more CPU/disk I/O.
+# Recommended: 4-8 for HDD, 8-16 for SSD
+indexing_threads: 4
 """
 
 
@@ -283,6 +293,7 @@ class Config:
         perceptual_hash_threshold: Hamming distance threshold for level 1 duplicates.
         similarity_threshold_level2: Cosine similarity threshold for level 2.
         similarity_threshold_level3: Cosine similarity threshold for level 3.
+        indexing_threads: Number of threads for parallel image indexing (1-16).
     """
 
     image_extensions: set[str] = field(default_factory=lambda: {
@@ -295,6 +306,7 @@ class Config:
     perceptual_hash_threshold: int = 4
     similarity_threshold_level2: float = 0.95
     similarity_threshold_level3: float = 0.85
+    indexing_threads: int = 4
 
     def __post_init__(self) -> None:
         """Validate configuration values after initialisation."""
@@ -337,6 +349,10 @@ class Config:
             raise ValueError('openclip_model must be a non-empty string')
         if not self.openclip_pretrained or not isinstance(self.openclip_pretrained, str):
             raise ValueError('openclip_pretrained must be a non-empty string')
+
+        # Validate indexing_threads
+        if not 1 <= self.indexing_threads <= 16:
+            raise ValueError(f'indexing_threads must be 1-16, got {self.indexing_threads}')
 
 
 def load_config(config_path: Path | str | None = None) -> Config:
@@ -1982,9 +1998,9 @@ def extract_image_metadata(path: Path | str) -> ImageMetadata | None:
 class IngestionThread(threading.Thread):
     """Background thread for ingesting images into the database.
 
-    Processes image paths from the ingestion queue, extracts metadata,
-    and inserts/updates database records. Images that need embeddings
-    are queued to the embedding queue.
+    Processes image paths from the ingestion queue using a thread pool for
+    parallel metadata extraction. Images that need embeddings are queued
+    to the embedding queue.
 
     Attributes:
         conn: Database connection.
@@ -1992,6 +2008,7 @@ class IngestionThread(threading.Thread):
         embedding_queue: Queue of image IDs needing embeddings.
         stop_event: Event to signal thread shutdown.
         pause_event: Event to temporarily pause processing.
+        num_threads: Number of worker threads for parallel processing.
     """
 
     def __init__(
@@ -2001,6 +2018,7 @@ class IngestionThread(threading.Thread):
         embedding_queue: queue.Queue[str],
         stop_event: threading.Event,
         pause_event: threading.Event | None = None,
+        num_threads: int = 4,
     ):
         """Initialise the ingestion thread.
 
@@ -2010,6 +2028,7 @@ class IngestionThread(threading.Thread):
             embedding_queue: Queue to add image IDs that need embeddings.
             stop_event: Event to signal thread should stop.
             pause_event: Optional event to pause processing (for folder removal).
+            num_threads: Number of worker threads for parallel metadata extraction.
         """
         super().__init__(name='IngestionThread', daemon=True)
         self.conn = conn
@@ -2017,8 +2036,10 @@ class IngestionThread(threading.Thread):
         self.embedding_queue = embedding_queue
         self.stop_event = stop_event
         self.pause_event = pause_event or threading.Event()
+        self.num_threads = max(1, min(16, num_threads))
         self._processed_count = 0
         self._error_count = 0
+        self._db_lock = threading.Lock()
 
     @property
     def processed_count(self) -> int:
@@ -2031,60 +2052,93 @@ class IngestionThread(threading.Thread):
         return self._error_count
 
     def run(self) -> None:
-        """Main thread loop - process images from the queue."""
-        logger.info('Ingestion thread started')
+        """Main thread loop - process images using thread pool."""
+        logger.info(f'Ingestion thread started with {self.num_threads} worker threads')
 
-        while not self.stop_event.is_set():
-            # Check if paused
-            if self.pause_event.is_set():
-                self.pause_event.wait(timeout=0.1)
-                continue
+        with ThreadPoolExecutor(max_workers=self.num_threads) as executor:
+            pending_futures: dict[Future, Path] = {}
 
-            try:
-                # Get next path from queue (with timeout to check stop_event)
-                try:
-                    path = self.ingestion_queue.get(timeout=0.5)
-                except queue.Empty:
+            while not self.stop_event.is_set():
+                # Check if paused
+                if self.pause_event.is_set():
+                    time.sleep(0.1)
                     continue
 
-                # Process the image
+                # Submit new jobs while we have capacity
+                while len(pending_futures) < self.num_threads * 2:
+                    try:
+                        path = self.ingestion_queue.get_nowait()
+                        future = executor.submit(self._process_image, path)
+                        pending_futures[future] = path
+                    except queue.Empty:
+                        break
+
+                # Check for completed futures
+                if pending_futures:
+                    done_futures = [f for f in pending_futures if f.done()]
+                    for future in done_futures:
+                        path = pending_futures.pop(future)
+                        try:
+                            future.result()  # Raises exception if worker failed
+                            self._processed_count += 1
+                        except Exception as e:
+                            logger.error(f'Error processing {path}: {e}')
+                            self._error_count += 1
+                        finally:
+                            self.ingestion_queue.task_done()
+
+                # Small sleep if no work to prevent busy-waiting
+                if not pending_futures:
+                    time.sleep(0.1)
+                else:
+                    # Brief sleep to allow futures to complete
+                    time.sleep(0.01)
+
+            # Wait for remaining futures on shutdown
+            for future in pending_futures:
+                path = pending_futures[future]
                 try:
-                    self._process_image(path)
+                    future.result(timeout=1.0)
                     self._processed_count += 1
                 except Exception as e:
-                    logger.error(f'Error processing {path}: {e}')
+                    logger.error(f'Error processing {path} during shutdown: {e}')
                     self._error_count += 1
                 finally:
                     self.ingestion_queue.task_done()
-
-            except Exception as e:
-                logger.error(f'Unexpected error in ingestion thread: {e}')
 
         logger.info('Ingestion thread stopped')
 
     def _process_image(self, path: Path) -> None:
         """Process a single image file.
 
+        This method is called from worker threads. Database operations are
+        protected by _db_lock to ensure thread safety.
+
         Args:
             path: Path to the image file.
         """
         path = canonicalise_path(path)
-        path_str = str(path)
 
-        # Check if file still exists
+        # Check if file still exists (no lock needed - file I/O)
         if not path.exists():
             logger.debug(f'Skipping non-existent file: {path}')
             return
 
-        # Check if already in database
-        existing = get_image_by_path(self.conn, path)
+        # Get file size (no lock needed - file I/O)
+        try:
+            current_size = path.stat().st_size
+        except OSError:
+            logger.warning(f'Cannot stat file: {path}')
+            return
+
+        # Check if already in database (lock needed - DB read)
+        with self._db_lock:
+            existing = get_image_by_path(self.conn, path)
 
         if existing is not None:
             # Image exists - check if it has changed
-            current_size = path.stat().st_size
-
             if existing['size'] == current_size:
-                # Size matches - compute checksum to verify
+                # Size matches - compute checksum to verify (no lock - file I/O)
                 try:
                     current_checksum = compute_checksum(path)
                 except OSError:
@@ -2101,33 +2155,34 @@ class IngestionThread(threading.Thread):
                         logger.debug(f'Skipping unchanged image: {path}')
                     return
 
-            # File has changed - re-extract metadata
+            # File has changed - re-extract metadata (no lock - file I/O)
             logger.info(f'Re-ingesting changed image: {path}')
             metadata = extract_image_metadata(path)
             if metadata is None:
                 logger.warning(f'Failed to extract metadata for changed image: {path}')
                 return
 
-            # Update existing record
-            update_image_metadata(
-                self.conn,
-                existing['id'],
-                size=metadata.size,
-                width=metadata.width,
-                height=metadata.height,
-                timestamp=metadata.timestamp,
-                checksum=metadata.checksum,
-                perceptual_hash=metadata.perceptual_hash,
-                laplacian_var=metadata.laplacian_var,
-                lossless=metadata.lossless,
-            )
+            # Update existing record (lock needed - DB write)
+            with self._db_lock:
+                update_image_metadata(
+                    self.conn,
+                    existing['id'],
+                    size=metadata.size,
+                    width=metadata.width,
+                    height=metadata.height,
+                    timestamp=metadata.timestamp,
+                    checksum=metadata.checksum,
+                    perceptual_hash=metadata.perceptual_hash,
+                    laplacian_var=metadata.laplacian_var,
+                    lossless=metadata.lossless,
+                )
 
             # Queue for embedding (metadata cleared embedding)
             self.embedding_queue.put(existing['id'])
             logger.debug(f'Queued changed image for embedding: {path}')
 
         else:
-            # New image - extract metadata and insert
+            # New image - extract metadata (no lock - file I/O)
             metadata = extract_image_metadata(path)
             if metadata is None:
                 logger.warning(f'Failed to extract metadata for new image: {path}')
@@ -2136,20 +2191,21 @@ class IngestionThread(threading.Thread):
             # Generate new UUID
             image_id = str(uuid.uuid4())
 
-            # Insert new record
-            create_image(
-                self.conn,
-                image_id=image_id,
-                path=metadata.path,
-                size=metadata.size,
-                width=metadata.width,
-                height=metadata.height,
-                timestamp=metadata.timestamp,
-                checksum=metadata.checksum,
-                perceptual_hash=metadata.perceptual_hash,
-                laplacian_var=metadata.laplacian_var,
-                lossless=metadata.lossless,
-            )
+            # Insert new record (lock needed - DB write)
+            with self._db_lock:
+                create_image(
+                    self.conn,
+                    image_id=image_id,
+                    path=metadata.path,
+                    size=metadata.size,
+                    width=metadata.width,
+                    height=metadata.height,
+                    timestamp=metadata.timestamp,
+                    checksum=metadata.checksum,
+                    perceptual_hash=metadata.perceptual_hash,
+                    laplacian_var=metadata.laplacian_var,
+                    lossless=metadata.lossless,
+                )
 
             # Queue for embedding
             self.embedding_queue.put(image_id)
@@ -3776,13 +3832,14 @@ class ImageDatabase:
             compute_all_duplicate_groups(self.conn, self.config)
             emit_processing_complete(self.event_queue)
 
-        # Start ingestion thread
+        # Start ingestion thread with configured number of worker threads
         self._ingestion_thread = IngestionThread(
             conn=self.conn,
             ingestion_queue=self._ingestion_queue,
             embedding_queue=self._embedding_queue,
             stop_event=self._stop_event,
             pause_event=self._pause_event,
+            num_threads=self.config.indexing_threads,
         )
         self._ingestion_thread.start()
 

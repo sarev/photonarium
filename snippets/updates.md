@@ -70,10 +70,10 @@ I now have ~ 30,000 images in the database (maybe half of my collection) but sta
 
 We need to have this mechanism work in a more scalable way, so a database with 100,000 images doesn't stop the UI from performing reasonably smoothly. I don't mind the odd modal progress indicator, which could *also* be helpful, but we need to get to the bottom of the core issue (which I believe is due to front-end/backend roundtrips taking ages when the database is of non-trivial size).
 
-## Slow image ingestion
+## Slow image ingestion - DONE
 
 During the ingestion process, for indexing and embedding new images, this seems to run a lot slower than I was hoping. I think the indexing can and should be run across a thread pool, not just on a single thread. I can see why having the embedding running in a single thread makes sense - stick with that part. The size of the thread pool should probably be a persisted config option.
-
+2
 ## Indexing ETA
 
 When the database is updating, it would be helpful for the "Indexing" progress info on the Database screen to include a computed "ETA", based upon how many images are being indexed per second over the last n seconds (or similar). We don't need this for the "Embedding" part, because that number is generally very low or zero, so any ETA would flicker and change pretty much randomly.
