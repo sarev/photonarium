@@ -2709,8 +2709,10 @@ def semantic_search(
 ) -> list[dict[str, Any]]:
     """Search for images similar to a query embedding.
 
-    Compares the query embedding against both image embeddings and
-    description embeddings using cosine similarity.
+    Compares the query embedding against image embeddings using cosine
+    similarity. Description embeddings provide a weighted boost but don't
+    dominate the score, since text-to-text similarity in CLIP tends to be
+    higher than text-to-image similarity.
 
     Args:
         conn: Database connection.
@@ -2722,6 +2724,9 @@ def semantic_search(
         List of image dictionaries with added 'score' field, sorted by
         descending similarity score.
     """
+    # Weight for description embedding score (lower to avoid text-to-text bias)
+    DESC_WEIGHT = 0.5
+
     # Get all images with embeddings
     cursor = conn.execute("""
         SELECT id, path, basename, size, width, height, timestamp,
@@ -2735,19 +2740,21 @@ def semantic_search(
 
     for row in cursor.fetchall():
         image_dict = dict(row)
-        max_score = 0.0
+        img_score = 0.0
+        desc_score = 0.0
 
-        # Check image embedding
+        # Check image embedding (primary score)
         if image_dict.get('embedding'):
             img_embedding = np.frombuffer(image_dict['embedding'], dtype=np.float32)
             img_score = float(np.dot(query_embedding, img_embedding))
-            max_score = max(max_score, img_score)
 
-        # Check description embedding
+        # Check description embedding (weighted boost)
         if image_dict.get('description_embedding'):
             desc_embedding = np.frombuffer(image_dict['description_embedding'], dtype=np.float32)
-            desc_score = float(np.dot(query_embedding, desc_embedding))
-            max_score = max(max_score, desc_score)
+            desc_score = float(np.dot(query_embedding, desc_embedding)) * DESC_WEIGHT
+
+        # Use the higher of the two scores
+        max_score = max(img_score, desc_score)
 
         if max_score >= threshold:
             # Remove blob fields from result

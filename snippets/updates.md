@@ -44,17 +44,17 @@ The similarity sliders for the filters have loose on the left, and strict on the
 
 In the full-screen view, I'd like a small close icon overlay that fades after a couple of seconds (as per the image name at the bottom) but reappears (briefly) when the user interacts with the photo (moves mouse, zooms, pans, presses a key, taps/clicks, etc.). It should be reasonably discrete, but not so much it'd be missed.
 
-## Scroll override
+## Scroll override - DONE
 
 When applying a filter from the filter screen, we return to the Gallery screen. If anything was changed about the filter, we should scroll to the top of the grid of images. This is probably better than leaving the gallery view at a stale scroll offset.
 
 On a related note, clicking the "Sort by content similarity" button in the gallery toolbar should also scroll the gallery back to the top.
 
-## Persisting info
+## Persisting info - CANNOT REPRODUCE
 
 When entering a description (string) or rating (string/emojis) for an image, I believe you have to hit 'enter' in the field to persist what you've entered. This is non-obvious. I think we should also persist on blur for each of these fields.
 
-## Deleting description
+## Deleting description - CONFIRMED
 
 I'm not checked, but can you confirm that if I edit an image description string to be an empty string (i.e. remove the description) then the associated description embedding also gets nulled?
 
