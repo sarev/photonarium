@@ -3087,6 +3087,9 @@ def semantic_search(
     dominate the score, since text-to-text similarity in CLIP tends to be
     higher than text-to-image similarity.
 
+    Uses vectorized numpy operations for performance - computing similarity
+    scores for 50k+ images in milliseconds rather than minutes.
+
     Args:
         conn: Database connection.
         query_embedding: Normalised query embedding vector.
@@ -3100,47 +3103,99 @@ def semantic_search(
     # Weight for description embedding score (lower to avoid text-to-text bias)
     DESC_WEIGHT = 0.5
 
-    # Get all images with embeddings
+    # Step 1: Get just IDs and embeddings (minimal data transfer)
     cursor = conn.execute("""
-        SELECT id, path, basename, size, width, height, timestamp,
-               checksum, perceptual_hash, laplacian_var, lossless,
-               description, rating, embedding, description_embedding
+        SELECT id, embedding, description_embedding
         FROM images
         WHERE deleted = 0 AND (embedding IS NOT NULL OR description_embedding IS NOT NULL)
     """)
 
-    results = []
+    rows = cursor.fetchall()
+    if not rows:
+        return []
 
+    # Step 2: Build numpy arrays for vectorized computation
+    n = len(rows)
+    embedding_dim = len(query_embedding)
+    ids = []
+    img_embeddings = []
+    desc_embeddings = []
+    has_img_embedding = []
+    has_desc_embedding = []
+
+    for row in rows:
+        ids.append(row['id'])
+        if row['embedding']:
+            img_embeddings.append(np.frombuffer(row['embedding'], dtype=np.float32))
+            has_img_embedding.append(True)
+        else:
+            img_embeddings.append(np.zeros(embedding_dim, dtype=np.float32))
+            has_img_embedding.append(False)
+
+        if row['description_embedding']:
+            desc_embeddings.append(np.frombuffer(row['description_embedding'], dtype=np.float32))
+            has_desc_embedding.append(True)
+        else:
+            desc_embeddings.append(np.zeros(embedding_dim, dtype=np.float32))
+            has_desc_embedding.append(False)
+
+    # Stack into matrices for vectorized dot product
+    img_matrix = np.vstack(img_embeddings)  # Shape: (n, embedding_dim)
+    desc_matrix = np.vstack(desc_embeddings)  # Shape: (n, embedding_dim)
+    has_img = np.array(has_img_embedding)
+    has_desc = np.array(has_desc_embedding)
+
+    # Step 3: Vectorized similarity computation (single matrix multiply)
+    img_scores = img_matrix @ query_embedding  # Shape: (n,)
+    desc_scores = desc_matrix @ query_embedding * DESC_WEIGHT  # Shape: (n,)
+
+    # Zero out scores for missing embeddings
+    img_scores = np.where(has_img, img_scores, 0.0)
+    desc_scores = np.where(has_desc, desc_scores, 0.0)
+
+    # Take max of the two scores
+    scores = np.maximum(img_scores, desc_scores)
+
+    # Step 4: Filter by threshold and get top results
+    above_threshold = scores >= threshold
+    if not np.any(above_threshold):
+        return []
+
+    # Get indices of results above threshold, sorted by score descending
+    valid_indices = np.where(above_threshold)[0]
+    valid_scores = scores[valid_indices]
+    sorted_order = np.argsort(-valid_scores)  # Descending
+    top_indices = valid_indices[sorted_order[:limit]]
+    top_scores = valid_scores[sorted_order[:limit]]
+
+    # Step 5: Fetch full metadata only for top results
+    top_ids = [ids[i] for i in top_indices]
+    if not top_ids:
+        return []
+
+    # Build a mapping of id -> score
+    score_map = {ids[i]: float(scores[i]) for i in top_indices}
+
+    # Fetch full image data for the top results
+    placeholders = ','.join('?' * len(top_ids))
+    cursor = conn.execute(f"""
+        SELECT id, path, basename, size, width, height, timestamp,
+               checksum, perceptual_hash, laplacian_var, lossless,
+               description, rating
+        FROM images
+        WHERE id IN ({placeholders})
+    """, top_ids)
+
+    results = []
     for row in cursor.fetchall():
         image_dict = dict(row)
-        img_score = 0.0
-        desc_score = 0.0
+        image_dict['score'] = score_map[image_dict['id']]
+        results.append(image_dict)
 
-        # Check image embedding (primary score)
-        if image_dict.get('embedding'):
-            img_embedding = np.frombuffer(image_dict['embedding'], dtype=np.float32)
-            img_score = float(np.dot(query_embedding, img_embedding))
-
-        # Check description embedding (weighted boost)
-        if image_dict.get('description_embedding'):
-            desc_embedding = np.frombuffer(image_dict['description_embedding'], dtype=np.float32)
-            desc_score = float(np.dot(query_embedding, desc_embedding)) * DESC_WEIGHT
-
-        # Use the higher of the two scores
-        max_score = max(img_score, desc_score)
-
-        if max_score >= threshold:
-            # Remove blob fields from result
-            del image_dict['embedding']
-            del image_dict['description_embedding']
-            image_dict['score'] = max_score
-            results.append(image_dict)
-
-    # Sort by score descending
+    # Sort by score descending (order may have changed from the IN query)
     results.sort(key=lambda x: x['score'], reverse=True)
 
-    # Apply limit
-    return results[:limit]
+    return results
 
 
 def get_images_by_similarity(
@@ -3148,6 +3203,9 @@ def get_images_by_similarity(
     reference_embedding: np.ndarray,
 ) -> list[dict[str, Any]]:
     """Get all images sorted by similarity to a reference embedding.
+
+    Uses vectorized numpy operations for performance - computing similarity
+    scores for 50k+ images in milliseconds rather than minutes.
 
     Args:
         conn: Database connection.
@@ -3157,27 +3215,45 @@ def get_images_by_similarity(
         List of image dictionaries with added 'similarity' field,
         sorted by descending similarity.
     """
-    # Get all images with embeddings
+    # Step 1: Get just IDs and embeddings (minimal data transfer)
+    cursor = conn.execute("""
+        SELECT id, embedding
+        FROM images
+        WHERE deleted = 0 AND embedding IS NOT NULL
+    """)
+
+    rows = cursor.fetchall()
+    if not rows:
+        return []
+
+    # Step 2: Build numpy arrays for vectorized computation
+    ids = [row['id'] for row in rows]
+    embeddings = [np.frombuffer(row['embedding'], dtype=np.float32) for row in rows]
+
+    # Stack into matrix for vectorized dot product
+    embedding_matrix = np.vstack(embeddings)  # Shape: (n, embedding_dim)
+
+    # Step 3: Vectorized similarity computation (single matrix multiply)
+    similarities = embedding_matrix @ reference_embedding  # Shape: (n,)
+
+    # Step 4: Build similarity map
+    similarity_map = {ids[i]: float(similarities[i]) for i in range(len(ids))}
+
+    # Step 5: Fetch full image data
+    # Note: For very large datasets, we could add a limit here, but for now
+    # we return all images sorted by similarity as the original function did.
     cursor = conn.execute("""
         SELECT id, path, basename, size, width, height, timestamp,
                checksum, perceptual_hash, laplacian_var, lossless,
-               description, rating, embedding
+               description, rating
         FROM images
         WHERE deleted = 0 AND embedding IS NOT NULL
     """)
 
     results = []
-
     for row in cursor.fetchall():
         image_dict = dict(row)
-
-        # Compute similarity
-        img_embedding = np.frombuffer(image_dict['embedding'], dtype=np.float32)
-        similarity = float(np.dot(reference_embedding, img_embedding))
-
-        # Remove blob field from result
-        del image_dict['embedding']
-        image_dict['similarity'] = similarity
+        image_dict['similarity'] = similarity_map.get(image_dict['id'], 0.0)
         results.append(image_dict)
 
     # Sort by similarity descending

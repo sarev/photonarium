@@ -1254,6 +1254,7 @@ const Gallery = {
             debounceTimer = setTimeout(async () => {
                 const threshold = parseInt(this._els.similaritySlider.value, 10) / 100;
 
+                App.showLoading('Searching...');
                 try {
                     // Re-run the search with new threshold
                     const response = await App.apiPost('/search', {
@@ -1279,6 +1280,9 @@ const Gallery = {
                     }
                 } catch (error) {
                     console.error('Failed to update search:', error);
+                    App.showError('Failed to update search results.');
+                } finally {
+                    App.hideLoading();
                 }
             }, 100);
         });

@@ -280,6 +280,7 @@ const Search = {
 
     /**
      * Applies the current filter and returns to gallery.
+     * Navigates immediately and shows loading overlay while semantic search runs.
      * @private
      */
     async _applyFilter() {
@@ -290,15 +291,17 @@ const Search = {
             return;
         }
 
-        // Read form values
+        // Read form values and threshold BEFORE navigating away
         const filter = this._readForm();
+        const threshold = parseInt(this._els.similaritySlider.value, 10) / 100;
 
-        // If there's a text query, perform semantic search
+        // Navigate to gallery immediately for responsive UX
+        App.showGallery();
+
+        // If there's a text query, perform semantic search with loading overlay
         if (filter && filter.text) {
+            App.showLoading('Searching...');
             try {
-                // Get similarity threshold from slider (convert percentage to decimal)
-                const threshold = parseInt(this._els.similaritySlider.value, 10) / 100;
-
                 const response = await App.apiPost('/search', {
                     query: filter.text,
                     threshold: threshold,
@@ -317,16 +320,14 @@ const Search = {
                 }
             } catch (error) {
                 console.error('Semantic search failed:', error);
-                this._showError('Search failed. Please try again.');
-                return;
+                App.showError('Search failed. Please try again.');
+            } finally {
+                App.hideLoading();
             }
         }
 
         // Set filter - gallery subscribes to filterChanged event
         App.setFilter(filter);
-
-        // Navigate to gallery
-        App.showGallery();
     },
 
     /**

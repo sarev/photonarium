@@ -1236,7 +1236,11 @@ a:hover {
 
 .loading-message {
     color: #fff;
-    font-size: 0.95rem;
+    font-size: 1.25rem;
+    font-weight: 600;
+    background-color: rgba(0, 0, 0, 0.7);
+    padding: 0.75rem 1.5rem;
+    border-radius: 8px;
 }
 
 /* Error toast */
