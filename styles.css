@@ -567,6 +567,16 @@ a:hover {
     flex-shrink: 0;
 }
 
+.info-timestamp {
+    font-size: 0.85rem;
+    padding: 0.375rem 0.5rem;
+}
+
+/* Fix datetime-local appearance in dark mode */
+.info-timestamp::-webkit-calendar-picker-indicator {
+    filter: invert(0.7);
+}
+
 
 /* ==========================================================================
    FULLSCREEN VIEW

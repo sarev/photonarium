@@ -259,6 +259,12 @@ _PATTERN_DATE_8DIGITS = re.compile(r'(\d{8})')
 _PATTERN_DATE_6DIGITS = re.compile(r'(\d{6})')
 # 3 groups with separator: YYYY-MM-DD or YY-MM-DD (separator is single non-digit)
 _PATTERN_DATE_SEPARATED = re.compile(r'(\d{2,4})\D(\d{2})\D(\d{2})')
+# Partial date patterns (for incomplete dates - default missing parts to Jan 1)
+# Year-month: YYYY-MM or YYYYMM (4 digits for month to avoid matching YYMMDD)
+_PATTERN_DATE_YEAR_MONTH_SEP = re.compile(r'((?:19|20)\d{2})\D(\d{2})(?!\d)')
+_PATTERN_DATE_YEAR_MONTH = re.compile(r'((?:19|20)\d{2})(\d{2})(?!\d)')
+# Year only: standalone 4-digit year (1900-2099) with word boundaries
+_PATTERN_DATE_YEAR_ONLY = re.compile(r'(?<!\d)((?:19|20)\d{2})(?!\d)')
 
 # 6 digits for time: HHMMSS
 _PATTERN_TIME_6DIGITS = re.compile(r'(\d{6})')
@@ -420,7 +426,15 @@ def extract_filesystem_timestamp(path: Path | str) -> datetime | None:
 def _parse_date_from_string(text: str) -> tuple[int, int, int, int] | None:
     """Parse a date from a string, returning (year, month, day, position).
 
-    Tries multiple patterns in order of specificity.
+    Tries multiple patterns in order of specificity. For partial dates where
+    month or day cannot be determined, defaults to January 1st for missing parts.
+
+    Pattern priority:
+    1. YYYYMMDD (8 digits)
+    2. YYYY-MM-DD or YY-MM-DD (separated)
+    3. YYMMDD (6 digits)
+    4. YYYY-MM (year-month, day defaults to 1)
+    5. YYYY (year only, month and day default to January 1st)
 
     Args:
         text: String to search for date patterns.
@@ -465,6 +479,27 @@ def _parse_date_from_string(text: str) -> tuple[int, int, int, int] | None:
 
         if _validate_date(year, month, day):
             return (year, month, day, match.end())
+
+    # Try partial date patterns - default missing parts to January 1st
+    # Year-month with separator: YYYY-MM
+    for match in _PATTERN_DATE_YEAR_MONTH_SEP.finditer(text):
+        year = int(match.group(1))
+        month = int(match.group(2))
+        if 1900 <= year <= 2099 and 1 <= month <= 12:
+            return (year, month, 1, match.end())
+
+    # Year-month without separator: YYYYMM (e.g., 202401)
+    for match in _PATTERN_DATE_YEAR_MONTH.finditer(text):
+        year = int(match.group(1))
+        month = int(match.group(2))
+        if 1900 <= year <= 2099 and 1 <= month <= 12:
+            return (year, month, 1, match.end())
+
+    # Year only: standalone 4-digit year (e.g., folder "2014" or "Photos 2014")
+    for match in _PATTERN_DATE_YEAR_ONLY.finditer(text):
+        year = int(match.group(1))
+        if 1900 <= year <= 2099:
+            return (year, 1, 1, match.end())
 
     return None
 
@@ -554,9 +589,9 @@ def derive_timestamp(path: Path | str) -> datetime | None:
     Tries sources in priority order:
     1. EXIF DateTimeOriginal tag
     2. EXIF DateTime tag
-    3. Filesystem creation time
-    4. Filesystem modification time
-    5. Parsed from filename/path
+    3. Parsed from filename/path (more reliable than filesystem dates)
+    4. Filesystem creation time
+    5. Filesystem modification time
 
     Args:
         path: Path to the image file.
@@ -573,16 +608,16 @@ def derive_timestamp(path: Path | str) -> datetime | None:
         logger.debug(f'Timestamp from EXIF: {timestamp} for {path}')
         return timestamp
 
-    # Try filesystem timestamp
-    timestamp = extract_filesystem_timestamp(path)
-    if timestamp:
-        logger.debug(f'Timestamp from filesystem: {timestamp} for {path}')
-        return timestamp
-
-    # Try parsing from filename/path
+    # Try parsing from filename/path (before filesystem, as files get copied around)
     timestamp = parse_timestamp_from_path(path)
     if timestamp:
         logger.debug(f'Timestamp from filename: {timestamp} for {path}')
+        return timestamp
+
+    # Try filesystem timestamp as last resort
+    timestamp = extract_filesystem_timestamp(path)
+    if timestamp:
+        logger.debug(f'Timestamp from filesystem: {timestamp} for {path}')
         return timestamp
 
     logger.debug(f'No timestamp found for {path}')

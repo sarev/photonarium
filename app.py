@@ -201,12 +201,14 @@ def update_image(image_id):
     if not data:
         return error_response('No data provided')
 
-    # Only allow updating description and rating
+    # Only allow updating user-editable fields
     allowed_updates = {}
     if 'description' in data:
         allowed_updates['description'] = data['description']
     if 'rating' in data:
         allowed_updates['rating'] = data['rating']
+    if 'timestamp' in data:
+        allowed_updates['timestamp'] = data['timestamp']
 
     if not allowed_updates:
         return error_response('No valid fields to update')

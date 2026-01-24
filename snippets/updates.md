@@ -1,22 +1,24 @@
 # Feature requests, improvements, bugs and issues:
 
-## Thumbnail loading
+## Thumbnail loading - DONE
 
 It looks like the gallery loads the image thumbnails dynamically and (I believe) asynchronously, which is a good thing. The issue I've found is when scrolling quickly through hundreds of images, the process appears to be loading them in order viewed, which means it can take _ages_ to get around to loading the thumbnails for the images I'm actually looking at when I finish scrolling. I think the loading should be more LIFO than FIFO, favouring loading the most recent thumbnails first.
 
-## Thumbnail RAM cache size
+## Thumbnail RAM cache size - IGNORED (SKIPPED)
 
 I'm not sure if it does, but we might need to impose a max RAM budget for loaded thumbnails. A few 100MiB might be about right. Have it as one of the things in our config file...
 
-## Timestamp editing
+## Timestamp editing - DONE
 
 In the "Image information" pane of the gallery screen, I'd like to have the timestamp for the selected photo editable. This should include a date picker. If the user updates this, it replaces whatever the timestamp is in the database for that image.
 
-## Timestamp calculations
+## Timestamp calculations - DONE
 
 I've realised I made a significant error in the image timestamp derivation rules. We should do the filename stuff _before_ the filesystem create/modified stuff (but still after the EXIF stuff), because often files are moved and copied around with file system datestamps being messed up, but if the photo is in a folder called "2014" then we should really assume it's from 2014 sometime. On a related note, where we cannot determine the complete date (e.g. we have the year but we're missing the month and day, or just the day), we should assume "01 January" for the missing parts.
 
-After fixing this, we'll probably need to do a (one-time) sweep through all of the images currently in the database to fix their timestamps!
+## Fix existing database
+
+After fixing the timestamp calculation above, we'll probably need to do a (one-time) sweep through all of the images currently in the database to fix their timestamps!
 
 ## Multiple image selection bug
 

@@ -517,24 +517,91 @@ const Gallery = {
 
     /**
      * Initialises the IntersectionObserver for lazy loading.
+     * Uses LIFO ordering so the most recently viewed images load first.
      * @private
      */
     _initLazyLoader() {
+        // Pending images to load (LIFO - process from end)
+        this._pendingLoads = [];
+        this._loadScheduled = false;
+
+        // Track currently visible images
+        this._visibleImages = new Set();
+
         this.state.lazyLoader = new IntersectionObserver((entries) => {
             for (const entry of entries) {
+                const img = entry.target;
                 if (entry.isIntersecting) {
-                    const img = entry.target;
+                    // Image entered viewport - add to pending queue
                     if (img.dataset.src) {
-                        img.src = img.dataset.src;
-                        delete img.dataset.src;
+                        this._visibleImages.add(img);
+                        // Remove if already in queue, then add to end (LIFO priority)
+                        const idx = this._pendingLoads.indexOf(img);
+                        if (idx !== -1) this._pendingLoads.splice(idx, 1);
+                        this._pendingLoads.push(img);
                     }
-                    this.state.lazyLoader.unobserve(img);
+                } else {
+                    // Image left viewport - remove from visible set
+                    this._visibleImages.delete(img);
                 }
             }
+            this._scheduleLoad();
         }, {
             root: this._els.grid?.closest('.gallery-container') || null,
             rootMargin: '100px'
         });
+    },
+
+    /**
+     * Schedules processing of the pending load queue.
+     * @private
+     */
+    _scheduleLoad() {
+        if (this._loadScheduled) return;
+        this._loadScheduled = true;
+
+        // Small delay to let scrolling settle, then load in LIFO order
+        requestAnimationFrame(() => {
+            this._loadScheduled = false;
+            this._processLoadQueue();
+        });
+    },
+
+    /**
+     * Processes the pending load queue in LIFO order.
+     * Prioritizes images that are still visible.
+     * @private
+     */
+    _processLoadQueue() {
+        // Load up to N images per frame to avoid jank
+        const BATCH_SIZE = 4;
+        let loaded = 0;
+
+        // Process from end of queue (LIFO) - most recently viewed first
+        while (this._pendingLoads.length > 0 && loaded < BATCH_SIZE) {
+            const img = this._pendingLoads.pop();
+
+            // Skip if already loaded or no longer has data-src
+            if (!img.dataset.src) continue;
+
+            // Prioritize if still visible, otherwise put back at front (low priority)
+            if (!this._visibleImages.has(img)) {
+                this._pendingLoads.unshift(img);
+                continue;
+            }
+
+            // Load this image
+            img.src = img.dataset.src;
+            delete img.dataset.src;
+            this.state.lazyLoader.unobserve(img);
+            this._visibleImages.delete(img);
+            loaded++;
+        }
+
+        // If more pending, schedule another batch
+        if (this._pendingLoads.length > 0) {
+            this._scheduleLoad();
+        }
     },
 
     /**
@@ -942,7 +1009,8 @@ const Gallery = {
                 </div>
                 <div class="info-row">
                     <span class="info-label">Date</span>
-                    <span class="info-value">${App.formatDate(img.timestamp)}</span>
+                    <input type="datetime-local" id="info-timestamp" class="info-input info-timestamp"
+                           value="${img.timestamp ? img.timestamp.slice(0, 16) : ''}">
                 </div>
             </div>
 
@@ -974,6 +1042,7 @@ const Gallery = {
     _bindInfoPanelEvents(imageId) {
         const descField = App.$('info-description');
         const ratingField = App.$('info-rating');
+        const timestampField = App.$('info-timestamp');
         const emojiBtn = App.$('info-emoji-btn');
 
         // Save on blur
@@ -986,6 +1055,17 @@ const Gallery = {
         if (ratingField) {
             ratingField.addEventListener('blur', () => {
                 this._saveImageField(imageId, 'rating', ratingField.value);
+            });
+        }
+
+        if (timestampField) {
+            timestampField.addEventListener('change', () => {
+                // Convert datetime-local value to ISO format
+                const value = timestampField.value;
+                if (value) {
+                    const isoTimestamp = new Date(value).toISOString();
+                    this._saveImageField(imageId, 'timestamp', isoTimestamp);
+                }
             });
         }
 
