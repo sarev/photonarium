@@ -96,6 +96,6 @@ In the gallery toolbar, we have a button for going into full-screen mode. This i
 
 Clearly, rotating the image will mean its sha256 checksum (and probably size and modified date) will change. As an optimisation, to help speed things up, I think we can assume that the rotation operation *doesn't* change the embedding, description, rating, description embedding, laplacian variance, or perceptual hash
 
-## Fullscreen prev/next buttons
+## Fullscreen prev/next buttons - DONE
 
 Along with the temporary close button on the fullscreen view, I'd like "Previous" and "Next" arrow buttons at each side of the screen. These do the same thing as pressing the corresponding cursor key when clicked/tapped.

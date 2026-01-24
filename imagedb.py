@@ -3866,6 +3866,9 @@ class ImageDatabase:
         self._db_lock = threading.RLock()  # Reentrant lock for nested calls
         self._image_locks: dict[str, threading.Lock] = {}  # Per-image locks for rotation
         self._image_locks_lock = threading.Lock()  # Lock for the locks dict
+        self._active_rotations = 0  # Count of in-flight rotation operations
+        self._rotations_lock = threading.Lock()  # Lock for the counter
+        self._rotations_done = threading.Condition(self._rotations_lock)  # Signal when rotations complete
 
         # Create queues
         self._ingestion_queue: queue.Queue[Path] = queue.Queue()
@@ -4131,13 +4134,20 @@ class ImageDatabase:
         """Close the database and stop all threads.
 
         Safe to call multiple times. After closing, the database
-        cannot be used.
+        cannot be used. Waits for any in-flight rotation operations
+        to complete before closing.
         """
         if self._closed:
             return
 
         self._closed = True
         self.stop_threads()
+
+        # Wait for any in-flight rotation operations to complete
+        with self._rotations_lock:
+            while self._active_rotations > 0:
+                logger.info(f'Waiting for {self._active_rotations} rotation(s) to complete...')
+                self._rotations_done.wait(timeout=5.0)
 
         with self._db_lock:
             if self.conn:
@@ -4335,28 +4345,44 @@ class ImageDatabase:
                 - results: Dict mapping image_id to success boolean
                 - rotated: List of successfully rotated image IDs
         """
-        results = {}
-        rotated = []
+        # Check if database is closing
+        if self._closed:
+            logger.warning('rotate_images: Database is closed')
+            return {'results': {id: False for id in image_ids}, 'rotated': []}
 
-        # Use thread pool for parallel rotation
-        max_workers = self.config.indexing_threads
+        # Track this rotation operation for graceful shutdown
+        with self._rotations_lock:
+            self._active_rotations += 1
 
-        def rotate_one(image_id: str) -> tuple[str, bool]:
-            success = self._rotate_single_image(image_id, direction)
-            return (image_id, success)
+        try:
+            results = {}
+            rotated = []
 
-        with ThreadPoolExecutor(max_workers=max_workers) as executor:
-            futures = [executor.submit(rotate_one, img_id) for img_id in image_ids]
-            for future in futures:
-                try:
-                    image_id, success = future.result()
-                    results[image_id] = success
-                    if success:
-                        rotated.append(image_id)
-                except Exception as e:
-                    logger.error(f'rotate_images: Thread error: {e}')
+            # Use thread pool for parallel rotation
+            max_workers = self.config.indexing_threads
 
-        return {'results': results, 'rotated': rotated}
+            def rotate_one(image_id: str) -> tuple[str, bool]:
+                success = self._rotate_single_image(image_id, direction)
+                return (image_id, success)
+
+            with ThreadPoolExecutor(max_workers=max_workers) as executor:
+                futures = [executor.submit(rotate_one, img_id) for img_id in image_ids]
+                for future in futures:
+                    try:
+                        image_id, success = future.result()
+                        results[image_id] = success
+                        if success:
+                            rotated.append(image_id)
+                    except Exception as e:
+                        logger.error(f'rotate_images: Thread error: {e}')
+
+            return {'results': results, 'rotated': rotated}
+
+        finally:
+            # Signal that this rotation operation is complete
+            with self._rotations_lock:
+                self._active_rotations -= 1
+                self._rotations_done.notify_all()
 
     def _get_image_lock(self, image_id: str) -> threading.Lock:
         """Get or create a lock for a specific image.
