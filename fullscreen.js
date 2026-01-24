@@ -140,7 +140,8 @@ const Fullscreen = {
      */
     onEnter(imageId) {
         // Get the current image list from Gallery's filtered/sorted state
-        this.state.imageList = Gallery.state.images;
+        // Use filteredImages to respect both the active filter and sort order
+        this.state.imageList = Gallery.state.filteredImages;
         this.state.currentIndex = this.state.imageList.findIndex(img => img.id === imageId);
 
         // Reset zoom/pan state

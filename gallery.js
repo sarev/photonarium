@@ -548,8 +548,19 @@ const Gallery = {
      */
     _onSortChanged() {
         const { by } = App.getSort();
+        const filter = App.getFilter();
+        const isSemanticFilter = filter && filter.type === 'semantic';
 
         if (by === 'content') {
+            // For semantic search filters, scores are already in the filter
+            // and results are sorted by _applyFilters() - no need to fetch
+            if (isSemanticFilter) {
+                // Just re-render, _applyFilters handles the sorting
+                this.state.images = this._sortImages(this.state.images);
+                this._renderGrid();
+                return;
+            }
+
             // Content sort requires fetching similarity data from server
             const selected = App.getSelectedImages();
             const referenceId = selected.length > 0 ? selected[0] : null;
@@ -590,6 +601,12 @@ const Gallery = {
                 this._els.similaritySlider.value = pct;
                 this._els.similarityValue.textContent = pct + '%';
             }
+        }
+
+        // Force "Sort by content similarity" (descending) for semantic searches
+        if (isSemanticFilter) {
+            App.setSortBy('content');
+            App.setSortDirection('desc');
         }
 
         this._loadImages(); // Reload and apply new filter
