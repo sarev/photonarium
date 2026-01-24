@@ -539,6 +539,10 @@ def get_duplicates():
         JSON object with:
             - groups: Array of duplicate groups, each containing:
                 - images: Array of image objects in the group
+            - status: Computation status for this level
+                - 'pending': Not yet computed
+                - 'computing': Currently being computed
+                - 'done': Computation finished
     """
     level = request.args.get('level', 0, type=int)
 
@@ -546,8 +550,10 @@ def get_duplicates():
     if level < 0 or level > 3:
         return error_response('Level must be between 0 and 3')
 
-    groups = get_db().get_duplicate_groups(level)
-    return jsonify({'groups': groups})
+    db = get_db()
+    groups = db.get_duplicate_groups(level)
+    status = db.get_duplicate_status().get(level, 'pending')
+    return jsonify({'groups': groups, 'status': status})
 
 
 # =============================================================================

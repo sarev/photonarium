@@ -1465,6 +1465,8 @@ class IngestionThread(threading.Thread):
         self._processed_count = 0
         self._error_count = 0
         self._db_lock = threading.Lock()
+        self._pending_count = 0  # Number of items being processed (not just in queue)
+        self._pending_lock = threading.Lock()
 
     @property
     def processed_count(self) -> int:
@@ -1475,6 +1477,16 @@ class IngestionThread(threading.Thread):
     def error_count(self) -> int:
         """Number of images that failed processing."""
         return self._error_count
+
+    @property
+    def is_idle(self) -> bool:
+        """Check if thread is idle (queue empty AND no pending work).
+
+        This is used by EmbeddingThread to determine when all ingestion
+        is truly complete, not just when the queue appears empty.
+        """
+        with self._pending_lock:
+            return self.ingestion_queue.empty() and self._pending_count == 0
 
     def run(self) -> None:
         """Main thread loop - process images using thread pool."""
@@ -1495,6 +1507,8 @@ class IngestionThread(threading.Thread):
                         path = self.ingestion_queue.get_nowait()
                         future = executor.submit(self._process_image, path)
                         pending_futures[future] = path
+                        with self._pending_lock:
+                            self._pending_count += 1
                     except queue.Empty:
                         break
 
@@ -1511,6 +1525,8 @@ class IngestionThread(threading.Thread):
                             self._error_count += 1
                         finally:
                             self.ingestion_queue.task_done()
+                            with self._pending_lock:
+                                self._pending_count -= 1
 
                 # Small sleep if no work to prevent busy-waiting
                 if not pending_futures:
@@ -1530,6 +1546,8 @@ class IngestionThread(threading.Thread):
                     self._error_count += 1
                 finally:
                     self.ingestion_queue.task_done()
+                    with self._pending_lock:
+                        self._pending_count -= 1
 
         logger.info('Ingestion thread stopped')
 
@@ -1906,7 +1924,7 @@ class EmbeddingThread(threading.Thread):
     Attributes:
         conn: Database connection.
         embedding_queue: Queue of image IDs to process.
-        ingestion_queue: Reference to ingestion queue (to check if empty).
+        ingestion_thread: Reference to ingestion thread (to check if idle).
         stop_event: Event to signal thread shutdown.
         config: Configuration object.
         clip_model: OpenCLIP model wrapper.
@@ -1917,7 +1935,7 @@ class EmbeddingThread(threading.Thread):
         self,
         conn: sqlite3.Connection,
         embedding_queue: queue.Queue[str],
-        ingestion_queue: queue.Queue[Path],
+        ingestion_thread: IngestionThread,
         stop_event: threading.Event,
         config: Config | None = None,
         on_complete: callable | None = None,
@@ -1927,7 +1945,7 @@ class EmbeddingThread(threading.Thread):
         Args:
             conn: Database connection (must be created with check_same_thread=False).
             embedding_queue: Queue of image IDs to process.
-            ingestion_queue: Reference to ingestion queue (to check if empty).
+            ingestion_thread: Reference to ingestion thread (to check if idle).
             stop_event: Event to signal thread should stop.
             config: Configuration object. Uses defaults if None.
             on_complete: Optional callback function called when both queues
@@ -1936,7 +1954,7 @@ class EmbeddingThread(threading.Thread):
         super().__init__(name='EmbeddingThread', daemon=True)
         self.conn = conn
         self.embedding_queue = embedding_queue
-        self.ingestion_queue = ingestion_queue
+        self.ingestion_thread = ingestion_thread
         self.stop_event = stop_event
         self.config = config or get_default_config()
         self.on_complete = on_complete
@@ -2042,14 +2060,19 @@ class EmbeddingThread(threading.Thread):
                 self.embedding_queue.task_done()
 
     def _check_completion(self) -> None:
-        """Check if both queues are empty and trigger completion callback."""
+        """Check if all processing is complete and trigger completion callback.
+
+        Completion requires:
+        - IngestionThread is idle (queue empty AND no pending futures)
+        - EmbeddingThread's queue is empty
+        """
         if self._completion_triggered:
             return
 
-        # Check if both queues are empty
-        if self.ingestion_queue.empty() and self.embedding_queue.empty():
+        # Check if ingestion is truly idle (not just queue empty) and embedding queue empty
+        if self.ingestion_thread.is_idle and self.embedding_queue.empty():
             self._completion_triggered = True
-            logger.info('Both queues empty - processing complete')
+            logger.info('All processing complete - triggering completion callback')
 
             if self.on_complete:
                 try:
@@ -2187,6 +2210,11 @@ def compute_duplicates_level1(conn: sqlite3.Connection, threshold: int = 4) -> i
 
     Groups images with perceptual hash Hamming distance <= threshold.
 
+    Uses multi-index hashing (locality-sensitive hashing) to avoid O(n²)
+    comparisons. By splitting each hash into bands, we only compare images
+    that share at least one band, which is guaranteed for similar hashes
+    by the pigeonhole principle.
+
     Args:
         conn: Database connection.
         threshold: Maximum Hamming distance to consider as duplicate.
@@ -2211,35 +2239,112 @@ def compute_duplicates_level1(conn: sqlite3.Connection, threshold: int = 4) -> i
         logger.info('Not enough images for perceptual duplicate detection')
         return 0
 
-    # Build list of (id, hash) tuples
-    image_data = [(row['id'], row['perceptual_hash']) for row in images]
+    # Convert hashes to integers for fast comparison
+    image_data = []
+    for row in images:
+        try:
+            hash_int = int(row['perceptual_hash'], 16)
+            image_data.append((row['id'], hash_int))
+        except ValueError:
+            continue
 
-    # Use union-find to group similar images
-    parent = {img_id: img_id for img_id, _ in image_data}
+    if len(image_data) < 2:
+        return 0
 
-    def find(x: str) -> str:
+    n = len(image_data)
+    logger.info(f'Processing {n} images with multi-index hashing')
+
+    # Multi-index hashing: split 64-bit hash into bands
+    # For threshold t, using t+1 bands ensures similar hashes share ≥1 band
+    num_bands = threshold + 1
+    bits_per_band = 64 // num_bands  # ~12-13 bits per band for threshold=4
+
+    # Build inverted index: band_value -> list of image indices
+    band_indices: list[dict[int, list[int]]] = [{} for _ in range(num_bands)]
+
+    for idx, (img_id, hash_int) in enumerate(image_data):
+        for band in range(num_bands):
+            # Extract band bits
+            shift = band * bits_per_band
+            if band == num_bands - 1:
+                # Last band gets remaining bits
+                band_value = hash_int >> shift
+            else:
+                mask = (1 << bits_per_band) - 1
+                band_value = (hash_int >> shift) & mask
+
+            if band_value not in band_indices[band]:
+                band_indices[band][band_value] = []
+            band_indices[band][band_value].append(idx)
+
+    # Log index stats
+    total_buckets = sum(len(bi) for bi in band_indices)
+    max_bucket = max(max(len(b) for b in bi.values()) if bi else 0 for bi in band_indices)
+    logger.info(f'  Built {num_bands} band indices with {total_buckets} buckets (max bucket size: {max_bucket})')
+
+    # Union-find for clustering
+    parent = list(range(n))
+
+    def find(x: int) -> int:
         if parent[x] != x:
             parent[x] = find(parent[x])
         return parent[x]
 
-    def union(x: str, y: str) -> None:
+    def union(x: int, y: int) -> None:
         px, py = find(x), find(y)
         if px != py:
             parent[px] = py
 
-    # Compare all pairs (O(n²) but necessary for clustering)
-    for i in range(len(image_data)):
-        for j in range(i + 1, len(image_data)):
-            id1, hash1 = image_data[i]
-            id2, hash2 = image_data[j]
+    # Fast popcount using lookup table
+    def popcount64(x: int) -> int:
+        return bin(x).count('1')
 
-            if hamming_distance(hash1, hash2) <= threshold:
-                union(id1, id2)
+    # Compare only candidate pairs that share at least one band
+    compared = set()  # Track compared pairs to avoid duplicates
+    comparisons = 0
+    matches = 0
+    last_log = 0
+    log_interval = 100000  # Log every 100k comparisons
+
+    logger.info('  Comparing candidate pairs...')
+    for band in range(num_bands):
+        for bucket in band_indices[band].values():
+            if len(bucket) < 2:
+                continue
+            # Compare all pairs in this bucket
+            for i in range(len(bucket)):
+                for j in range(i + 1, len(bucket)):
+                    idx1, idx2 = bucket[i], bucket[j]
+                    if idx1 > idx2:
+                        idx1, idx2 = idx2, idx1
+                    pair = (idx1, idx2)
+                    if pair in compared:
+                        continue
+                    compared.add(pair)
+
+                    # Compute actual Hamming distance
+                    hash1 = image_data[idx1][1]
+                    hash2 = image_data[idx2][1]
+                    dist = popcount64(hash1 ^ hash2)
+                    comparisons += 1
+
+                    if dist <= threshold:
+                        union(idx1, idx2)
+                        matches += 1
+
+                    # Periodic progress logging
+                    if comparisons - last_log >= log_interval:
+                        logger.info(f'  ... {comparisons:,} comparisons, {matches:,} matches so far')
+                        last_log = comparisons
+
+    brute_force = n * (n - 1) // 2
+    reduction = (1 - comparisons / brute_force) * 100 if brute_force > 0 else 0
+    logger.info(f'  Completed: {comparisons:,} comparisons ({reduction:.1f}% reduction from brute force)')
 
     # Build groups from union-find
-    groups: dict[str, list[str]] = {}
-    for img_id, _ in image_data:
-        root = find(img_id)
+    groups: dict[int, list[str]] = {}
+    for idx, (img_id, _) in enumerate(image_data):
+        root = find(idx)
         if root not in groups:
             groups[root] = []
         groups[root].append(img_id)
@@ -2248,7 +2353,7 @@ def compute_duplicates_level1(conn: sqlite3.Connection, threshold: int = 4) -> i
     group_count = 0
     for root, members in groups.items():
         if len(members) > 1:
-            group_hash = f'phash_{root}'
+            group_hash = f'phash_{image_data[root][0]}'
             _insert_duplicate_group(conn, level=1, group_hash=group_hash, image_ids=members)
             group_count += 1
 
@@ -2257,10 +2362,98 @@ def compute_duplicates_level1(conn: sqlite3.Connection, threshold: int = 4) -> i
     return group_count
 
 
+def _compute_embedding_duplicates_chunked(
+    image_ids: list[str],
+    embeddings: np.ndarray,
+    threshold: float,
+    chunk_size: int = 1000,
+) -> dict[int, list[str]]:
+    """Compute duplicate groups from embeddings using chunked processing.
+
+    Uses chunked matrix multiplication to avoid O(n²) memory usage.
+    Only stores pairs above threshold, then builds clusters with union-find.
+
+    Args:
+        image_ids: List of image IDs corresponding to embeddings.
+        embeddings: Numpy array of shape (n, embedding_dim).
+        threshold: Minimum cosine similarity to consider as similar.
+        chunk_size: Number of images to process per chunk.
+
+    Returns:
+        Dictionary mapping group root index to list of image IDs.
+    """
+    n = len(image_ids)
+
+    # Union-find with path compression and union by rank
+    parent = list(range(n))
+    rank = [0] * n
+
+    def find(x: int) -> int:
+        if parent[x] != x:
+            parent[x] = find(parent[x])
+        return parent[x]
+
+    def union(x: int, y: int) -> None:
+        px, py = find(x), find(y)
+        if px == py:
+            return
+        if rank[px] < rank[py]:
+            px, py = py, px
+        parent[py] = px
+        if rank[px] == rank[py]:
+            rank[px] += 1
+
+    # Process in chunks to avoid O(n²) memory
+    # For each chunk, compute similarities with ALL embeddings
+    pairs_found = 0
+    total_chunks = (n + chunk_size - 1) // chunk_size
+    log_interval = max(1, total_chunks // 10)  # Log ~10 times during processing
+
+    logger.info(f'  Processing {total_chunks} chunks (chunk size: {chunk_size})...')
+
+    for chunk_idx, chunk_start in enumerate(range(0, n, chunk_size)):
+        chunk_end = min(chunk_start + chunk_size, n)
+        chunk_embeddings = embeddings[chunk_start:chunk_end]
+
+        # Compute similarities between chunk and all embeddings
+        # Shape: (chunk_size, n)
+        similarities = chunk_embeddings @ embeddings.T
+
+        # Find pairs above threshold (only upper triangle to avoid duplicates)
+        for i_local in range(chunk_end - chunk_start):
+            i_global = chunk_start + i_local
+            # Only look at j > i to avoid double counting
+            start_j = max(i_global + 1, 0)
+            for j in range(start_j, n):
+                if similarities[i_local, j] >= threshold:
+                    union(i_global, j)
+                    pairs_found += 1
+
+        # Periodic progress logging
+        if (chunk_idx + 1) % log_interval == 0 or chunk_idx == total_chunks - 1:
+            pct = (chunk_idx + 1) * 100 // total_chunks
+            logger.info(f'  ... {pct}% complete ({chunk_idx + 1}/{total_chunks} chunks, {pairs_found:,} pairs found)')
+
+    logger.info(f'  Completed: {pairs_found:,} similar pairs found')
+
+    # Build groups from union-find
+    groups: dict[int, list[str]] = {}
+    for i, img_id in enumerate(image_ids):
+        root = find(i)
+        if root not in groups:
+            groups[root] = []
+        groups[root].append(img_id)
+
+    return groups
+
+
 def compute_duplicates_level2(conn: sqlite3.Connection, threshold: float = 0.95) -> int:
     """Compute level 2 duplicates (similar embeddings).
 
     Groups images with cosine similarity >= threshold.
+
+    Uses chunked processing to avoid O(n²) memory usage. Memory is now
+    O(chunk_size × n) which is much more manageable for large collections.
 
     Args:
         conn: Database connection.
@@ -2290,36 +2483,12 @@ def compute_duplicates_level2(conn: sqlite3.Connection, threshold: float = 0.95)
     image_ids = [row['id'] for row in rows]
     embeddings = np.array([embedding_to_numpy(row['embedding']) for row in rows])
 
-    # Compute pairwise cosine similarities (dot product of normalised vectors)
-    # similarities[i,j] = similarity between image i and j
-    similarities = embeddings @ embeddings.T
+    logger.info(f'Processing {len(image_ids)} images with chunked similarity')
 
-    # Use union-find to cluster
-    parent = {i: i for i in range(len(image_ids))}
-
-    def find(x: int) -> int:
-        if parent[x] != x:
-            parent[x] = find(parent[x])
-        return parent[x]
-
-    def union(x: int, y: int) -> None:
-        px, py = find(x), find(y)
-        if px != py:
-            parent[px] = py
-
-    # Find pairs above threshold
-    for i in range(len(image_ids)):
-        for j in range(i + 1, len(image_ids)):
-            if similarities[i, j] >= threshold:
-                union(i, j)
-
-    # Build groups
-    groups: dict[int, list[str]] = {}
-    for i, img_id in enumerate(image_ids):
-        root = find(i)
-        if root not in groups:
-            groups[root] = []
-        groups[root].append(img_id)
+    # Use chunked processing
+    groups = _compute_embedding_duplicates_chunked(
+        image_ids, embeddings, threshold, chunk_size=1000
+    )
 
     # Insert groups with more than one member
     group_count = 0
@@ -2338,6 +2507,8 @@ def compute_duplicates_level3(conn: sqlite3.Connection, threshold: float = 0.85)
     """Compute level 3 duplicates (related embeddings).
 
     Groups images with cosine similarity >= threshold (lower than level 2).
+
+    Uses chunked processing to avoid O(n²) memory usage.
 
     Args:
         conn: Database connection.
@@ -2367,35 +2538,12 @@ def compute_duplicates_level3(conn: sqlite3.Connection, threshold: float = 0.85)
     image_ids = [row['id'] for row in rows]
     embeddings = np.array([embedding_to_numpy(row['embedding']) for row in rows])
 
-    # Compute pairwise cosine similarities
-    similarities = embeddings @ embeddings.T
+    logger.info(f'Processing {len(image_ids)} images with chunked similarity')
 
-    # Use union-find to cluster
-    parent = {i: i for i in range(len(image_ids))}
-
-    def find(x: int) -> int:
-        if parent[x] != x:
-            parent[x] = find(parent[x])
-        return parent[x]
-
-    def union(x: int, y: int) -> None:
-        px, py = find(x), find(y)
-        if px != py:
-            parent[px] = py
-
-    # Find pairs above threshold
-    for i in range(len(image_ids)):
-        for j in range(i + 1, len(image_ids)):
-            if similarities[i, j] >= threshold:
-                union(i, j)
-
-    # Build groups
-    groups: dict[int, list[str]] = {}
-    for i, img_id in enumerate(image_ids):
-        root = find(i)
-        if root not in groups:
-            groups[root] = []
-        groups[root].append(img_id)
+    # Use chunked processing
+    groups = _compute_embedding_duplicates_chunked(
+        image_ids, embeddings, threshold, chunk_size=1000
+    )
 
     # Insert groups with more than one member
     group_count = 0
@@ -3061,6 +3209,16 @@ class ImageDatabase:
         # Track if we've been closed
         self._closed = False
 
+        # Duplicate computation status per level
+        # Values: 'pending', 'computing', 'done', or None (never computed)
+        self._duplicate_status: dict[int, str] = {
+            0: 'pending',
+            1: 'pending',
+            2: 'pending',
+            3: 'pending',
+        }
+        self._duplicate_status_lock = threading.Lock()
+
         # Ensure thumbnail directory exists
         self.thumbnail_dir.mkdir(parents=True, exist_ok=True)
 
@@ -3262,7 +3420,7 @@ class ImageDatabase:
 
         # Create completion callback
         def on_complete():
-            compute_all_duplicate_groups(self.conn, self.config)
+            self._compute_duplicates_with_status()
             emit_processing_complete(self.event_queue)
 
         # Start ingestion thread with configured number of worker threads
@@ -3280,7 +3438,7 @@ class ImageDatabase:
         self._embedding_thread = EmbeddingThread(
             conn=self.conn,
             embedding_queue=self._embedding_queue,
-            ingestion_queue=self._ingestion_queue,
+            ingestion_thread=self._ingestion_thread,
             stop_event=self._stop_event,
             config=self.config,
             on_complete=on_complete,
@@ -3799,6 +3957,52 @@ class ImageDatabase:
             'embedding_queue': embedding_count,
             'total_images': total_images,
         }
+
+    def get_duplicate_status(self) -> dict[int, str]:
+        """Get the computation status for each duplicate level.
+
+        Returns:
+            Dict mapping level (0-3) to status string:
+            - 'pending': Not yet computed
+            - 'computing': Currently being computed
+            - 'done': Computation finished
+        """
+        with self._duplicate_status_lock:
+            return dict(self._duplicate_status)
+
+    def _compute_duplicates_with_status(self) -> None:
+        """Compute all duplicate groups while tracking status per level.
+
+        Updates _duplicate_status before and after computing each level.
+        This allows the frontend to show progress to the user.
+        """
+        logger.info('Computing all duplicate groups with status tracking')
+
+        level_functions = [
+            (0, lambda: compute_duplicates_level0(self.conn)),
+            (1, lambda: compute_duplicates_level1(self.conn, self.config.perceptual_hash_threshold)),
+            (2, lambda: compute_duplicates_level2(self.conn, self.config.similarity_threshold_level2)),
+            (3, lambda: compute_duplicates_level3(self.conn, self.config.similarity_threshold_level3)),
+        ]
+
+        results = {}
+        for level, compute_fn in level_functions:
+            # Mark as computing
+            with self._duplicate_status_lock:
+                self._duplicate_status[level] = 'computing'
+
+            try:
+                results[level] = compute_fn()
+            except Exception as e:
+                logger.error(f'Error computing level {level} duplicates: {e}')
+                results[level] = 0
+
+            # Mark as done
+            with self._duplicate_status_lock:
+                self._duplicate_status[level] = 'done'
+
+        total = sum(results.values())
+        logger.info(f'Duplicate computation complete: {total} total groups')
 
     def queue_rescan_all(self) -> None:
         """Queue all registered folders for rescanning."""

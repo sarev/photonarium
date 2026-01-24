@@ -609,10 +609,14 @@ const Gallery = {
             App.setSortDirection('desc');
         }
 
-        this._loadImages(); // Reload and apply new filter
-
-        // Scroll to top when filter changes
-        this._scrollToTop();
+        // If gallery is currently visible, reload immediately
+        // Otherwise, mark as needing refresh for when we enter
+        if (App.getScreen() === 'gallery') {
+            this._loadImages();
+            this._scrollToTop();
+        } else {
+            this.state.needsRefresh = true;
+        }
     },
 
     /**

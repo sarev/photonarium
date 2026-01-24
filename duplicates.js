@@ -102,16 +102,20 @@ const Duplicates = {
      * Local state for the duplicates screen.
      * @type {Object}
      * @property {Object<number, Array>} groupCache - Cached groups by similarity level
+     * @property {Object<number, string>} statusCache - Cached status by similarity level
      * @property {number} currentLevel - Current similarity level (0-3)
      * @property {Array<Object>} groups - Current duplicate groups for display
+     * @property {string} currentStatus - Status of current level ('pending', 'computing', 'done')
      * @property {number} scrollTop - Saved scroll position
      * @property {boolean} needsRefresh - Whether data needs to reload
      * @property {IntersectionObserver|null} lazyLoader - Observer for lazy loading
      */
     state: {
         groupCache: {},
+        statusCache: {},
         currentLevel: 0,
         groups: [],
+        currentStatus: 'pending',
         scrollTop: 0,
         needsRefresh: true,
         lazyLoader: null
@@ -263,6 +267,7 @@ const Duplicates = {
     markNeedsRefresh() {
         this.state.needsRefresh = true;
         this.state.groupCache = {};
+        this.state.statusCache = {};
     }
 };
 
@@ -281,10 +286,16 @@ Duplicates._loadGroups = async function() {
     App.showLoading('Loading duplicates…');
 
     try {
-        const groups = await this._getGroupsForLevel(this.state.currentLevel);
+        const { groups, status } = await this._getGroupsForLevel(this.state.currentLevel);
         this.state.groups = groups;
+        this.state.currentStatus = status;
         this.state.needsRefresh = false;
         this._renderGroups();
+
+        // If still computing, poll for updates
+        if (status === 'computing' || status === 'pending') {
+            this._scheduleStatusPoll(this.state.currentLevel);
+        }
     } catch (err) {
         App.showError('Failed to load duplicates: ' + err.message);
     } finally {
@@ -294,20 +305,25 @@ Duplicates._loadGroups = async function() {
 
 /**
  * Gets duplicate groups for a given similarity level.
- * Returns from cache if available, otherwise fetches from backend.
+ * Returns from cache if available (and status is 'done'), otherwise fetches from backend.
  * @param {number} level - Similarity level (0-3)
- * @returns {Promise<Array<Object>>} Array of duplicate groups
+ * @returns {Promise<{groups: Array<Object>, status: string}>} Groups and computation status
  * @private
  */
 Duplicates._getGroupsForLevel = async function(level) {
-    // Return cached if available
-    if (this.state.groupCache[level]) {
-        return this.state.groupCache[level];
+    // Return cached if available and status is 'done'
+    const cachedStatus = this.state.statusCache[level];
+    if (cachedStatus === 'done' && this.state.groupCache[level]) {
+        return {
+            groups: this.state.groupCache[level],
+            status: cachedStatus
+        };
     }
 
     // Fetch from backend
     const response = await App.apiGet(`/duplicates?level=${level}`);
     const groups = response.groups || [];
+    const status = response.status || 'done';
 
     // Process each group to determine the "best" image
     groups.forEach((group) => {
@@ -317,10 +333,13 @@ Duplicates._getGroupsForLevel = async function(level) {
     // Sort by group size (largest first)
     groups.sort((a, b) => b.images.length - a.images.length);
 
-    // Cache the result
-    this.state.groupCache[level] = groups;
+    // Only cache if computation is done
+    if (status === 'done') {
+        this.state.groupCache[level] = groups;
+    }
+    this.state.statusCache[level] = status;
 
-    return groups;
+    return { groups, status };
 };
 
 /**
@@ -329,19 +348,58 @@ Duplicates._getGroupsForLevel = async function(level) {
  * @private
  */
 Duplicates._setLevel = async function(level) {
-    if (level === this.state.currentLevel && this.state.groups.length > 0) {
+    if (level === this.state.currentLevel && this.state.groups.length > 0 && this.state.currentStatus === 'done') {
         return;
     }
 
     this.state.currentLevel = level;
 
     try {
-        const groups = await this._getGroupsForLevel(level);
+        const { groups, status } = await this._getGroupsForLevel(level);
         this.state.groups = groups;
+        this.state.currentStatus = status;
         this._renderGroups();
+
+        // If still computing, poll for updates
+        if (status === 'computing' || status === 'pending') {
+            this._scheduleStatusPoll(level);
+        }
     } catch (err) {
         App.showError('Failed to load duplicates: ' + err.message);
     }
+};
+
+/**
+ * Schedules a poll to check for updated duplicate computation status.
+ * @param {number} level - The level to poll for
+ * @private
+ */
+Duplicates._scheduleStatusPoll = function(level) {
+    // Clear any existing poll
+    if (this._pollTimeout) {
+        clearTimeout(this._pollTimeout);
+    }
+
+    // Poll again in 2 seconds
+    this._pollTimeout = setTimeout(async () => {
+        // Only poll if still on same level and screen is visible
+        if (this.state.currentLevel !== level) return;
+        if (!this._els.container.offsetParent) return;
+
+        try {
+            const { groups, status } = await this._getGroupsForLevel(level);
+            this.state.groups = groups;
+            this.state.currentStatus = status;
+            this._renderGroups();
+
+            // Continue polling if still not done
+            if (status === 'computing' || status === 'pending') {
+                this._scheduleStatusPoll(level);
+            }
+        } catch (err) {
+            // Silently fail polls, user can manually refresh
+        }
+    }, 2000);
 };
 
 /**
@@ -408,15 +466,24 @@ Duplicates._renderGroups = function() {
     // Clear existing content
     grid.innerHTML = '';
 
-    // Show empty state if no groups
+    const status = this.state.currentStatus;
+    const sliderPos = this._levelToSlider(this.state.currentLevel);
+    const levelLabel = this.SIMILARITY_LABELS[sliderPos].toLowerCase();
+
+    // Show empty/status state if no groups
     if (this.state.groups.length === 0) {
         grid.hidden = true;
         empty.hidden = false;
 
         const p = empty.querySelector('p');
         if (p) {
-            const sliderPos = this._levelToSlider(this.state.currentLevel);
-            p.textContent = `No ${this.SIMILARITY_LABELS[sliderPos].toLowerCase()} duplicates found at the current similarity level.`;
+            if (status === 'computing') {
+                p.textContent = `Computing ${levelLabel} duplicates... This may take a while for large collections.`;
+            } else if (status === 'pending') {
+                p.textContent = `Waiting to compute ${levelLabel} duplicates...`;
+            } else {
+                p.textContent = `No ${levelLabel} duplicates found.`;
+            }
         }
         return;
     }
