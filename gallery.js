@@ -115,6 +115,34 @@ const Gallery = {
     },
 
     /**
+     * Scroll indicator overlay element (shows date or rating while scrolling).
+     * @type {HTMLElement|null}
+     * @private
+     */
+    _scrollOverlay: null,
+
+    /**
+     * Timer for hiding the scroll indicator overlay.
+     * @type {number|null}
+     * @private
+     */
+    _scrollOverlayTimer: null,
+
+    /**
+     * Current mouse position for overlay positioning.
+     * @type {{x: number, y: number}}
+     * @private
+     */
+    _mousePos: { x: 0, y: 0 },
+
+    /**
+     * Scroll state when overlay was first shown (for tracking during drag).
+     * @type {{scrollTop: number, overlayY: number}|null}
+     * @private
+     */
+    _scrollOverlayAnchor: null,
+
+    /**
      * DOM element references.
      * @type {Object}
      * @private
@@ -138,6 +166,16 @@ const Gallery = {
 
         // Set up virtual scrolling
         this._initVirtualScroll();
+
+        // Create scroll indicator overlay
+        this._createScrollOverlay();
+
+        // Track mouse position for overlay positioning
+        this._mouseTracker = (e) => {
+            this._mousePos.x = e.clientX;
+            this._mousePos.y = e.clientY;
+        };
+        document.addEventListener('mousemove', this._mouseTracker, { passive: true });
 
         // Set up selection handlers
         this._initSelection();
@@ -180,6 +218,14 @@ const Gallery = {
         this._stopBackgroundRefresh();
         // Remove scroll listener from grid
         this._detachScrollListener();
+        // Hide scroll indicator overlay and clear timer
+        if (this._scrollOverlayTimer) {
+            clearTimeout(this._scrollOverlayTimer);
+            this._scrollOverlayTimer = null;
+        }
+        if (this._scrollOverlay) {
+            this._scrollOverlay.hidden = true;
+        }
     },
 
     /**
@@ -595,6 +641,135 @@ const Gallery = {
        ---------------------------------------------------------------------- */
 
     /**
+     * Creates the scroll indicator overlay element.
+     * @private
+     */
+    _createScrollOverlay() {
+        this._scrollOverlay = document.createElement('div');
+        this._scrollOverlay.className = 'scroll-overlay';
+        this._scrollOverlay.hidden = true;
+        // Will be appended to grid in _renderGrid
+    },
+
+    /**
+     * Shows the scroll indicator overlay with the given text.
+     * @param {string} text - Text to display
+     * @param {number} scrollTop - Current scroll position
+     * @private
+     */
+    _showScrollOverlay(text, scrollTop) {
+        if (!this._scrollOverlay || !text) return;
+
+        const wasHidden = this._scrollOverlay.hidden;
+        this._scrollOverlay.textContent = text;
+        this._scrollOverlay.hidden = false;
+
+        // Position overlay
+        if (wasHidden) {
+            // First show - position based on mouse and anchor the scroll position
+            this._positionScrollOverlayAtMouse();
+            this._scrollOverlayAnchor = {
+                scrollTop: scrollTop,
+                overlayY: parseFloat(this._scrollOverlay.style.top) || 0
+            };
+        } else {
+            // Already visible - track scrollbar thumb movement
+            this._updateScrollOverlayFromScroll(scrollTop);
+        }
+
+        // Clear any existing hide timer
+        if (this._scrollOverlayTimer) {
+            clearTimeout(this._scrollOverlayTimer);
+        }
+
+        // Hide after 1 second of no scrolling
+        this._scrollOverlayTimer = setTimeout(() => {
+            this._scrollOverlay.hidden = true;
+            this._scrollOverlayAnchor = null;
+        }, 1000);
+    },
+
+    /**
+     * Positions the scroll overlay at the current mouse position.
+     * @private
+     */
+    _positionScrollOverlayAtMouse() {
+        if (!this._scrollOverlay) return;
+
+        const rect = this._scrollOverlay.getBoundingClientRect();
+        const padding = 12; // Gap between overlay and mouse pointer
+
+        // Position so right edge is to the left of mouse pointer
+        const left = this._mousePos.x - rect.width - padding;
+        // Vertically center on mouse Y
+        const top = this._mousePos.y - rect.height / 2;
+
+        // Clamp to viewport bounds
+        const clampedLeft = Math.max(8, left);
+        const clampedTop = Math.max(8, Math.min(top, window.innerHeight - rect.height - 8));
+
+        this._scrollOverlay.style.left = clampedLeft + 'px';
+        this._scrollOverlay.style.top = clampedTop + 'px';
+    },
+
+    /**
+     * Updates overlay position based on scroll delta (tracks scrollbar thumb).
+     * @param {number} scrollTop - Current scroll position
+     * @private
+     */
+    _updateScrollOverlayFromScroll(scrollTop) {
+        if (!this._scrollOverlay || !this._scrollOverlayAnchor) return;
+
+        const grid = this._els.grid;
+        if (!grid) return;
+
+        // Calculate how much the scrollbar thumb has moved
+        const scrollDelta = scrollTop - this._scrollOverlayAnchor.scrollTop;
+        const scrollableHeight = grid.scrollHeight - grid.clientHeight;
+
+        if (scrollableHeight <= 0) return;
+
+        // Scrollbar thumb moves proportionally within the track (which is ~clientHeight)
+        const gridRect = grid.getBoundingClientRect();
+        const trackHeight = gridRect.height;
+        const thumbDelta = (scrollDelta / scrollableHeight) * trackHeight;
+
+        // Update overlay Y position
+        const newTop = this._scrollOverlayAnchor.overlayY + thumbDelta;
+        const rect = this._scrollOverlay.getBoundingClientRect();
+        const clampedTop = Math.max(8, Math.min(newTop, window.innerHeight - rect.height - 8));
+
+        this._scrollOverlay.style.top = clampedTop + 'px';
+    },
+
+    /**
+     * Formats a date for the scroll overlay.
+     * @param {Date} date - Date to format
+     * @returns {string} Formatted date string
+     * @private
+     */
+    _formatScrollDate(date) {
+        if (!(date instanceof Date) || isNaN(date)) {
+            return '';
+        }
+
+        const now = new Date();
+        const isThisYear = date.getFullYear() === now.getFullYear();
+
+        // Format options
+        const options = {
+            month: 'short',
+            day: 'numeric'
+        };
+
+        if (!isThisYear) {
+            options.year = 'numeric';
+        }
+
+        return date.toLocaleDateString(undefined, options);
+    },
+
+    /**
      * Initializes virtual scrolling.
      * @private
      */
@@ -672,6 +847,12 @@ const Gallery = {
         grid.appendChild(this._topSpacer);
         grid.appendChild(this._bottomSpacer);
 
+        // Add scroll indicator overlay
+        if (this._scrollOverlay) {
+            this._scrollOverlay.hidden = true;
+            grid.appendChild(this._scrollOverlay);
+        }
+
         // Render initial visible items
         this._updateVisibleItems(grid.scrollTop);
 
@@ -735,7 +916,52 @@ const Gallery = {
         this._scrollRAF = requestAnimationFrame(() => {
             this._scrollRAF = null;
             this._updateVisibleItems(scrollTop);
+            this._updateScrollOverlay(scrollTop);
         });
+    },
+
+    /**
+     * Updates the scroll indicator overlay based on the first visible image.
+     * Shows date when sorting by date, rating when sorting by rating.
+     * @param {number} scrollTop - Current scroll position
+     * @private
+     */
+    _updateScrollOverlay(scrollTop) {
+        const { by } = App.getSort();
+
+        // Only show for date and rating sorts
+        if (by !== 'date' && by !== 'rating') {
+            if (this._scrollOverlay) {
+                this._scrollOverlay.hidden = true;
+            }
+            return;
+        }
+
+        const filtered = this.state.filteredImages;
+        if (filtered.length === 0) return;
+
+        // Calculate first visible row and image index
+        const vs = this._virtualScroll;
+        const firstVisibleRow = Math.floor(scrollTop / vs.itemHeight);
+        const firstVisibleIndex = firstVisibleRow * vs.itemsPerRow;
+
+        if (firstVisibleIndex < 0 || firstVisibleIndex >= filtered.length) return;
+
+        const img = filtered[firstVisibleIndex];
+        if (!img) return;
+
+        // Show appropriate content based on sort type
+        if (by === 'date' && img.timestamp) {
+            const date = new Date(img.timestamp);
+            const formatted = this._formatScrollDate(date);
+            if (formatted) {
+                this._showScrollOverlay(formatted, scrollTop);
+            }
+        } else if (by === 'rating') {
+            // Show rating (emoji string) or "No rating" if empty
+            const rating = img.rating || 'No rating';
+            this._showScrollOverlay(rating, scrollTop);
+        }
     },
 
     /**

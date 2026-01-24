@@ -431,6 +431,31 @@ a:hover {
     pointer-events: none;
 }
 
+/* Scroll indicator overlay (shows date or rating while scrolling) */
+.scroll-overlay {
+    position: fixed;
+    top: 0;
+    left: 0;
+    z-index: 100;
+    padding: 0.5rem 1rem;
+    background-color: var(--color-bg-elevated);
+    border: 1px solid var(--color-border);
+    border-radius: 6px;
+    box-shadow: var(--shadow-md);
+    font-size: 0.9rem;
+    font-weight: 500;
+    color: var(--color-text-primary);
+    pointer-events: none;
+    opacity: 1;
+    transition: opacity 0.2s ease-out;
+    white-space: nowrap;
+}
+
+.scroll-overlay[hidden] {
+    opacity: 0;
+    pointer-events: none;
+}
+
 /* Loading indicator */
 .gallery-loading {
     grid-column: 1 / -1;
