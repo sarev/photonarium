@@ -5,6 +5,6 @@ photos
 photos2
 photos3
 .imaginary.yml
-.thumbnails/*
-__pycache__/*
-imaginary.db
+.thumbnails
+__pycache__
+imaginary.db*

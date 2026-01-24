@@ -54,14 +54,32 @@ On a related note, clicking the "Sort by content similarity" button in the galle
 
 When entering a description (string) or rating (string/emojis) for an image, I believe you have to hit 'enter' in the field to persist what you've entered. This is non-obvious. I think we should also persist on blur for each of these fields.
 
+NOTE TO SELF: try to make this into a reproducible test case before re-raising for further investigation.
+
 ## Deleting description - CONFIRMED
 
 I'm not checked, but can you confirm that if I edit an image description string to be an empty string (i.e. remove the description) then the associated description embedding also gets nulled?
 
-## Semantic search bug
+## Semantic search bug - DONE
 
 I gave an image a description (string). None of the others have. This image now appears first in all semantic searches (filter results) for reasons I cannot determine! The string is "Ste & Karen in Valmezo garden" and the search term is "Swans" or "Cat in box" yet still it's displayed first...
 
 ## Slow image ingestion
 
 During the ingestion process, for indexing and embedding new images, this seems to run a lot slower than I was hoping. I think the indexing can and should be run across a thread pool, not just on a single thread. I can see why having the embedding running in a single thread makes sense - stick with that part. The size of the thread pool should probably be a persisted config option.
+
+## Indexing ETA
+
+When the database is updating, it would be helpful for the "Indexing" progress info on the Database screen to include a computed "ETA", based upon how many images are being indexed per second over the last n seconds (or similar). We don't need this for the "Embedding" part, because that number is generally very low or zero, so any ETA would flicker and change pretty much randomly.
+
+## Database screen updates
+
+When the database is in an "Updating" state, we have the indexing and embedding status updating periodically. It would be good to have the "Total images" field updating at the same time.
+
+## "Rescan all" validation
+
+I'd like to double-check what happens when the user clicks on "Rescan all folders" in the Database screen. Please outline everything it will do as plain English bullet points.
+
+## Toolbar 'sreen control' button semantics
+
+When we're on the Gallery screen, the related toolbar button (for going to the Gallery screen) is hidden. This makes sense. When we're on the other main screens (Database, Duplicates, Search/Filter) their corresponding buttons *aren't* hidden. They should be.

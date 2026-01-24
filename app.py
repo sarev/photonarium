@@ -24,7 +24,6 @@ import atexit
 import logging
 import os
 import threading
-from pathlib import Path
 
 from flask import Flask, Response, jsonify, request, send_file, abort
 from flask_cors import CORS
@@ -74,7 +73,7 @@ def get_db() -> ImageDatabase:
             auto_start=True,
         )
         register_signal_handlers(db)
-        logger.info('ImageDatabase initialized')
+        logger.info('ImageDatabase initialised')
     return db
 
 
@@ -630,7 +629,7 @@ def internal_error(error):
 # =============================================================================
 
 if __name__ == '__main__':
-    # Initialize database before starting server
+    # Initialise database before starting server
     get_db()
 
     # Print ready banner

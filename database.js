@@ -69,7 +69,7 @@ const Database = {
     _lastStatus: null,
 
     /**
-     * Initializes the database module.
+     * Initialises the database module.
      * Called once during app startup.
      */
     init() {

@@ -1,33 +1,197 @@
 #!/usr/bin/env python3
 
+"""
+Imaginary image catalogue backend (single-file implementation).
+
+Core responsibilities:
+
+1) Maintain a local SQLite database of image files and their metadata.
+2) Discover images by scanning user-registered folders on disk.
+3) Compute derived properties (timestamps, checksums, perceptual hashes, etc.).
+4) Compute and store semantic embeddings for images and text using OpenCLIP.
+5) Provide query helpers for gallery browsing, semantic search, similarity, and
+   duplicate grouping.
+6) Generate and cache thumbnails on demand.
+7) Run background processing in threads and optionally broadcast progress via
+   Server-Sent Events (SSE).
+8) Provide graceful shutdown helpers and an optional standalone test mode.
+
+the main entry point is the `ImageDatabase` class. Everything else is either:
+
+- Pure helper functions (database CRUD, scanning, embedding maths, thumbnails)
+- Background worker threads
+- Small utilities for streaming progress (SSE) and shutdown handling
+
+-------------------------------------------------------------------------------
+Concepts used in this file
+-------------------------------------------------------------------------------
+
+SQLite schema (high level)
+    The database stores:
+    - Registered folders (the roots to scan)
+    - Images (one row per discovered image path, plus metadata)
+    - Duplicate groups (pre-computed groupings at different similarity levels)
+    - One-time migrations bookkeeping
+
+    Embeddings are stored as raw float32 bytes (BLOB). When you read them back
+    they are converted to NumPy arrays via `np.frombuffer(..., dtype=np.float32)`.
+
+Images and metadata
+    When ingesting an image, the module extracts or derives:
+    - A "best" timestamp (preferring EXIF, then filename patterns, then filesystem)
+    - A checksum (content hash, used for exact duplicates and thumbnail filenames)
+    - A perceptual hash (used for near-duplicate detection)
+    - Basic dimensions and file size
+    - Optional user-editable fields such as description and rating
+
+OpenCLIP embeddings (what and why)
+    OpenCLIP is a library that provides CLIP-style models. CLIP models map both
+    images and text into the same vector space. In practice this enables:
+    - Semantic search: turn a text query into a vector, compare with stored image
+      vectors using cosine similarity.
+    - Visual similarity: compare image vectors to find visually related images.
+    - Optional description embeddings: the same text encoder can embed user
+      descriptions, which can be used to improve search recall.
+
+    This module wraps OpenCLIP + PyTorch in `OpenCLIPModel` and uses it from the
+    background embedding thread (and as a fallback for query-time encoding).
+
+Duplicate detection levels
+    Duplicate groups are computed after processing completes and stored in the
+    database for fast retrieval. The module treats duplicates as tiers:
+    - Level 0: exact matches (typically checksum-based)
+    - Level 1: near-identical (perceptual hash distance threshold)
+    - Level 2: similar (embedding cosine similarity threshold)
+    - Level 3: related (a looser embedding similarity threshold)
+    Thresholds are configurable in the YAML config file.
+
+Thumbnails
+    Thumbnails are generated on demand and cached on disk under a dedicated
+    directory. The cache key is the image checksum so it remains stable even if
+    the image is moved to a different path.
+
+Events (optional)
+    The module includes a small SSE implementation (`EventQueue` and helpers).
+    The idea is simple: background work emits events like "image ingested" or
+    "processing complete", and any number of subscribers can stream them.
+
+-------------------------------------------------------------------------------
+How the module is structured
+-------------------------------------------------------------------------------
+
+The module is laid out in sections separated by banners. Roughly:
+
+1) Configuration
+    - DEFAULT_CONFIG_PATH is a YAML file written to disk on first run.
+    - `Config` defines supported keys and validates ranges.
+    - `load_config()` creates the file if missing, then loads and validates.
+
+2) Timestamp extraction utilities
+    - EXIF parsing and robust filename/path parsing helpers.
+    - `derive_timestamp()` applies a priority order so timestamps are stable even
+      when files have been copied between machines.
+
+3) Database schema and initialisation
+    - SQL DDL strings and `init_database()` which enables WAL mode, creates
+      tables/indexes, and applies lightweight migrations.
+
+4) Folder management and scanning
+    - Canonical path handling.
+    - Folder registration helpers.
+    - A scanner that walks registered folders and queues discovered image paths.
+
+5) Image CRUD helpers
+    - Thin helpers that read/write dictionaries to/from the `images` table.
+    - Soft delete is supported (mark rows as deleted) with an option to delete
+      from disk and/or hard-delete the row.
+
+6) Embedding and search helpers
+    - `semantic_search()` compares a query embedding with stored embeddings.
+    - `get_images_by_similarity()` compares one image to all others.
+    - These functions assume vectors are already normalised, so cosine similarity
+      reduces to a dot product.
+
+7) Thumbnail helpers
+    - Cache path calculation, thumbnail generation, cache cleanup.
+
+8) SSE events
+    - `Event`, `EventQueue`, and `create_sse_generator()`.
+
+9) Background threads
+    - Ingestion thread: consumes file paths, extracts metadata, writes rows, and
+      queues image IDs for embedding when needed.
+    - Embedding thread: batches queued image IDs, computes embeddings using
+      OpenCLIP, stores results, and can trigger duplicate group computation once
+      all queues are drained.
+
+10) `ImageDatabase` public API wrapper
+    - Owns a single SQLite connection (created with thread usage in mind), the
+      queues, and thread control events.
+    - Provides methods intended for external callers:
+        * folder management (add/remove/list)
+        * image listing and updates
+        * thumbnail retrieval
+        * semantic search and similarity
+        * duplicate group retrieval
+        * stats and processing status
+        * SSE stream generator
+
+11) Graceful shutdown helpers
+    - Signal handlers and a context manager to ensure threads stop and the DB is
+      closed on exit.
+
+12) Standalone test mode
+    - When executed directly, the module can run a basic automated test suite
+      that creates temporary images, exercises ingestion, and checks key paths.
+
+-------------------------------------------------------------------------------
+Threading and safety notes
+-------------------------------------------------------------------------------
+
+- Two worker threads are used by default (ingestion, embedding).
+- Work is coordinated through `queue.Queue` instances.
+- The database connection is shared, so the module uses locking and creates the
+  connection in a way that supports thread usage.
+- "Up to date" means both queues are empty, not necessarily that the filesystem
+  will never change. Rescans can be queued explicitly.
+
+"""
+
 # =============================================================================
 # IMPORTS
 # =============================================================================
 
 from __future__ import annotations
 
-import hashlib
-import json
-import logging
-import os
-import queue
-import re
-import sqlite3
-import threading
-import uuid
-from dataclasses import dataclass, field, asdict
+from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Iterator
-
-import cv2
-import imagehash
-import numpy as np
-import open_clip
-import torch
-import yaml
 from PIL import Image, ImageOps
 from PIL.ExifTags import TAGS
+from typing import Any, Iterator
+
+import atexit
+import cv2
+import hashlib
+import imagehash
+import json
+import logging
+import numpy as np
+import open_clip
+import os
+import queue
+import random
+import re
+import shutil
+import signal
+import sqlite3
+import tempfile
+import threading
+import time
+import torch
+import traceback
+import uuid
+import yaml
 
 # Configure module logger
 logger = logging.getLogger(__name__)
@@ -1965,7 +2129,6 @@ class OpenCLIPModel:
         logger.info('This may take several minutes depending on your connection...')
         logger.info('-' * 60)
 
-        import time
         start_time = time.time()
 
         self._model, _, self._preprocess = open_clip.create_model_and_transforms(
@@ -3901,9 +4064,6 @@ class ImageDatabase:
 # GRACEFUL SHUTDOWN AND SIGNAL HANDLING
 # =============================================================================
 
-import signal
-import atexit
-
 # Global reference for signal handlers
 _active_database: ImageDatabase | None = None
 
@@ -4018,7 +4178,6 @@ def wait_for_completion(
     Returns:
         True if processing completed, False if timeout reached.
     """
-    import time
     start_time = time.time()
 
     while True:
@@ -4044,10 +4203,6 @@ def _run_tests() -> None:
     Creates temporary test data, exercises all major features, and
     reports results. Cleans up after itself.
     """
-    import shutil
-    import tempfile
-    import time
-    import random
 
     # Configure logging for test output
     logging.basicConfig(
@@ -4391,7 +4546,6 @@ def _run_tests() -> None:
 
     except Exception as e:
         print(f'\n[ERROR] Test suite crashed: {e}')
-        import traceback
         traceback.print_exc()
         failed += 1
 

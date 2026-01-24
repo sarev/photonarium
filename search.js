@@ -74,7 +74,7 @@ const Search = {
     _els: {},
 
     /**
-     * Initializes the search module.
+     * Initialises the search module.
      * Called once during app startup.
      */
     init() {
