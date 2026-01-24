@@ -28,7 +28,7 @@ When multiple images are selected, the "Image information" shouldn't be showing 
 
 Also, it'd be nice if the gallery screen updated from time to time while the database is in an "Updating" state. So long as it doesn't mess up the scroll position and selection, it would be good to have the newly added images appear in the gallery.
 
-## Selection auto-scroll
+## Selection auto-scroll - DONE
 
 Drag selection should auto-scroll when the user is trying to drag off the top or bottom of the visible area of the gallery.
 

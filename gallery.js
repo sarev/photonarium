@@ -16,6 +16,8 @@
  *
  * Image Selection:
  *   - Single click/tap clears selection and selects the clicked image
+ *   - Ctrl+click (or Cmd+click on Mac) toggles selection of clicked image
+ *   - Shift+click selects range from last clicked image to current
  *   - Tap-and-hold (long press) adds image to existing selection
  *   - Right-click toggles selection state without affecting other selections
  *   - Drag-box selection: left-drag selects range, right-drag toggles range
@@ -807,6 +809,13 @@ const Gallery = {
      * @param {MouseEvent} e
      * @private
      */
+    /**
+     * Anchor image ID for shift-click range selection.
+     * @type {string|null}
+     * @private
+     */
+    _selectionAnchor: null,
+
     _handleClick(e) {
         // Ignore if this was a long-press or drag
         if (this._longPressTriggered || this.state.dragState?.dragged || this._justDragged) {
@@ -817,11 +826,53 @@ const Gallery = {
 
         const id = this._getImageId(e.target);
         if (id) {
-            App.setSelectedImages([id]);
+            if (e.ctrlKey || e.metaKey) {
+                // Ctrl+click: Toggle selection of clicked item
+                App.toggleSelection(id);
+                // Update anchor to this item
+                this._selectionAnchor = id;
+            } else if (e.shiftKey && this._selectionAnchor) {
+                // Shift+click: Select range from anchor to clicked item
+                this._selectRange(this._selectionAnchor, id);
+            } else {
+                // Regular click: Select only this item
+                App.setSelectedImages([id]);
+                // Set anchor for future shift-clicks
+                this._selectionAnchor = id;
+            }
         } else {
             // Clicked on empty space - clear selection
             App.clearSelection();
+            this._selectionAnchor = null;
         }
+    },
+
+    /**
+     * Selects all images in the range between two image IDs (inclusive).
+     * @param {string} anchorId - Starting image ID
+     * @param {string} targetId - Ending image ID
+     * @private
+     */
+    _selectRange(anchorId, targetId) {
+        const images = this.state.images;
+        const anchorIdx = images.findIndex(img => img.id === anchorId);
+        const targetIdx = images.findIndex(img => img.id === targetId);
+
+        if (anchorIdx === -1 || targetIdx === -1) {
+            // Fallback: just select the target
+            App.setSelectedImages([targetId]);
+            return;
+        }
+
+        const startIdx = Math.min(anchorIdx, targetIdx);
+        const endIdx = Math.max(anchorIdx, targetIdx);
+
+        const rangeIds = [];
+        for (let i = startIdx; i <= endIdx; i++) {
+            rangeIds.push(images[i].id);
+        }
+
+        App.setSelectedImages(rangeIds);
     },
 
     /**
