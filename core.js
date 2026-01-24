@@ -688,6 +688,14 @@ const App = {
     },
 
     /**
+     * Exits fullscreen view and returns to gallery.
+     * Convenience method.
+     */
+    hideFullscreen() {
+        this.navigateTo('gallery');
+    },
+
+    /**
      * Navigates to database screen.
      * Convenience method.
      */
