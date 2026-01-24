@@ -1,0 +1,45 @@
+Here's what happens when the user clicks "Rescan All Folders":
+
+  Frontend
+
+  - Sends POST /api/rescan to the backend
+  - Shows an error toast if the request fails
+
+  Backend (queue_rescan_all → _rescan_all_folders)
+
+  1. Get all registered folders from the database
+  2. Get all currently known image paths from the database (excluding deleted ones)
+  3. For each registered folder:
+    - Skip if the folder doesn't exist on disk
+    - Recursively walk the folder tree using os.walk()
+    - Skip any subdirectories that are separately registered (to avoid duplicate scanning)
+    - For each file with a matching image extension (.jpg, .png, etc.):
+      - Add the path to the "found" set
+      - Queue the path for ingestion (add to ingestion queue)
+  4. Mark missing files as deleted:
+    - Compare known paths vs found paths
+    - Any image paths in the database that weren't found on disk get deleted = 1
+  5. Ingestion thread processes each queued path (in parallel with indexing_threads workers):
+    - stat() the file to get size and mtime
+    - Look up the path in the database
+    - If image exists in DB:
+      - If mtime is NULL (pre-migration), backfill it
+      - If size AND mtime match → file unchanged:
+        - Backfill checksum if missing
+        - Queue for embedding if embedding is NULL
+        - Queue for embedding if description exists but description_embedding is NULL
+        - Otherwise skip
+      - If size OR mtime differ → file has changed:
+        - Re-extract all metadata (dimensions, checksum, perceptual hash, timestamp, etc.)
+        - Update the database record
+        - Queue for embedding
+    - If image is new:
+      - Extract all metadata
+      - Create new database record
+      - Queue for embedding
+  6. Embedding thread processes queued images (single-threaded, batched):
+    - Compute OpenCLIP embeddings for images
+    - Update database with embeddings
+  7. When queues are empty:
+    - Recompute duplicate groups
+    - Emit "processing complete" event
