@@ -77,6 +77,14 @@ const Database = {
     _indexingHistory: [],
 
     /**
+     * History of embedding queue samples for ETA calculation.
+     * Each entry is {count, timestamp}.
+     * @type {Array<{count: number, timestamp: number}>}
+     * @private
+     */
+    _embeddingHistory: [],
+
+    /**
      * Maximum number of samples to keep for ETA calculation.
      * @type {number}
      * @private
@@ -99,7 +107,8 @@ const Database = {
             queueCounts: App.$('queue-counts'),
             indexingCount: App.$('indexing-count'),
             indexingEta: App.$('indexing-eta'),
-            embeddingCount: App.$('embedding-count')
+            embeddingCount: App.$('embedding-count'),
+            embeddingEta: App.$('embedding-eta')
         };
 
         this._bindEvents();
@@ -364,13 +373,16 @@ const Database = {
             this._els.indexingCount.textContent = indexing;
             this._els.embeddingCount.textContent = embedding;
 
-            // Update ETA for indexing
+            // Update ETAs
             this._updateIndexingEta(indexing);
+            this._updateEmbeddingEta(embedding);
         } else {
             this._els.queueCounts.hidden = true;
             // Clear history when not updating
             this._indexingHistory = [];
+            this._embeddingHistory = [];
             this._els.indexingEta.textContent = '';
+            this._els.embeddingEta.textContent = '';
         }
     },
 
@@ -436,6 +448,48 @@ const Database = {
             }
             return hours === 1 ? `~1 hour ${mins} mins` : `~${hours} hours ${mins} mins`;
         }
+    },
+
+    /**
+     * Updates the embedding ETA based on processing rate.
+     * @param {number} currentCount - Current embedding queue size
+     * @private
+     */
+    _updateEmbeddingEta(currentCount) {
+        const now = Date.now();
+
+        // Add current sample to history
+        this._embeddingHistory.push({ count: currentCount, timestamp: now });
+
+        // Keep only recent samples
+        if (this._embeddingHistory.length > this._maxHistorySamples) {
+            this._embeddingHistory.shift();
+        }
+
+        // Need at least 2 samples to calculate rate
+        if (this._embeddingHistory.length < 2) {
+            this._els.embeddingEta.textContent = '';
+            return;
+        }
+
+        // Calculate processing rate from oldest to newest sample
+        const oldest = this._embeddingHistory[0];
+        const newest = this._embeddingHistory[this._embeddingHistory.length - 1];
+        const countDiff = oldest.count - newest.count;
+        const timeDiff = (newest.timestamp - oldest.timestamp) / 1000; // seconds
+
+        // If no progress or queue growing, can't estimate
+        if (countDiff <= 0 || timeDiff <= 0) {
+            this._els.embeddingEta.textContent = '';
+            return;
+        }
+
+        // Calculate rate (images per second) and ETA
+        const rate = countDiff / timeDiff;
+        const etaSeconds = currentCount / rate;
+
+        // Format ETA
+        this._els.embeddingEta.textContent = ' (' + this._formatEta(etaSeconds) + ')';
     }
 };
 
