@@ -108,6 +108,15 @@
                             <span class="material-symbols-outlined">arrow_downward</span>
                         </button>
                     </div>
+                    <!-- Similarity slider (visible when semantic filter active) -->
+                    <div id="gallery-similarity-control" class="gallery-similarity-control" style="display: none;">
+                        <div class="toolbar-separator"></div>
+                        <label title="Adjust similarity threshold">
+                            <span class="material-symbols-outlined">tune</span>
+                            <span id="gallery-similarity-value">20%</span>
+                        </label>
+                        <input type="range" id="gallery-similarity-slider" min="5" max="50" value="20" step="1" title="Similarity threshold">
+                    </div>
                     <div class="toolbar-separator"></div>
                     <!-- Selection controls -->
                     <button id="btn-select-all" class="toolbar-btn" title="Select all">
@@ -184,18 +193,22 @@
                     <div id="db-status" class="db-status">
                         <p><span class="status-label">Total Images:</span> <span id="status-total">0</span></p>
                     </div>
+                    <!-- Processing status indicator -->
+                    <div id="processing-status" class="processing-status">
+                        <div class="status-row">
+                            <span id="status-indicator" class="status-indicator up-to-date"></span>
+                            <span id="status-text" class="status-text">Up to date</span>
+                        </div>
+                        <div id="queue-counts" class="queue-counts" hidden>
+                            <p><span class="queue-label">Indexing:</span> <span id="indexing-count">0</span> remaining</p>
+                            <p><span class="queue-label">Embedding:</span> <span id="embedding-count">0</span> remaining</p>
+                        </div>
+                    </div>
                     <div class="scan-controls">
                         <button id="btn-rescan" class="action-btn">
                             <span class="material-symbols-outlined">refresh</span>
                             Rescan All Folders
                         </button>
-                    </div>
-                    <!-- Progress bar (visible during scan) -->
-                    <div id="scan-progress" class="progress-container" hidden>
-                        <div class="progress-bar">
-                            <div id="progress-fill" class="progress-fill"></div>
-                        </div>
-                        <p id="progress-text" class="progress-text">Scanning...</p>
                     </div>
                 </section>
             </div>
@@ -214,6 +227,14 @@
                     <div class="filter-group">
                         <label for="filter-text">Description</label>
                         <input type="text" id="filter-text" placeholder="Search by description...">
+                        <div class="similarity-slider">
+                            <label for="filter-similarity">Similarity: <span id="similarity-value">20%</span></label>
+                            <input type="range" id="filter-similarity" min="5" max="50" value="20" step="1">
+                            <div class="similarity-hints">
+                                <span>Loose</span>
+                                <span>Strict</span>
+                            </div>
+                        </div>
                     </div>
 
                     <!-- Date range filter -->

@@ -7,7 +7,8 @@ database operations and image processing.
 Routes:
     /api/images         - Image listing and management
     /api/folders        - Folder registration and removal
-    /api/scan           - Database scanning with progress tracking
+    /api/status         - Processing status
+    /api/rescan         - Trigger folder rescan
     /api/duplicates     - Duplicate group retrieval
     /api/stats          - Database statistics
 
@@ -19,13 +20,24 @@ Example:
     The server will start on http://localhost:5000 by default.
 """
 
+import atexit
+import logging
 import os
-import uuid
-from flask import Flask, jsonify, request, send_file, abort
+import threading
+from pathlib import Path
+
+from flask import Flask, Response, jsonify, request, send_file, abort
 from flask_cors import CORS
 
-# Application logic will be handled by imagedb module (to be implemented)
-# from imagedb import ImageDatabase
+from imagedb import ImageDatabase, register_signal_handlers
+
+# Configure logging
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s [%(levelname)s] %(name)s: %(message)s',
+    datefmt='%H:%M:%S',
+)
+logger = logging.getLogger(__name__)
 
 app = Flask(__name__, static_folder='.', static_url_path='')
 
@@ -38,18 +50,46 @@ CORS(app)
 # Configuration
 # =============================================================================
 
-# TODO: Move to config file or environment variables
-DATABASE_PATH = 'imaginary.db'
-THUMBNAIL_CACHE_DIR = '.thumbnails'
+DATABASE_PATH = os.environ.get('IMAGINARY_DB', 'imaginary.db')
+THUMBNAIL_CACHE_DIR = os.environ.get('IMAGINARY_THUMBNAILS', '.thumbnails')
+CONFIG_PATH = os.environ.get('IMAGINARY_CONFIG', None)
 
 
 # =============================================================================
 # Database Instance
 # =============================================================================
 
-# Placeholder for the database instance
-# db = ImageDatabase(DATABASE_PATH)
-db = None  # Stubbed until imagedb is implemented
+db: ImageDatabase | None = None
+
+
+def get_db() -> ImageDatabase:
+    """Get the database instance, initializing if necessary."""
+    global db
+    if db is None:
+        logger.info('Initializing ImageDatabase...')
+        db = ImageDatabase(
+            db_path=DATABASE_PATH,
+            thumbnail_dir=THUMBNAIL_CACHE_DIR,
+            config_path=CONFIG_PATH,
+            auto_start=True,
+        )
+        register_signal_handlers(db)
+        logger.info('ImageDatabase initialized')
+    return db
+
+
+def shutdown_db():
+    """Shutdown the database on application exit."""
+    global db
+    if db is not None:
+        logger.info('Shutting down ImageDatabase...')
+        db.close()
+        db = None
+        logger.info('ImageDatabase shut down')
+
+
+# Register shutdown handler
+atexit.register(shutdown_db)
 
 
 # =============================================================================
@@ -116,29 +156,11 @@ def get_images():
     The response includes all image metadata needed for the gallery view.
     Results can be filtered and sorted by the frontend.
 
-    Query Parameters:
-        None currently. Filtering/sorting is done client-side.
-
     Returns:
-        JSON array of image objects, each containing:
-            - id: Unique image identifier
-            - path: Full file path
-            - basename: Filename only
-            - width, height: Dimensions in pixels
-            - size: File size in bytes
-            - timestamp: Best-guess date (ISO format)
-            - description: User-editable text
-            - rating: User-editable emoji string
-            - checksum: SHA256 hash
-            - laplacian_variance: Focus quality score
-            - lossless: Boolean compression flag
+        JSON array of image objects.
     """
-    # TODO: Implement with imagedb
-    # images = db.get_all_images()
-    # return jsonify(images)
-
-    # Stub response
-    return jsonify([])
+    images = get_db().get_all_images()
+    return jsonify(images)
 
 
 @app.route('/api/images/<image_id>', methods=['GET'])
@@ -151,14 +173,10 @@ def get_image(image_id):
     Returns:
         JSON object with full image metadata, or 404 if not found.
     """
-    # TODO: Implement with imagedb
-    # image = db.get_image(image_id)
-    # if image is None:
-    #     return error_response('Image not found', 404)
-    # return jsonify(image)
-
-    # Stub response
-    return error_response('Image not found', 404)
+    image = get_db().get_image(image_id)
+    if image is None:
+        return error_response('Image not found', 404)
+    return jsonify(image)
 
 
 @app.route('/api/images/<image_id>', methods=['POST'])
@@ -179,18 +197,24 @@ def update_image(image_id):
     Returns:
         JSON object with updated image metadata, or 404 if not found.
     """
-    # TODO: Implement with imagedb
-    # data = request.get_json()
-    # if not data:
-    #     return error_response('No data provided')
-    #
-    # image = db.update_image(image_id, data)
-    # if image is None:
-    #     return error_response('Image not found', 404)
-    # return jsonify(image)
+    data = request.get_json()
+    if not data:
+        return error_response('No data provided')
 
-    # Stub response
-    return error_response('Image not found', 404)
+    # Only allow updating description and rating
+    allowed_updates = {}
+    if 'description' in data:
+        allowed_updates['description'] = data['description']
+    if 'rating' in data:
+        allowed_updates['rating'] = data['rating']
+
+    if not allowed_updates:
+        return error_response('No valid fields to update')
+
+    image = get_db().update_image(image_id, allowed_updates)
+    if image is None:
+        return error_response('Image not found', 404)
+    return jsonify(image)
 
 
 @app.route('/api/images/<image_id>', methods=['DELETE'])
@@ -198,7 +222,7 @@ def delete_image(image_id):
     """Delete an image from the database and optionally from disk.
 
     This removes the image entry from the database. The actual file
-    deletion behaviour is configurable (TODO: add config option).
+    deletion behaviour is controlled by the delete_file parameter.
 
     Args:
         image_id: The unique identifier of the image.
@@ -210,15 +234,11 @@ def delete_image(image_id):
     Returns:
         Success response, or 404 if image not found.
     """
-    # TODO: Implement with imagedb
-    # delete_file = request.args.get('delete_file', 'false').lower() == 'true'
-    # success = db.delete_image(image_id, delete_file=delete_file)
-    # if not success:
-    #     return error_response('Image not found', 404)
-    # return success_response(message='Image deleted')
-
-    # Stub response
-    return error_response('Image not found', 404)
+    delete_file = request.args.get('delete_file', 'false').lower() == 'true'
+    success = get_db().delete_image(image_id, from_disk=delete_file)
+    if not success:
+        return error_response('Image not found', 404)
+    return success_response(message='Image deleted')
 
 
 @app.route('/api/images/<image_id>/thumbnail', methods=['GET'])
@@ -243,14 +263,11 @@ def get_thumbnail(image_id):
     # Clamp size to reasonable bounds
     size = max(50, min(800, size))
 
-    # TODO: Implement with imagedb
-    # thumbnail_path = db.get_or_create_thumbnail(image_id, size)
-    # if thumbnail_path is None:
-    #     return error_response('Image not found', 404)
-    # return send_file(thumbnail_path, mimetype='image/jpeg')
+    thumbnail_path = get_db().get_thumbnail_path(image_id, size)
+    if thumbnail_path is None:
+        abort(404)
 
-    # Stub response
-    abort(404)
+    return send_file(thumbnail_path, mimetype='image/jpeg')
 
 
 @app.route('/api/images/<image_id>/full', methods=['GET'])
@@ -266,19 +283,15 @@ def get_full_image(image_id):
     Returns:
         Original image file with appropriate MIME type, or 404 if not found.
     """
-    # TODO: Implement with imagedb
-    # image = db.get_image(image_id)
-    # if image is None:
-    #     return error_response('Image not found', 404)
-    #
-    # path = image['path']
-    # if not os.path.exists(path):
-    #     return error_response('Image file not found on disk', 404)
-    #
-    # return send_file(path)
+    image = get_db().get_image(image_id)
+    if image is None:
+        abort(404)
 
-    # Stub response
-    abort(404)
+    path = image['path']
+    if not os.path.exists(path):
+        return error_response('Image file not found on disk', 404)
+
+    return send_file(path)
 
 
 # =============================================================================
@@ -297,20 +310,59 @@ def get_folders():
             - path: Folder path
             - count: Number of images from this folder
     """
-    # TODO: Implement with imagedb
-    # folders = db.get_folders()
-    # return jsonify(folders)
+    folders = get_db().get_folders()
+    return jsonify(folders)
 
-    # Stub response
-    return jsonify([])
+
+@app.route('/api/pick-folder', methods=['POST'])
+def pick_folder():
+    """Open a native folder picker dialog and return the selected path.
+
+    This uses tkinter to show a native OS folder selection dialog.
+    The dialog runs on the main thread to ensure proper GUI interaction.
+
+    Returns:
+        JSON object with:
+            - path: Selected folder path, or null if cancelled
+    """
+    import tkinter as tk
+    from tkinter import filedialog
+
+    selected_path = None
+
+    def show_dialog():
+        nonlocal selected_path
+        # Create a hidden root window
+        root = tk.Tk()
+        root.withdraw()  # Hide the root window
+        root.attributes('-topmost', True)  # Bring dialog to front
+
+        # Show folder selection dialog
+        path = filedialog.askdirectory(
+            title='Select Image Folder',
+            mustexist=True,
+        )
+
+        root.destroy()
+
+        if path:
+            selected_path = path
+
+    # Run dialog in a separate thread and wait for it
+    # (tkinter must run on the thread that created it)
+    dialog_thread = threading.Thread(target=show_dialog)
+    dialog_thread.start()
+    dialog_thread.join(timeout=300)  # 5 minute timeout
+
+    return jsonify({'path': selected_path})
 
 
 @app.route('/api/folders', methods=['POST'])
 def add_folder():
     """Register a new image source folder.
 
-    Adds a folder to the list of monitored directories. This does not
-    immediately scan the folder; use /api/scan to trigger scanning.
+    Adds a folder to the list of monitored directories and queues its
+    images for processing.
 
     Request Body:
         JSON object with:
@@ -333,22 +385,22 @@ def add_folder():
     if not os.path.isdir(path):
         return error_response('Path is not a directory')
 
-    # TODO: Implement with imagedb
-    # folder = db.add_folder(path)
-    # if folder is None:
-    #     return error_response('Folder already registered')
-    # return success_response(folder)
-
-    # Stub response
-    return success_response({'path': path, 'count': 0})
+    try:
+        folder = get_db().add_folder(path)
+        if folder is None:
+            return error_response('Folder already registered')
+        return success_response(folder)
+    except ValueError as e:
+        return error_response(str(e))
 
 
 @app.route('/api/folders/<path:folder_path>', methods=['DELETE'])
 def remove_folder(folder_path):
     """Remove a folder and all its images from the database.
 
-    This removes the folder registration and deletes all image entries
-    that originated from this folder. Original image files are not deleted.
+    This removes the folder registration and marks all image entries
+    that originated from this folder as deleted. Original image files
+    are not deleted.
 
     Args:
         folder_path: URL-encoded path of the folder to remove.
@@ -361,111 +413,46 @@ def remove_folder(folder_path):
     if not folder_path.startswith('/') and ':' not in folder_path:
         folder_path = '/' + folder_path
 
-    # TODO: Implement with imagedb
-    # success = db.remove_folder(folder_path)
-    # if not success:
-    #     return error_response('Folder not found', 404)
-    # return success_response(message='Folder removed')
-
-    # Stub response
+    success = get_db().remove_folder(folder_path)
+    if not success:
+        return error_response('Folder not found', 404)
     return success_response(message='Folder removed')
 
 
 # =============================================================================
-# Scan Endpoints
+# Status Endpoints
 # =============================================================================
 
-# In-memory store for scan job status (would use proper job queue in production)
-_scan_jobs = {}
+@app.route('/api/status', methods=['GET'])
+def get_status():
+    """Get the current processing status of the database.
 
-
-@app.route('/api/scan', methods=['POST'])
-def start_scan():
-    """Start a database scan operation.
-
-    Scans can target a specific folder or all registered folders.
-    The scan runs asynchronously; use GET /api/scan/<job_id> to
-    check progress.
-
-    Request Body:
-        JSON object with optional fields:
-            - folder: Single folder path to scan
-            - folders: Array of folder paths to scan
-            If neither specified, scans all registered folders.
+    Returns the status of background processing threads, including
+    the number of items remaining in the indexing and embedding queues.
 
     Returns:
         JSON object with:
-            - jobId: Unique identifier for tracking scan progress
+            - status: 'up_to_date' or 'updating'
+            - indexing_queue: Number of images awaiting indexing
+            - embedding_queue: Number of images awaiting embedding
     """
-    data = request.get_json() or {}
-
-    # Generate a job ID
-    job_id = str(uuid.uuid4())
-
-    # Determine what to scan
-    folders_to_scan = []
-    if 'folder' in data:
-        folders_to_scan = [data['folder']]
-    elif 'folders' in data:
-        folders_to_scan = data['folders']
-    else:
-        # TODO: Get all registered folders from db
-        # folders_to_scan = [f['path'] for f in db.get_folders()]
-        pass
-
-    # TODO: Start async scan job
-    # db.start_scan(job_id, folders_to_scan)
-
-    # Store initial job status
-    _scan_jobs[job_id] = {
-        'status': 'running',
-        'progress': 0,
-        'message': 'Starting scan...',
-        'folders': folders_to_scan
-    }
-
-    return jsonify({'jobId': job_id})
+    status = get_db().get_processing_status()
+    return jsonify(status)
 
 
-@app.route('/api/scan/<job_id>', methods=['GET'])
-def get_scan_status(job_id):
-    """Get the status of a scan operation.
+@app.route('/api/rescan', methods=['POST'])
+def rescan_folders():
+    """Trigger a rescan of all registered folders.
 
-    Args:
-        job_id: The unique identifier returned by POST /api/scan.
+    This queues all registered folders for re-indexing. The background
+    ingestion thread will process new and changed files. Use GET /api/status
+    to monitor progress.
 
     Returns:
-        JSON object with:
-            - status: 'running', 'complete', or 'error'
-            - progress: Percentage complete (0-100)
-            - message: Human-readable status message
+        Success response confirming rescan has been queued.
     """
-    # TODO: Get actual status from imagedb
-    # status = db.get_scan_status(job_id)
-    # if status is None:
-    #     return error_response('Scan job not found', 404)
-    # return jsonify(status)
-
-    # Check in-memory store
-    if job_id not in _scan_jobs:
-        return error_response('Scan job not found', 404)
-
-    job = _scan_jobs[job_id]
-
-    # Stub: Simulate progress
-    if job['status'] == 'running':
-        job['progress'] = min(100, job['progress'] + 10)
-        if job['progress'] >= 100:
-            job['status'] = 'complete'
-            job['message'] = 'Scan complete'
-        else:
-            job['message'] = f"Scanning... {job['progress']}%"
-
-    return jsonify({
-        'status': job['status'],
-        'progress': job['progress'],
-        'message': job['message']
-    })
+    get_db().queue_rescan_all()
+    return success_response(message='Rescan queued')
 
 
 # =============================================================================
@@ -497,12 +484,78 @@ def get_duplicates():
     if level < 0 or level > 3:
         return error_response('Level must be between 0 and 3')
 
-    # TODO: Implement with imagedb
-    # groups = db.get_duplicate_groups(level)
-    # return jsonify({'groups': groups})
+    groups = get_db().get_duplicate_groups(level)
+    return jsonify({'groups': groups})
 
-    # Stub response
-    return jsonify({'groups': []})
+
+# =============================================================================
+# Search Endpoints
+# =============================================================================
+
+@app.route('/api/search', methods=['POST'])
+def search_images():
+    """Semantic search for images using OpenCLIP embeddings.
+
+    Takes a text query, encodes it with OpenCLIP, and finds images
+    with similar embeddings. Searches both image content embeddings
+    and description embeddings.
+
+    Request Body:
+        JSON object with:
+            - query: Text query to search for
+            - threshold: (optional) Minimum similarity score (0.0-1.0, default 0.2)
+            - limit: (optional) Maximum results (default 100)
+
+    Returns:
+        JSON object with:
+            - results: Array of matching images with 'score' field
+    """
+    data = request.get_json()
+    if not data or 'query' not in data:
+        return error_response('Query is required')
+
+    query = data['query'].strip()
+    if not query:
+        return error_response('Query cannot be empty')
+
+    threshold = data.get('threshold', 0.2)
+    limit = data.get('limit', 100)
+
+    try:
+        results = get_db().search_images(query, threshold=threshold, limit=limit)
+        return jsonify({'results': results})
+    except Exception as e:
+        logger.exception('Search failed')
+        return error_response(f'Search failed: {str(e)}', 500)
+
+
+@app.route('/api/similar/<image_id>', methods=['GET'])
+def get_similar_images(image_id):
+    """Get all images sorted by visual similarity to a reference image.
+
+    Uses OpenCLIP embeddings to compute cosine similarity between the
+    reference image and all other images in the database.
+
+    Args:
+        image_id: The ID of the reference image.
+
+    Returns:
+        JSON object with:
+            - results: Array of images with 'similarity' field, sorted descending
+    """
+    try:
+        # Check if image exists first
+        image = get_db().get_image(image_id)
+        if image is None:
+            return error_response('Image not found', 404)
+
+        results = get_db().get_similar_images(image_id)
+        if results is None:
+            return error_response('Image embedding not yet computed. Please wait for processing to complete.', 404)
+        return jsonify({'results': results})
+    except Exception as e:
+        logger.exception('Similarity search failed')
+        return error_response(f'Similarity search failed: {str(e)}', 500)
 
 
 # =============================================================================
@@ -520,15 +573,37 @@ def get_stats():
             - totalImages: Total number of images in database
             - totalFolders: Number of registered folders
     """
-    # TODO: Implement with imagedb
-    # stats = db.get_stats()
-    # return jsonify(stats)
+    stats = get_db().get_stats()
+    return jsonify(stats)
 
-    # Stub response
-    return jsonify({
-        'totalImages': 0,
-        'totalFolders': 0
-    })
+
+# =============================================================================
+# SSE Events Endpoint (Optional)
+# =============================================================================
+
+@app.route('/api/events', methods=['GET'])
+def event_stream():
+    """Server-Sent Events endpoint for real-time updates.
+
+    Clients can connect to this endpoint to receive real-time
+    notifications about processing status, folder changes, etc.
+
+    Returns:
+        SSE event stream.
+    """
+    def generate():
+        for event in get_db().get_event_stream(timeout=30.0):
+            yield event
+
+    return Response(
+        generate(),
+        mimetype='text/event-stream',
+        headers={
+            'Cache-Control': 'no-cache',
+            'Connection': 'keep-alive',
+            'X-Accel-Buffering': 'no',  # Disable nginx buffering
+        }
+    )
 
 
 # =============================================================================
@@ -544,6 +619,7 @@ def not_found(error):
 @app.errorhandler(500)
 def internal_error(error):
     """Handle 500 errors with JSON response."""
+    logger.exception('Internal server error')
     return error_response('Internal server error', 500)
 
 
@@ -552,13 +628,21 @@ def internal_error(error):
 # =============================================================================
 
 if __name__ == '__main__':
-    # Ensure thumbnail cache directory exists
-    os.makedirs(THUMBNAIL_CACHE_DIR, exist_ok=True)
+    # Initialize database before starting server
+    get_db()
+
+    # Print ready banner
+    logger.info('=' * 60)
+    logger.info('SERVER READY')
+    logger.info('=' * 60)
+    logger.info('Open http://localhost:5000 in your browser')
+    logger.info('=' * 60)
 
     # Run development server
     # In production, use a proper WSGI server like gunicorn
     app.run(
         host='0.0.0.0',
         port=5000,
-        debug=True
+        debug=False,  # Set to False to avoid reloader issues with threads
+        threaded=True,
     )

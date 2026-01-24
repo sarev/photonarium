@@ -79,12 +79,16 @@ const Gallery = {
      * @property {boolean} needsRefresh - Whether grid needs to reload on next enter
      * @property {IntersectionObserver|null} lazyLoader - Observer for lazy loading
      * @property {Object|null} dragState - Current drag selection state
+     * @property {Object|null} contentSimilarities - Similarity scores by image ID for content sort
+     * @property {string|null} contentReferenceId - Reference image ID for content sort
      */
     state: {
         images: [],
         needsRefresh: true,
         lazyLoader: null,
-        dragState: null
+        dragState: null,
+        contentSimilarities: null,
+        contentReferenceId: null
     },
 
     /**
@@ -103,7 +107,10 @@ const Gallery = {
         this._els = {
             grid: App.$('gallery-grid'),
             infoPanel: App.$('info-panel'),
-            infoContent: App.$('info-content')
+            infoContent: App.$('info-content'),
+            similarityControl: App.$('gallery-similarity-control'),
+            similaritySlider: App.$('gallery-similarity-slider'),
+            similarityValue: App.$('gallery-similarity-value')
         };
 
         // Set up lazy loading observer
@@ -111,6 +118,9 @@ const Gallery = {
 
         // Set up selection handlers
         this._initSelection();
+
+        // Set up similarity slider handler
+        this._initSimilaritySlider();
 
         // Subscribe to app events
         App.on('thumbnailSizeChanged', () => this._onThumbnailSizeChanged());
@@ -181,13 +191,58 @@ const Gallery = {
             } else if (by === 'rating') {
                 cmp = (a.rating || '').localeCompare(b.rating || '');
             } else if (by === 'content') {
-                // Content sort requires a reference image; fall back to date
-                cmp = new Date(a.timestamp) - new Date(b.timestamp);
+                // Sort by content similarity (requires contentSimilarities to be populated)
+                const simA = this.state.contentSimilarities?.[a.id] ?? 0;
+                const simB = this.state.contentSimilarities?.[b.id] ?? 0;
+                cmp = simA - simB;
             }
             return direction === 'asc' ? cmp : -cmp;
         });
 
         return sorted;
+    },
+
+    /**
+     * Loads content similarity data for sorting by visual similarity.
+     * Uses the first selected image as the reference.
+     * @private
+     */
+    async _loadContentSimilarities() {
+        const selected = App.getSelectedImages();
+        if (selected.length === 0) {
+            // No reference image - show message
+            App.showError('Select an image first to sort by visual similarity.');
+            // Revert to date sort
+            App.setSortBy('date');
+            return;
+        }
+
+        const referenceId = selected[0];
+
+        try {
+            const response = await App.apiGet(`/similar/${referenceId}`);
+            if (response && response.results) {
+                // Store similarities by image ID
+                this.state.contentSimilarities = {};
+                this.state.contentReferenceId = referenceId;
+                response.results.forEach(img => {
+                    this.state.contentSimilarities[img.id] = img.similarity;
+                });
+
+                // Re-sort and render
+                this.state.images = this._sortImages(this.state.images);
+                this._renderGrid();
+            }
+        } catch (error) {
+            console.error('Failed to load content similarities:', error);
+            // Check if it's a 404 (image has no embedding yet)
+            if (error.message && error.message.includes('404')) {
+                App.showError('This image has no embedding yet. Wait for processing to complete, or select a different image.');
+            } else {
+                App.showError('Could not load similarity data.');
+            }
+            App.setSortBy('date');
+        }
     },
 
     /**
@@ -206,9 +261,48 @@ const Gallery = {
             return images.filter(img => idSet.has(String(img.id)));
         }
 
+        // Semantic search filter: show matching images sorted by score
+        if (filter.type === 'semantic' && Array.isArray(filter.imageIds)) {
+            const idSet = new Set(filter.imageIds.map(String));
+            const scores = filter.scores || {};
+
+            // Filter to matching images
+            let filtered = images.filter(img => idSet.has(String(img.id)));
+
+            // Apply additional filters (date range, rating)
+            filtered = filtered.filter(img => {
+                if (filter.dateStart) {
+                    const imgDate = new Date(img.timestamp);
+                    const startDate = new Date(filter.dateStart);
+                    if (imgDate < startDate) return false;
+                }
+                if (filter.dateEnd) {
+                    const imgDate = new Date(img.timestamp);
+                    const endDate = new Date(filter.dateEnd);
+                    endDate.setHours(23, 59, 59, 999);
+                    if (imgDate > endDate) return false;
+                }
+                if (filter.rating) {
+                    const filterEmoji = [...filter.rating];
+                    const hasMatch = filterEmoji.some(e => img.rating && img.rating.includes(e));
+                    if (!hasMatch) return false;
+                }
+                return true;
+            });
+
+            // Sort by semantic similarity score (highest first)
+            filtered.sort((a, b) => {
+                const scoreA = scores[a.id] || 0;
+                const scoreB = scores[b.id] || 0;
+                return scoreB - scoreA;
+            });
+
+            return filtered;
+        }
+
         return images.filter(img => {
-            // Text filter (description)
-            if (filter.text && !img.description.toLowerCase().includes(filter.text.toLowerCase())) {
+            // Text filter (description) - simple substring match fallback
+            if (filter.text && !(img.description || '').toLowerCase().includes(filter.text.toLowerCase())) {
                 return false;
             }
             // Date range filter
@@ -251,8 +345,29 @@ const Gallery = {
      * @private
      */
     _onSortChanged() {
-        this.state.images = this._sortImages(this.state.images);
-        this._renderGrid();
+        const { by } = App.getSort();
+
+        if (by === 'content') {
+            // Content sort requires fetching similarity data from server
+            const selected = App.getSelectedImages();
+            const referenceId = selected.length > 0 ? selected[0] : null;
+
+            // Check if we already have similarities for this reference
+            if (referenceId && this.state.contentReferenceId === referenceId) {
+                // Already have the data, just re-sort
+                this.state.images = this._sortImages(this.state.images);
+                this._renderGrid();
+            } else {
+                // Need to fetch similarity data
+                this._loadContentSimilarities();
+            }
+        } else {
+            // Clear content similarity data when switching away
+            this.state.contentSimilarities = null;
+            this.state.contentReferenceId = null;
+            this.state.images = this._sortImages(this.state.images);
+            this._renderGrid();
+        }
     },
 
     /**
@@ -260,6 +375,21 @@ const Gallery = {
      * @private
      */
     _onFilterChanged() {
+        // Show/hide similarity slider based on filter type
+        const filter = App.getFilter();
+        const isSemanticFilter = filter && filter.type === 'semantic';
+
+        if (this._els.similarityControl) {
+            this._els.similarityControl.style.display = isSemanticFilter ? 'flex' : 'none';
+
+            // Sync slider value with filter threshold if available
+            if (isSemanticFilter && filter.threshold) {
+                const pct = Math.round(filter.threshold * 100);
+                this._els.similaritySlider.value = pct;
+                this._els.similarityValue.textContent = pct + '%';
+            }
+        }
+
         this._loadImages(); // Reload and apply new filter
     },
 
@@ -461,6 +591,63 @@ const Gallery = {
 
         // Drag-box selection
         grid.addEventListener('mousedown', (e) => this._handleDragStart(e));
+    },
+
+    /**
+     * Initialises the similarity slider for semantic search filtering.
+     * @private
+     */
+    _initSimilaritySlider() {
+        if (!this._els.similaritySlider) return;
+
+        // Debounce timer for slider changes
+        let debounceTimer = null;
+
+        // Update display value as slider moves
+        this._els.similaritySlider.addEventListener('input', () => {
+            const value = this._els.similaritySlider.value;
+            this._els.similarityValue.textContent = value + '%';
+        });
+
+        // Re-run search when slider value changes (debounced)
+        this._els.similaritySlider.addEventListener('change', async () => {
+            const filter = App.getFilter();
+            if (!filter || filter.type !== 'semantic' || !filter.text) return;
+
+            // Clear any pending debounce
+            if (debounceTimer) clearTimeout(debounceTimer);
+
+            debounceTimer = setTimeout(async () => {
+                const threshold = parseInt(this._els.similaritySlider.value, 10) / 100;
+
+                try {
+                    // Re-run the search with new threshold
+                    const response = await App.apiPost('/search', {
+                        query: filter.text,
+                        threshold: threshold,
+                        limit: 500
+                    });
+
+                    if (response && response.results) {
+                        // Update filter with new results
+                        filter.threshold = threshold;
+                        filter.imageIds = response.results.map(r => r.id);
+                        filter.scores = {};
+                        response.results.forEach(r => {
+                            filter.scores[r.id] = r.score;
+                        });
+
+                        // Update filter without triggering full reload
+                        App.setFilter(filter, { silent: true });
+
+                        // Re-render the grid with new filter
+                        this._renderGrid();
+                    }
+                } catch (error) {
+                    console.error('Failed to update search:', error);
+                }
+            }, 100);
+        });
     },
 
     /**

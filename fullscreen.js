@@ -248,8 +248,8 @@ const Fullscreen = {
         // Load the full image
         this._els.image.src = App.imageUrl(imageId);
 
-        // Show filename overlay
-        this._showFilename(img.basename);
+        // Show filename overlay with dimensions
+        this._showFilename(img.basename, img.width, img.height);
 
         // Preload adjacent images
         this._preloadAdjacent();
@@ -258,11 +258,19 @@ const Fullscreen = {
     /**
      * Shows the filename overlay and schedules it to hide.
      * @param {string} filename - Filename to display
+     * @param {number} [width] - Image width in pixels
+     * @param {number} [height] - Image height in pixels
      * @private
      */
-    _showFilename(filename) {
+    _showFilename(filename, width, height) {
         const el = this._els.filename;
-        el.textContent = filename;
+
+        // Build display text with optional dimensions
+        let text = filename;
+        if (width && height) {
+            text += ` (${width} × ${height})`;
+        }
+        el.textContent = text;
         el.classList.remove('hidden');
 
         // Clear any existing timeout

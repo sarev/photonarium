@@ -2,3 +2,9 @@ env
 .claude
 CLAUDE.md
 photos
+photos2
+photos3
+.imaginary.yml
+.thumbnails/*
+__pycache__/*
+imaginary.db

@@ -2,8 +2,8 @@
  * @fileoverview Database management screen module for the Imaginary application.
  *
  * This module handles the Database screen where users manage image source
- * folders and trigger database scans. It registers with the core App module
- * and is shown by default when the database is empty.
+ * folders and monitor database processing status. It registers with the core
+ * App module and is shown by default when the database is empty.
  *
  * RESPONSIBILITIES:
  *
@@ -12,26 +12,19 @@
  *   - Add folder button opens native folder picker dialog
  *   - Each folder entry shows path and image count from that folder
  *   - Remove button on each folder (with confirmation dialog)
- *   - Removing a folder removes all its images from the database
+ *   - Removing a folder marks its images as deleted in the database
  *
- * Database Scanning:
- *   - "Rescan All Folders" button triggers a full database rescan
- *   - Adding a new folder automatically triggers a scan of that folder
- *   - Scans are performed asynchronously on the backend
- *   - Detects new, modified, and deleted images
- *   - Modified images are detected by timestamp or file size changes
+ * Processing Status:
+ *   - Shows current database status: "Up to date" or "Updating"
+ *   - When updating, displays queue counts:
+ *     - Indexing: N remaining (ingestion queue)
+ *     - Embedding: N remaining (embedding queue)
+ *   - Polls backend for status updates while on this screen
+ *   - Status updates automatically as background threads process
  *
- * Progress Reporting:
- *   - Shows progress bar during scan operations
- *   - Displays current status text (e.g., "Scanning folder X..." or "Processing image Y...")
- *   - Progress bar shows percentage completion
- *   - Polls backend for progress updates during scan
- *   - Hides progress bar when scan completes
- *
- * Database Status:
+ * Database Statistics:
  *   - Displays total image count in database
- *   - Updates count after scan completion or folder removal
- *   - Shows last scan timestamp
+ *   - Updates count as processing completes
  *
  * Startup Behavior:
  *   - If database is empty on app start, this screen is shown automatically
@@ -39,12 +32,11 @@
  *
  * Error Handling:
  *   - Displays error messages if folder cannot be added (e.g., doesn't exist)
- *   - Shows warning if scan encounters unreadable files
  *   - Handles backend connection errors gracefully
  *
  * LIFECYCLE HOOKS:
- *   - onEnter(): Fetches current folder list and database stats from backend
- *   - onLeave(): Cancels any pending progress polling
+ *   - onEnter(): Fetches folder list, stats, and starts status polling
+ *   - onLeave(): Stops status polling
  *
  * @module database
  * @requires core
@@ -63,18 +55,18 @@ const Database = {
     _els: {},
 
     /**
-     * Active scan job id if a scan is in progress.
-     * @type {string|null}
-     * @private
-     */
-    _scanJobId: null,
-
-    /**
-     * Progress polling timer id.
+     * Status polling timer id.
      * @type {number|null}
      * @private
      */
     _pollTimer: null,
+
+    /**
+     * Last known processing status to detect changes.
+     * @type {string|null}
+     * @private
+     */
+    _lastStatus: null,
 
     /**
      * Initializes the database module.
@@ -86,9 +78,12 @@ const Database = {
             addFolderBtn: App.$('btn-add-folder'),
             rescanBtn: App.$('btn-rescan'),
             statusTotal: App.$('status-total'),
-            scanProgress: App.$('scan-progress'),
-            progressFill: App.$('progress-fill'),
-            progressText: App.$('progress-text')
+            processingStatus: App.$('processing-status'),
+            statusIndicator: App.$('status-indicator'),
+            statusText: App.$('status-text'),
+            queueCounts: App.$('queue-counts'),
+            indexingCount: App.$('indexing-count'),
+            embeddingCount: App.$('embedding-count')
         };
 
         this._bindEvents();
@@ -99,11 +94,7 @@ const Database = {
      */
     onEnter() {
         this._refresh();
-
-        // If a scan was already running, resume polling.
-        if (this._scanJobId) {
-            this._startPolling();
-        }
+        this._startPolling();
     },
 
     /**
@@ -127,63 +118,27 @@ const Database = {
        ---------------------------------------------------------------------- */
 
     /**
-     * Opens a native folder picker.
-     * Returns a display path (not a real absolute path in browsers).
+     * Opens a native folder picker dialog via the backend.
+     * The backend uses tkinter to show an OS-native folder selection dialog.
      * @returns {Promise<{ path: string } | null>}
      * @private
      */
     async _pickFolder() {
-        // Preferred: File System Access API (Chromium-based, secure contexts).
-        if (window.showDirectoryPicker) {
-            try {
-                const handle = await window.showDirectoryPicker();
-                if (!handle) {
-                    return null;
-                }
-
-                // Browsers do not expose absolute paths; use a stable display name for now.
-                return { path: handle.name };
-            } catch (error) {
-                // AbortError is user cancel.
-                if (error && error.name === 'AbortError') {
-                    return null;
-                }
-                console.warn('showDirectoryPicker failed, falling back:', error);
-                // Continue to fallback.
+        try {
+            const result = await App.apiPost('/pick-folder', {});
+            if (result && result.path) {
+                return { path: result.path };
             }
+            return null;
+        } catch (error) {
+            console.error('Error opening folder picker:', error);
+            App.showError('Could not open folder picker.');
+            return null;
         }
-
-        // Fallback: <input webkitdirectory> (works in Chromium, often Safari).
-        return await new Promise((resolve) => {
-            const input = document.createElement('input');
-            input.type = 'file';
-            input.multiple = true;
-
-            // Non-standard but widely supported for folder picking.
-            input.setAttribute('webkitdirectory', '');
-            input.setAttribute('directory', '');
-
-            input.addEventListener('change', () => {
-                const files = input.files ? Array.from(input.files) : [];
-                if (files.length === 0) {
-                    resolve(null);
-                    return;
-                }
-
-                // webkitRelativePath is like "FolderName/subdir/file.jpg"
-                const rel = files[0].webkitRelativePath || '';
-                const top = rel.split('/')[0].trim();
-
-                resolve({ path: top || 'Selected folder' });
-            }, { once: true });
-
-            input.click();
-        });
     },
 
     /**
      * Prompts for a folder path and adds it to the database.
-     * Note: Until the Python backend exists, we mock this with a prompt.
      * @private
      */
     async _addFolder() {
@@ -200,9 +155,7 @@ const Database = {
             }
 
             await this._refresh();
-
-            // Adding a folder triggers a scan of that folder.
-            await this._startScan({ folder: picked.path });
+            // No need to start scan - backend automatically queues new folder contents
         } catch (error) {
             console.error('Error adding folder:', error);
             App.showError('Could not add folder.');
@@ -291,70 +244,44 @@ const Database = {
         }
     },
 
-    /* ----------------------------------------------------------------------
-       Scanning + progress
-       ---------------------------------------------------------------------- */
-
     /**
-     * Triggers a scan.
-     * @param {Object} payload - Scan payload
-     * @private
-     */
-    async _startScan(payload) {
-        try {
-            const resp = await App.apiPost('/scan', payload || {});
-            if (!resp || !resp.jobId) {
-                throw new Error('Scan did not return a jobId');
-            }
-
-            this._scanJobId = resp.jobId;
-            this._showProgress(0, 'Queued...');
-            this._startPolling();
-        } catch (error) {
-            console.error('Error starting scan:', error);
-            App.showError('Could not start scan.');
-        }
-    },
-
-    /**
-     * Rescans all folders.
+     * Triggers a full rescan of all registered folders.
      * @private
      */
     async _rescanAll() {
         try {
-            const folders = await App.apiGet('/folders');
-            if (!Array.isArray(folders) || folders.length === 0) {
-                App.showError('Add a folder first.');
+            const resp = await App.apiPost('/rescan');
+            if (resp && resp.success === false) {
+                App.showError(resp.error || 'Could not start rescan.');
                 return;
             }
-
-            await this._startScan({ folders: folders.map(f => f.path) });
+            // Status polling will pick up the new queue items
         } catch (error) {
             console.error('Error initiating rescan:', error);
             App.showError('Could not start rescan.');
         }
     },
 
+    /* ----------------------------------------------------------------------
+       Processing status polling
+       ---------------------------------------------------------------------- */
+
     /**
-     * Starts polling scan progress.
+     * Starts polling for processing status.
      * @private
      */
     _startPolling() {
-        if (!this._scanJobId) {
-            return;
-        }
-
         if (this._pollTimer) {
             return;
         }
 
-        const poll = () => this._pollOnce();
-        this._pollTimer = window.setInterval(poll, 750);
-        poll();
+        const poll = () => this._pollStatus();
+        this._pollTimer = window.setInterval(poll, 1000);
+        poll(); // Immediate first poll
     },
 
     /**
-     * Stops polling scan progress.
+     * Stops polling for processing status.
      * @private
      */
     _stopPolling() {
@@ -365,63 +292,58 @@ const Database = {
     },
 
     /**
-     * Polls the backend once for scan progress.
+     * Polls the backend for current processing status.
      * @private
      */
-    async _pollOnce() {
-        if (!this._scanJobId) {
+    async _pollStatus() {
+        try {
+            const status = await App.apiGet('/status');
+            this._updateStatusDisplay(status);
+
+            // If status changed to 'up_to_date', refresh the stats
+            if (status.status === 'up_to_date' && this._lastStatus === 'updating') {
+                await this._refresh();
+                App.emit('databaseChanged');
+            }
+
+            this._lastStatus = status.status;
+        } catch (error) {
+            console.error('Error polling status:', error);
+            // Don't show error toast for polling failures
+        }
+    },
+
+    /**
+     * Updates the status display based on backend response.
+     * @param {Object} status - Status object from backend
+     * @param {string} status.status - 'up_to_date' or 'updating'
+     * @param {number} status.indexing_queue - Items in ingestion queue
+     * @param {number} status.embedding_queue - Items in embedding queue
+     * @private
+     */
+    _updateStatusDisplay(status) {
+        if (!status) {
             return;
         }
 
-        try {
-            const status = await App.apiGet(`/scan/${encodeURIComponent(this._scanJobId)}`);
-            if (!status) {
-                return;
-            }
+        const isUpdating = status.status === 'updating';
+        const indexing = status.indexing_queue || 0;
+        const embedding = status.embedding_queue || 0;
 
-            const progress = typeof status.progress === 'number' ? status.progress : 0;
-            const text = status.message || (status.status === 'complete' ? 'Scan complete' : 'Scanning...');
+        // Update indicator class
+        this._els.statusIndicator.className = 'status-indicator ' + (isUpdating ? 'updating' : 'up-to-date');
 
-            this._showProgress(progress, text);
+        // Update status text
+        this._els.statusText.textContent = isUpdating ? 'Updating' : 'Up to date';
 
-            if (status.status === 'complete' || status.status === 'error') {
-                this._stopPolling();
-                this._scanJobId = null;
-
-                // Pull fresh counts after scan completes.
-                await this._refresh();
-
-                // Hide progress a moment later to avoid flicker.
-                window.setTimeout(() => this._hideProgress(), 600);
-            }
-        } catch (error) {
-            console.error('Error polling scan status:', error);
-            // Keep polling; transient backend failures are expected.
+        // Show/hide queue counts
+        if (isUpdating && (indexing > 0 || embedding > 0)) {
+            this._els.queueCounts.hidden = false;
+            this._els.indexingCount.textContent = indexing;
+            this._els.embeddingCount.textContent = embedding;
+        } else {
+            this._els.queueCounts.hidden = true;
         }
-    },
-
-    /**
-     * Shows and updates the progress UI.
-     * @param {number} progress - Progress percent 0..100
-     * @param {string} text - Status text
-     * @private
-     */
-    _showProgress(progress, text) {
-        const pct = Math.max(0, Math.min(100, Math.round(Number(progress) || 0)));
-
-        this._els.scanProgress.hidden = false;
-        this._els.progressFill.style.width = `${pct}%`;
-        this._els.progressText.textContent = text || 'Scanning...';
-    },
-
-    /**
-     * Hides the progress UI.
-     * @private
-     */
-    _hideProgress() {
-        this._els.scanProgress.hidden = true;
-        this._els.progressFill.style.width = '0%';
-        this._els.progressText.textContent = '';
     }
 };
 

@@ -81,6 +81,8 @@ const Search = {
         // Cache DOM elements
         this._els = {
             textInput: App.$('filter-text'),
+            similaritySlider: App.$('filter-similarity'),
+            similarityValue: App.$('similarity-value'),
             dateStart: App.$('filter-date-start'),
             dateEnd: App.$('filter-date-end'),
             ratingInput: App.$('filter-rating'),
@@ -120,6 +122,11 @@ const Search = {
 
         // Clear filter button
         this._els.clearBtn.addEventListener('click', () => this._clearFilter());
+
+        // Similarity slider - update displayed value
+        this._els.similaritySlider.addEventListener('input', () => {
+            this._els.similarityValue.textContent = this._els.similaritySlider.value + '%';
+        });
 
         // Emoji picker button
         this._els.emojiBtn.addEventListener('click', () => {
@@ -167,6 +174,8 @@ const Search = {
      */
     _clearForm() {
         this._els.textInput.value = '';
+        this._els.similaritySlider.value = 20;
+        this._els.similarityValue.textContent = '20%';
         this._els.dateStart.value = '';
         this._els.dateEnd.value = '';
         this._els.ratingInput.value = '';
@@ -255,7 +264,7 @@ const Search = {
      * Applies the current filter and returns to gallery.
      * @private
      */
-    _applyFilter() {
+    async _applyFilter() {
         // Validate
         const validation = this._validate();
         if (!validation.valid) {
@@ -263,9 +272,39 @@ const Search = {
             return;
         }
 
-        // Read form and set filter
-        // Gallery subscribes to filterChanged event and will reload automatically
+        // Read form values
         const filter = this._readForm();
+
+        // If there's a text query, perform semantic search
+        if (filter && filter.text) {
+            try {
+                // Get similarity threshold from slider (convert percentage to decimal)
+                const threshold = parseInt(this._els.similaritySlider.value, 10) / 100;
+
+                const response = await App.apiPost('/search', {
+                    query: filter.text,
+                    threshold: threshold,
+                    limit: 500
+                });
+
+                if (response && response.results) {
+                    // Store matching image IDs, scores, and threshold in the filter
+                    filter.type = 'semantic';
+                    filter.threshold = threshold;
+                    filter.imageIds = response.results.map(r => r.id);
+                    filter.scores = {};
+                    response.results.forEach(r => {
+                        filter.scores[r.id] = r.score;
+                    });
+                }
+            } catch (error) {
+                console.error('Semantic search failed:', error);
+                this._showError('Search failed. Please try again.');
+                return;
+            }
+        }
+
+        // Set filter - gallery subscribes to filterChanged event
         App.setFilter(filter);
 
         // Navigate to gallery

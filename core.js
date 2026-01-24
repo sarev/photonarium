@@ -73,7 +73,7 @@ const App = {
      * Set to true to use simulated API responses.
      * @type {boolean}
      */
-    mockMode: true,
+    mockMode: false,
 
     /**
      * Application state object.
@@ -258,11 +258,15 @@ const App = {
      * @param {string} [filter.dateStart] - Start date (ISO string)
      * @param {string} [filter.dateEnd] - End date (ISO string)
      * @param {string} [filter.rating] - Rating emoji to filter by
+     * @param {Object} [options] - Options for filter setting
+     * @param {boolean} [options.silent] - If true, don't emit filterChanged event
      * @fires App#filterChanged
      */
-    setFilter(filter) {
+    setFilter(filter, options = {}) {
         this.state.filter = filter;
-        this.emit('filterChanged', filter);
+        if (!options.silent) {
+            this.emit('filterChanged', filter);
+        }
     },
 
     /**
@@ -801,11 +805,17 @@ const App = {
             this._mockFolders = this._mockFolders.filter(f => f.path !== path);
             return { success: true };
         }
-        if (endpoint === '/scan' && method === 'POST') {
-            return { success: true, jobId: 'mock-scan-1' };
+        if (endpoint === '/status' && method === 'GET') {
+            // Mock status: simulate occasional updating state
+            const isUpdating = Math.random() < 0.3; // 30% chance of updating
+            return {
+                status: isUpdating ? 'updating' : 'up_to_date',
+                indexing_queue: isUpdating ? Math.floor(Math.random() * 50) : 0,
+                embedding_queue: isUpdating ? Math.floor(Math.random() * 100) : 0
+            };
         }
-        if (endpoint.startsWith('/scan/') && method === 'GET') {
-            return { status: 'complete', progress: 100 };
+        if (endpoint === '/rescan' && method === 'POST') {
+            return { success: true };
         }
         if (endpoint.startsWith('/duplicates') && method === 'GET') {
             // Parse level from query string
@@ -1398,12 +1408,14 @@ const App = {
                     '🏈': 'American football',
                     '🏹': 'Archery',
                     '🏸': 'Badminton',
+                    '🩰': 'Ballet',
                     '⚾': 'Baseball',
                     '🏀': 'Basketball',
                     '🎳': 'Bowling',
                     '🥊': 'Boxing',
                     '🏏': 'Cricket',
                     '🚴': 'Cycling',
+                    '💃': 'Dancing',
                     '🏑': 'Field hockey',
                     '⚽': 'Football / soccer',
                     '⛳': 'Golf',
