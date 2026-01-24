@@ -89,7 +89,9 @@ const Gallery = {
         lazyLoader: null,
         dragState: null,
         contentSimilarities: null,
-        contentReferenceId: null
+        contentReferenceId: null,
+        refreshIntervalId: null,
+        lastImageCount: 0
     },
 
     /**
@@ -141,6 +143,8 @@ const Gallery = {
         }
         // Bind keyboard events
         this._bindKeyboard();
+        // Start background refresh while database is updating
+        this._startBackgroundRefresh();
     },
 
     /**
@@ -149,6 +153,8 @@ const Gallery = {
     onLeave() {
         // Unbind keyboard events
         this._unbindKeyboard();
+        // Stop background refresh
+        this._stopBackgroundRefresh();
     },
 
     /**
@@ -166,12 +172,89 @@ const Gallery = {
         try {
             const images = await App.apiGet('/images');
             this.state.images = this._sortImages(images);
+            this.state.lastImageCount = images.length;
             this._renderGrid();
             this.state.needsRefresh = false;
         } catch (error) {
             console.error('Failed to load images:', error);
             this.state.images = [];
             this._renderGrid();
+        }
+    },
+
+    /**
+     * Starts background refresh polling while database is updating.
+     * @private
+     */
+    _startBackgroundRefresh() {
+        // Don't start if already running
+        if (this.state.refreshIntervalId) return;
+
+        // Poll every 5 seconds
+        this.state.refreshIntervalId = setInterval(() => {
+            this._checkForNewImages();
+        }, 5000);
+    },
+
+    /**
+     * Stops background refresh polling.
+     * @private
+     */
+    _stopBackgroundRefresh() {
+        if (this.state.refreshIntervalId) {
+            clearInterval(this.state.refreshIntervalId);
+            this.state.refreshIntervalId = null;
+        }
+    },
+
+    /**
+     * Checks if new images are available and refreshes while preserving state.
+     * Only refreshes when database is in updating state.
+     * @private
+     */
+    async _checkForNewImages() {
+        try {
+            // Check database status
+            const status = await App.apiGet('/status');
+            if (status.status !== 'updating') {
+                return; // Only refresh while updating
+            }
+
+            // Fetch latest images
+            const images = await App.apiGet('/images');
+
+            // Only refresh if there are new images
+            if (images.length === this.state.lastImageCount) {
+                return;
+            }
+
+            // Preserve current state
+            const scrollTop = this._els.grid?.closest('.gallery-container')?.scrollTop || 0;
+            const currentSelection = App.getSelection();
+
+            // Update images
+            this.state.images = this._sortImages(images);
+            this.state.lastImageCount = images.length;
+
+            // Re-render grid
+            this._renderGrid();
+
+            // Restore scroll position
+            const container = this._els.grid?.closest('.gallery-container');
+            if (container) {
+                container.scrollTop = scrollTop;
+            }
+
+            // Restore selection (filter to still-existing image IDs)
+            const existingIds = new Set(this.state.images.map(img => img.id));
+            const validSelection = currentSelection.filter(id => existingIds.has(id));
+            if (validSelection.length > 0) {
+                App.setSelection(validSelection);
+            }
+
+        } catch (error) {
+            // Silently ignore errors during background refresh
+            console.debug('Background refresh error:', error);
         }
     },
 
