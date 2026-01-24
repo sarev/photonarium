@@ -74,11 +74,11 @@ We need to have this mechanism work in a more scalable way, so a database with 1
 
 During the ingestion process, for indexing and embedding new images, this seems to run a lot slower than I was hoping. I think the indexing can and should be run across a thread pool, not just on a single thread. I can see why having the embedding running in a single thread makes sense - stick with that part. The size of the thread pool should probably be a persisted config option.
 2
-## Indexing ETA
+## Indexing ETA - DONE
 
 When the database is updating, it would be helpful for the "Indexing" progress info on the Database screen to include a computed "ETA", based upon how many images are being indexed per second over the last n seconds (or similar). We don't need this for the "Embedding" part, because that number is generally very low or zero, so any ETA would flicker and change pretty much randomly.
 
-## Database screen updates
+## Database screen updates - DONE
 
 When the database is in an "Updating" state, we have the indexing and embedding status updating periodically. It would be good to have the "Total images" field updating at the same time.
 

@@ -335,6 +335,7 @@ const Database = {
      * @param {string} status.status - 'up_to_date' or 'updating'
      * @param {number} status.indexing_queue - Items in ingestion queue
      * @param {number} status.embedding_queue - Items in embedding queue
+     * @param {number} status.total_images - Total images in database
      * @private
      */
     _updateStatusDisplay(status) {
@@ -351,6 +352,11 @@ const Database = {
 
         // Update status text
         this._els.statusText.textContent = isUpdating ? 'Updating' : 'Up to date';
+
+        // Update total images count (always, so it updates during indexing)
+        if (typeof status.total_images === 'number') {
+            this._els.statusTotal.textContent = String(status.total_images);
+        }
 
         // Show/hide queue counts
         if (isUpdating && (indexing > 0 || embedding > 0)) {

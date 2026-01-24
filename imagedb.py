@@ -4186,17 +4186,24 @@ class ImageDatabase:
         """Get current processing status.
 
         Returns:
-            Dict with status, indexing_queue, and embedding_queue counts.
+            Dict with status, indexing_queue, embedding_queue counts, and total_images.
         """
         indexing_count = self._ingestion_queue.qsize()
         embedding_count = self._embedding_queue.qsize()
 
         status = 'up_to_date' if (indexing_count == 0 and embedding_count == 0) else 'updating'
 
+        # Get total image count for live updates during indexing
+        cursor = self.conn.execute(
+            'SELECT COUNT(*) as count FROM images WHERE deleted = 0'
+        )
+        total_images = cursor.fetchone()['count']
+
         return {
             'status': status,
             'indexing_queue': indexing_count,
             'embedding_queue': embedding_count,
+            'total_images': total_images,
         }
 
     def queue_rescan_all(self) -> None:
