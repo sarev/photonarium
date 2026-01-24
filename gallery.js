@@ -23,7 +23,8 @@
  *   - Tracks selection state and updates toolbar button states accordingly
  *
  * Info Panel:
- *   - Displays metadata for the currently selected image (or last selected if multiple)
+ *   - Displays metadata for the currently selected image (single selection only)
+ *   - Shows selection count only when multiple images are selected
  *   - Shows: path, dimensions, file size, timestamps, checksum, perceptual hash
  *   - Shows computed values: Laplacian variance, lossless compression flag
  *   - Provides editable fields for Description and Rating
@@ -950,7 +951,7 @@ const Gallery = {
 
     /**
      * Updates the info panel based on selection.
-     * Shows info for last selected image, or placeholder if none.
+     * Shows info for single selection, or just count for multiple.
      * @param {Array<string>} selection - Selected image IDs
      * @private
      */
@@ -963,26 +964,35 @@ const Gallery = {
             return;
         }
 
-        // Show info for the last selected image
-        const imageId = selection[selection.length - 1];
+        // Multiple selection: show only the count, no individual image details
+        if (selection.length > 1) {
+            this._infoPanelImageId = null;
+            content.innerHTML = `
+                <div class="info-section">
+                    <p class="info-selection-count">${selection.length} images selected</p>
+                </div>
+            `;
+            return;
+        }
+
+        // Single selection: show full details
+        const imageId = selection[0];
 
         // Don't re-render if same image
         if (imageId === this._infoPanelImageId) {
-            this._updateSelectionCount(selection.length);
             return;
         }
 
         this._infoPanelImageId = imageId;
-        this._renderInfoPanel(imageId, selection.length);
+        this._renderInfoPanel(imageId, 1);
     },
 
     /**
-     * Renders the info panel for a specific image.
+     * Renders the info panel for a single selected image.
      * @param {string} imageId - Image ID to display
-     * @param {number} selectionCount - Total number of selected images
      * @private
      */
-    async _renderInfoPanel(imageId, selectionCount) {
+    async _renderInfoPanel(imageId) {
         const content = this._els.infoContent;
         const img = this.state.images.find(i => i.id === imageId);
 
@@ -993,7 +1003,6 @@ const Gallery = {
 
         content.innerHTML = `
             <div class="info-section">
-                ${selectionCount > 1 ? `<p class="info-selection-count">${selectionCount} images selected</p>` : ''}
                 <p class="info-filename">${App.escapeHtml(img.basename)}</p>
                 <p class="info-path">${App.escapeHtml(img.path)}</p>
             </div>
@@ -1099,28 +1108,6 @@ const Gallery = {
             await App.apiPost(`/images/${imageId}`, { [field]: value });
         } catch (error) {
             console.error(`Failed to save ${field}:`, error);
-        }
-    },
-
-    /**
-     * Updates just the selection count in the info panel.
-     * @param {number} count - Number of selected images
-     * @private
-     */
-    _updateSelectionCount(count) {
-        const existing = this._els.infoContent.querySelector('.info-selection-count');
-        if (count > 1) {
-            if (existing) {
-                existing.textContent = `${count} images selected`;
-            } else {
-                const section = this._els.infoContent.querySelector('.info-section');
-                if (section) {
-                    const p = App.createElement('p', { className: 'info-selection-count' }, `${count} images selected`);
-                    section.insertBefore(p, section.firstChild);
-                }
-            }
-        } else if (existing) {
-            existing.remove();
         }
     },
 
