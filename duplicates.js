@@ -8,14 +8,15 @@
  * RESPONSIBILITIES:
  *
  * Duplicate Detection Levels:
- *   The similarity slider controls the strictness of duplicate matching:
- *   - Level 0 (Identical): Same file size and SHA256 checksum
- *   - Level 1 (Perceptual): Same or very similar perceptual hash
- *     (catches rescaled images, different compression levels)
- *   - Level 2 (Similar): High OpenCLIP embedding cosine similarity
- *     (catches shot sequences, similar compositions)
- *   - Level 3 (Related): Lower OpenCLIP similarity threshold
+ *   The similarity slider controls the strictness of duplicate matching.
+ *   Slider moves from loose (left) to strict (right), matching filter sliders:
+ *   - Related (left): Lower OpenCLIP similarity threshold
  *     (catches thematically related images)
+ *   - Similar: High OpenCLIP embedding cosine similarity
+ *     (catches shot sequences, similar compositions)
+ *   - Near-identical: Same or very similar perceptual hash
+ *     (catches rescaled images, different compression levels)
+ *   - Identical (right): Same file size and SHA256 checksum
  *
  * Stack Display:
  *   - Shows duplicate groups as stacked thumbnail cards
@@ -68,11 +69,34 @@
  */
 const Duplicates = {
     /**
-     * Similarity level labels for the slider.
+     * Similarity level labels for the slider (ordered loose to strict).
+     * Index 0 = leftmost (loosest), Index 3 = rightmost (strictest).
      * @type {string[]}
      * @constant
      */
-    SIMILARITY_LABELS: ['Identical', 'Near-identical', 'Similar', 'Related'],
+    SIMILARITY_LABELS: ['Related', 'Similar', 'Near-identical', 'Identical'],
+
+    /**
+     * Converts slider position to similarity level.
+     * Slider: 0 (left/loose) to 3 (right/strict)
+     * Level: 3 (related) to 0 (identical)
+     * @param {number} sliderValue - Slider position (0-3)
+     * @returns {number} Similarity level (0-3)
+     * @private
+     */
+    _sliderToLevel(sliderValue) {
+        return 3 - sliderValue;
+    },
+
+    /**
+     * Converts similarity level to slider position.
+     * @param {number} level - Similarity level (0-3)
+     * @returns {number} Slider position (0-3)
+     * @private
+     */
+    _levelToSlider(level) {
+        return 3 - level;
+    },
 
     /**
      * Local state for the duplicates screen.
@@ -134,9 +158,10 @@ const Duplicates = {
      * Fetches groups if needed and restores scroll position.
      */
     onEnter() {
-        // Sync slider with current level
-        this._els.slider.value = this.state.currentLevel;
-        this._els.sliderLabel.textContent = this.SIMILARITY_LABELS[this.state.currentLevel];
+        // Sync slider with current level (invert: level 0=strict, slider 3=strict)
+        const sliderPos = this._levelToSlider(this.state.currentLevel);
+        this._els.slider.value = sliderPos;
+        this._els.sliderLabel.textContent = this.SIMILARITY_LABELS[sliderPos];
 
         // Load data if needed
         if (this.state.needsRefresh) {
@@ -160,10 +185,11 @@ const Duplicates = {
      * @private
      */
     _bindEvents() {
-        // Similarity slider
+        // Similarity slider (inverted: left=loose/related, right=strict/identical)
         this._els.slider.addEventListener('input', () => {
-            const level = parseInt(this._els.slider.value, 10);
-            this._els.sliderLabel.textContent = this.SIMILARITY_LABELS[level];
+            const sliderPos = parseInt(this._els.slider.value, 10);
+            const level = this._sliderToLevel(sliderPos);
+            this._els.sliderLabel.textContent = this.SIMILARITY_LABELS[sliderPos];
             this._setLevel(level);
         });
         // Thumbnail size buttons are handled globally by the toolbar (App.setThumbnailSize)
@@ -389,7 +415,8 @@ Duplicates._renderGroups = function() {
 
         const p = empty.querySelector('p');
         if (p) {
-            p.textContent = `No ${this.SIMILARITY_LABELS[this.state.currentLevel].toLowerCase()} duplicates found at the current similarity level.`;
+            const sliderPos = this._levelToSlider(this.state.currentLevel);
+            p.textContent = `No ${this.SIMILARITY_LABELS[sliderPos].toLowerCase()} duplicates found at the current similarity level.`;
         }
         return;
     }

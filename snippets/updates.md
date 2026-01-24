@@ -32,7 +32,7 @@ Also, it'd be nice if the gallery screen updated from time to time while the dat
 
 Drag selection should auto-scroll when the user is trying to drag off the top or bottom of the visible area of the gallery.
 
-## Selection modifier keys
+## Selection modifier keys - DONE
 
 We should support ctrl-click and shift-click selection models, as per how Windows does these.
 
