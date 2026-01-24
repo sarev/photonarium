@@ -1227,10 +1227,20 @@ const Gallery = {
         // Debounce timer for slider changes
         let debounceTimer = null;
 
-        // Update display value as slider moves
+        // Update display value as slider moves and sync with search screen slider
         this._els.similaritySlider.addEventListener('input', () => {
             const value = this._els.similaritySlider.value;
             this._els.similarityValue.textContent = value + '%';
+
+            // Sync search screen slider if it exists
+            const searchSimilaritySlider = App.$('filter-similarity');
+            const searchSimilarityValue = App.$('similarity-value');
+            if (searchSimilaritySlider) {
+                searchSimilaritySlider.value = value;
+            }
+            if (searchSimilarityValue) {
+                searchSimilarityValue.textContent = value + '%';
+            }
         });
 
         // Re-run search when slider value changes (debounced)

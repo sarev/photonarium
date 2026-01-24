@@ -123,9 +123,20 @@ const Search = {
         // Clear filter button
         this._els.clearBtn.addEventListener('click', () => this._clearFilter());
 
-        // Similarity slider - update displayed value
+        // Similarity slider - update displayed value and sync with gallery slider
         this._els.similaritySlider.addEventListener('input', () => {
-            this._els.similarityValue.textContent = this._els.similaritySlider.value + '%';
+            const value = this._els.similaritySlider.value;
+            this._els.similarityValue.textContent = value + '%';
+
+            // Sync gallery toolbar slider if it exists
+            const gallerySimilaritySlider = App.$('gallery-similarity-slider');
+            const gallerySimilarityValue = App.$('gallery-similarity-value');
+            if (gallerySimilaritySlider) {
+                gallerySimilaritySlider.value = value;
+            }
+            if (gallerySimilarityValue) {
+                gallerySimilarityValue.textContent = value + '%';
+            }
         });
 
         // Emoji picker button
@@ -163,6 +174,13 @@ const Search = {
             this._els.dateStart.value = filter.dateStart || '';
             this._els.dateEnd.value = filter.dateEnd || '';
             this._els.ratingInput.value = filter.rating || '';
+
+            // Sync similarity slider from filter threshold if available
+            if (filter.threshold) {
+                const pct = Math.round(filter.threshold * 100);
+                this._els.similaritySlider.value = pct;
+                this._els.similarityValue.textContent = pct + '%';
+            }
         } else {
             this._clearForm();
         }
