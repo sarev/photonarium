@@ -186,6 +186,7 @@ import re
 import shutil
 import signal
 import sqlite3
+import subprocess
 import tempfile
 import threading
 import time
@@ -3269,6 +3270,191 @@ def generate_thumbnail(
         return False
 
 
+def rotate_image_file(
+    path: Path | str,
+    direction: str,
+) -> bool:
+    """Rotate an image file in place.
+
+    Uses lossless rotation for JPEG files (via jpegtran if available),
+    falls back to Pillow for other formats or if jpegtran is not installed.
+
+    Args:
+        path: Path to the image file.
+        direction: 'cw' for clockwise (90 degrees right),
+                   'ccw' for counter-clockwise (90 degrees left).
+
+    Returns:
+        True if rotation was successful, False otherwise.
+    """
+    path = Path(path)
+
+    if direction not in ('cw', 'ccw'):
+        logger.error(f'Invalid rotation direction: {direction}')
+        return False
+
+    if not path.exists():
+        logger.error(f'Image file not found: {path}')
+        return False
+
+    # Check if JPEG (can use lossless rotation)
+    suffix = path.suffix.lower()
+    is_jpeg = suffix in ('.jpg', '.jpeg')
+
+    if is_jpeg:
+        # Try lossless JPEG rotation with jpegtran
+        if _rotate_jpeg_lossless(path, direction):
+            return True
+        # Fall through to Pillow if jpegtran failed
+
+    # Use Pillow for non-JPEG or if jpegtran unavailable
+    return _rotate_with_pillow(path, direction)
+
+
+def _rotate_jpeg_lossless(path: Path, direction: str) -> bool:
+    """Attempt lossless JPEG rotation using jpegtran.
+
+    Args:
+        path: Path to the JPEG file.
+        direction: 'cw' or 'ccw'.
+
+    Returns:
+        True if successful, False if jpegtran not available or failed.
+    """
+    # Map direction to jpegtran argument
+    rotate_arg = '90' if direction == 'cw' else '270'
+
+    try:
+        # Create temp file for output
+        with tempfile.NamedTemporaryFile(
+            suffix='.jpg',
+            delete=False,
+            dir=path.parent,
+        ) as tmp:
+            tmp_path = Path(tmp.name)
+
+        # Run jpegtran
+        result = subprocess.run(
+            ['jpegtran', '-rotate', rotate_arg, '-copy', 'all', '-outfile', str(tmp_path), str(path)],
+            capture_output=True,
+            timeout=30,
+        )
+
+        if result.returncode == 0 and tmp_path.exists():
+            # Replace original with rotated version
+            shutil.move(tmp_path, path)
+            logger.debug(f'Lossless JPEG rotation successful: {path}')
+            return True
+        else:
+            # jpegtran failed
+            if tmp_path.exists():
+                tmp_path.unlink()
+            logger.debug(f'jpegtran failed: {result.stderr.decode() if result.stderr else "unknown error"}')
+            return False
+
+    except FileNotFoundError:
+        # jpegtran not installed
+        logger.debug('jpegtran not found, falling back to Pillow')
+        return False
+    except subprocess.TimeoutExpired:
+        logger.warning(f'jpegtran timed out for: {path}')
+        return False
+    except Exception as e:
+        logger.warning(f'jpegtran error for {path}: {e}')
+        if 'tmp_path' in locals() and tmp_path.exists():
+            tmp_path.unlink()
+        return False
+
+
+def _rotate_with_pillow(path: Path, direction: str) -> bool:
+    """Rotate an image using Pillow.
+
+    Args:
+        path: Path to the image file.
+        direction: 'cw' or 'ccw'.
+
+    Returns:
+        True if successful, False otherwise.
+    """
+    try:
+        with Image.open(path) as img:
+            # Apply EXIF orientation first
+            img = ImageOps.exif_transpose(img)
+
+            # Rotate (Pillow uses counter-clockwise positive angles)
+            if direction == 'cw':
+                rotated = img.transpose(Image.Transpose.ROTATE_270)
+            else:
+                rotated = img.transpose(Image.Transpose.ROTATE_90)
+
+            # Determine save format and options
+            suffix = path.suffix.lower()
+            save_kwargs = {}
+
+            if suffix in ('.jpg', '.jpeg'):
+                save_kwargs['quality'] = 95
+                save_kwargs['optimize'] = True
+            elif suffix == '.png':
+                save_kwargs['optimize'] = True
+            elif suffix == '.webp':
+                save_kwargs['quality'] = 95
+
+            # Save to temp file first, then replace
+            with tempfile.NamedTemporaryFile(
+                suffix=suffix,
+                delete=False,
+                dir=path.parent,
+            ) as tmp:
+                tmp_path = Path(tmp.name)
+
+            rotated.save(tmp_path, **save_kwargs)
+            shutil.move(tmp_path, path)
+
+            logger.debug(f'Pillow rotation successful: {path}')
+            return True
+
+    except Exception as e:
+        logger.error(f'Failed to rotate image {path}: {e}')
+        if 'tmp_path' in locals() and tmp_path.exists():
+            tmp_path.unlink()
+        return False
+
+
+def delete_thumbnails_for_checksum(
+    checksum: str,
+    thumbnail_dir: Path | str = DEFAULT_THUMBNAIL_DIR,
+) -> int:
+    """Delete all cached thumbnails for a given checksum.
+
+    Args:
+        checksum: The image checksum whose thumbnails should be deleted.
+        thumbnail_dir: Root thumbnail cache directory.
+
+    Returns:
+        Number of thumbnails deleted.
+    """
+    thumbnail_dir = Path(thumbnail_dir)
+    if not thumbnail_dir.exists():
+        return 0
+
+    count = 0
+    prefix = checksum[:2] if len(checksum) >= 2 else 'xx'
+
+    # Thumbnails are stored as: <thumbnail_dir>/<size>/<prefix>/<checksum>.jpg
+    # We need to check all size directories
+    for size_dir in thumbnail_dir.iterdir():
+        if size_dir.is_dir():
+            thumb_path = size_dir / prefix / f'{checksum}.jpg'
+            if thumb_path.exists():
+                try:
+                    thumb_path.unlink()
+                    count += 1
+                except Exception as e:
+                    logger.warning(f'Failed to delete thumbnail {thumb_path}: {e}')
+
+    return count
+
+
 def get_or_create_thumbnail(
     conn: sqlite3.Connection,
     image_id: str,
@@ -4127,6 +4313,121 @@ class ImageDatabase:
     def delete_image(self, image_id: str, from_disk: bool = False) -> bool:
         """Delete an image (soft delete or from disk)."""
         return delete_image(self.conn, image_id, from_disk)
+
+    def rotate_images(
+        self,
+        image_ids: list[str],
+        direction: str,
+    ) -> dict[str, Any]:
+        """Rotate multiple image files in parallel.
+
+        Uses a thread pool for parallel processing, controlled by the
+        indexing_threads config option.
+
+        Args:
+            image_ids: List of image UUIDs to rotate.
+            direction: 'cw' for clockwise, 'ccw' for counter-clockwise.
+
+        Returns:
+            Dict with:
+                - results: Dict mapping image_id to success boolean
+                - rotated: List of successfully rotated image IDs
+        """
+        results = {}
+        rotated = []
+
+        # Use thread pool for parallel rotation
+        max_workers = self.config.indexing_threads
+
+        def rotate_one(image_id: str) -> tuple[str, bool]:
+            success = self._rotate_single_image(image_id, direction)
+            return (image_id, success)
+
+        with ThreadPoolExecutor(max_workers=max_workers) as executor:
+            futures = [executor.submit(rotate_one, img_id) for img_id in image_ids]
+            for future in futures:
+                try:
+                    image_id, success = future.result()
+                    results[image_id] = success
+                    if success:
+                        rotated.append(image_id)
+                except Exception as e:
+                    logger.error(f'rotate_images: Thread error: {e}')
+
+        return {'results': results, 'rotated': rotated}
+
+    def _rotate_single_image(self, image_id: str, direction: str) -> bool:
+        """Rotate a single image file and update its metadata.
+
+        Performs lossless rotation for JPEG files when possible.
+        Updates the database with new checksum, size, and mtime.
+        Deletes old cached thumbnails.
+
+        Args:
+            image_id: UUID of the image to rotate.
+            direction: 'cw' for clockwise, 'ccw' for counter-clockwise.
+
+        Returns:
+            True if rotation succeeded, False otherwise.
+        """
+        # Get current image info
+        image = get_image(self.conn, image_id)
+        if image is None:
+            logger.warning(f'rotate_image: Image not found: {image_id}')
+            return False
+
+        path = Path(image['path'])
+        if not path.exists():
+            logger.error(f'rotate_image: File not found: {path}')
+            return False
+
+        old_checksum = image.get('checksum')
+
+        # Rotate the image file
+        if not rotate_image_file(path, direction):
+            logger.error(f'rotate_image: Rotation failed for: {path}')
+            return False
+
+        # Delete old thumbnails (based on old checksum)
+        if old_checksum:
+            deleted_count = delete_thumbnails_for_checksum(old_checksum, self.thumbnail_dir)
+            logger.debug(f'Deleted {deleted_count} old thumbnails for checksum {old_checksum[:8]}...')
+
+        # Compute new metadata
+        try:
+            new_checksum = compute_checksum(path)
+            stat = path.stat()
+            new_size = stat.st_size
+            new_mtime = stat.st_mtime
+
+            # Get new dimensions
+            with Image.open(path) as img:
+                new_width, new_height = img.size
+        except Exception as e:
+            logger.error(f'rotate_image: Failed to compute new metadata: {e}')
+            return False
+
+        # Update database
+        try:
+            self.conn.execute(
+                '''UPDATE images SET
+                    checksum = ?,
+                    size = ?,
+                    width = ?,
+                    height = ?,
+                    mtime = ?,
+                    updated_at = ?
+                WHERE id = ?''',
+                (new_checksum, new_size, new_width, new_height, new_mtime,
+                 datetime.now().isoformat(), image_id)
+            )
+            self.conn.commit()
+        except Exception as e:
+            logger.error(f'rotate_image: Failed to update database: {e}')
+            return False
+
+        logger.info(f'Rotated image {direction}: {path.name}')
+        return True
 
     def search_images(
         self,

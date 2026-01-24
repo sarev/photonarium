@@ -1163,6 +1163,8 @@ const App = {
         this._bindBtn('btn-thumb-smaller', () => this.setThumbnailSize(this.state.thumbnailSize - 50));
         this._bindBtn('btn-thumb-larger', () => this.setThumbnailSize(this.state.thumbnailSize + 50));
         this._bindBtn('btn-fullscreen', () => this._handleFullscreenClick());
+        this._bindBtn('btn-rotate-ccw', () => this._handleRotateClick('ccw'));
+        this._bindBtn('btn-rotate-cw', () => this._handleRotateClick('cw'));
         this._bindBtn('btn-select-all', () => this.emit('selectAll'));
         this._bindBtn('btn-clear-selection', () => this.clearSelection());
 
@@ -1224,6 +1226,46 @@ const App = {
     },
 
     /**
+     * Handles rotate button click.
+     * Rotates all selected images in the specified direction.
+     * @param {string} direction - 'cw' for clockwise, 'ccw' for counter-clockwise
+     * @private
+     */
+    async _handleRotateClick(direction) {
+        const selectedIds = [...this.state.selectedImages];
+        if (selectedIds.length === 0) {
+            return;
+        }
+
+        try {
+            // Rotate all selected images in one batch request
+            const result = await this.apiPost('/images/rotate', {
+                image_ids: selectedIds,
+                direction: direction
+            });
+
+            // Emit event for each successfully rotated image
+            if (result && result.rotated) {
+                for (const imageId of result.rotated) {
+                    this.emit('imageRotated', imageId);
+                }
+            }
+
+            // Report any failures
+            if (result && result.results) {
+                const failed = selectedIds.filter(id => !result.results[id]);
+                if (failed.length > 0) {
+                    console.error('Failed to rotate images:', failed);
+                    this.showError(`Failed to rotate ${failed.length} image(s).`);
+                }
+            }
+        } catch (error) {
+            console.error('Failed to rotate images:', error);
+            this.showError('Failed to rotate images.');
+        }
+    },
+
+    /**
      * Handles similarity slider changes.
      * Updates label and emits event for duplicates screen.
      * @param {string} value - Slider value (0-3)
@@ -1249,6 +1291,16 @@ const App = {
         const fullscreenBtn = document.getElementById('btn-fullscreen');
         if (fullscreenBtn) {
             fullscreenBtn.disabled = selCount !== 1;
+        }
+
+        // Rotate buttons: enabled when at least one image selected
+        const rotateCcwBtn = document.getElementById('btn-rotate-ccw');
+        const rotateCwBtn = document.getElementById('btn-rotate-cw');
+        if (rotateCcwBtn) {
+            rotateCcwBtn.disabled = selCount === 0;
+        }
+        if (rotateCwBtn) {
+            rotateCwBtn.disabled = selCount === 0;
         }
     },
 

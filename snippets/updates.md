@@ -86,6 +86,16 @@ When the database is in an "Updating" state, we have the indexing and embedding 
 
 When we're on the Gallery screen, the related toolbar button (for going to the Gallery screen) is hidden. This makes sense. When we're on the other main screens (Database, Duplicates, Search/Filter) their corresponding buttons *aren't* hidden. They should be.
 
-## "Rescan all" validation
+## "Rescan all" validation - DONE
 
 I'd like to double-check what happens when the user clicks on "Rescan all folders" in the Database screen. Please outline everything it will do as plain English bullet points.
+
+## Rotate buttons
+
+In the gallery toolbar, we have a button for going into full-screen mode. This is shaded if there isn't exactly one imgae selected. It's good. I'd like two buttons next to it: for rotating all selected images anti-clockwise, or clockwise. It will be shaded if no images are selected.
+
+Clearly, rotating the image will mean its sha256 checksum (and probably size and modified date) will change. As an optimisation, to help speed things up, I think we can assume that the rotation operation *doesn't* change the embedding, description, rating, description embedding, laplacian variance, or perceptual hash
+
+## Fullscreen prev/next buttons
+
+Along with the temporary close button on the fullscreen view, I'd like "Previous" and "Next" arrow buttons at each side of the screen. These do the same thing as pressing the corresponding cursor key when clicked/tapped.

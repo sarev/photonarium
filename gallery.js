@@ -189,6 +189,7 @@ const Gallery = {
         App.on('filterChanged', () => this._onFilterChanged());
         App.on('selectionChanged', (sel) => this._onSelectionChanged(sel));
         App.on('selectAll', () => this._selectAll());
+        App.on('imageRotated', (imageId) => this._onImageRotated(imageId));
     },
 
     /**
@@ -631,6 +632,27 @@ const Gallery = {
     _selectAll() {
         const allIds = this.state.filteredImages.map(img => img.id);
         App.setSelectedImages(allIds);
+    },
+
+    /**
+     * Handles image rotation - refreshes the thumbnail.
+     * @param {string} imageId - ID of the rotated image
+     * @private
+     */
+    _onImageRotated(imageId) {
+        // Remove from virtual scroll cache
+        this._virtualScroll.renderedItems.delete(imageId);
+
+        // Find and update the DOM element if it exists
+        const item = this._els.grid.querySelector(`.gallery-item[data-id="${imageId}"]`);
+        if (item) {
+            const img = item.querySelector('img');
+            if (img) {
+                // Add cache-busting timestamp to force reload
+                const newSrc = App.thumbnailUrl(imageId) + '&_t=' + Date.now();
+                img.src = newSrc;
+            }
+        }
     },
 
     /* ----------------------------------------------------------------------

@@ -314,6 +314,48 @@ def get_full_image(image_id):
     return send_file(path)
 
 
+@app.route('/api/images/rotate', methods=['POST'])
+def rotate_images():
+    """Rotate one or more image files.
+
+    Performs lossless rotation for JPEG files when possible (using jpegtran),
+    otherwise uses Pillow. Updates the database with new checksum, size, and
+    dimensions. Old thumbnails are deleted and will regenerate on demand.
+
+    Rotations are processed in parallel using the configured thread pool.
+
+    Request Body:
+        JSON object with:
+            - image_ids: Array of image IDs to rotate
+            - direction: 'cw' for clockwise, 'ccw' for counter-clockwise
+
+    Returns:
+        JSON object with:
+            - results: Object mapping image_id to success boolean
+            - rotated: Array of successfully rotated image IDs
+    """
+    data = request.get_json()
+    if not data:
+        return error_response('Request body is required')
+
+    if 'direction' not in data:
+        return error_response('Direction is required (cw or ccw)')
+
+    direction = data['direction']
+    if direction not in ('cw', 'ccw'):
+        return error_response('Direction must be "cw" or "ccw"')
+
+    image_ids = data.get('image_ids', [])
+    if not image_ids:
+        return error_response('At least one image_id is required')
+
+    if not isinstance(image_ids, list):
+        return error_response('image_ids must be an array')
+
+    results = get_db().rotate_images(image_ids, direction)
+    return jsonify(results)
+
+
 # =============================================================================
 # Folder Endpoints
 # =============================================================================
