@@ -2157,10 +2157,58 @@ class IngestionThread(threading.Thread):
             # Image exists - check if it has changed using size + mtime
             # This is much faster than computing checksum for every file
             existing_mtime = existing.get('mtime')
+            existing_checksum = existing.get('checksum')
+            existing_size = existing.get('size', 0)
+
+            # Check if mtime is missing (pre-migration image) - need to backfill
+            if existing_mtime is None and existing['size'] == current_size:
+                # Size matches but no mtime stored - just update mtime without full re-process
+                logger.debug(f'Backfilling mtime for: {path}')
+                with self._db_lock:
+                    self.conn.execute(
+                        'UPDATE images SET mtime = ?, updated_at = ? WHERE id = ?',
+                        (current_mtime, datetime.now().isoformat(), existing['id'])
+                    )
+                    self.conn.commit()
+                existing_mtime = current_mtime  # Continue with normal checks
+
             if existing['size'] == current_size and existing_mtime == current_mtime:
                 # File unchanged (size and mtime match)
+                needs_embedding = False
+
+                # Check if we need to backfill missing checksum
+                if existing_checksum is None and existing_size > 0:
+                    # Missing checksum - need to regenerate metadata
+                    logger.info(f'Backfilling missing checksum for: {path}')
+                    metadata = extract_image_metadata(path)
+                    if metadata is not None:
+                        with self._db_lock:
+                            update_image_metadata(
+                                self.conn,
+                                existing['id'],
+                                size=metadata.size,
+                                width=metadata.width,
+                                height=metadata.height,
+                                timestamp=metadata.timestamp,
+                                checksum=metadata.checksum,
+                                perceptual_hash=metadata.perceptual_hash,
+                                laplacian_var=metadata.laplacian_var,
+                                lossless=metadata.lossless,
+                                mtime=metadata.mtime,
+                            )
+                        needs_embedding = True
+
+                # Check if embedding is needed
                 if existing['embedding'] is None:
-                    # Needs embedding (interrupted previous run)
+                    needs_embedding = True
+
+                # Check if description embedding is needed
+                description = existing.get('description', '')
+                description_embedding = existing.get('description_embedding')
+                if description and description_embedding is None:
+                    needs_embedding = True
+
+                if needs_embedding:
                     self.embedding_queue.put(existing['id'])
                     logger.debug(f'Queued existing image for embedding: {path}')
                 else:
