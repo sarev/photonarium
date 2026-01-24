@@ -843,6 +843,8 @@ CREATE TABLE IF NOT EXISTS images (
 _SQL_MIGRATIONS = [
     # Add description_embedding column if it doesn't exist
     "ALTER TABLE images ADD COLUMN description_embedding BLOB",
+    # Add mtime column for fast change detection (avoids checksum on every scan)
+    "ALTER TABLE images ADD COLUMN mtime REAL",
 ]
 
 # SQL schema for the duplicate_groups table
@@ -1427,6 +1429,7 @@ def create_image(
     perceptual_hash: str | None = None,
     laplacian_var: float | None = None,
     lossless: bool = False,
+    mtime: float | None = None,
     description: str = '',
     rating: str = '',
 ) -> dict[str, Any]:
@@ -1444,6 +1447,7 @@ def create_image(
         perceptual_hash: Perceptual hash hex string.
         laplacian_var: Laplacian variance (focus score).
         lossless: Whether the image format is lossless.
+        mtime: File modification time (Unix timestamp).
         description: User description (default empty).
         rating: User rating emoji string (default empty).
 
@@ -1462,12 +1466,12 @@ def create_image(
     conn.execute("""
         INSERT INTO images (
             id, path, basename, size, width, height, timestamp,
-            checksum, perceptual_hash, laplacian_var, lossless,
+            checksum, perceptual_hash, laplacian_var, lossless, mtime,
             description, rating, embedding, deleted, created_at, updated_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, 0, ?, ?)
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, 0, ?, ?)
     """, (
         image_id, path_str, basename, size, width, height, timestamp_str,
-        checksum, perceptual_hash, laplacian_var, int(lossless),
+        checksum, perceptual_hash, laplacian_var, int(lossless), mtime,
         description, rating, now, now
     ))
     conn.commit()
@@ -1486,6 +1490,7 @@ def create_image(
         'perceptual_hash': perceptual_hash,
         'laplacian_var': laplacian_var,
         'lossless': lossless,
+        'mtime': mtime,
         'description': description,
         'rating': rating,
         'deleted': 0,
@@ -1575,6 +1580,7 @@ def update_image_metadata(
     perceptual_hash: str | None,
     laplacian_var: float | None,
     lossless: bool,
+    mtime: float | None = None,
 ) -> bool:
     """Update all computed metadata fields for an image.
 
@@ -1592,6 +1598,7 @@ def update_image_metadata(
         perceptual_hash: Perceptual hash hex string.
         laplacian_var: Laplacian variance.
         lossless: Whether format is lossless.
+        mtime: File modification time (Unix timestamp).
 
     Returns:
         True if image was updated, False if not found.
@@ -1609,12 +1616,13 @@ def update_image_metadata(
             perceptual_hash = ?,
             laplacian_var = ?,
             lossless = ?,
+            mtime = ?,
             embedding = NULL,
             updated_at = ?
         WHERE id = ?
     """, (
         size, width, height, timestamp_str, checksum,
-        perceptual_hash, laplacian_var, int(lossless), now, image_id
+        perceptual_hash, laplacian_var, int(lossless), mtime, now, image_id
     ))
     conn.commit()
 
@@ -1910,6 +1918,7 @@ class ImageMetadata:
     Attributes:
         path: Canonicalised file path.
         size: File size in bytes.
+        mtime: File modification time (Unix timestamp).
         width: Image width in pixels.
         height: Image height in pixels.
         timestamp: Derived timestamp (may be None).
@@ -1920,6 +1929,7 @@ class ImageMetadata:
     """
     path: Path
     size: int
+    mtime: float
     width: int
     height: int
     timestamp: datetime | None
@@ -1945,11 +1955,13 @@ def extract_image_metadata(path: Path | str) -> ImageMetadata | None:
         logger.warning(f'Image file not found: {path}')
         return None
 
-    # Get file size
+    # Get file size and modification time
     try:
-        size = path.stat().st_size
+        stat_info = path.stat()
+        size = stat_info.st_size
+        mtime = stat_info.st_mtime
     except OSError as e:
-        logger.warning(f'Failed to get file size for {path}: {e}')
+        logger.warning(f'Failed to stat file {path}: {e}')
         return None
 
     # Get dimensions
@@ -1981,6 +1993,7 @@ def extract_image_metadata(path: Path | str) -> ImageMetadata | None:
     return ImageMetadata(
         path=path,
         size=size,
+        mtime=mtime,
         width=width,
         height=height,
         timestamp=timestamp,
@@ -2114,6 +2127,9 @@ class IngestionThread(threading.Thread):
         This method is called from worker threads. Database operations are
         protected by _db_lock to ensure thread safety.
 
+        Uses size + mtime for fast change detection to avoid reading file
+        contents (checksum) on every scan.
+
         Args:
             path: Path to the image file.
         """
@@ -2124,9 +2140,11 @@ class IngestionThread(threading.Thread):
             logger.debug(f'Skipping non-existent file: {path}')
             return
 
-        # Get file size (no lock needed - file I/O)
+        # Get file size and mtime (no lock needed - file I/O)
         try:
-            current_size = path.stat().st_size
+            stat_info = path.stat()
+            current_size = stat_info.st_size
+            current_mtime = stat_info.st_mtime
         except OSError:
             logger.warning(f'Cannot stat file: {path}')
             return
@@ -2136,26 +2154,20 @@ class IngestionThread(threading.Thread):
             existing = get_image_by_path(self.conn, path)
 
         if existing is not None:
-            # Image exists - check if it has changed
-            if existing['size'] == current_size:
-                # Size matches - compute checksum to verify (no lock - file I/O)
-                try:
-                    current_checksum = compute_checksum(path)
-                except OSError:
-                    logger.warning(f'Cannot read file for checksum: {path}')
-                    return
+            # Image exists - check if it has changed using size + mtime
+            # This is much faster than computing checksum for every file
+            existing_mtime = existing.get('mtime')
+            if existing['size'] == current_size and existing_mtime == current_mtime:
+                # File unchanged (size and mtime match)
+                if existing['embedding'] is None:
+                    # Needs embedding (interrupted previous run)
+                    self.embedding_queue.put(existing['id'])
+                    logger.debug(f'Queued existing image for embedding: {path}')
+                else:
+                    logger.debug(f'Skipping unchanged image: {path}')
+                return
 
-                if existing['checksum'] == current_checksum:
-                    # File unchanged
-                    if existing['embedding'] is None:
-                        # Needs embedding (interrupted previous run)
-                        self.embedding_queue.put(existing['id'])
-                        logger.debug(f'Queued existing image for embedding: {path}')
-                    else:
-                        logger.debug(f'Skipping unchanged image: {path}')
-                    return
-
-            # File has changed - re-extract metadata (no lock - file I/O)
+            # File has changed (size or mtime differ) - re-extract metadata
             logger.info(f'Re-ingesting changed image: {path}')
             metadata = extract_image_metadata(path)
             if metadata is None:
@@ -2175,6 +2187,7 @@ class IngestionThread(threading.Thread):
                     perceptual_hash=metadata.perceptual_hash,
                     laplacian_var=metadata.laplacian_var,
                     lossless=metadata.lossless,
+                    mtime=metadata.mtime,
                 )
 
             # Queue for embedding (metadata cleared embedding)
@@ -2205,6 +2218,7 @@ class IngestionThread(threading.Thread):
                     perceptual_hash=metadata.perceptual_hash,
                     laplacian_var=metadata.laplacian_var,
                     lossless=metadata.lossless,
+                    mtime=metadata.mtime,
                 )
 
             # Queue for embedding

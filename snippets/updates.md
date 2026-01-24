@@ -82,10 +82,10 @@ When the database is updating, it would be helpful for the "Indexing" progress i
 
 When the database is in an "Updating" state, we have the indexing and embedding status updating periodically. It would be good to have the "Total images" field updating at the same time.
 
+## Toolbar 'sreen control' button semantics - DONE
+
+When we're on the Gallery screen, the related toolbar button (for going to the Gallery screen) is hidden. This makes sense. When we're on the other main screens (Database, Duplicates, Search/Filter) their corresponding buttons *aren't* hidden. They should be.
+
 ## "Rescan all" validation
 
 I'd like to double-check what happens when the user clicks on "Rescan all folders" in the Database screen. Please outline everything it will do as plain English bullet points.
-
-## Toolbar 'sreen control' button semantics
-
-When we're on the Gallery screen, the related toolbar button (for going to the Gallery screen) is hidden. This makes sense. When we're on the other main screens (Database, Duplicates, Search/Filter) their corresponding buttons *aren't* hidden. They should be.

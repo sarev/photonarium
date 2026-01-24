@@ -595,6 +595,7 @@ const App = {
     /**
      * Updates toolbar visibility based on the active screen.
      * Shows/hides toolbar groups using data-for-screen attributes.
+     * Hides navigation buttons for the current screen.
      * Hides entire toolbar for fullscreen view.
      * @param {string} activeScreen - The current active screen
      * @private
@@ -614,6 +615,21 @@ const App = {
         for (const group of groups) {
             const forScreens = group.dataset.forScreen.split(' ');
             group.hidden = !forScreens.includes(activeScreen);
+        }
+
+        // Hide navigation buttons for the current screen
+        // (no point showing a button to go to the screen you're already on)
+        const screenButtons = {
+            'database': 'btn-database',
+            'duplicates': 'btn-duplicates',
+            'search': 'btn-filter'
+        };
+
+        for (const [screen, btnId] of Object.entries(screenButtons)) {
+            const btn = document.getElementById(btnId);
+            if (btn) {
+                btn.hidden = (activeScreen === screen);
+            }
         }
     },
 
