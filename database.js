@@ -69,6 +69,21 @@ const Database = {
     _lastStatus: null,
 
     /**
+     * History of indexing queue samples for ETA calculation.
+     * Each entry is {count, timestamp}.
+     * @type {Array<{count: number, timestamp: number}>}
+     * @private
+     */
+    _indexingHistory: [],
+
+    /**
+     * Maximum number of samples to keep for ETA calculation.
+     * @type {number}
+     * @private
+     */
+    _maxHistorySamples: 10,
+
+    /**
      * Initialises the database module.
      * Called once during app startup.
      */
@@ -83,6 +98,7 @@ const Database = {
             statusText: App.$('status-text'),
             queueCounts: App.$('queue-counts'),
             indexingCount: App.$('indexing-count'),
+            indexingEta: App.$('indexing-eta'),
             embeddingCount: App.$('embedding-count')
         };
 
@@ -341,8 +357,78 @@ const Database = {
             this._els.queueCounts.hidden = false;
             this._els.indexingCount.textContent = indexing;
             this._els.embeddingCount.textContent = embedding;
+
+            // Update ETA for indexing
+            this._updateIndexingEta(indexing);
         } else {
             this._els.queueCounts.hidden = true;
+            // Clear history when not updating
+            this._indexingHistory = [];
+            this._els.indexingEta.textContent = '';
+        }
+    },
+
+    /**
+     * Updates the indexing ETA based on processing rate.
+     * @param {number} currentCount - Current indexing queue size
+     * @private
+     */
+    _updateIndexingEta(currentCount) {
+        const now = Date.now();
+
+        // Add current sample to history
+        this._indexingHistory.push({ count: currentCount, timestamp: now });
+
+        // Keep only recent samples
+        if (this._indexingHistory.length > this._maxHistorySamples) {
+            this._indexingHistory.shift();
+        }
+
+        // Need at least 2 samples to calculate rate
+        if (this._indexingHistory.length < 2) {
+            this._els.indexingEta.textContent = '';
+            return;
+        }
+
+        // Calculate processing rate from oldest to newest sample
+        const oldest = this._indexingHistory[0];
+        const newest = this._indexingHistory[this._indexingHistory.length - 1];
+        const countDiff = oldest.count - newest.count;
+        const timeDiff = (newest.timestamp - oldest.timestamp) / 1000; // seconds
+
+        // If no progress or queue growing, can't estimate
+        if (countDiff <= 0 || timeDiff <= 0) {
+            this._els.indexingEta.textContent = '';
+            return;
+        }
+
+        // Calculate rate (images per second) and ETA
+        const rate = countDiff / timeDiff;
+        const etaSeconds = currentCount / rate;
+
+        // Format ETA
+        this._els.indexingEta.textContent = ' (' + this._formatEta(etaSeconds) + ')';
+    },
+
+    /**
+     * Formats seconds into a human-readable ETA string.
+     * @param {number} seconds - Estimated seconds remaining
+     * @returns {string} Formatted ETA string
+     * @private
+     */
+    _formatEta(seconds) {
+        if (seconds < 60) {
+            return '< 1 min';
+        } else if (seconds < 3600) {
+            const mins = Math.ceil(seconds / 60);
+            return mins === 1 ? '~1 min' : `~${mins} mins`;
+        } else {
+            const hours = Math.floor(seconds / 3600);
+            const mins = Math.ceil((seconds % 3600) / 60);
+            if (mins === 0) {
+                return hours === 1 ? '~1 hour' : `~${hours} hours`;
+            }
+            return hours === 1 ? `~1 hour ${mins} mins` : `~${hours} hours ${mins} mins`;
         }
     }
 };

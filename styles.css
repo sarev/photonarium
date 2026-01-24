@@ -850,6 +850,12 @@ a:hover {
     color: var(--color-text-muted);
 }
 
+.indexing-eta {
+    margin-left: 0.5rem;
+    color: var(--color-text-muted);
+    font-style: italic;
+}
+
 
 /* ==========================================================================
    SEARCH SCREEN
