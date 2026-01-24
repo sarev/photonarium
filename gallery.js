@@ -318,6 +318,9 @@ const Gallery = {
                 // Re-sort and render
                 this.state.images = this._sortImages(this.state.images);
                 this._renderGrid();
+
+                // Scroll to top to show most similar images first
+                this._scrollToTop();
             }
         } catch (error) {
             console.error('Failed to load content similarities:', error);
@@ -477,6 +480,20 @@ const Gallery = {
         }
 
         this._loadImages(); // Reload and apply new filter
+
+        // Scroll to top when filter changes
+        this._scrollToTop();
+    },
+
+    /**
+     * Scrolls the gallery grid to the top.
+     * @private
+     */
+    _scrollToTop() {
+        const container = this._els.grid?.closest('.gallery-container');
+        if (container) {
+            container.scrollTop = 0;
+        }
     },
 
     /**

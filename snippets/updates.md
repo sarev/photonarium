@@ -40,7 +40,7 @@ We should support ctrl-click and shift-click selection models, as per how Window
 
 The similarity sliders for the filters have loose on the left, and strict on the right. For the duplicate finder screen, the slider has exact on the left, and related on the right. Can we reverse the order of the duplicate finder slider so that it's logically consistent with the filter sliders?
 
-## Close icon
+## Close icon - DONE
 
 In the full-screen view, I'd like a small close icon overlay that fades after a couple of seconds (as per the image name at the bottom) but reappears (briefly) when the user interacts with the photo (moves mouse, zooms, pans, presses a key, taps/clicks, etc.). It should be reasonably discrete, but not so much it'd be missed.
 
