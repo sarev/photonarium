@@ -105,12 +105,14 @@ const Duplicates = {
      * @property {Object<number, string>} statusCache - Cached status by similarity level
      * @property {Object<number, string>} epochCache - Cached epoch by similarity level
      * @property {number} currentLevel - Current similarity level (0-3)
-     * @property {Array<Object>} groups - Current duplicate groups for display
+     * @property {Array<Object>} groups - Current duplicate groups for display (filtered)
+     * @property {Array<Object>} allGroups - All groups before min size filtering
      * @property {string} currentStatus - Status of current level ('pending', 'computing', 'done')
      * @property {number} scrollTop - Saved scroll position
      * @property {boolean} needsRefresh - Whether data needs to reload
      * @property {string} sortMode - Current sort mode: 'size' or 'semantic'
      * @property {string} semanticQuery - Current semantic query for sorting
+     * @property {number} minGroupSize - Minimum group size to display
      */
     state: {
         groupCache: {},
@@ -118,11 +120,13 @@ const Duplicates = {
         epochCache: {},
         currentLevel: 0,
         groups: [],
+        allGroups: [],
         currentStatus: 'pending',
         scrollTop: 0,
         needsRefresh: true,
         sortMode: 'size',
-        semanticQuery: ''
+        semanticQuery: '',
+        minGroupSize: 2
     },
 
     /**
@@ -165,7 +169,8 @@ const Duplicates = {
             btnLarger: App.$('btn-dup-thumb-larger'),
             btnSortSize: App.$('btn-dup-sort-size'),
             btnSortSemantic: App.$('btn-dup-sort-semantic'),
-            semanticQuery: App.$('dup-semantic-query')
+            semanticQuery: App.$('dup-semantic-query'),
+            minGroupSize: App.$('dup-min-group-size')
         };
 
         // Bind events
@@ -196,6 +201,9 @@ const Duplicates = {
         this._els.btnSortSemantic.classList.toggle('active', this.state.sortMode === 'semantic');
         this._els.semanticQuery.disabled = (this.state.sortMode !== 'semantic');
         this._els.semanticQuery.value = this.state.semanticQuery;
+
+        // Sync min group size dropdown
+        this._els.minGroupSize.value = String(this.state.minGroupSize);
 
         // Load data if needed
         if (this.state.needsRefresh) {
@@ -245,6 +253,9 @@ const Duplicates = {
             }
         });
 
+        // Min group size dropdown
+        this._els.minGroupSize.addEventListener('change', () => this._onMinGroupSizeChange());
+
         // Grid click events (delegated)
         this._els.grid.addEventListener('dblclick', (e) => this._handleDoubleClick(e));
     },
@@ -262,6 +273,8 @@ const Duplicates = {
             this.state.needsRefresh = true;
             this.state.groupCache = {};
             this.state.epochCache = {};
+            this.state.allGroups = [];
+            this.state.groups = [];
         });
     },
 
@@ -528,6 +541,8 @@ const Duplicates = {
         this.state.groupCache = {};
         this.state.statusCache = {};
         this.state.epochCache = {};
+        this.state.allGroups = [];
+        this.state.groups = [];
     }
 };
 
@@ -547,11 +562,11 @@ Duplicates._loadGroups = async function() {
 
     try {
         const { groups, status } = await this._getGroupsForLevel(this.state.currentLevel);
-        this.state.groups = groups;
+        this.state.allGroups = groups;
         this.state.currentStatus = status;
         this.state.needsRefresh = false;
 
-        // Apply current sort mode
+        // Apply current sort mode (also applies min group size filter)
         await this._applySortOrder();
 
         // If still computing, poll for updates
@@ -618,7 +633,7 @@ Duplicates._getGroupsForLevel = async function(level) {
  * @private
  */
 Duplicates._setLevel = async function(level) {
-    if (level === this.state.currentLevel && this.state.groups.length > 0 && this.state.currentStatus === 'done') {
+    if (level === this.state.currentLevel && this.state.allGroups.length > 0 && this.state.currentStatus === 'done') {
         return;
     }
 
@@ -626,10 +641,10 @@ Duplicates._setLevel = async function(level) {
 
     try {
         const { groups, status } = await this._getGroupsForLevel(level);
-        this.state.groups = groups;
+        this.state.allGroups = groups;
         this.state.currentStatus = status;
 
-        // Apply current sort mode
+        // Apply current sort mode (also applies min group size filter)
         await this._applySortOrder();
 
         // If still computing, poll for updates
@@ -660,8 +675,9 @@ Duplicates._scheduleStatusPoll = function(level) {
 
         try {
             const { groups, status } = await this._getGroupsForLevel(level);
-            this.state.groups = groups;
+            this.state.allGroups = groups;
             this.state.currentStatus = status;
+            this._applyMinGroupSizeFilter();
             this._renderGroups();
 
             // Continue polling if still not done
@@ -726,11 +742,36 @@ Duplicates._onSemanticQueryChange = function() {
 };
 
 /**
+ * Handles changes to the min group size dropdown.
+ * @private
+ */
+Duplicates._onMinGroupSizeChange = function() {
+    const size = parseInt(this._els.minGroupSize.value, 10);
+
+    if (size === this.state.minGroupSize) return;
+
+    this.state.minGroupSize = size;
+    this._applyMinGroupSizeFilter();
+    this._renderGroups();
+};
+
+/**
+ * Applies the min group size filter to allGroups and stores result in groups.
+ * @private
+ */
+Duplicates._applyMinGroupSizeFilter = function() {
+    const minSize = this.state.minGroupSize;
+    this.state.groups = this.state.allGroups.filter(g => g.count >= minSize);
+};
+
+/**
  * Sorts groups by size (count) in descending order.
+ * Sorts allGroups and re-applies min size filter.
  * @private
  */
 Duplicates._sortGroupsBySize = function() {
-    this.state.groups.sort((a, b) => b.count - a.count);
+    this.state.allGroups.sort((a, b) => b.count - a.count);
+    this._applyMinGroupSizeFilter();
 };
 
 /**
@@ -749,14 +790,15 @@ Duplicates._applySortOrder = async function() {
 /**
  * Applies semantic sorting based on the current query.
  * Fetches similarity scores from the backend and reorders groups.
+ * Sorts allGroups and re-applies min size filter.
  * @private
  */
 Duplicates._applySemanticSort = async function() {
     const query = this.state.semanticQuery;
-    if (!query || this.state.groups.length === 0) return;
+    if (!query || this.state.allGroups.length === 0) return;
 
     // Get the best image ID from each group for similarity comparison
-    const groupImageIds = this.state.groups.map(g => ({
+    const groupImageIds = this.state.allGroups.map(g => ({
         group_hash: g.group_hash,
         image_id: g.best_image?.id
     })).filter(g => g.image_id);
@@ -778,13 +820,15 @@ Duplicates._applySemanticSort = async function() {
                 response.scores.map(s => [s.image_id, s.score])
             );
 
-            // Sort groups by score (descending)
-            this.state.groups.sort((a, b) => {
+            // Sort allGroups by score (descending)
+            this.state.allGroups.sort((a, b) => {
                 const scoreA = scoreMap.get(a.best_image?.id) || 0;
                 const scoreB = scoreMap.get(b.best_image?.id) || 0;
                 return scoreB - scoreA;
             });
 
+            // Re-apply min size filter and render
+            this._applyMinGroupSizeFilter();
             this._renderGroups();
         }
     } catch (err) {

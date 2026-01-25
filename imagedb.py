@@ -282,6 +282,14 @@ CREATE TABLE IF NOT EXISTS migrations (
 )
 """
 
+# SQL schema for storing app metadata (key-value pairs)
+_SQL_CREATE_METADATA = """
+CREATE TABLE IF NOT EXISTS metadata (
+    key         TEXT PRIMARY KEY,
+    value       TEXT NOT NULL
+)
+"""
+
 # Index definitions for performance
 _SQL_CREATE_INDEXES = [
     "CREATE INDEX IF NOT EXISTS idx_images_path ON images(path)",
@@ -340,6 +348,7 @@ def init_database(db_path: Path | str) -> sqlite3.Connection:
     conn.execute(_SQL_CREATE_IMAGES)
     conn.execute(_SQL_CREATE_DUPLICATE_GROUPS)
     conn.execute(_SQL_CREATE_MIGRATIONS)
+    conn.execute(_SQL_CREATE_METADATA)
 
     # Run migrations for existing databases (must run BEFORE indexes)
     for migration_sql in _SQL_MIGRATIONS:
@@ -686,7 +695,8 @@ def get_all_images(
         cursor = conn.execute("""
             SELECT id, path, basename, size, width, height, timestamp,
                    checksum, perceptual_hash, laplacian_var, lossless,
-                   description, rating, deleted, created_at, updated_at
+                   description, rating, deleted, created_at, updated_at,
+                   mtime
             FROM images
             ORDER BY timestamp DESC, path ASC
         """)
@@ -694,7 +704,8 @@ def get_all_images(
         cursor = conn.execute("""
             SELECT id, path, basename, size, width, height, timestamp,
                    checksum, perceptual_hash, laplacian_var, lossless,
-                   description, rating, deleted, created_at, updated_at
+                   description, rating, deleted, created_at, updated_at,
+                   mtime
             FROM images
             WHERE deleted = 0
             ORDER BY timestamp DESC, path ASC
@@ -807,7 +818,8 @@ def get_image(conn: sqlite3.Connection, image_id: str) -> dict[str, Any] | None:
     cursor = conn.execute("""
         SELECT id, path, basename, size, width, height, timestamp,
                checksum, perceptual_hash, laplacian_var, lossless,
-               description, rating, deleted, created_at, updated_at
+               description, rating, deleted, created_at, updated_at,
+               mtime
         FROM images
         WHERE id = ?
     """, (image_id,))
@@ -830,7 +842,8 @@ def get_image_by_path(conn: sqlite3.Connection, path: Path | str) -> dict[str, A
     cursor = conn.execute("""
         SELECT id, path, basename, size, width, height, timestamp,
                checksum, perceptual_hash, laplacian_var, lossless,
-               description, rating, embedding, deleted, created_at, updated_at
+               description, rating, embedding, deleted, created_at, updated_at,
+               mtime
         FROM images
         WHERE path = ?
     """, (path_str,))
@@ -1620,11 +1633,12 @@ class IngestionThread(threading.Thread):
             # Check if mtime is missing (pre-migration image) - need to backfill
             if existing_mtime is None and existing['size'] == current_size:
                 # Size matches but no mtime stored - just update mtime without full re-process
+                # NOTE: Don't update updated_at here - mtime backfill is not a content change
                 logger.debug(f'Backfilling mtime for: {path}')
                 with self._db_lock:
                     self.conn.execute(
-                        'UPDATE images SET mtime = ?, updated_at = ? WHERE id = ?',
-                        (current_mtime, datetime.now().isoformat(), existing['id'])
+                        'UPDATE images SET mtime = ? WHERE id = ?',
+                        (current_mtime, existing['id'])
                     )
                     self.conn.commit()
                 existing_mtime = current_mtime  # Continue with normal checks
@@ -3176,10 +3190,44 @@ def get_duplicate_groups_lightweight(
     return groups
 
 
+def get_metadata(conn: sqlite3.Connection, key: str) -> str | None:
+    """Get a metadata value by key.
+
+    Args:
+        conn: Database connection.
+        key: Metadata key.
+
+    Returns:
+        The value, or None if not found.
+    """
+    cursor = conn.execute('SELECT value FROM metadata WHERE key = ?', (key,))
+    row = cursor.fetchone()
+    if row:
+        return row['value']
+    return None
+
+
+def set_metadata(conn: sqlite3.Connection, key: str, value: str) -> None:
+    """Set a metadata value.
+
+    Args:
+        conn: Database connection.
+        key: Metadata key.
+        value: Value to store.
+    """
+    conn.execute(
+        'INSERT OR REPLACE INTO metadata (key, value) VALUES (?, ?)',
+        (key, value)
+    )
+    conn.commit()
+
+
 def get_duplicate_epoch(conn: sqlite3.Connection) -> str:
     """Get the current epoch timestamp for duplicate groups.
 
-    The epoch changes whenever duplicate groups are recomputed.
+    The epoch is stored in the metadata table and is updated after
+    each duplicate computation completes. This ensures the epoch is
+    tracked even when there are no duplicate groups.
 
     Args:
         conn: Database connection.
@@ -3188,14 +3236,18 @@ def get_duplicate_epoch(conn: sqlite3.Connection) -> str:
         ISO format timestamp string of the last duplicate computation,
         or empty string if never computed.
     """
-    cursor = conn.execute("""
-        SELECT MAX(updated_at) as epoch
-        FROM duplicate_groups
-    """)
-    row = cursor.fetchone()
-    if row and row['epoch']:
-        return row['epoch']
-    return ''
+    epoch = get_metadata(conn, 'duplicate_epoch')
+    return epoch if epoch else ''
+
+
+def set_duplicate_epoch(conn: sqlite3.Connection, epoch: str) -> None:
+    """Set the duplicate computation epoch.
+
+    Args:
+        conn: Database connection.
+        epoch: ISO format timestamp string.
+    """
+    set_metadata(conn, 'duplicate_epoch', epoch)
 
 
 # =============================================================================
@@ -3829,6 +3881,11 @@ class ImageDatabase:
         if missing_embeddings:
             logger.info(f'        {len(missing_embeddings)} images queued for embedding')
 
+        # Run one-time migrations BEFORE starting threads
+        # (duplicate epoch migration must complete before completion callback fires)
+        self._migrate_recalculate_timestamps()
+        self._migrate_duplicate_epoch_to_metadata()
+
         # Steps 6-7: Start background threads
         self.start_threads()
 
@@ -3837,9 +3894,6 @@ class ImageDatabase:
             logger.info('Pre-loading OpenCLIP model...')
             # Access the clip_model property to trigger loading
             _ = self._embedding_thread.clip_model
-
-        # Run one-time migrations
-        self._migrate_recalculate_timestamps()
 
         # Backfill description embeddings for images with descriptions but no embedding
         self._backfill_description_embeddings()
@@ -4025,6 +4079,37 @@ class ImageDatabase:
         self.conn.commit()
         record_migration(self.conn, migration_id)
         logger.info(f'        Fixed {count} images')
+
+    def _migrate_duplicate_epoch_to_metadata(self) -> None:
+        """One-time migration to move duplicate epoch from duplicate_groups to metadata table.
+
+        Previously, the epoch was derived from MAX(duplicate_groups.updated_at), which
+        fails when there are no duplicate groups (returns NULL). This migration transfers
+        the epoch to the metadata table where it's tracked independently.
+        """
+        migration_id = 'duplicate_epoch_to_metadata_v1'
+
+        if has_migration_run(self.conn, migration_id):
+            return
+
+        # Check if we already have an epoch in metadata (shouldn't happen, but be safe)
+        existing_epoch = get_metadata(self.conn, 'duplicate_epoch')
+        if existing_epoch:
+            record_migration(self.conn, migration_id)
+            return
+
+        # Get the old epoch from duplicate_groups (if any groups exist)
+        cursor = self.conn.execute('SELECT MAX(updated_at) as epoch FROM duplicate_groups')
+        row = cursor.fetchone()
+        old_epoch = row['epoch'] if row and row['epoch'] else None
+
+        if old_epoch:
+            logger.info(f'Migrating duplicate epoch to metadata table: {old_epoch}')
+            set_metadata(self.conn, 'duplicate_epoch', old_epoch)
+        else:
+            logger.debug('No existing duplicate epoch to migrate')
+
+        record_migration(self.conn, migration_id)
 
     def _rescan_all_folders(self) -> None:
         """Rescan all registered folders for new/changed/deleted files."""
@@ -4798,6 +4883,10 @@ class ImageDatabase:
 
             with self._duplicate_status_lock:
                 self._duplicate_status[level] = 'done'
+
+        # Update the epoch to mark this computation as complete
+        with self._db_lock:
+            set_duplicate_epoch(self.conn, datetime.now().isoformat())
 
         total = sum(results.values())
         logger.info(f'Duplicate computation complete: {total} groups from {dirty_count} dirty images')
