@@ -1163,6 +1163,7 @@ const App = {
         this._bindBtn('btn-thumb-smaller', () => this.setThumbnailSize(this.state.thumbnailSize - 50));
         this._bindBtn('btn-thumb-larger', () => this.setThumbnailSize(this.state.thumbnailSize + 50));
         this._bindBtn('btn-fullscreen', () => this._handleFullscreenClick());
+        this._bindBtn('btn-reveal-folder', () => this._handleRevealFolderClick());
         this._bindBtn('btn-rotate-ccw', () => this._handleRotateClick('ccw'));
         this._bindBtn('btn-rotate-cw', () => this._handleRotateClick('cw'));
         this._bindBtn('btn-select-all', () => this.emit('selectAll'));
@@ -1222,6 +1223,23 @@ const App = {
     _handleFullscreenClick() {
         if (this.state.selectedImages.length === 1) {
             this.showFullscreen(this.state.selectedImages[0]);
+        }
+    },
+
+    /**
+     * Handles reveal folder button click.
+     * Opens the containing folder for the selected image.
+     * @private
+     */
+    async _handleRevealFolderClick() {
+        if (this.state.selectedImages.length === 1) {
+            const imageId = this.state.selectedImages[0];
+            try {
+                await this.apiPost(`/images/${imageId}/reveal`, {});
+            } catch (error) {
+                console.error('Failed to open folder:', error);
+                this.showError('Failed to open containing folder.');
+            }
         }
     },
 
@@ -1291,6 +1309,12 @@ const App = {
         const fullscreenBtn = document.getElementById('btn-fullscreen');
         if (fullscreenBtn) {
             fullscreenBtn.disabled = selCount !== 1;
+        }
+
+        // Reveal folder button: enabled only when exactly one image selected
+        const revealBtn = document.getElementById('btn-reveal-folder');
+        if (revealBtn) {
+            revealBtn.disabled = selCount !== 1;
         }
 
         // Rotate buttons: enabled when at least one image selected

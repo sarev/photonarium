@@ -59,6 +59,7 @@ CONFIG_PATH = os.environ.get('IMAGINARY_CONFIG', None)
 # =============================================================================
 
 db: ImageDatabase | None = None
+_skip_scan: bool = False  # Set via command-line args in __main__
 
 
 def get_db() -> ImageDatabase:
@@ -71,6 +72,7 @@ def get_db() -> ImageDatabase:
             thumbnail_dir=THUMBNAIL_CACHE_DIR,
             config_path=CONFIG_PATH,
             auto_start=True,
+            skip_scan=_skip_scan,
         )
         register_signal_handlers(db)
         logger.info('ImageDatabase initialised')
@@ -312,6 +314,49 @@ def get_full_image(image_id):
         return error_response('Image file not found on disk', 404)
 
     return send_file(path)
+
+
+@app.route('/api/images/<image_id>/reveal', methods=['POST'])
+def reveal_image(image_id):
+    """Open the containing folder and select the image file.
+
+    Uses platform-specific commands to reveal the image in the file manager:
+    - Windows: explorer /select
+    - macOS: open -R
+    - Linux: xdg-open (opens folder only)
+
+    Args:
+        image_id: The unique identifier of the image.
+
+    Returns:
+        Success response, or 404 if image not found.
+    """
+    import subprocess
+    import sys
+
+    image = get_db().get_image(image_id)
+    if image is None:
+        return error_response('Image not found', 404)
+
+    path = image['path']
+    if not os.path.exists(path):
+        return error_response('Image file not found on disk', 404)
+
+    try:
+        if sys.platform == 'win32':
+            # Windows: explorer /select highlights the file
+            subprocess.run(['explorer', '/select,', path], check=False)
+        elif sys.platform == 'darwin':
+            # macOS: open -R reveals file in Finder
+            subprocess.run(['open', '-R', path], check=True)
+        else:
+            # Linux: open the containing folder (no file selection)
+            folder = os.path.dirname(path)
+            subprocess.run(['xdg-open', folder], check=True)
+        return success_response(message='Folder opened')
+    except Exception as e:
+        logger.exception('Failed to open folder')
+        return error_response(f'Failed to open folder: {str(e)}', 500)
 
 
 @app.route('/api/images/rotate', methods=['POST'])
@@ -759,37 +804,20 @@ if __name__ == '__main__':
 
     parser = argparse.ArgumentParser(description='Imaginary - Image Catalogue Server')
     parser.add_argument(
-        '--no-scan',
+        '-n', '--no-scan',
         action='store_true',
         help='Skip the startup folder scan (faster startup when nothing changed)'
     )
     parser.add_argument(
-        '--port',
+        '-p', '--port',
         type=int,
         default=5000,
         help='Port to run the server on (default: 5000)'
     )
     args = parser.parse_args()
 
-    # Store skip_scan flag for get_db()
+    # Set module-level flag before initializing database
     _skip_scan = args.no_scan
-
-    # Patch get_db to use the flag
-    _original_get_db = get_db
-    def get_db() -> ImageDatabase:
-        global db
-        if db is None:
-            logger.info('Initializing ImageDatabase...')
-            db = ImageDatabase(
-                db_path=DATABASE_PATH,
-                thumbnail_dir=THUMBNAIL_CACHE_DIR,
-                config_path=CONFIG_PATH,
-                auto_start=True,
-                skip_scan=_skip_scan,
-            )
-            register_signal_handlers(db)
-            logger.info('ImageDatabase initialised')
-        return db
 
     # Initialise database before starting server
     get_db()
