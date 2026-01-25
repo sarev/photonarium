@@ -3134,6 +3134,12 @@ def get_duplicate_groups_lightweight(
     """
     # Get groups with their counts and best image in a single efficient query
     # Uses window function to rank images within each group
+    # Best image selection criteria (in order of priority):
+    # 1. Highest resolution (width * height)
+    # 2. Lossless format preferred
+    # 3. Largest file size
+    # 4. Best focus (highest Laplacian variance)
+    # 5. First added (lowest ID as tiebreaker)
     cursor = conn.execute("""
         WITH ranked AS (
             SELECT
@@ -3142,14 +3148,17 @@ def get_duplicate_groups_lightweight(
                 i.basename,
                 i.width,
                 i.height,
+                i.size,
                 i.laplacian_var,
                 i.lossless,
                 ROW_NUMBER() OVER (
                     PARTITION BY dg.group_hash
                     ORDER BY
                         (i.width * i.height) DESC,
+                        i.lossless DESC,
+                        i.size DESC,
                         i.laplacian_var DESC,
-                        i.lossless DESC
+                        i.id ASC
                 ) as rank
             FROM duplicate_groups dg
             JOIN images i ON i.id = dg.image_id
