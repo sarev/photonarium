@@ -2213,9 +2213,8 @@ def _insert_duplicate_group(
 def get_dirty_image_ids(conn: sqlite3.Connection) -> list[str]:
     """Get IDs of images that need duplicate checking.
 
-    An image is "dirty" if:
-    - duplicate_checked_at is NULL (never checked), OR
-    - duplicate_checked_at < updated_at (modified since last check)
+    An image is "dirty" if it was added or modified after the last
+    duplicate computation (i.e., images.updated_at > duplicate_epoch).
 
     Args:
         conn: Database connection.
@@ -2223,38 +2222,20 @@ def get_dirty_image_ids(conn: sqlite3.Connection) -> list[str]:
     Returns:
         List of image IDs that need duplicate checking.
     """
+    # Get the epoch from duplicate groups
+    epoch = get_duplicate_epoch(conn)
+
+    if not epoch:
+        # Never computed - all images need checking
+        cursor = conn.execute('SELECT id FROM images WHERE deleted = 0')
+        return [row['id'] for row in cursor.fetchall()]
+
+    # Images modified after last duplicate computation
     cursor = conn.execute("""
         SELECT id FROM images
-        WHERE deleted = 0 AND (
-            duplicate_checked_at IS NULL OR
-            duplicate_checked_at < updated_at
-        )
-    """)
+        WHERE deleted = 0 AND updated_at > ?
+    """, (epoch,))
     return [row['id'] for row in cursor.fetchall()]
-
-
-def mark_images_duplicate_checked(
-    conn: sqlite3.Connection,
-    image_ids: list[str],
-) -> None:
-    """Mark images as having been checked for duplicates.
-
-    Args:
-        conn: Database connection.
-        image_ids: List of image IDs to mark.
-    """
-    if not image_ids:
-        return
-    now = datetime.now().isoformat()
-    # Use batched updates for efficiency
-    for i in range(0, len(image_ids), 500):
-        batch = image_ids[i:i + 500]
-        placeholders = ','.join('?' * len(batch))
-        conn.execute(
-            f'UPDATE images SET duplicate_checked_at = ? WHERE id IN ({placeholders})',
-            [now] + batch
-        )
-    conn.commit()
 
 
 def get_group_count(conn: sqlite3.Connection, level: int) -> int:
@@ -3742,6 +3723,7 @@ class ImageDatabase:
         config_path: Path | str | None = None,
         auto_start: bool = True,
         preload_model: bool = True,
+        skip_scan: bool = False,
     ):
         """Initialise the image database.
 
@@ -3753,8 +3735,11 @@ class ImageDatabase:
             preload_model: If True, load the OpenCLIP model during startup
                 instead of lazily on first use. This provides better console
                 feedback during first-time setup.
+            skip_scan: If True, skip the folder scanning step on startup.
+                Useful for faster startup when you know nothing has changed.
         """
         self._preload_model = preload_model
+        self._skip_scan = skip_scan
         self.db_path = Path(db_path)
         self.thumbnail_dir = Path(thumbnail_dir)
 
@@ -3811,13 +3796,17 @@ class ImageDatabase:
         self.thumbnail_dir.mkdir(parents=True, exist_ok=True)
 
         if auto_start:
-            self.startup()
+            self.startup(skip_scan=self._skip_scan)
 
-    def startup(self) -> None:
+    def startup(self, skip_scan: bool = False) -> None:
         """Run the startup sequence.
 
         Steps 3-7 of the startup sequence. Call this if auto_start=False
         was passed to __init__.
+
+        Args:
+            skip_scan: If True, skip the folder scanning step. Useful for
+                faster startup when you know nothing has changed.
         """
         # Step 3: Verify registered folders exist
         logger.info('[3/5] Verifying registered folders...')
@@ -3826,8 +3815,11 @@ class ImageDatabase:
             logger.warning(f'        Folder missing: {folder}')
 
         # Step 4: Rescan all registered directories
-        logger.info('[4/5] Scanning registered folders...')
-        self._rescan_all_folders()
+        if skip_scan:
+            logger.info('[4/5] Skipping folder scan (--no-scan)')
+        else:
+            logger.info('[4/5] Scanning registered folders...')
+            self._rescan_all_folders()
 
         # Step 5: Queue images with missing embeddings
         logger.info('[5/5] Starting background threads...')
@@ -3848,7 +3840,6 @@ class ImageDatabase:
 
         # Run one-time migrations
         self._migrate_recalculate_timestamps()
-        self._migrate_mark_existing_duplicate_checked()
 
         # Backfill description embeddings for images with descriptions but no embedding
         self._backfill_description_embeddings()
@@ -3991,6 +3982,49 @@ class ImageDatabase:
         self.conn.commit()
         record_migration(self.conn, migration_id)
         logger.info(f'        Marked {count} images as duplicate-checked')
+
+    def _migrate_fix_duplicate_checked_v2(self) -> None:
+        """Fix duplicate_checked_at to match updated_at for existing images.
+
+        The v1 migration incorrectly set duplicate_checked_at to the duplicate
+        epoch, which may be older than the image's updated_at, causing all
+        images to appear dirty. This migration fixes that by setting
+        duplicate_checked_at = updated_at for all images that appear dirty.
+        """
+        migration_id = 'fix_duplicate_checked_v2'
+
+        if has_migration_run(self.conn, migration_id):
+            return
+
+        # Count images that would be considered dirty
+        cursor = self.conn.execute("""
+            SELECT COUNT(*) as cnt FROM images
+            WHERE deleted = 0 AND (
+                duplicate_checked_at IS NULL OR
+                duplicate_checked_at < updated_at
+            )
+        """)
+        count = cursor.fetchone()['cnt']
+
+        if count == 0:
+            record_migration(self.conn, migration_id)
+            return
+
+        logger.info(f'Fixing duplicate_checked_at for {count} images (one-time migration)...')
+
+        # Set duplicate_checked_at = updated_at for all dirty images
+        self.conn.execute("""
+            UPDATE images
+            SET duplicate_checked_at = updated_at
+            WHERE deleted = 0 AND (
+                duplicate_checked_at IS NULL OR
+                duplicate_checked_at < updated_at
+            )
+        """)
+
+        self.conn.commit()
+        record_migration(self.conn, migration_id)
+        logger.info(f'        Fixed {count} images')
 
     def _rescan_all_folders(self) -> None:
         """Rescan all registered folders for new/changed/deleted files."""
@@ -4764,9 +4798,6 @@ class ImageDatabase:
 
             with self._duplicate_status_lock:
                 self._duplicate_status[level] = 'done'
-
-        # Mark all dirty images as checked
-        mark_images_duplicate_checked(self.conn, dirty_ids)
 
         total = sum(results.values())
         logger.info(f'Duplicate computation complete: {total} groups from {dirty_count} dirty images')

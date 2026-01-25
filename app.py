@@ -755,6 +755,42 @@ def internal_error(error):
 # =============================================================================
 
 if __name__ == '__main__':
+    import argparse
+
+    parser = argparse.ArgumentParser(description='Imaginary - Image Catalogue Server')
+    parser.add_argument(
+        '--no-scan',
+        action='store_true',
+        help='Skip the startup folder scan (faster startup when nothing changed)'
+    )
+    parser.add_argument(
+        '--port',
+        type=int,
+        default=5000,
+        help='Port to run the server on (default: 5000)'
+    )
+    args = parser.parse_args()
+
+    # Store skip_scan flag for get_db()
+    _skip_scan = args.no_scan
+
+    # Patch get_db to use the flag
+    _original_get_db = get_db
+    def get_db() -> ImageDatabase:
+        global db
+        if db is None:
+            logger.info('Initializing ImageDatabase...')
+            db = ImageDatabase(
+                db_path=DATABASE_PATH,
+                thumbnail_dir=THUMBNAIL_CACHE_DIR,
+                config_path=CONFIG_PATH,
+                auto_start=True,
+                skip_scan=_skip_scan,
+            )
+            register_signal_handlers(db)
+            logger.info('ImageDatabase initialised')
+        return db
+
     # Initialise database before starting server
     get_db()
 
@@ -762,14 +798,14 @@ if __name__ == '__main__':
     logger.info('=' * 60)
     logger.info('SERVER READY')
     logger.info('=' * 60)
-    logger.info('Open http://localhost:5000 in your browser')
+    logger.info(f'Open http://localhost:{args.port} in your browser')
     logger.info('=' * 60)
 
     # Run development server
     # In production, use a proper WSGI server like gunicorn
     app.run(
         host='0.0.0.0',
-        port=5000,
+        port=args.port,
         debug=False,  # Set to False to avoid reloader issues with threads
         threaded=True,
     )
