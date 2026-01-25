@@ -241,6 +241,7 @@ CREATE TABLE IF NOT EXISTS images (
     perceptual_hash       TEXT,
     laplacian_var         REAL,
     lossless              INTEGER NOT NULL DEFAULT 0,
+    mtime                 REAL,
     description           TEXT NOT NULL DEFAULT '',
     rating                TEXT NOT NULL DEFAULT '',
     embedding             BLOB,
@@ -259,8 +260,6 @@ _SQL_MIGRATIONS = [
     "ALTER TABLE images ADD COLUMN mtime REAL",
     # Add updated_at column for duplicate epoch tracking
     "ALTER TABLE duplicate_groups ADD COLUMN updated_at TEXT",
-    # Track when each image was last included in duplicate computation
-    "ALTER TABLE images ADD COLUMN duplicate_checked_at TEXT",
 ]
 
 # SQL schema for the duplicate_groups table
@@ -270,6 +269,7 @@ CREATE TABLE IF NOT EXISTS duplicate_groups (
     level       INTEGER NOT NULL,
     group_hash  TEXT NOT NULL,
     image_id    TEXT NOT NULL,
+    updated_at  TEXT,
     FOREIGN KEY (image_id) REFERENCES images(id) ON DELETE CASCADE
 )
 """
@@ -1464,6 +1464,7 @@ class IngestionThread(threading.Thread):
         ingestion_queue: queue.Queue[Path],
         embedding_queue: queue.Queue[str],
         stop_event: threading.Event,
+        db_lock: threading.RLock,
         pause_event: threading.Event | None = None,
         num_threads: int = 4,
     ):
@@ -1474,6 +1475,7 @@ class IngestionThread(threading.Thread):
             ingestion_queue: Queue of file paths to process.
             embedding_queue: Queue to add image IDs that need embeddings.
             stop_event: Event to signal thread should stop.
+            db_lock: Shared lock for database access (from ImageDatabase).
             pause_event: Optional event to pause processing (for folder removal).
             num_threads: Number of worker threads for parallel metadata extraction.
         """
@@ -1486,7 +1488,7 @@ class IngestionThread(threading.Thread):
         self.num_threads = max(1, min(16, num_threads))
         self._processed_count = 0
         self._error_count = 0
-        self._db_lock = threading.Lock()
+        self._db_lock = db_lock  # Shared lock from ImageDatabase
         self._pending_count = 0  # Number of items being processed (not just in queue)
         self._pending_lock = threading.Lock()
 
@@ -1978,6 +1980,7 @@ class EmbeddingThread(threading.Thread):
         embedding_queue: queue.Queue[str],
         ingestion_thread: IngestionThread,
         stop_event: threading.Event,
+        db_lock: threading.RLock,
         config: Config | None = None,
         on_complete: callable | None = None,
     ):
@@ -1988,6 +1991,7 @@ class EmbeddingThread(threading.Thread):
             embedding_queue: Queue of image IDs to process.
             ingestion_thread: Reference to ingestion thread (to check if idle).
             stop_event: Event to signal thread should stop.
+            db_lock: Shared lock for database access (from ImageDatabase).
             config: Configuration object. Uses defaults if None.
             on_complete: Optional callback function called when both queues
                 are empty. Used to trigger duplicate group computation.
@@ -1997,6 +2001,7 @@ class EmbeddingThread(threading.Thread):
         self.embedding_queue = embedding_queue
         self.ingestion_thread = ingestion_thread
         self.stop_event = stop_event
+        self._db_lock = db_lock  # Shared lock from ImageDatabase
         self.config = config or get_default_config()
         self.on_complete = on_complete
 
@@ -2105,7 +2110,8 @@ class EmbeddingThread(threading.Thread):
                 if embedding is not None:
                     # Convert to bytes for storage
                     embedding_bytes = embedding.astype(np.float32).tobytes()
-                    update_image_embedding(self.conn, image_id, embedding_bytes)
+                    with self._db_lock:
+                        update_image_embedding(self.conn, image_id, embedding_bytes)
                     self._processed_count += 1
                 else:
                     self._error_count += 1
@@ -3994,92 +4000,6 @@ class ImageDatabase:
         record_migration(self.conn, migration_id)
         logger.info(f'        Updated {updated} image timestamps')
 
-    def _migrate_mark_existing_duplicate_checked(self) -> None:
-        """One-time migration to mark existing images as duplicate-checked.
-
-        When incremental duplicate detection is introduced, existing images
-        would all appear as 'dirty' because their duplicate_checked_at is NULL.
-        This migration sets duplicate_checked_at to the last duplicate computation
-        time for all existing images, so only truly new/modified images are checked.
-        """
-        migration_id = 'mark_duplicate_checked_v1'
-
-        if has_migration_run(self.conn, migration_id):
-            return
-
-        # Get the epoch from existing duplicate groups
-        epoch = get_duplicate_epoch(self.conn)
-
-        if not epoch:
-            # No duplicates computed yet, nothing to migrate
-            record_migration(self.conn, migration_id)
-            return
-
-        # Count images that need updating
-        cursor = self.conn.execute(
-            'SELECT COUNT(*) as cnt FROM images WHERE duplicate_checked_at IS NULL AND deleted = 0'
-        )
-        count = cursor.fetchone()['cnt']
-
-        if count == 0:
-            record_migration(self.conn, migration_id)
-            return
-
-        logger.info(f'Marking {count} existing images as duplicate-checked (one-time migration)...')
-
-        # Set duplicate_checked_at to the epoch for all images
-        self.conn.execute(
-            'UPDATE images SET duplicate_checked_at = ? WHERE duplicate_checked_at IS NULL',
-            (epoch,)
-        )
-
-        self.conn.commit()
-        record_migration(self.conn, migration_id)
-        logger.info(f'        Marked {count} images as duplicate-checked')
-
-    def _migrate_fix_duplicate_checked_v2(self) -> None:
-        """Fix duplicate_checked_at to match updated_at for existing images.
-
-        The v1 migration incorrectly set duplicate_checked_at to the duplicate
-        epoch, which may be older than the image's updated_at, causing all
-        images to appear dirty. This migration fixes that by setting
-        duplicate_checked_at = updated_at for all images that appear dirty.
-        """
-        migration_id = 'fix_duplicate_checked_v2'
-
-        if has_migration_run(self.conn, migration_id):
-            return
-
-        # Count images that would be considered dirty
-        cursor = self.conn.execute("""
-            SELECT COUNT(*) as cnt FROM images
-            WHERE deleted = 0 AND (
-                duplicate_checked_at IS NULL OR
-                duplicate_checked_at < updated_at
-            )
-        """)
-        count = cursor.fetchone()['cnt']
-
-        if count == 0:
-            record_migration(self.conn, migration_id)
-            return
-
-        logger.info(f'Fixing duplicate_checked_at for {count} images (one-time migration)...')
-
-        # Set duplicate_checked_at = updated_at for all dirty images
-        self.conn.execute("""
-            UPDATE images
-            SET duplicate_checked_at = updated_at
-            WHERE deleted = 0 AND (
-                duplicate_checked_at IS NULL OR
-                duplicate_checked_at < updated_at
-            )
-        """)
-
-        self.conn.commit()
-        record_migration(self.conn, migration_id)
-        logger.info(f'        Fixed {count} images')
-
     def _migrate_duplicate_epoch_to_metadata(self) -> None:
         """One-time migration to move duplicate epoch from duplicate_groups to metadata table.
 
@@ -4152,12 +4072,13 @@ class ImageDatabase:
         if missing_paths:
             logger.info(f'Marking {len(missing_paths)} missing images as deleted')
             now = datetime.now().isoformat()
-            for path in missing_paths:
-                self.conn.execute(
-                    'UPDATE images SET deleted = 1, updated_at = ? WHERE path = ? AND deleted = 0',
-                    (now, path)
-                )
-            self.conn.commit()
+            with self._db_lock:
+                for path in missing_paths:
+                    self.conn.execute(
+                        'UPDATE images SET deleted = 1, updated_at = ? WHERE path = ? AND deleted = 0',
+                        (now, path)
+                    )
+                self.conn.commit()
 
         logger.info(f'        Found {len(found_paths)} images')
 
@@ -4180,6 +4101,7 @@ class ImageDatabase:
             ingestion_queue=self._ingestion_queue,
             embedding_queue=self._embedding_queue,
             stop_event=self._stop_event,
+            db_lock=self._db_lock,
             pause_event=self._pause_event,
             num_threads=self.config.indexing_threads,
         )
@@ -4191,6 +4113,7 @@ class ImageDatabase:
             embedding_queue=self._embedding_queue,
             ingestion_thread=self._ingestion_thread,
             stop_event=self._stop_event,
+            db_lock=self._db_lock,
             config=self.config,
             on_complete=on_complete,
         )
@@ -4322,7 +4245,8 @@ class ImageDatabase:
         Returns:
             Folder info dict, or None if already registered.
         """
-        result = add_folder(self.conn, path, self.config)
+        with self._db_lock:
+            result = add_folder(self.conn, path, self.config)
         if result is not None:
             # Queue images for ingestion
             for image_path in result['new_images']:
@@ -4339,7 +4263,8 @@ class ImageDatabase:
         try:
             # Clear ingestion queue of paths from this folder
             self._clear_folder_from_queue(path)
-            result = remove_folder(self.conn, path)
+            with self._db_lock:
+                result = remove_folder(self.conn, path)
             if result:
                 emit_folder_removed(self.event_queue, path)
             return result
@@ -4399,7 +4324,7 @@ class ImageDatabase:
         if 'description' in data:
             description = data['description'].strip() if data['description'] else ''
             if description:
-                # Compute embedding for the new description
+                # Compute embedding for the new description (outside lock - CPU intensive)
                 try:
                     embedding = self._get_clip_model().encode_text(description)
                     data['description_embedding'] = embedding.astype(np.float32).tobytes()
@@ -4409,11 +4334,13 @@ class ImageDatabase:
                 # Clear description embedding if description is empty
                 data['description_embedding'] = None
 
-        return update_image(self.conn, image_id, data)
+        with self._db_lock:
+            return update_image(self.conn, image_id, data)
 
     def delete_image(self, image_id: str, from_disk: bool = False) -> bool:
         """Delete an image (soft delete or from disk)."""
-        return delete_image(self.conn, image_id, from_disk)
+        with self._db_lock:
+            return delete_image(self.conn, image_id, from_disk)
 
     def rotate_images(
         self,
