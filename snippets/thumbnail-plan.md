@@ -421,16 +421,16 @@ ThumbnailLoader then:
 
 ### Phase 2: Implement VirtualGrid
 
-- [ ] Implement `VirtualGrid.create(config)` factory function
-- [ ] Port spacer element creation from Gallery
-- [ ] Port scroll handler with RAF throttling
-- [ ] Port dimension calculation (`_calculateVirtualDimensions`)
-- [ ] Port `_updateVisibleItems` core logic
-- [ ] Port `_insertItemAtPosition`
-- [ ] Port resize handler
-- [ ] Implement `render()`, `refresh()`, `scrollTo()`, `scrollToId()`, `getVisibleRange()`, `getItemsPerRow()`, `destroy()`
-- [ ] Add callback hooks: `onItemVisible`, `onItemRemoved`
-- [ ] Integrate ThumbnailLoader priority calls into scroll handling
+- [x] Implement `VirtualGrid.create(config)` factory function
+- [x] Port spacer element creation from Gallery
+- [x] Port scroll handler with RAF throttling
+- [x] Port dimension calculation (`_calculateVirtualDimensions`)
+- [x] Port `_updateVisibleItems` core logic
+- [x] Port `_insertItemAtPosition`
+- [x] Port resize handler
+- [x] Implement `render()`, `refresh()`, `scrollTo()`, `scrollToId()`, `getVisibleRange()`, `getItemsPerRow()`, `destroy()`
+- [x] Add callback hooks: `onItemVisible`, `onItemRemoved`
+- [x] Integrate ThumbnailLoader priority calls into scroll handling
 
 ### Phase 3: Implement GridSelection
 

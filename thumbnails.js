@@ -378,3 +378,502 @@ const ThumbnailLoader = {
 
 // Make ThumbnailLoader available globally
 window.ThumbnailLoader = ThumbnailLoader;
+
+
+/* ==========================================================================
+   VIRTUAL GRID
+
+   Reusable virtual scrolling infrastructure for thumbnail grids.
+   Only renders visible items plus a buffer for smooth scrolling.
+   ========================================================================== */
+
+/**
+ * Factory for creating virtual scrolling grid instances.
+ *
+ * @namespace
+ */
+const VirtualGrid = {
+    /**
+     * Creates a new VirtualGrid instance.
+     *
+     * @param {Object} config - Configuration object
+     * @param {HTMLElement} config.container - Scroll container element
+     * @param {HTMLElement} config.grid - Grid element for items (can be same as container)
+     * @param {Function} config.getItems - Returns current data array
+     * @param {Function} config.getItemId - Extracts unique ID from an item
+     * @param {Function} config.createItem - Creates DOM element for an item (item, index) => HTMLElement
+     * @param {Function} [config.onItemVisible] - Called when item enters render zone (item, element)
+     * @param {Function} [config.onItemRemoved] - Called when item leaves retain zone (id)
+     * @param {Function} [config.getThumbnailId] - Gets thumbnail imageId from item for ThumbnailLoader (item) => string
+     * @param {string} [config.itemSelector='.grid-item'] - CSS selector for items
+     * @param {number} [config.bufferRows=3] - Extra rows to pre-render above/below viewport
+     * @param {number} [config.retainRows=30] - Extra rows to keep cached once rendered
+     * @param {number} [config.gap=16] - Gap between items in pixels
+     * @param {number} [config.padding=16] - Container padding in pixels
+     * @param {Function} [config.getItemHeight] - Custom item height calculator (thumbSize, itemWidth) => height
+     * @returns {Object} VirtualGrid instance
+     */
+    create(config) {
+        const instance = {
+            // Configuration
+            _config: {
+                container: config.container,
+                grid: config.grid || config.container,
+                getItems: config.getItems,
+                getItemId: config.getItemId,
+                createItem: config.createItem,
+                onItemVisible: config.onItemVisible || null,
+                onItemRemoved: config.onItemRemoved || null,
+                getThumbnailId: config.getThumbnailId || null,
+                itemSelector: config.itemSelector || '.grid-item',
+                bufferRows: config.bufferRows ?? 3,
+                retainRows: config.retainRows ?? 30,
+                gap: config.gap ?? 16,
+                padding: config.padding ?? 16,
+                getItemHeight: config.getItemHeight || null
+            },
+
+            // Virtual scroll state
+            _state: {
+                itemHeight: 0,
+                itemWidth: 0,
+                itemsPerRow: 0,
+                visibleRows: 0,
+                totalHeight: 0,
+                startIndex: -1,
+                endIndex: -1,
+                renderedItems: new Map(),  // id -> HTMLElement
+                scrollRAF: null
+            },
+
+            // DOM elements
+            _topSpacer: null,
+            _bottomSpacer: null,
+            _scrollHandler: null,
+            _resizeHandler: null,
+            _bound: false,
+
+            /**
+             * Initializes the virtual grid (creates spacers, binds handlers).
+             */
+            _init() {
+                // Create spacer elements
+                this._topSpacer = document.createElement('div');
+                this._topSpacer.className = 'virtual-spacer';
+                this._bottomSpacer = document.createElement('div');
+                this._bottomSpacer.className = 'virtual-spacer';
+
+                // Bind handlers
+                this._scrollHandler = this._onScroll.bind(this);
+                this._resizeHandler = App.debounce(() => {
+                    if (this._bound && this._config.getItems().length > 0) {
+                        this._calculateDimensions();
+                        this._state.startIndex = -1;
+                        this._state.endIndex = -1;
+                        this._updateVisibleItems(this._config.container.scrollTop);
+                    }
+                }, 100);
+
+                window.addEventListener('resize', this._resizeHandler);
+            },
+
+            /**
+             * Handles scroll events with RAF throttling.
+             * @param {Event} e - Scroll event
+             * @private
+             */
+            _onScroll(e) {
+                if (this._state.scrollRAF) return;
+                const scrollTop = e.target.scrollTop;
+                this._state.scrollRAF = requestAnimationFrame(() => {
+                    this._state.scrollRAF = null;
+                    this._updateVisibleItems(scrollTop);
+                });
+            },
+
+            /**
+             * Calculates dimensions for virtual scrolling.
+             * @private
+             */
+            _calculateDimensions() {
+                const container = this._config.container;
+                const thumbSize = App.getThumbnailSize();
+                const gap = this._config.gap;
+                const padding = this._config.padding;
+
+                // Calculate available width
+                const availableWidth = container.clientWidth - padding * 2;
+
+                // Calculate items per row (CSS grid auto-fill behavior)
+                const minItemWidth = thumbSize + 16; // Item includes some padding
+                this._state.itemsPerRow = Math.max(1, Math.floor((availableWidth + gap) / (minItemWidth + gap)));
+
+                // Actual item width when using 1fr
+                const actualItemWidth = (availableWidth - gap * (this._state.itemsPerRow - 1)) / this._state.itemsPerRow;
+                this._state.itemWidth = actualItemWidth;
+
+                // Item height - use custom calculator if provided
+                if (this._config.getItemHeight) {
+                    this._state.itemHeight = this._config.getItemHeight(thumbSize, actualItemWidth) + gap;
+                } else {
+                    // Default: square thumbnail + label area
+                    const thumbnailHeight = actualItemWidth - 16; // Minus item padding
+                    const labelHeight = 24;
+                    this._state.itemHeight = thumbnailHeight + labelHeight + 16 + gap;
+                }
+
+                // Calculate visible rows
+                const containerHeight = container.clientHeight;
+                this._state.visibleRows = Math.ceil(containerHeight / this._state.itemHeight) + 1;
+
+                // Calculate total height
+                const items = this._config.getItems();
+                const totalRows = Math.ceil(items.length / this._state.itemsPerRow);
+                this._state.totalHeight = totalRows * this._state.itemHeight;
+            },
+
+            /**
+             * Updates visible items based on scroll position.
+             * @param {number} scrollTop - Current scroll position
+             * @private
+             */
+            _updateVisibleItems(scrollTop) {
+                const state = this._state;
+                const config = this._config;
+                const items = config.getItems();
+                const grid = config.grid;
+
+                if (items.length === 0) return;
+
+                const totalRows = Math.ceil(items.length / state.itemsPerRow);
+                const firstVisibleRow = Math.floor(scrollTop / state.itemHeight);
+
+                // Render zone: must have these items in DOM
+                const renderStartRow = Math.max(0, firstVisibleRow - config.bufferRows);
+                const renderEndRow = Math.min(totalRows, firstVisibleRow + state.visibleRows + config.bufferRows);
+
+                // Retain zone: keep these items cached longer
+                const retainStartRow = Math.max(0, firstVisibleRow - config.retainRows);
+                const retainEndRow = Math.min(totalRows, firstVisibleRow + state.visibleRows + config.retainRows);
+
+                // Convert to item indices
+                const renderStart = renderStartRow * state.itemsPerRow;
+                const renderEnd = Math.min(renderEndRow * state.itemsPerRow, items.length);
+                const retainStart = retainStartRow * state.itemsPerRow;
+                const retainEnd = Math.min(retainEndRow * state.itemsPerRow, items.length);
+
+                // Visible zone (for ThumbnailLoader priority)
+                const visibleStart = firstVisibleRow * state.itemsPerRow;
+                const visibleEnd = Math.min((firstVisibleRow + state.visibleRows) * state.itemsPerRow, items.length);
+
+                // Track what we need
+                const neededIds = new Set();
+                for (let i = renderStart; i < renderEnd; i++) {
+                    neededIds.add(config.getItemId(items[i]));
+                }
+
+                // Remove items outside retain zone
+                const currentItems = grid.querySelectorAll(config.itemSelector);
+                for (const el of currentItems) {
+                    const id = el.dataset.id || el.dataset.groupHash;
+                    const idx = items.findIndex(item => config.getItemId(item) === id);
+                    if (idx === -1 || idx < retainStart || idx >= retainEnd) {
+                        state.renderedItems.delete(id);
+                        el.remove();
+                        // Notify removal
+                        if (config.onItemRemoved) {
+                            config.onItemRemoved(id);
+                        }
+                    }
+                }
+
+                // Add missing items in render zone
+                for (let i = renderStart; i < renderEnd; i++) {
+                    const item = items[i];
+                    const id = config.getItemId(item);
+                    if (!state.renderedItems.has(id)) {
+                        const el = config.createItem(item, i);
+                        state.renderedItems.set(id, el);
+                        this._insertItemAtPosition(el, i);
+                        // Notify visibility
+                        if (config.onItemVisible) {
+                            config.onItemVisible(item, el);
+                        }
+                    }
+                }
+
+                // Update spacer heights
+                let minRenderedIdx = Infinity;
+                let maxRenderedIdx = -1;
+                for (const [id] of state.renderedItems) {
+                    const idx = items.findIndex(item => config.getItemId(item) === id);
+                    if (idx !== -1) {
+                        minRenderedIdx = Math.min(minRenderedIdx, idx);
+                        maxRenderedIdx = Math.max(maxRenderedIdx, idx);
+                    }
+                }
+
+                if (minRenderedIdx !== Infinity) {
+                    const topRow = Math.floor(minRenderedIdx / state.itemsPerRow);
+                    const bottomRow = Math.floor(maxRenderedIdx / state.itemsPerRow) + 1;
+                    const topHeight = topRow * state.itemHeight;
+                    const bottomHeight = Math.max(0, (totalRows - bottomRow) * state.itemHeight);
+
+                    this._topSpacer.style.height = topHeight + 'px';
+                    this._bottomSpacer.style.height = bottomHeight + 'px';
+                }
+
+                state.startIndex = renderStart;
+                state.endIndex = renderEnd;
+
+                // Update ThumbnailLoader priorities if we have a getThumbnailId function
+                if (config.getThumbnailId) {
+                    const visibleIds = [];
+                    const bufferIds = [];
+
+                    for (let i = renderStart; i < renderEnd; i++) {
+                        const thumbId = config.getThumbnailId(items[i]);
+                        if (thumbId) {
+                            if (i >= visibleStart && i < visibleEnd) {
+                                visibleIds.push(thumbId);
+                            } else {
+                                bufferIds.push(thumbId);
+                            }
+                        }
+                    }
+
+                    ThumbnailLoader.prioritize(visibleIds, bufferIds);
+                }
+            },
+
+            /**
+             * Inserts an item at the correct position in the grid.
+             * @param {HTMLElement} el - Element to insert
+             * @param {number} targetIndex - Target index in items array
+             * @private
+             */
+            _insertItemAtPosition(el, targetIndex) {
+                const grid = this._config.grid;
+                const items = this._config.getItems();
+                const getItemId = this._config.getItemId;
+                const selector = this._config.itemSelector;
+
+                // Find the right position among existing items
+                const existingItems = grid.querySelectorAll(selector);
+                let insertBefore = this._bottomSpacer;
+
+                for (const existing of existingItems) {
+                    const existingId = existing.dataset.id || existing.dataset.groupHash;
+                    const existingIdx = items.findIndex(item => getItemId(item) === existingId);
+                    if (existingIdx > targetIndex) {
+                        insertBefore = existing;
+                        break;
+                    }
+                }
+
+                grid.insertBefore(el, insertBefore);
+            },
+
+            /**
+             * Attaches scroll listener.
+             * @private
+             */
+            _attachScrollListener() {
+                const container = this._config.container;
+                if (container && this._scrollHandler) {
+                    container.removeEventListener('scroll', this._scrollHandler);
+                    container.addEventListener('scroll', this._scrollHandler, { passive: true });
+                }
+            },
+
+            /**
+             * Detaches scroll listener.
+             * @private
+             */
+            _detachScrollListener() {
+                const container = this._config.container;
+                if (container && this._scrollHandler) {
+                    container.removeEventListener('scroll', this._scrollHandler);
+                }
+            },
+
+            // ==================== Public API ====================
+
+            /**
+             * Performs a full render of the grid.
+             * Clears existing items and re-renders visible items.
+             */
+            render() {
+                const grid = this._config.grid;
+                const items = this._config.getItems();
+
+                // Clear existing content and cache
+                grid.innerHTML = '';
+                this._state.renderedItems.clear();
+                this._state.startIndex = -1;
+                this._state.endIndex = -1;
+
+                // Handle empty state
+                if (items.length === 0) {
+                    return;
+                }
+
+                // Calculate dimensions
+                this._calculateDimensions();
+
+                // Add spacers
+                grid.appendChild(this._topSpacer);
+                grid.appendChild(this._bottomSpacer);
+
+                // Render initial visible items
+                this._updateVisibleItems(this._config.container.scrollTop);
+
+                // Attach scroll listener
+                this._attachScrollListener();
+                this._bound = true;
+            },
+
+            /**
+             * Refreshes the grid without full re-render.
+             * Recalculates dimensions and updates visible items.
+             */
+            refresh() {
+                if (!this._bound) return;
+
+                const container = this._config.container;
+                this._calculateDimensions();
+                this._state.startIndex = -1;
+                this._state.endIndex = -1;
+                this._updateVisibleItems(container.scrollTop);
+            },
+
+            /**
+             * Scrolls to show item at given index.
+             * @param {number} index - Index in items array
+             * @param {string} [behavior='smooth'] - Scroll behavior
+             */
+            scrollTo(index, behavior = 'smooth') {
+                const container = this._config.container;
+                const items = this._config.getItems();
+
+                if (index < 0 || index >= items.length) return;
+
+                const row = Math.floor(index / this._state.itemsPerRow);
+                const targetY = row * this._state.itemHeight;
+
+                // Check if item is already visible
+                const viewTop = container.scrollTop;
+                const viewBottom = viewTop + container.clientHeight;
+                const itemBottom = targetY + this._state.itemHeight;
+
+                if (targetY < viewTop) {
+                    container.scrollTo({ top: targetY, behavior });
+                } else if (itemBottom > viewBottom) {
+                    container.scrollTo({ top: itemBottom - container.clientHeight, behavior });
+                }
+            },
+
+            /**
+             * Scrolls to show item with given ID.
+             * @param {string} id - Item ID
+             * @param {string} [behavior='smooth'] - Scroll behavior
+             */
+            scrollToId(id, behavior = 'smooth') {
+                const items = this._config.getItems();
+                const index = items.findIndex(item => this._config.getItemId(item) === id);
+                if (index !== -1) {
+                    this.scrollTo(index, behavior);
+                }
+            },
+
+            /**
+             * Gets the currently visible item range.
+             * @returns {{start: number, end: number}} Start and end indices
+             */
+            getVisibleRange() {
+                return {
+                    start: this._state.startIndex,
+                    end: this._state.endIndex
+                };
+            },
+
+            /**
+             * Gets the number of items per row.
+             * @returns {number} Items per row
+             */
+            getItemsPerRow() {
+                return this._state.itemsPerRow;
+            },
+
+            /**
+             * Gets the item height including gap.
+             * @returns {number} Item height
+             */
+            getItemHeight() {
+                return this._state.itemHeight;
+            },
+
+            /**
+             * Gets the rendered item element for an ID.
+             * @param {string} id - Item ID
+             * @returns {HTMLElement|null} Element or null if not rendered
+             */
+            getRenderedElement(id) {
+                return this._state.renderedItems.get(id) || null;
+            },
+
+            /**
+             * Updates visual state for a rendered item (e.g., selection).
+             * @param {string} id - Item ID
+             * @param {string} className - Class to toggle
+             * @param {boolean} state - Add or remove
+             */
+            setItemClass(id, className, state) {
+                const el = this._state.renderedItems.get(id);
+                if (el) {
+                    el.classList.toggle(className, state);
+                }
+            },
+
+            /**
+             * Unbinds scroll listener (for screen leave).
+             */
+            unbind() {
+                this._detachScrollListener();
+                this._bound = false;
+            },
+
+            /**
+             * Rebinds scroll listener (for screen enter).
+             */
+            bind() {
+                this._attachScrollListener();
+                this._bound = true;
+            },
+
+            /**
+             * Cleans up all resources.
+             */
+            destroy() {
+                this._detachScrollListener();
+                window.removeEventListener('resize', this._resizeHandler);
+
+                if (this._state.scrollRAF) {
+                    cancelAnimationFrame(this._state.scrollRAF);
+                }
+
+                this._state.renderedItems.clear();
+                this._config.grid.innerHTML = '';
+                this._bound = false;
+            }
+        };
+
+        // Initialize
+        instance._init();
+
+        return instance;
+    }
+};
+
+// Make VirtualGrid available globally
+window.VirtualGrid = VirtualGrid;
