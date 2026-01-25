@@ -460,35 +460,35 @@ ThumbnailLoader then:
 
 ### Phase 4: Integrate into Gallery.js
 
-- [ ] Remove old virtual scroll code from Gallery
-- [ ] Remove old selection handling code from Gallery
-- [ ] Remove old keyboard navigation code from Gallery
-- [ ] Create VirtualGrid instance in `init()`
-- [ ] Create GridSelection instance in `init()`
-- [ ] Update `_createThumbnailItem()` to not set `img.src`
-- [ ] Wire up `onItemVisible` to call `ThumbnailLoader.request()`
-- [ ] Wire up `onItemRemoved` to call `ThumbnailLoader.cancel()`
-- [ ] Wire up `onSelectionChanged` to `App.setSelectedImages()`
-- [ ] Wire up `onItemActivated` to `App.showFullscreen()`
-- [ ] Wire up `onDeleteRequested` to delete confirmation flow
-- [ ] Update `onEnter()` to call `selection.bind()`
-- [ ] Update `onLeave()` to call `selection.unbind()`
-- [ ] Update `_onImageRotated()` to use `ThumbnailLoader.bustCache()`
-- [ ] Preserve scroll overlay (date/rating indicator) functionality
+- [x] Remove old virtual scroll code from Gallery
+- [x] Remove old selection handling code from Gallery
+- [x] Remove old keyboard navigation code from Gallery
+- [x] Create VirtualGrid instance in `init()`
+- [x] Create GridSelection instance in `init()`
+- [x] Update `_createThumbnailItem()` to not set `img.src`
+- [x] Wire up `onItemVisible` to call `ThumbnailLoader.request()`
+- [x] Wire up `onItemRemoved` to call `ThumbnailLoader.cancel()`
+- [x] Wire up `onSelectionChanged` to `App.setSelectedImages()`
+- [x] Wire up `onItemActivated` to `App.showFullscreen()`
+- [x] Wire up `onDeleteRequested` to delete confirmation flow
+- [x] Update `onEnter()` to call `selection.bind()`
+- [x] Update `onLeave()` to call `selection.unbind()`
+- [x] Update `_onImageRotated()` to use `ThumbnailLoader.bustCache()`
+- [x] Preserve scroll overlay (date/rating indicator) functionality
 - [ ] Test all Gallery functionality
 
 ### Phase 5: Integrate into Duplicates.js
 
-- [ ] Remove old virtual scroll code from Duplicates
-- [ ] Create VirtualGrid instance in `init()`
-- [ ] Create GridSelection instance in `init()`
-- [ ] Update `_createStackElement()` to not set `img.src`
-- [ ] Wire up `onItemVisible` to call `ThumbnailLoader.request()`
-- [ ] Wire up `onItemRemoved` to call `ThumbnailLoader.cancel()`
-- [ ] Wire up `onSelectionChanged` to local state
-- [ ] Wire up `onItemActivated` to open group in Gallery
-- [ ] Update `onEnter()` to call `selection.bind()`
-- [ ] Update `onLeave()` to call `selection.unbind()`
+- [x] Remove old virtual scroll code from Duplicates
+- [x] Create VirtualGrid instance in `init()`
+- [x] Create GridSelection instance in `init()`
+- [x] Update `_createStackElement()` to not set `img.src`
+- [x] Wire up `onItemVisible` to call `ThumbnailLoader.request()`
+- [x] Wire up `onItemRemoved` to call `ThumbnailLoader.cancel()`
+- [x] Wire up `onSelectionChanged` to local state
+- [x] Wire up `onItemActivated` to open group in Gallery
+- [x] Update `onEnter()` to call `selection.bind()`
+- [x] Update `onLeave()` to call `selection.unbind()`
 - [ ] Test all Duplicates functionality
 - [ ] Verify new selection features work (click, multi-select, drag-box, keyboard)
 

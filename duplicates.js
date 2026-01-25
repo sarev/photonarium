@@ -34,10 +34,12 @@
  *   viewing the group in Gallery.
  *
  * Stack Interaction:
+ *   - Click to select stacks (single, Ctrl+click, Shift+click, drag-box)
  *   - Double-click stack opens Gallery filtered to show only that group
  *   - Gallery pre-selects the "best" image in the group
  *   - Returning from Gallery restores Duplicates scroll position
  *   - Thumbnail size controls (smaller/larger) adjust stack preview size
+ *   - Keyboard navigation: arrows, Ctrl+A, Escape, Enter
  *
  * Dynamic Updates:
  *   - Changing similarity slider immediately recomputes and updates display
@@ -47,7 +49,8 @@
  * Performance:
  *   - Duplicate groups are computed on backend during scan
  *   - Frontend caches group data for quick slider changes
- *   - Lazy loads stack thumbnails as they scroll into view
+ *   - Lazy loads stack thumbnails via ThumbnailLoader LIFO queue
+ *   - Virtual scrolling via VirtualGrid for large collections
  *
  * LIFECYCLE HOOKS:
  *   - onEnter(): Fetches duplicate groups from backend, renders stacks
@@ -55,6 +58,7 @@
  *
  * @module duplicates
  * @requires core
+ * @requires thumbnails
  */
 
 /* ==========================================================================
@@ -113,6 +117,7 @@ const Duplicates = {
      * @property {string} sortMode - Current sort mode: 'size' or 'semantic'
      * @property {string} semanticQuery - Current semantic query for sorting
      * @property {number} minGroupSize - Minimum group size to display
+     * @property {Array<string>} selectedGroups - Currently selected group hashes
      */
     state: {
         groupCache: {},
@@ -126,24 +131,8 @@ const Duplicates = {
         needsRefresh: true,
         sortMode: 'size',
         semanticQuery: '',
-        minGroupSize: 2
-    },
-
-    /**
-     * Virtual scrolling configuration.
-     * @type {Object}
-     * @private
-     */
-    _virtualScroll: {
-        itemHeight: 0,      // Height of each stack item including gap
-        itemWidth: 0,       // Width of each stack item including gap
-        itemsPerRow: 0,     // Number of items per row
-        visibleRows: 0,     // Number of visible rows
-        bufferRows: 3,      // Extra rows to pre-render above/below viewport
-        startIndex: 0,      // First rendered item index
-        endIndex: 0,        // Last rendered item index
-        renderedItems: new Map(), // Cache of rendered DOM elements by group_hash
-        scrollHandler: null // Bound scroll handler for cleanup
+        minGroupSize: 2,
+        selectedGroups: []
     },
 
     /**
@@ -152,6 +141,20 @@ const Duplicates = {
      * @private
      */
     _els: {},
+
+    /**
+     * VirtualGrid instance for rendering.
+     * @type {Object|null}
+     * @private
+     */
+    _grid: null,
+
+    /**
+     * GridSelection instance for selection handling.
+     * @type {Object|null}
+     * @private
+     */
+    _selection: null,
 
     /**
      * Initialises the duplicates module.
@@ -173,11 +176,52 @@ const Duplicates = {
             minGroupSize: App.$('dup-min-group-size')
         };
 
+        // Create VirtualGrid instance
+        this._grid = VirtualGrid.create({
+            container: this._els.container,
+            grid: this._els.grid,
+            getItems: () => this.state.groups,
+            getItemId: (group) => group.group_hash,
+            createItem: (group, index) => this._createStackElement(group, index),
+            onItemVisible: (group, el) => {
+                const imgEl = el.querySelector('img');
+                const imageId = group.best_image?.id;
+                if (imgEl && imageId) {
+                    ThumbnailLoader.request(imageId, imgEl, 'visible');
+                }
+            },
+            onItemRemoved: (hash) => {
+                const group = this.state.groups.find(g => g.group_hash === hash);
+                if (group?.best_image?.id) {
+                    ThumbnailLoader.cancel(group.best_image.id);
+                }
+            },
+            getThumbnailId: (group) => group.best_image?.id,
+            itemSelector: '.duplicate-stack',
+            getItemHeight: (thumbSize, itemWidth) => {
+                // Stack height: thumbnail (square) + count label + padding
+                const thumbnailHeight = itemWidth;
+                const labelHeight = 24;
+                return thumbnailHeight + labelHeight + 16;
+            }
+        });
+
+        // Create GridSelection instance
+        this._selection = GridSelection.create({
+            grid: this._grid,
+            getItems: () => this.state.groups,
+            getItemId: (group) => group.group_hash,
+            itemSelector: '.duplicate-stack',
+            onSelectionChanged: (hashes) => {
+                this.state.selectedGroups = hashes;
+            },
+            onItemActivated: (hash) => this._openGroupInGallery(hash),
+            // No delete handler for duplicate groups
+            enableDeleteKey: false
+        });
+
         // Bind events
         this._bindEvents();
-
-        // Set up virtual scrolling
-        this._initVirtualScroll();
 
         // Subscribe to relevant app events
         this._subscribeToEvents();
@@ -205,15 +249,20 @@ const Duplicates = {
         // Sync min group size dropdown
         this._els.minGroupSize.value = String(this.state.minGroupSize);
 
+        // Bind selection handlers
+        this._selection.bind();
+
         // Load data if needed
         if (this.state.needsRefresh) {
             this._loadGroups();
         } else {
-            // Attach scroll listener and restore position
-            this._attachScrollListener();
+            // Rebind grid and restore position
+            this._grid.bind();
             this._els.container.scrollTop = this.state.scrollTop;
-            // Update visible items in case viewport changed
-            this._updateVisibleItems(this.state.scrollTop);
+            // Refresh visible items in case viewport changed
+            this._grid.refresh();
+            // Restore selection visual state
+            this._selection.updateVisualState();
         }
     },
 
@@ -223,7 +272,8 @@ const Duplicates = {
      */
     onLeave() {
         this.state.scrollTop = this._els.container.scrollTop;
-        this._detachScrollListener();
+        this._grid.unbind();
+        this._selection.unbind();
     },
 
     /**
@@ -238,7 +288,6 @@ const Duplicates = {
             this._els.sliderLabel.textContent = this.SIMILARITY_LABELS[sliderPos];
             this._setLevel(level);
         });
-        // Thumbnail size buttons are handled globally by the toolbar (App.setThumbnailSize)
 
         // Sort mode buttons
         this._els.btnSortSize.addEventListener('click', () => this._setSortMode('size'));
@@ -255,9 +304,6 @@ const Duplicates = {
 
         // Min group size dropdown
         this._els.minGroupSize.addEventListener('change', () => this._onMinGroupSizeChange());
-
-        // Grid click events (delegated)
-        this._els.grid.addEventListener('dblclick', (e) => this._handleDoubleClick(e));
     },
 
     /**
@@ -287,21 +333,9 @@ const Duplicates = {
     _onThumbnailSizeChanged(sizePx) {
         this._applyThumbSize(sizePx);
 
-        // Re-render if currently visible
+        // Refresh grid if currently visible
         if (App.getScreen() === 'duplicates' && this.state.groups.length > 0) {
-            const container = this._els.container;
-            if (container) {
-                this._calculateVirtualDimensions(container);
-                // Clear cache and force re-render
-                this._virtualScroll.renderedItems.clear();
-                const items = this._els.grid.querySelectorAll('.duplicate-stack');
-                for (const item of items) {
-                    item.remove();
-                }
-                this._virtualScroll.startIndex = -1;
-                this._virtualScroll.endIndex = -1;
-                this._updateVisibleItems(container.scrollTop);
-            }
+            this._grid.refresh();
         }
     },
 
@@ -323,213 +357,6 @@ const Duplicates = {
         // Keep within a sensible range to avoid breaking layout.
         const clamped = Math.max(60, Math.min(260, Math.round(n)));
         this._els.grid.style.setProperty('--thumb-size', `${clamped}px`);
-    },
-
-    /**
-     * Initializes virtual scrolling.
-     * @private
-     */
-    _initVirtualScroll() {
-        // Create spacer elements for virtual scrolling
-        this._topSpacer = document.createElement('div');
-        this._topSpacer.className = 'virtual-spacer';
-        this._bottomSpacer = document.createElement('div');
-        this._bottomSpacer.className = 'virtual-spacer';
-
-        // Bind scroll handler
-        this._virtualScroll.scrollHandler = this._onScroll.bind(this);
-
-        // Handle window resize
-        this._resizeHandler = App.debounce(() => {
-            if (App.getScreen() === 'duplicates' && this.state.groups.length > 0) {
-                const container = this._els.container;
-                if (container) {
-                    this._calculateVirtualDimensions(container);
-                    // Force re-render
-                    this._virtualScroll.startIndex = -1;
-                    this._virtualScroll.endIndex = -1;
-                    this._updateVisibleItems(container.scrollTop);
-                }
-            }
-        }, 100);
-        window.addEventListener('resize', this._resizeHandler);
-    },
-
-    /**
-     * Attaches the scroll listener for virtual scrolling.
-     * @private
-     */
-    _attachScrollListener() {
-        const container = this._els.container;
-        if (container && this._virtualScroll.scrollHandler) {
-            container.removeEventListener('scroll', this._virtualScroll.scrollHandler);
-            container.addEventListener('scroll', this._virtualScroll.scrollHandler, { passive: true });
-        }
-    },
-
-    /**
-     * Detaches the scroll listener for virtual scrolling.
-     * @private
-     */
-    _detachScrollListener() {
-        const container = this._els.container;
-        if (container && this._virtualScroll.scrollHandler) {
-            container.removeEventListener('scroll', this._virtualScroll.scrollHandler);
-        }
-    },
-
-    /**
-     * Handles scroll events for virtual scrolling.
-     * @param {Event} e - Scroll event
-     * @private
-     */
-    _onScroll(e) {
-        // Throttle scroll updates with requestAnimationFrame
-        if (this._scrollRAF) return;
-        const scrollTop = e.target.scrollTop;
-        this._scrollRAF = requestAnimationFrame(() => {
-            this._scrollRAF = null;
-            this._updateVisibleItems(scrollTop);
-        });
-    },
-
-    /**
-     * Calculates dimensions for virtual scrolling.
-     * Matches CSS grid's auto-fill calculation.
-     * @param {HTMLElement} container - The scroll container
-     * @private
-     */
-    _calculateVirtualDimensions(container) {
-        const thumbSize = App.getThumbnailSize();
-        const gap = 16; // 1rem gap (from CSS)
-        const padding = 16; // 1rem padding (from CSS)
-
-        // Calculate items per row matching CSS grid auto-fill behavior
-        const availableWidth = container.clientWidth - padding * 2;
-        const minItemWidth = thumbSize + 16; // Stack includes padding
-
-        this._virtualScroll.itemsPerRow = Math.max(1, Math.floor((availableWidth + gap) / (minItemWidth + gap)));
-
-        // Actual item width when using 1fr
-        const actualItemWidth = (availableWidth - gap * (this._virtualScroll.itemsPerRow - 1)) / this._virtualScroll.itemsPerRow;
-
-        // Item height: thumbnail (square) + count label + padding
-        const thumbnailHeight = actualItemWidth;
-        const labelHeight = 24;
-        const itemHeight = thumbnailHeight + labelHeight + 16;
-
-        this._virtualScroll.itemWidth = actualItemWidth;
-        this._virtualScroll.itemHeight = itemHeight + gap;
-
-        // Calculate visible rows
-        const containerHeight = container.clientHeight;
-        this._virtualScroll.visibleRows = Math.ceil(containerHeight / this._virtualScroll.itemHeight) + 1;
-
-        // Calculate total height
-        const totalRows = Math.ceil(this.state.groups.length / this._virtualScroll.itemsPerRow);
-        this._virtualScroll.totalHeight = totalRows * this._virtualScroll.itemHeight;
-    },
-
-    /**
-     * Updates visible items based on scroll position.
-     * @param {number} scrollTop - Current scroll position
-     * @private
-     */
-    _updateVisibleItems(scrollTop) {
-        const vs = this._virtualScroll;
-        const groups = this.state.groups;
-        const grid = this._els.grid;
-
-        if (groups.length === 0) return;
-
-        const totalRows = Math.ceil(groups.length / vs.itemsPerRow);
-        const firstVisibleRow = Math.floor(scrollTop / vs.itemHeight);
-
-        // Render zone: must have these items in DOM
-        const renderStartRow = Math.max(0, firstVisibleRow - vs.bufferRows);
-        const renderEndRow = Math.min(totalRows, firstVisibleRow + vs.visibleRows + vs.bufferRows);
-
-        // Convert to item indices
-        const renderStart = renderStartRow * vs.itemsPerRow;
-        const renderEnd = Math.min(renderEndRow * vs.itemsPerRow, groups.length);
-
-        // Track what we need
-        const neededHashes = new Set();
-        for (let i = renderStart; i < renderEnd; i++) {
-            neededHashes.add(groups[i].group_hash);
-        }
-
-        // Remove items outside render zone
-        const currentItems = grid.querySelectorAll('.duplicate-stack');
-        for (const item of currentItems) {
-            const hash = item.dataset.groupHash;
-            if (!neededHashes.has(hash)) {
-                vs.renderedItems.delete(hash);
-                item.remove();
-            }
-        }
-
-        // Add missing items in render zone
-        for (let i = renderStart; i < renderEnd; i++) {
-            const group = groups[i];
-            if (!vs.renderedItems.has(group.group_hash)) {
-                const stack = this._createStackElement(group, i);
-                vs.renderedItems.set(group.group_hash, stack);
-                this._insertItemAtPosition(stack, i);
-                // Load thumbnail immediately since we only render visible items
-                this._loadStackThumbnail(stack, group);
-            }
-        }
-
-        // Update spacer heights
-        let minRenderedIdx = Infinity;
-        let maxRenderedIdx = -1;
-        for (const [hash] of vs.renderedItems) {
-            const idx = groups.findIndex(g => g.group_hash === hash);
-            if (idx !== -1) {
-                minRenderedIdx = Math.min(minRenderedIdx, idx);
-                maxRenderedIdx = Math.max(maxRenderedIdx, idx);
-            }
-        }
-
-        if (minRenderedIdx !== Infinity) {
-            const topRow = Math.floor(minRenderedIdx / vs.itemsPerRow);
-            const bottomRow = Math.floor(maxRenderedIdx / vs.itemsPerRow) + 1;
-            const topHeight = topRow * vs.itemHeight;
-            const bottomHeight = Math.max(0, (totalRows - bottomRow) * vs.itemHeight);
-
-            this._topSpacer.style.height = topHeight + 'px';
-            this._bottomSpacer.style.height = bottomHeight + 'px';
-        }
-
-        vs.startIndex = renderStart;
-        vs.endIndex = renderEnd;
-    },
-
-    /**
-     * Inserts a stack element at the correct position in the grid.
-     * @param {HTMLElement} stack - The stack element to insert
-     * @param {number} targetIndex - The index in groups array
-     * @private
-     */
-    _insertItemAtPosition(stack, targetIndex) {
-        const grid = this._els.grid;
-        const groups = this.state.groups;
-
-        // Find the right position among existing items
-        const existingItems = grid.querySelectorAll('.duplicate-stack');
-        let insertBefore = this._bottomSpacer;
-
-        for (const existing of existingItems) {
-            const existingHash = existing.dataset.groupHash;
-            const existingIdx = groups.findIndex(g => g.group_hash === existingHash);
-            if (existingIdx > targetIndex) {
-                insertBefore = existing;
-                break;
-            }
-        }
-
-        grid.insertBefore(stack, insertBefore);
     },
 
     /**
@@ -638,6 +465,9 @@ Duplicates._setLevel = async function(level) {
     }
 
     this.state.currentLevel = level;
+
+    // Clear selection when changing level
+    this._selection.clear();
 
     try {
         const { groups, status } = await this._getGroupsForLevel(level);
@@ -845,20 +675,12 @@ Duplicates._applySemanticSort = async function() {
    ========================================================================== */
 
 /**
- * Renders the current duplicate groups using virtual scrolling.
- * Only renders visible items plus a buffer for smooth scrolling.
+ * Renders the current duplicate groups using VirtualGrid.
  * @private
  */
 Duplicates._renderGroups = function() {
     const grid = this._els.grid;
     const empty = this._els.empty;
-    const container = this._els.container;
-
-    // Clear existing content and cache
-    grid.innerHTML = '';
-    this._virtualScroll.renderedItems.clear();
-    this._virtualScroll.startIndex = -1;
-    this._virtualScroll.endIndex = -1;
 
     const status = this.state.currentStatus;
     const sliderPos = this._levelToSlider(this.state.currentLevel);
@@ -889,22 +711,16 @@ Duplicates._renderGroups = function() {
     // Update grid CSS for thumbnail size
     this._applyThumbSize(App.getThumbnailSize());
 
-    // Calculate virtual scroll dimensions
-    this._calculateVirtualDimensions(container);
+    // Render via VirtualGrid
+    this._grid.render();
 
-    // Add spacers for virtual scrolling
-    grid.appendChild(this._topSpacer);
-    grid.appendChild(this._bottomSpacer);
-
-    // Render initial visible items
-    this._updateVisibleItems(container.scrollTop);
-
-    // Attach scroll listener
-    this._attachScrollListener();
+    // Restore selection visual state
+    this._selection.updateVisualState();
 };
 
 /**
  * Creates a stack element for a duplicate group.
+ * Note: Does NOT set img.src - ThumbnailLoader handles that via onItemVisible.
  * @param {Object} group - The duplicate group (lightweight format)
  * @param {number} index - Group index for data attribute
  * @returns {HTMLElement} The stack element
@@ -916,7 +732,7 @@ Duplicates._createStackElement = function(group, index) {
     stack.dataset.groupIndex = index;
     stack.dataset.groupHash = group.group_hash;
 
-    // Best image preview (thumbnail)
+    // Best image preview (thumbnail) - src will be set by ThumbnailLoader
     const img = document.createElement('img');
     img.alt = group.best_image?.basename || 'Duplicate group preview';
     img.dataset.imageId = group.best_image?.id || '';
@@ -931,44 +747,6 @@ Duplicates._createStackElement = function(group, index) {
     return stack;
 };
 
-/**
- * Loads the thumbnail image for a stack element.
- * Called when stack is rendered in the visible zone.
- * @param {HTMLElement} stack - The stack element
- * @param {Object} group - The group data (for additional context if needed)
- * @private
- */
-Duplicates._loadStackThumbnail = function(stack, group) {
-    const img = stack.querySelector('img');
-    const imageId = img?.dataset.imageId;
-
-    if (!img || !imageId) {
-        stack.classList.add('error');
-        return;
-    }
-
-    img.onload = () => {
-        stack.classList.add('loaded');
-    };
-
-    img.onerror = () => {
-        stack.classList.add('error');
-    };
-
-    img.src = App.thumbnailUrl(imageId);
-};
-
-/**
- * Adjusts the thumbnail size for duplicate stacks.
- * @param {number} delta - Size change direction (-1 smaller, +1 larger)
- * @private
- */
-Duplicates._adjustThumbSize = function(delta) {
-    // Deprecated: toolbar buttons call App.setThumbnailSize directly.
-    const step = 50;
-    App.setThumbnailSize(App.getThumbnailSize() + delta * step);
-};
-
 /* ==========================================================================
    STACK INTERACTION
 
@@ -976,18 +754,13 @@ Duplicates._adjustThumbSize = function(delta) {
    ========================================================================== */
 
 /**
- * Handles double-click on a duplicate stack.
- * Opens the gallery filtered to show only that group's images.
- * @param {MouseEvent} e - The double-click event
+ * Opens a duplicate group in the gallery.
+ * Called when a stack is activated (double-click or Enter key).
+ * @param {string} hash - The group hash to open
  * @private
  */
-Duplicates._handleDoubleClick = function(e) {
-    const stack = e.target.closest('.duplicate-stack');
-    if (!stack) return;
-
-    const index = parseInt(stack.dataset.groupIndex, 10);
-    const group = this.state.groups[index];
-
+Duplicates._openGroupInGallery = function(hash) {
+    const group = this.state.groups.find(g => g.group_hash === hash);
     if (!group?.image_ids?.length) return;
 
     // Save scroll position before leaving
