@@ -579,6 +579,42 @@ def get_duplicates():
     })
 
 
+@app.route('/api/duplicates/sort-semantic', methods=['POST'])
+def sort_duplicates_semantic():
+    """Get semantic similarity scores for duplicate group ordering.
+
+    Takes a text query and a list of image IDs (one per group), returns
+    similarity scores for each image to enable semantic sorting of groups.
+
+    Request Body:
+        JSON object with:
+            - query: Text query to sort by similarity to
+            - image_ids: Array of image IDs to score (typically best_image from each group)
+
+    Returns:
+        JSON object with:
+            - scores: Array of {image_id, score} objects sorted by descending score
+    """
+    data = request.get_json()
+    if not data:
+        return error_response('Request body is required')
+
+    query = data.get('query', '').strip()
+    if not query:
+        return error_response('Query is required')
+
+    image_ids = data.get('image_ids', [])
+    if not image_ids:
+        return error_response('image_ids array is required')
+
+    try:
+        scores = get_db().get_semantic_scores_for_images(query, image_ids)
+        return jsonify({'scores': scores})
+    except Exception as e:
+        logger.exception('Semantic sort failed')
+        return error_response(f'Semantic sort failed: {str(e)}', 500)
+
+
 # =============================================================================
 # Search Endpoints
 # =============================================================================

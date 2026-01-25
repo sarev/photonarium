@@ -4475,6 +4475,47 @@ class ImageDatabase:
         # Perform semantic search
         return semantic_search(self.conn, query_embedding, threshold, limit)
 
+    def get_semantic_scores_for_images(
+        self,
+        query: str,
+        image_ids: list[str],
+    ) -> list[dict[str, Any]]:
+        """Get semantic similarity scores for specific images.
+
+        Used for sorting duplicate groups by similarity to a query.
+
+        Args:
+            query: Text query to compare against.
+            image_ids: List of image IDs to score.
+
+        Returns:
+            List of {image_id, score} dicts sorted by descending score.
+        """
+        if not image_ids:
+            return []
+
+        # Encode the query text
+        query_embedding = self._get_clip_model().encode_text(query)
+        query_embedding = query_embedding / (np.linalg.norm(query_embedding) or 1)
+
+        # Get embeddings for the specified images
+        placeholders = ','.join('?' * len(image_ids))
+        cursor = self.conn.execute(
+            f'SELECT id, embedding FROM images WHERE id IN ({placeholders}) AND embedding IS NOT NULL',
+            image_ids
+        )
+
+        results = []
+        for row in cursor.fetchall():
+            embedding = embedding_to_numpy(row['embedding'])
+            embedding = embedding / (np.linalg.norm(embedding) or 1)
+            score = float(np.dot(query_embedding, embedding))
+            results.append({'image_id': row['id'], 'score': score})
+
+        # Sort by score descending
+        results.sort(key=lambda x: x['score'], reverse=True)
+        return results
+
     def get_similar_images(self, reference_image_id: str) -> list[dict[str, Any]] | None:
         """Get all images sorted by visual similarity to a reference image.
 

@@ -109,6 +109,8 @@ const Duplicates = {
      * @property {string} currentStatus - Status of current level ('pending', 'computing', 'done')
      * @property {number} scrollTop - Saved scroll position
      * @property {boolean} needsRefresh - Whether data needs to reload
+     * @property {string} sortMode - Current sort mode: 'size' or 'semantic'
+     * @property {string} semanticQuery - Current semantic query for sorting
      */
     state: {
         groupCache: {},
@@ -118,7 +120,9 @@ const Duplicates = {
         groups: [],
         currentStatus: 'pending',
         scrollTop: 0,
-        needsRefresh: true
+        needsRefresh: true,
+        sortMode: 'size',
+        semanticQuery: ''
     },
 
     /**
@@ -158,7 +162,10 @@ const Duplicates = {
             slider: App.$('similarity-slider'),
             sliderLabel: App.$('similarity-label'),
             btnSmaller: App.$('btn-dup-thumb-smaller'),
-            btnLarger: App.$('btn-dup-thumb-larger')
+            btnLarger: App.$('btn-dup-thumb-larger'),
+            btnSortSize: App.$('btn-dup-sort-size'),
+            btnSortSemantic: App.$('btn-dup-sort-semantic'),
+            semanticQuery: App.$('dup-semantic-query')
         };
 
         // Bind events
@@ -183,6 +190,12 @@ const Duplicates = {
         const sliderPos = this._levelToSlider(this.state.currentLevel);
         this._els.slider.value = sliderPos;
         this._els.sliderLabel.textContent = this.SIMILARITY_LABELS[sliderPos];
+
+        // Sync sort mode UI
+        this._els.btnSortSize.classList.toggle('active', this.state.sortMode === 'size');
+        this._els.btnSortSemantic.classList.toggle('active', this.state.sortMode === 'semantic');
+        this._els.semanticQuery.disabled = (this.state.sortMode !== 'semantic');
+        this._els.semanticQuery.value = this.state.semanticQuery;
 
         // Load data if needed
         if (this.state.needsRefresh) {
@@ -218,6 +231,19 @@ const Duplicates = {
             this._setLevel(level);
         });
         // Thumbnail size buttons are handled globally by the toolbar (App.setThumbnailSize)
+
+        // Sort mode buttons
+        this._els.btnSortSize.addEventListener('click', () => this._setSortMode('size'));
+        this._els.btnSortSemantic.addEventListener('click', () => this._setSortMode('semantic'));
+
+        // Semantic query input - recompute on blur or Enter
+        this._els.semanticQuery.addEventListener('blur', () => this._onSemanticQueryChange());
+        this._els.semanticQuery.addEventListener('keydown', (e) => {
+            if (e.key === 'Enter') {
+                e.preventDefault();
+                this._els.semanticQuery.blur();
+            }
+        });
 
         // Grid click events (delegated)
         this._els.grid.addEventListener('dblclick', (e) => this._handleDoubleClick(e));
@@ -524,7 +550,9 @@ Duplicates._loadGroups = async function() {
         this.state.groups = groups;
         this.state.currentStatus = status;
         this.state.needsRefresh = false;
-        this._renderGroups();
+
+        // Apply current sort mode
+        await this._applySortOrder();
 
         // If still computing, poll for updates
         if (status === 'computing' || status === 'pending') {
@@ -600,7 +628,9 @@ Duplicates._setLevel = async function(level) {
         const { groups, status } = await this._getGroupsForLevel(level);
         this.state.groups = groups;
         this.state.currentStatus = status;
-        this._renderGroups();
+
+        // Apply current sort mode
+        await this._applySortOrder();
 
         // If still computing, poll for updates
         if (status === 'computing' || status === 'pending') {
@@ -642,6 +672,126 @@ Duplicates._scheduleStatusPoll = function(level) {
             // Silently fail polls, user can manually refresh
         }
     }, 2000);
+};
+
+/**
+ * Sets the sort mode for duplicate groups.
+ * @param {string} mode - 'size' or 'semantic'
+ * @private
+ */
+Duplicates._setSortMode = function(mode) {
+    if (mode === this.state.sortMode) return;
+
+    this.state.sortMode = mode;
+
+    // Update button states
+    this._els.btnSortSize.classList.toggle('active', mode === 'size');
+    this._els.btnSortSemantic.classList.toggle('active', mode === 'semantic');
+
+    // Enable/disable semantic input
+    this._els.semanticQuery.disabled = (mode !== 'semantic');
+
+    if (mode === 'semantic') {
+        // Focus the input when switching to semantic mode
+        this._els.semanticQuery.focus();
+        // If there's already a query, apply it
+        if (this.state.semanticQuery) {
+            this._applySemanticSort();
+        }
+    } else {
+        // Sort by size (default)
+        this._sortGroupsBySize();
+        this._renderGroups();
+    }
+};
+
+/**
+ * Handles changes to the semantic query input.
+ * @private
+ */
+Duplicates._onSemanticQueryChange = function() {
+    const query = this._els.semanticQuery.value.trim();
+
+    if (query === this.state.semanticQuery) return;
+
+    this.state.semanticQuery = query;
+
+    if (this.state.sortMode === 'semantic' && query) {
+        this._applySemanticSort();
+    } else if (!query) {
+        // Empty query - fall back to size sort
+        this._sortGroupsBySize();
+        this._renderGroups();
+    }
+};
+
+/**
+ * Sorts groups by size (count) in descending order.
+ * @private
+ */
+Duplicates._sortGroupsBySize = function() {
+    this.state.groups.sort((a, b) => b.count - a.count);
+};
+
+/**
+ * Applies the current sort order and re-renders.
+ * @private
+ */
+Duplicates._applySortOrder = async function() {
+    if (this.state.sortMode === 'semantic' && this.state.semanticQuery) {
+        await this._applySemanticSort();
+    } else {
+        this._sortGroupsBySize();
+        this._renderGroups();
+    }
+};
+
+/**
+ * Applies semantic sorting based on the current query.
+ * Fetches similarity scores from the backend and reorders groups.
+ * @private
+ */
+Duplicates._applySemanticSort = async function() {
+    const query = this.state.semanticQuery;
+    if (!query || this.state.groups.length === 0) return;
+
+    // Get the best image ID from each group for similarity comparison
+    const groupImageIds = this.state.groups.map(g => ({
+        group_hash: g.group_hash,
+        image_id: g.best_image?.id
+    })).filter(g => g.image_id);
+
+    if (groupImageIds.length === 0) return;
+
+    try {
+        App.showLoading('Sorting by similarity...');
+
+        // Call backend to get similarity scores
+        const response = await App.apiPost('/duplicates/sort-semantic', {
+            query: query,
+            image_ids: groupImageIds.map(g => g.image_id)
+        });
+
+        if (response.scores) {
+            // Create a map of image_id -> score
+            const scoreMap = new Map(
+                response.scores.map(s => [s.image_id, s.score])
+            );
+
+            // Sort groups by score (descending)
+            this.state.groups.sort((a, b) => {
+                const scoreA = scoreMap.get(a.best_image?.id) || 0;
+                const scoreB = scoreMap.get(b.best_image?.id) || 0;
+                return scoreB - scoreA;
+            });
+
+            this._renderGroups();
+        }
+    } catch (err) {
+        App.showError('Failed to sort by similarity: ' + err.message);
+    } finally {
+        App.hideLoading();
+    }
 };
 
 /* ==========================================================================

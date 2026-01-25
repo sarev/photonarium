@@ -61,6 +61,17 @@
                     <button id="btn-dup-thumb-larger" class="toolbar-btn" title="Larger thumbnails">
                         <span class="material-symbols-outlined">add</span>
                     </button>
+                    <div class="toolbar-separator"></div>
+                    <div class="dup-sort-controls">
+                        <button id="btn-dup-sort-size" class="toolbar-btn active" title="Sort by group size">
+                            <span class="material-symbols-outlined">sort</span>
+                        </button>
+                        <button id="btn-dup-sort-semantic" class="toolbar-btn" title="Sort by semantic similarity">
+                            <span class="material-symbols-outlined">image_search</span>
+                        </button>
+                        <input type="text" id="dup-semantic-query" class="semantic-query-input" placeholder="Sort by similarity to..." disabled>
+                    </div>
+                    <div class="toolbar-separator"></div>
                     <div class="similarity-control">
                         <label for="similarity-slider">Similarity:</label>
                         <input type="range" id="similarity-slider" min="0" max="3" value="0" step="1">
