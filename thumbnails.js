@@ -80,6 +80,14 @@ const ThumbnailLoader = {
     _activeCount: 0,
 
     /**
+     * Sequence counter for LIFO ordering within priority levels.
+     * Higher = more recent = should load first.
+     * @type {number}
+     * @private
+     */
+    _sequence: 0,
+
+    /**
      * Requests a thumbnail load for an image.
      *
      * If the imageId is already queued, adds the element as a listener and
@@ -110,17 +118,19 @@ const ThumbnailLoader = {
         if (existing) {
             // Add element as listener
             existing.listeners.add(imgElement);
-            // Update priority if higher
+            // Update priority and sequence if higher priority (makes it "fresh" again)
             if (priorityNum > existing.priority) {
                 existing.priority = priorityNum;
+                existing.sequence = ++this._sequence;
             }
             return;
         }
 
-        // New request - add to front of queue (LIFO)
-        this._queue.unshift({
+        // New request - add to queue with sequence number for LIFO ordering
+        this._queue.push({
             imageId,
             priority: priorityNum,
+            sequence: ++this._sequence,
             listeners: new Set([imgElement])
         });
 
@@ -194,10 +204,15 @@ const ThumbnailLoader = {
         const visibleSet = new Set(visibleIds);
         const bufferSet = new Set(bufferIds);
 
-        // Update priorities in queue
+        // Update priorities in queue, refreshing sequence for items that become visible
         for (const item of this._queue) {
+            const oldPriority = item.priority;
             if (visibleSet.has(item.imageId)) {
                 item.priority = this.PRIORITY.visible;
+                // Refresh sequence when becoming visible (makes it LIFO among visible)
+                if (oldPriority !== this.PRIORITY.visible) {
+                    item.sequence = ++this._sequence;
+                }
             } else if (bufferSet.has(item.imageId)) {
                 item.priority = this.PRIORITY.buffer;
             } else {
@@ -205,10 +220,8 @@ const ThumbnailLoader = {
             }
         }
 
-        // Sort queue: highest priority first, then LIFO within priority
-        // Since we unshift new items, original order is reverse insertion order
-        // We want: visible items first (most recent first), then buffer, then background
-        this._queue.sort((a, b) => b.priority - a.priority);
+        // Sort queue: highest priority first, then LIFO within priority (higher sequence = more recent)
+        this._queue.sort((a, b) => (b.priority - a.priority) || (b.sequence - a.sequence));
 
         // Cancel background items that are no longer needed
         // Keep queue focused on visible and buffer items
@@ -359,6 +372,7 @@ const ThumbnailLoader = {
         this._queue = [];
         this._inFlight.clear();
         this._activeCount = 0;
+        this._sequence = 0;
         // Keep _cacheBust - those are still valid
     },
 
@@ -373,6 +387,15 @@ const ThumbnailLoader = {
             activeCount: this._activeCount,
             cacheBustCount: this._cacheBust.size
         };
+    },
+
+    /**
+     * Re-sorts the queue and processes it.
+     * Call after batch-adding items via request() to ensure proper ordering.
+     */
+    flush() {
+        this._queue.sort((a, b) => (b.priority - a.priority) || (b.sequence - a.sequence));
+        this._processQueue();
     }
 };
 
@@ -504,9 +527,10 @@ const VirtualGrid = {
                 // Calculate available width
                 const availableWidth = container.clientWidth - padding * 2;
 
-                // Calculate items per row (CSS grid auto-fill behavior)
-                const minItemWidth = thumbSize + 16; // Item includes some padding
-                this._state.itemsPerRow = Math.max(1, Math.floor((availableWidth + gap) / (minItemWidth + gap)));
+                // Calculate items per row (must match CSS grid auto-fill behavior)
+                // CSS: grid-template-columns: repeat(auto-fill, minmax(var(--thumb-size), 1fr))
+                // Formula: floor((availableWidth + gap) / (thumbSize + gap))
+                this._state.itemsPerRow = Math.max(1, Math.floor((availableWidth + gap) / (thumbSize + gap)));
 
                 // Actual item width when using 1fr
                 const actualItemWidth = (availableWidth - gap * (this._state.itemsPerRow - 1)) / this._state.itemsPerRow;
@@ -566,18 +590,18 @@ const VirtualGrid = {
                 const visibleStart = firstVisibleRow * state.itemsPerRow;
                 const visibleEnd = Math.min((firstVisibleRow + state.visibleRows) * state.itemsPerRow, items.length);
 
-                // Track what we need
-                const neededIds = new Set();
-                for (let i = renderStart; i < renderEnd; i++) {
-                    neededIds.add(config.getItemId(items[i]));
+                // Build id->index map for O(1) lookups (avoids O(n) findIndex calls)
+                const idToIndex = new Map();
+                for (let i = retainStart; i < retainEnd; i++) {
+                    idToIndex.set(config.getItemId(items[i]), i);
                 }
 
                 // Remove items outside retain zone
                 const currentItems = grid.querySelectorAll(config.itemSelector);
                 for (const el of currentItems) {
                     const id = el.dataset.id || el.dataset.groupHash;
-                    const idx = items.findIndex(item => config.getItemId(item) === id);
-                    if (idx === -1 || idx < retainStart || idx >= retainEnd) {
+                    const idx = idToIndex.get(id);
+                    if (idx === undefined) {
                         state.renderedItems.delete(id);
                         el.remove();
                         // Notify removal
@@ -594,7 +618,7 @@ const VirtualGrid = {
                     if (!state.renderedItems.has(id)) {
                         const el = config.createItem(item, i);
                         state.renderedItems.set(id, el);
-                        this._insertItemAtPosition(el, i);
+                        this._insertItemAtPosition(el, i, idToIndex);
                         // Notify visibility
                         if (config.onItemVisible) {
                             config.onItemVisible(item, el);
@@ -602,26 +626,15 @@ const VirtualGrid = {
                     }
                 }
 
-                // Update spacer heights
-                let minRenderedIdx = Infinity;
-                let maxRenderedIdx = -1;
-                for (const [id] of state.renderedItems) {
-                    const idx = items.findIndex(item => config.getItemId(item) === id);
-                    if (idx !== -1) {
-                        minRenderedIdx = Math.min(minRenderedIdx, idx);
-                        maxRenderedIdx = Math.max(maxRenderedIdx, idx);
-                    }
-                }
+                // Update spacer heights based on render zone
+                // (no need to iterate renderedItems - we know the range)
+                const topRow = renderStartRow;
+                const bottomRow = renderEndRow;
+                const topHeight = topRow * state.itemHeight;
+                const bottomHeight = Math.max(0, (totalRows - bottomRow) * state.itemHeight);
 
-                if (minRenderedIdx !== Infinity) {
-                    const topRow = Math.floor(minRenderedIdx / state.itemsPerRow);
-                    const bottomRow = Math.floor(maxRenderedIdx / state.itemsPerRow) + 1;
-                    const topHeight = topRow * state.itemHeight;
-                    const bottomHeight = Math.max(0, (totalRows - bottomRow) * state.itemHeight);
-
-                    this._topSpacer.style.height = topHeight + 'px';
-                    this._bottomSpacer.style.height = bottomHeight + 'px';
-                }
+                this._topSpacer.style.height = topHeight + 'px';
+                this._bottomSpacer.style.height = bottomHeight + 'px';
 
                 state.startIndex = renderStart;
                 state.endIndex = renderEnd;
@@ -643,6 +656,33 @@ const VirtualGrid = {
                     }
 
                     ThumbnailLoader.prioritize(visibleIds, bufferIds);
+
+                    // Re-request thumbnails for visible items that were pruned from the queue.
+                    // Items in retain zone keep their DOM element but may have had their
+                    // thumbnail request pruned when they were in the background priority.
+                    // When they become visible again, onItemVisible isn't called (already rendered),
+                    // so we need to explicitly re-request their thumbnails here.
+                    let requeued = false;
+                    for (let i = visibleStart; i < visibleEnd; i++) {
+                        const item = items[i];
+                        const id = config.getItemId(item);
+                        const el = state.renderedItems.get(id);
+                        if (el && !el.classList.contains('loaded')) {
+                            const thumbId = config.getThumbnailId(item);
+                            if (thumbId) {
+                                const img = el.querySelector('img');
+                                if (img) {
+                                    ThumbnailLoader.request(thumbId, img, 'visible');
+                                    requeued = true;
+                                }
+                            }
+                        }
+                    }
+
+                    // If we re-queued any items, flush to re-sort and process
+                    if (requeued) {
+                        ThumbnailLoader.flush();
+                    }
                 }
             },
 
@@ -652,10 +692,8 @@ const VirtualGrid = {
              * @param {number} targetIndex - Target index in items array
              * @private
              */
-            _insertItemAtPosition(el, targetIndex) {
+            _insertItemAtPosition(el, targetIndex, idToIndex) {
                 const grid = this._config.grid;
-                const items = this._config.getItems();
-                const getItemId = this._config.getItemId;
                 const selector = this._config.itemSelector;
 
                 // Find the right position among existing items
@@ -664,8 +702,8 @@ const VirtualGrid = {
 
                 for (const existing of existingItems) {
                     const existingId = existing.dataset.id || existing.dataset.groupHash;
-                    const existingIdx = items.findIndex(item => getItemId(item) === existingId);
-                    if (existingIdx > targetIndex) {
+                    const existingIdx = idToIndex.get(existingId);
+                    if (existingIdx !== undefined && existingIdx > targetIndex) {
                         insertBefore = existing;
                         break;
                     }
