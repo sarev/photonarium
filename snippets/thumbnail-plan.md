@@ -406,17 +406,17 @@ ThumbnailLoader then:
 
 ### Phase 1: Create thumbnails.js with ThumbnailLoader
 
-- [ ] Create `thumbnails.js` file with module header/documentation
-- [ ] Implement `ThumbnailLoader` object:
-  - [ ] `_queue`, `_inFlight`, `_cacheBust`, `_maxConcurrent`, `_activeCount` state
-  - [ ] `request(imageId, imgElement, priority)` method
-  - [ ] `cancel(imageId, imgElement)` method
-  - [ ] `prioritize(visibleIds, bufferIds)` method
-  - [ ] `bustCache(imageId)` method
-  - [ ] `_processQueue()` internal method
-  - [ ] `_loadThumbnail(item)` internal method with fetch + AbortController
-  - [ ] Deduplication logic (multiple listeners per imageId)
-- [ ] Add `thumbnails.js` to `index.html` script load order
+- [x] Create `thumbnails.js` file with module header/documentation
+- [x] Implement `ThumbnailLoader` object:
+  - [x] `_queue`, `_inFlight`, `_cacheBust`, `_maxConcurrent`, `_activeCount` state
+  - [x] `request(imageId, imgElement, priority)` method
+  - [x] `cancel(imageId, imgElement)` method
+  - [x] `prioritize(visibleIds, bufferIds)` method
+  - [x] `bustCache(imageId)` method
+  - [x] `_processQueue()` internal method
+  - [x] `_loadThumbnail(item)` internal method with fetch + AbortController
+  - [x] Deduplication logic (multiple listeners per imageId)
+- [x] Add `thumbnails.js` to `index.html` script load order
 - [ ] Write basic tests / manual verification
 
 ### Phase 2: Implement VirtualGrid
