@@ -494,12 +494,12 @@ ThumbnailLoader then:
 
 ### Phase 6: Cleanup and Polish
 
-- [ ] Remove any dead code from Gallery.js and Duplicates.js
-- [ ] Verify no duplicate functionality remains
+- [x] Remove any dead code from Gallery.js and Duplicates.js
+- [x] Verify no duplicate functionality remains
 - [ ] Test rapid scrolling behavior (LIFO queue working correctly)
 - [ ] Test scroll up/down/up pattern (deduplication working)
 - [ ] Test drag-box with auto-scroll
 - [ ] Test keyboard navigation in both screens
 - [ ] Test thumbnail size changes
 - [ ] Test window resize
-- [ ] Update CLAUDE.md if needed with new architecture notes
+- [x] Update CLAUDE.md if needed with new architecture notes
