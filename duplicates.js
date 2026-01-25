@@ -103,22 +103,39 @@ const Duplicates = {
      * @type {Object}
      * @property {Object<number, Array>} groupCache - Cached groups by similarity level
      * @property {Object<number, string>} statusCache - Cached status by similarity level
+     * @property {Object<number, string>} epochCache - Cached epoch by similarity level
      * @property {number} currentLevel - Current similarity level (0-3)
      * @property {Array<Object>} groups - Current duplicate groups for display
      * @property {string} currentStatus - Status of current level ('pending', 'computing', 'done')
      * @property {number} scrollTop - Saved scroll position
      * @property {boolean} needsRefresh - Whether data needs to reload
-     * @property {IntersectionObserver|null} lazyLoader - Observer for lazy loading
      */
     state: {
         groupCache: {},
         statusCache: {},
+        epochCache: {},
         currentLevel: 0,
         groups: [],
         currentStatus: 'pending',
         scrollTop: 0,
-        needsRefresh: true,
-        lazyLoader: null
+        needsRefresh: true
+    },
+
+    /**
+     * Virtual scrolling configuration.
+     * @type {Object}
+     * @private
+     */
+    _virtualScroll: {
+        itemHeight: 0,      // Height of each stack item including gap
+        itemWidth: 0,       // Width of each stack item including gap
+        itemsPerRow: 0,     // Number of items per row
+        visibleRows: 0,     // Number of visible rows
+        bufferRows: 3,      // Extra rows to pre-render above/below viewport
+        startIndex: 0,      // First rendered item index
+        endIndex: 0,        // Last rendered item index
+        renderedItems: new Map(), // Cache of rendered DOM elements by group_hash
+        scrollHandler: null // Bound scroll handler for cleanup
     },
 
     /**
@@ -147,8 +164,8 @@ const Duplicates = {
         // Bind events
         this._bindEvents();
 
-        // Set up lazy loading observer
-        this._setupLazyLoader();
+        // Set up virtual scrolling
+        this._initVirtualScroll();
 
         // Subscribe to relevant app events
         this._subscribeToEvents();
@@ -171,8 +188,11 @@ const Duplicates = {
         if (this.state.needsRefresh) {
             this._loadGroups();
         } else {
-            // Restore scroll position
+            // Attach scroll listener and restore position
+            this._attachScrollListener();
             this._els.container.scrollTop = this.state.scrollTop;
+            // Update visible items in case viewport changed
+            this._updateVisibleItems(this.state.scrollTop);
         }
     },
 
@@ -182,6 +202,7 @@ const Duplicates = {
      */
     onLeave() {
         this.state.scrollTop = this._els.container.scrollTop;
+        this._detachScrollListener();
     },
 
     /**
@@ -208,13 +229,41 @@ const Duplicates = {
      */
     _subscribeToEvents() {
         // Thumbnail size sync
-        App.on('thumbnailSizeChanged', (size) => this._applyThumbSize(size));
+        App.on('thumbnailSizeChanged', (size) => this._onThumbnailSizeChanged(size));
 
         // Database changes require refresh
         App.on('databaseChanged', () => {
             this.state.needsRefresh = true;
             this.state.groupCache = {};
+            this.state.epochCache = {};
         });
+    },
+
+    /**
+     * Handles thumbnail size changes.
+     * Recalculates virtual scroll dimensions and re-renders visible items.
+     * @param {number} sizePx - New thumbnail size in pixels
+     * @private
+     */
+    _onThumbnailSizeChanged(sizePx) {
+        this._applyThumbSize(sizePx);
+
+        // Re-render if currently visible
+        if (App.getScreen() === 'duplicates' && this.state.groups.length > 0) {
+            const container = this._els.container;
+            if (container) {
+                this._calculateVirtualDimensions(container);
+                // Clear cache and force re-render
+                this._virtualScroll.renderedItems.clear();
+                const items = this._els.grid.querySelectorAll('.duplicate-stack');
+                for (const item of items) {
+                    item.remove();
+                }
+                this._virtualScroll.startIndex = -1;
+                this._virtualScroll.endIndex = -1;
+                this._updateVisibleItems(container.scrollTop);
+            }
+        }
     },
 
     /**
@@ -238,26 +287,210 @@ const Duplicates = {
     },
 
     /**
-     * Sets up the IntersectionObserver for lazy loading thumbnails.
+     * Initializes virtual scrolling.
      * @private
      */
-    _setupLazyLoader() {
-        this.state.lazyLoader = new IntersectionObserver(
-            (entries) => {
-                entries.forEach((entry) => {
-                    if (entry.isIntersecting) {
-                        const stack = entry.target;
-                        this._loadStackThumbnail(stack);
-                        this.state.lazyLoader.unobserve(stack);
-                    }
-                });
-            },
-            {
-                root: this._els.container,
-                rootMargin: '100px',
-                threshold: 0
+    _initVirtualScroll() {
+        // Create spacer elements for virtual scrolling
+        this._topSpacer = document.createElement('div');
+        this._topSpacer.className = 'virtual-spacer';
+        this._bottomSpacer = document.createElement('div');
+        this._bottomSpacer.className = 'virtual-spacer';
+
+        // Bind scroll handler
+        this._virtualScroll.scrollHandler = this._onScroll.bind(this);
+
+        // Handle window resize
+        this._resizeHandler = App.debounce(() => {
+            if (App.getScreen() === 'duplicates' && this.state.groups.length > 0) {
+                const container = this._els.container;
+                if (container) {
+                    this._calculateVirtualDimensions(container);
+                    // Force re-render
+                    this._virtualScroll.startIndex = -1;
+                    this._virtualScroll.endIndex = -1;
+                    this._updateVisibleItems(container.scrollTop);
+                }
             }
-        );
+        }, 100);
+        window.addEventListener('resize', this._resizeHandler);
+    },
+
+    /**
+     * Attaches the scroll listener for virtual scrolling.
+     * @private
+     */
+    _attachScrollListener() {
+        const container = this._els.container;
+        if (container && this._virtualScroll.scrollHandler) {
+            container.removeEventListener('scroll', this._virtualScroll.scrollHandler);
+            container.addEventListener('scroll', this._virtualScroll.scrollHandler, { passive: true });
+        }
+    },
+
+    /**
+     * Detaches the scroll listener for virtual scrolling.
+     * @private
+     */
+    _detachScrollListener() {
+        const container = this._els.container;
+        if (container && this._virtualScroll.scrollHandler) {
+            container.removeEventListener('scroll', this._virtualScroll.scrollHandler);
+        }
+    },
+
+    /**
+     * Handles scroll events for virtual scrolling.
+     * @param {Event} e - Scroll event
+     * @private
+     */
+    _onScroll(e) {
+        // Throttle scroll updates with requestAnimationFrame
+        if (this._scrollRAF) return;
+        const scrollTop = e.target.scrollTop;
+        this._scrollRAF = requestAnimationFrame(() => {
+            this._scrollRAF = null;
+            this._updateVisibleItems(scrollTop);
+        });
+    },
+
+    /**
+     * Calculates dimensions for virtual scrolling.
+     * Matches CSS grid's auto-fill calculation.
+     * @param {HTMLElement} container - The scroll container
+     * @private
+     */
+    _calculateVirtualDimensions(container) {
+        const thumbSize = App.getThumbnailSize();
+        const gap = 16; // 1rem gap (from CSS)
+        const padding = 16; // 1rem padding (from CSS)
+
+        // Calculate items per row matching CSS grid auto-fill behavior
+        const availableWidth = container.clientWidth - padding * 2;
+        const minItemWidth = thumbSize + 16; // Stack includes padding
+
+        this._virtualScroll.itemsPerRow = Math.max(1, Math.floor((availableWidth + gap) / (minItemWidth + gap)));
+
+        // Actual item width when using 1fr
+        const actualItemWidth = (availableWidth - gap * (this._virtualScroll.itemsPerRow - 1)) / this._virtualScroll.itemsPerRow;
+
+        // Item height: thumbnail (square) + count label + padding
+        const thumbnailHeight = actualItemWidth;
+        const labelHeight = 24;
+        const itemHeight = thumbnailHeight + labelHeight + 16;
+
+        this._virtualScroll.itemWidth = actualItemWidth;
+        this._virtualScroll.itemHeight = itemHeight + gap;
+
+        // Calculate visible rows
+        const containerHeight = container.clientHeight;
+        this._virtualScroll.visibleRows = Math.ceil(containerHeight / this._virtualScroll.itemHeight) + 1;
+
+        // Calculate total height
+        const totalRows = Math.ceil(this.state.groups.length / this._virtualScroll.itemsPerRow);
+        this._virtualScroll.totalHeight = totalRows * this._virtualScroll.itemHeight;
+    },
+
+    /**
+     * Updates visible items based on scroll position.
+     * @param {number} scrollTop - Current scroll position
+     * @private
+     */
+    _updateVisibleItems(scrollTop) {
+        const vs = this._virtualScroll;
+        const groups = this.state.groups;
+        const grid = this._els.grid;
+
+        if (groups.length === 0) return;
+
+        const totalRows = Math.ceil(groups.length / vs.itemsPerRow);
+        const firstVisibleRow = Math.floor(scrollTop / vs.itemHeight);
+
+        // Render zone: must have these items in DOM
+        const renderStartRow = Math.max(0, firstVisibleRow - vs.bufferRows);
+        const renderEndRow = Math.min(totalRows, firstVisibleRow + vs.visibleRows + vs.bufferRows);
+
+        // Convert to item indices
+        const renderStart = renderStartRow * vs.itemsPerRow;
+        const renderEnd = Math.min(renderEndRow * vs.itemsPerRow, groups.length);
+
+        // Track what we need
+        const neededHashes = new Set();
+        for (let i = renderStart; i < renderEnd; i++) {
+            neededHashes.add(groups[i].group_hash);
+        }
+
+        // Remove items outside render zone
+        const currentItems = grid.querySelectorAll('.duplicate-stack');
+        for (const item of currentItems) {
+            const hash = item.dataset.groupHash;
+            if (!neededHashes.has(hash)) {
+                vs.renderedItems.delete(hash);
+                item.remove();
+            }
+        }
+
+        // Add missing items in render zone
+        for (let i = renderStart; i < renderEnd; i++) {
+            const group = groups[i];
+            if (!vs.renderedItems.has(group.group_hash)) {
+                const stack = this._createStackElement(group, i);
+                vs.renderedItems.set(group.group_hash, stack);
+                this._insertItemAtPosition(stack, i);
+                // Load thumbnail immediately since we only render visible items
+                this._loadStackThumbnail(stack, group);
+            }
+        }
+
+        // Update spacer heights
+        let minRenderedIdx = Infinity;
+        let maxRenderedIdx = -1;
+        for (const [hash] of vs.renderedItems) {
+            const idx = groups.findIndex(g => g.group_hash === hash);
+            if (idx !== -1) {
+                minRenderedIdx = Math.min(minRenderedIdx, idx);
+                maxRenderedIdx = Math.max(maxRenderedIdx, idx);
+            }
+        }
+
+        if (minRenderedIdx !== Infinity) {
+            const topRow = Math.floor(minRenderedIdx / vs.itemsPerRow);
+            const bottomRow = Math.floor(maxRenderedIdx / vs.itemsPerRow) + 1;
+            const topHeight = topRow * vs.itemHeight;
+            const bottomHeight = Math.max(0, (totalRows - bottomRow) * vs.itemHeight);
+
+            this._topSpacer.style.height = topHeight + 'px';
+            this._bottomSpacer.style.height = bottomHeight + 'px';
+        }
+
+        vs.startIndex = renderStart;
+        vs.endIndex = renderEnd;
+    },
+
+    /**
+     * Inserts a stack element at the correct position in the grid.
+     * @param {HTMLElement} stack - The stack element to insert
+     * @param {number} targetIndex - The index in groups array
+     * @private
+     */
+    _insertItemAtPosition(stack, targetIndex) {
+        const grid = this._els.grid;
+        const groups = this.state.groups;
+
+        // Find the right position among existing items
+        const existingItems = grid.querySelectorAll('.duplicate-stack');
+        let insertBefore = this._bottomSpacer;
+
+        for (const existing of existingItems) {
+            const existingHash = existing.dataset.groupHash;
+            const existingIdx = groups.findIndex(g => g.group_hash === existingHash);
+            if (existingIdx > targetIndex) {
+                insertBefore = existing;
+                break;
+            }
+        }
+
+        grid.insertBefore(stack, insertBefore);
     },
 
     /**
@@ -268,6 +501,7 @@ const Duplicates = {
         this.state.needsRefresh = true;
         this.state.groupCache = {};
         this.state.statusCache = {};
+        this.state.epochCache = {};
     }
 };
 
@@ -305,37 +539,45 @@ Duplicates._loadGroups = async function() {
 
 /**
  * Gets duplicate groups for a given similarity level.
- * Returns from cache if available (and status is 'done'), otherwise fetches from backend.
+ * Uses epoch-based caching to avoid re-fetching unchanged data.
  * @param {number} level - Similarity level (0-3)
  * @returns {Promise<{groups: Array<Object>, status: string}>} Groups and computation status
  * @private
  */
 Duplicates._getGroupsForLevel = async function(level) {
-    // Return cached if available and status is 'done'
+    // Check cache status
     const cachedStatus = this.state.statusCache[level];
-    if (cachedStatus === 'done' && this.state.groupCache[level]) {
-        return {
-            groups: this.state.groupCache[level],
-            status: cachedStatus
-        };
+    const cachedEpoch = this.state.epochCache[level];
+    const cachedGroups = this.state.groupCache[level];
+
+    // If we have cached data with 'done' status, include epoch in request
+    let url = `/duplicates?level=${level}`;
+    if (cachedStatus === 'done' && cachedEpoch && cachedGroups) {
+        url += `&since=${encodeURIComponent(cachedEpoch)}`;
     }
 
     // Fetch from backend
-    const response = await App.apiGet(`/duplicates?level=${level}`);
+    const response = await App.apiGet(url);
+
+    // If unchanged, return cached data
+    if (response.unchanged && cachedGroups) {
+        return {
+            groups: cachedGroups,
+            status: response.status || 'done'
+        };
+    }
+
+    // New data - the API now returns lightweight format with best_image already selected
     const groups = response.groups || [];
     const status = response.status || 'done';
+    const epoch = response.epoch || '';
 
-    // Process each group to determine the "best" image
-    groups.forEach((group) => {
-        group.bestImage = this._selectBestImage(group.images);
-    });
-
-    // Sort by group size (largest first)
-    groups.sort((a, b) => b.images.length - a.images.length);
+    // Groups are already sorted by count (largest first) from the API
 
     // Only cache if computation is done
     if (status === 'done') {
         this.state.groupCache[level] = groups;
+        this.state.epochCache[level] = epoch;
     }
     this.state.statusCache[level] = status;
 
@@ -402,53 +644,6 @@ Duplicates._scheduleStatusPoll = function(level) {
     }, 2000);
 };
 
-/**
- * Selects the "best" image from a group of duplicates.
- * Criteria in order:
- *   1. Highest resolution (width × height)
- *   2. Best Laplacian variance (sharpness/focus)
- *   3. Lossless compression preferred
- * @param {Array<Object>} images - Array of image objects in the group
- * @returns {Object} The best image from the group
- * @private
- */
-Duplicates._selectBestImage = function(images) {
-    if (!images || images.length === 0) {
-        return null;
-    }
-
-    return images.reduce((best, img) => {
-        // Compare resolution
-        const bestRes = (best.width || 0) * (best.height || 0);
-        const imgRes = (img.width || 0) * (img.height || 0);
-
-        if (imgRes > bestRes) {
-            return img;
-        }
-        if (imgRes < bestRes) {
-            return best;
-        }
-
-        // Resolution equal, compare Laplacian variance (sharpness)
-        const bestLap = best.laplacian_variance || 0;
-        const imgLap = img.laplacian_variance || 0;
-
-        if (imgLap > bestLap) {
-            return img;
-        }
-        if (imgLap < bestLap) {
-            return best;
-        }
-
-        // Sharpness equal, prefer lossless
-        if (img.lossless && !best.lossless) {
-            return img;
-        }
-
-        return best;
-    });
-};
-
 /* ==========================================================================
    RENDERING & DISPLAY
 
@@ -456,15 +651,20 @@ Duplicates._selectBestImage = function(images) {
    ========================================================================== */
 
 /**
- * Renders the current duplicate groups as stacked cards.
+ * Renders the current duplicate groups using virtual scrolling.
+ * Only renders visible items plus a buffer for smooth scrolling.
  * @private
  */
 Duplicates._renderGroups = function() {
     const grid = this._els.grid;
     const empty = this._els.empty;
+    const container = this._els.container;
 
-    // Clear existing content
+    // Clear existing content and cache
     grid.innerHTML = '';
+    this._virtualScroll.renderedItems.clear();
+    this._virtualScroll.startIndex = -1;
+    this._virtualScroll.endIndex = -1;
 
     const status = this.state.currentStatus;
     const sliderPos = this._levelToSlider(this.state.currentLevel);
@@ -492,19 +692,26 @@ Duplicates._renderGroups = function() {
     empty.hidden = true;
     grid.hidden = false;
 
-    // Create stack elements for each group
-    this.state.groups.forEach((group, index) => {
-        const stack = this._createStackElement(group, index);
-        grid.appendChild(stack);
+    // Update grid CSS for thumbnail size
+    this._applyThumbSize(App.getThumbnailSize());
 
-        // Observe for lazy loading
-        this.state.lazyLoader.observe(stack);
-    });
+    // Calculate virtual scroll dimensions
+    this._calculateVirtualDimensions(container);
+
+    // Add spacers for virtual scrolling
+    grid.appendChild(this._topSpacer);
+    grid.appendChild(this._bottomSpacer);
+
+    // Render initial visible items
+    this._updateVisibleItems(container.scrollTop);
+
+    // Attach scroll listener
+    this._attachScrollListener();
 };
 
 /**
  * Creates a stack element for a duplicate group.
- * @param {Object} group - The duplicate group
+ * @param {Object} group - The duplicate group (lightweight format)
  * @param {number} index - Group index for data attribute
  * @returns {HTMLElement} The stack element
  * @private
@@ -513,17 +720,18 @@ Duplicates._createStackElement = function(group, index) {
     const stack = document.createElement('div');
     stack.className = 'duplicate-stack';
     stack.dataset.groupIndex = index;
+    stack.dataset.groupHash = group.group_hash;
 
-    // Best image preview (loaded lazily)
+    // Best image preview (thumbnail)
     const img = document.createElement('img');
-    img.alt = group.bestImage?.basename || 'Duplicate group preview';
-    img.dataset.imageId = group.bestImage?.id || '';
+    img.alt = group.best_image?.basename || 'Duplicate group preview';
+    img.dataset.imageId = group.best_image?.id || '';
     stack.appendChild(img);
 
     // Count label
     const count = document.createElement('div');
     count.className = 'duplicate-stack-count';
-    count.textContent = `${group.images.length} images`;
+    count.textContent = `${group.count} images`;
     stack.appendChild(count);
 
     return stack;
@@ -531,11 +739,12 @@ Duplicates._createStackElement = function(group, index) {
 
 /**
  * Loads the thumbnail image for a stack element.
- * Called by IntersectionObserver when stack enters viewport.
+ * Called when stack is rendered in the visible zone.
  * @param {HTMLElement} stack - The stack element
+ * @param {Object} group - The group data (for additional context if needed)
  * @private
  */
-Duplicates._loadStackThumbnail = function(stack) {
+Duplicates._loadStackThumbnail = function(stack, group) {
     const img = stack.querySelector('img');
     const imageId = img?.dataset.imageId;
 
@@ -585,15 +794,15 @@ Duplicates._handleDoubleClick = function(e) {
     const index = parseInt(stack.dataset.groupIndex, 10);
     const group = this.state.groups[index];
 
-    if (!group?.images?.length) return;
+    if (!group?.image_ids?.length) return;
 
     // Save scroll position before leaving
     this.state.scrollTop = this._els.container.scrollTop;
 
-    const imageIds = group.images.map(img => img.id).filter(Boolean);
+    const imageIds = group.image_ids;
     if (imageIds.length === 0) return;
 
-    const bestId = group.bestImage?.id;
+    const bestId = group.best_image?.id;
     const selection = bestId ? [bestId] : [imageIds[0]];
 
     // Set a gallery filter to show only this group's images

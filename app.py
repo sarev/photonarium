@@ -526,7 +526,7 @@ def get_duplicates():
     """Get duplicate image groups at a specified similarity level.
 
     Duplicate groups are pre-computed during scanning. This endpoint
-    returns groups for the requested similarity level.
+    returns lightweight group data for efficient grid display.
 
     Query Parameters:
         level: Similarity level (0-3). Defaults to 0.
@@ -534,26 +534,49 @@ def get_duplicates():
             - 1: Near-identical (similar perceptual hash)
             - 2: Similar (high OpenCLIP similarity)
             - 3: Related (lower OpenCLIP threshold)
+        since: Optional epoch timestamp. If provided and matches current
+               epoch, returns empty groups (no changes).
 
     Returns:
         JSON object with:
-            - groups: Array of duplicate groups, each containing:
-                - images: Array of image objects in the group
+            - groups: Array of lightweight duplicate groups, each containing:
+                - group_hash: Unique group identifier
+                - count: Number of images in the group
+                - image_ids: Array of image IDs in the group
+                - best_image: Object with id and basename for thumbnail
             - status: Computation status for this level
                 - 'pending': Not yet computed
                 - 'computing': Currently being computed
                 - 'done': Computation finished
+            - epoch: Current epoch timestamp for caching
     """
     level = request.args.get('level', 0, type=int)
+    since = request.args.get('since')
 
     # Validate level
     if level < 0 or level > 3:
         return error_response('Level must be between 0 and 3')
 
     db = get_db()
-    groups = db.get_duplicate_groups(level)
     status = db.get_duplicate_status().get(level, 'pending')
-    return jsonify({'groups': groups, 'status': status})
+    epoch = db.get_duplicate_epoch()
+
+    # If client has current data, return minimal response
+    if since and since == epoch and status == 'done':
+        return jsonify({
+            'groups': [],
+            'status': status,
+            'epoch': epoch,
+            'unchanged': True,
+        })
+
+    # Return lightweight group data
+    groups = db.get_duplicate_groups_lightweight(level)
+    return jsonify({
+        'groups': groups,
+        'status': status,
+        'epoch': epoch,
+    })
 
 
 # =============================================================================

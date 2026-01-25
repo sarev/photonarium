@@ -257,6 +257,10 @@ _SQL_MIGRATIONS = [
     "ALTER TABLE images ADD COLUMN description_embedding BLOB",
     # Add mtime column for fast change detection (avoids checksum on every scan)
     "ALTER TABLE images ADD COLUMN mtime REAL",
+    # Add updated_at column for duplicate epoch tracking
+    "ALTER TABLE duplicate_groups ADD COLUMN updated_at TEXT",
+    # Track when each image was last included in duplicate computation
+    "ALTER TABLE images ADD COLUMN duplicate_checked_at TEXT",
 ]
 
 # SQL schema for the duplicate_groups table
@@ -286,6 +290,7 @@ _SQL_CREATE_INDEXES = [
     "CREATE INDEX IF NOT EXISTS idx_images_deleted ON images(deleted)",
     "CREATE INDEX IF NOT EXISTS idx_images_timestamp ON images(timestamp)",
     "CREATE INDEX IF NOT EXISTS idx_dup_level_group ON duplicate_groups(level, group_hash)",
+    "CREATE INDEX IF NOT EXISTS idx_dup_updated_at ON duplicate_groups(updated_at)",
 ]
 
 
@@ -336,16 +341,20 @@ def init_database(db_path: Path | str) -> sqlite3.Connection:
     conn.execute(_SQL_CREATE_DUPLICATE_GROUPS)
     conn.execute(_SQL_CREATE_MIGRATIONS)
 
-    # Create indexes
-    for index_sql in _SQL_CREATE_INDEXES:
-        conn.execute(index_sql)
-
-    # Run migrations for existing databases
+    # Run migrations for existing databases (must run BEFORE indexes)
     for migration_sql in _SQL_MIGRATIONS:
         try:
             conn.execute(migration_sql)
         except sqlite3.OperationalError:
             # Column/table already exists, ignore
+            pass
+
+    # Create indexes (after migrations so new columns exist)
+    for index_sql in _SQL_CREATE_INDEXES:
+        try:
+            conn.execute(index_sql)
+        except sqlite3.OperationalError:
+            # Index already exists, ignore
             pass
 
     conn.commit()
@@ -1492,6 +1501,13 @@ class IngestionThread(threading.Thread):
         """Main thread loop - process images using thread pool."""
         logger.info(f'Ingestion thread started with {self.num_threads} worker threads')
 
+        # Progress logging state
+        last_progress_time = time.time()
+        progress_interval = 5.0  # Log every 5 seconds
+        initial_queue_size = self.ingestion_queue.qsize()
+        if initial_queue_size > 0:
+            logger.info(f'Indexing {initial_queue_size} images...')
+
         with ThreadPoolExecutor(max_workers=self.num_threads) as executor:
             pending_futures: dict[Future, Path] = {}
 
@@ -1527,6 +1543,17 @@ class IngestionThread(threading.Thread):
                             self.ingestion_queue.task_done()
                             with self._pending_lock:
                                 self._pending_count -= 1
+
+                # Periodic progress logging
+                now = time.time()
+                if now - last_progress_time >= progress_interval:
+                    remaining = self.ingestion_queue.qsize() + len(pending_futures)
+                    if remaining > 0:
+                        logger.info(
+                            f'Indexing progress: {self._processed_count} done, '
+                            f'{remaining} remaining'
+                        )
+                    last_progress_time = now
 
                 # Small sleep if no work to prevent busy-waiting
                 if not pending_futures:
@@ -1988,6 +2015,10 @@ class EmbeddingThread(threading.Thread):
         """Main thread loop - process images in batches from the queue."""
         logger.info('Embedding thread started')
 
+        # Progress logging state
+        last_progress_time = time.time()
+        progress_interval = 5.0  # Log every 5 seconds
+
         while not self.stop_event.is_set():
             try:
                 # Collect a batch of image IDs
@@ -2022,6 +2053,17 @@ class EmbeddingThread(threading.Thread):
                 if batch_ids:
                     self._process_batch(batch_ids, batch_paths)
                     self._completion_triggered = False  # Reset completion flag
+
+                    # Periodic progress logging
+                    now = time.time()
+                    if now - last_progress_time >= progress_interval:
+                        remaining = self.embedding_queue.qsize()
+                        if remaining > 0 or self._processed_count > 0:
+                            logger.info(
+                                f'Embedding progress: {self._processed_count} done, '
+                                f'{remaining} remaining'
+                            )
+                        last_progress_time = now
                 else:
                     # Queue is empty - check if we should trigger completion
                     self._check_completion()
@@ -2160,11 +2202,144 @@ def _insert_duplicate_group(
         group_hash: Unique identifier for this group.
         image_ids: List of image IDs in the group.
     """
+    now = datetime.now().isoformat()
     for image_id in image_ids:
         conn.execute(
-            'INSERT INTO duplicate_groups (level, group_hash, image_id) VALUES (?, ?, ?)',
-            (level, group_hash, image_id)
+            'INSERT INTO duplicate_groups (level, group_hash, image_id, updated_at) VALUES (?, ?, ?, ?)',
+            (level, group_hash, image_id, now)
         )
+
+
+def get_dirty_image_ids(conn: sqlite3.Connection) -> list[str]:
+    """Get IDs of images that need duplicate checking.
+
+    An image is "dirty" if:
+    - duplicate_checked_at is NULL (never checked), OR
+    - duplicate_checked_at < updated_at (modified since last check)
+
+    Args:
+        conn: Database connection.
+
+    Returns:
+        List of image IDs that need duplicate checking.
+    """
+    cursor = conn.execute("""
+        SELECT id FROM images
+        WHERE deleted = 0 AND (
+            duplicate_checked_at IS NULL OR
+            duplicate_checked_at < updated_at
+        )
+    """)
+    return [row['id'] for row in cursor.fetchall()]
+
+
+def mark_images_duplicate_checked(
+    conn: sqlite3.Connection,
+    image_ids: list[str],
+) -> None:
+    """Mark images as having been checked for duplicates.
+
+    Args:
+        conn: Database connection.
+        image_ids: List of image IDs to mark.
+    """
+    if not image_ids:
+        return
+    now = datetime.now().isoformat()
+    # Use batched updates for efficiency
+    for i in range(0, len(image_ids), 500):
+        batch = image_ids[i:i + 500]
+        placeholders = ','.join('?' * len(batch))
+        conn.execute(
+            f'UPDATE images SET duplicate_checked_at = ? WHERE id IN ({placeholders})',
+            [now] + batch
+        )
+    conn.commit()
+
+
+def get_group_count(conn: sqlite3.Connection, level: int) -> int:
+    """Get the number of duplicate groups at a level.
+
+    Args:
+        conn: Database connection.
+        level: Duplicate level (0-3).
+
+    Returns:
+        Number of distinct groups at this level.
+    """
+    cursor = conn.execute(
+        'SELECT COUNT(DISTINCT group_hash) as cnt FROM duplicate_groups WHERE level = ?',
+        (level,)
+    )
+    return cursor.fetchone()['cnt']
+
+
+def get_image_to_group_mapping(
+    conn: sqlite3.Connection,
+    level: int,
+) -> dict[str, str]:
+    """Get mapping of image IDs to their group hashes.
+
+    Args:
+        conn: Database connection.
+        level: Duplicate level (0-3).
+
+    Returns:
+        Dict mapping image_id to group_hash.
+    """
+    cursor = conn.execute(
+        'SELECT image_id, group_hash FROM duplicate_groups WHERE level = ?',
+        (level,)
+    )
+    return {row['image_id']: row['group_hash'] for row in cursor.fetchall()}
+
+
+def add_image_to_group(
+    conn: sqlite3.Connection,
+    level: int,
+    group_hash: str,
+    image_id: str,
+) -> None:
+    """Add a single image to an existing group.
+
+    Args:
+        conn: Database connection.
+        level: Duplicate level (0-3).
+        group_hash: Group to add image to.
+        image_id: Image to add.
+    """
+    now = datetime.now().isoformat()
+    conn.execute(
+        'INSERT INTO duplicate_groups (level, group_hash, image_id, updated_at) VALUES (?, ?, ?, ?)',
+        (level, group_hash, image_id, now)
+    )
+
+
+def merge_groups(
+    conn: sqlite3.Connection,
+    level: int,
+    group_hash_keep: str,
+    group_hash_merge: str,
+) -> None:
+    """Merge two groups into one.
+
+    All images in group_hash_merge are moved to group_hash_keep.
+
+    Args:
+        conn: Database connection.
+        level: Duplicate level (0-3).
+        group_hash_keep: The group to keep.
+        group_hash_merge: The group to merge into group_hash_keep.
+    """
+    if group_hash_keep == group_hash_merge:
+        return
+    now = datetime.now().isoformat()
+    conn.execute(
+        '''UPDATE duplicate_groups
+           SET group_hash = ?, updated_at = ?
+           WHERE level = ? AND group_hash = ?''',
+        (group_hash_keep, now, level, group_hash_merge)
+    )
 
 
 def compute_duplicates_level0(conn: sqlite3.Connection) -> int:
@@ -2558,6 +2733,310 @@ def compute_duplicates_level3(conn: sqlite3.Connection, threshold: float = 0.85)
     return group_count
 
 
+# =============================================================================
+# INCREMENTAL DUPLICATE COMPUTATION
+#
+# These functions update duplicate groups incrementally when only some images
+# have changed, rather than recomputing everything from scratch.
+# =============================================================================
+
+
+def compute_duplicates_level0_incremental(
+    conn: sqlite3.Connection,
+    dirty_ids: list[str],
+) -> int:
+    """Incrementally update level 0 duplicates for dirty images.
+
+    For each dirty image, finds images with the same checksum and either
+    adds to an existing group or creates a new one.
+
+    Args:
+        conn: Database connection.
+        dirty_ids: List of image IDs that need checking.
+
+    Returns:
+        Number of new groups created.
+    """
+    if not dirty_ids:
+        return 0
+
+    logger.info(f'Incremental level 0: checking {len(dirty_ids)} images')
+
+    # Get current group mapping
+    image_to_group = get_image_to_group_mapping(conn, level=0)
+
+    # Get checksums for dirty images
+    placeholders = ','.join('?' * len(dirty_ids))
+    cursor = conn.execute(
+        f'SELECT id, checksum FROM images WHERE id IN ({placeholders}) AND deleted = 0',
+        dirty_ids
+    )
+    dirty_checksums = {row['id']: row['checksum'] for row in cursor.fetchall()}
+
+    new_groups = 0
+
+    for dirty_id, checksum in dirty_checksums.items():
+        if not checksum:
+            continue
+
+        # Find all images with this checksum (including the dirty one)
+        cursor = conn.execute(
+            'SELECT id FROM images WHERE checksum = ? AND deleted = 0 AND id != ?',
+            (checksum, dirty_id)
+        )
+        matches = [row['id'] for row in cursor.fetchall()]
+
+        if not matches:
+            # No duplicates for this image
+            continue
+
+        # Check if any match is already in a group
+        existing_groups = set()
+        for match_id in matches:
+            if match_id in image_to_group:
+                existing_groups.add(image_to_group[match_id])
+
+        if existing_groups:
+            # Add dirty image to existing group (pick first if multiple)
+            target_group = next(iter(existing_groups))
+            if dirty_id not in image_to_group:
+                add_image_to_group(conn, level=0, group_hash=target_group, image_id=dirty_id)
+                image_to_group[dirty_id] = target_group
+
+            # Merge any other groups
+            for other_group in existing_groups:
+                if other_group != target_group:
+                    merge_groups(conn, level=0, group_hash_keep=target_group, group_hash_merge=other_group)
+                    # Update our local mapping
+                    for img_id, grp in list(image_to_group.items()):
+                        if grp == other_group:
+                            image_to_group[img_id] = target_group
+        else:
+            # Create new group
+            group_hash = f'chk_{checksum[:16]}'
+            all_members = [dirty_id] + matches
+            _insert_duplicate_group(conn, level=0, group_hash=group_hash, image_ids=all_members)
+            for member in all_members:
+                image_to_group[member] = group_hash
+            new_groups += 1
+
+    conn.commit()
+    logger.info(f'Incremental level 0: created {new_groups} new groups')
+    return new_groups
+
+
+def compute_duplicates_level1_incremental(
+    conn: sqlite3.Connection,
+    dirty_ids: list[str],
+    threshold: int = 5,
+) -> int:
+    """Incrementally update level 1 duplicates for dirty images.
+
+    For each dirty image, finds images with similar perceptual hash.
+
+    Args:
+        conn: Database connection.
+        dirty_ids: List of image IDs that need checking.
+        threshold: Maximum Hamming distance to consider as near-identical.
+
+    Returns:
+        Number of new groups created.
+    """
+    if not dirty_ids:
+        return 0
+
+    logger.info(f'Incremental level 1: checking {len(dirty_ids)} images')
+
+    # Get current group mapping
+    image_to_group = get_image_to_group_mapping(conn, level=1)
+
+    # Get all images with perceptual hashes for comparison
+    cursor = conn.execute(
+        'SELECT id, perceptual_hash FROM images WHERE deleted = 0 AND perceptual_hash IS NOT NULL'
+    )
+    all_images = {row['id']: row['perceptual_hash'] for row in cursor.fetchall()}
+
+    # Get perceptual hashes for dirty images
+    dirty_hashes = {img_id: all_images.get(img_id) for img_id in dirty_ids if img_id in all_images}
+
+    new_groups = 0
+
+    for dirty_id, dirty_hash in dirty_hashes.items():
+        if dirty_hash is None:
+            continue
+
+        dirty_hash_int = int(dirty_hash, 16) if isinstance(dirty_hash, str) else dirty_hash
+
+        # Find matches within Hamming distance threshold
+        matches = []
+        for other_id, other_hash in all_images.items():
+            if other_id == dirty_id:
+                continue
+            other_hash_int = int(other_hash, 16) if isinstance(other_hash, str) else other_hash
+            distance = bin(dirty_hash_int ^ other_hash_int).count('1')
+            if distance <= threshold:
+                matches.append(other_id)
+
+        if not matches:
+            continue
+
+        # Check if any match is already in a group
+        existing_groups = set()
+        for match_id in matches:
+            if match_id in image_to_group:
+                existing_groups.add(image_to_group[match_id])
+
+        if existing_groups:
+            # Add dirty image to existing group
+            target_group = next(iter(existing_groups))
+            if dirty_id not in image_to_group:
+                add_image_to_group(conn, level=1, group_hash=target_group, image_id=dirty_id)
+                image_to_group[dirty_id] = target_group
+
+            # Merge any other groups
+            for other_group in existing_groups:
+                if other_group != target_group:
+                    merge_groups(conn, level=1, group_hash_keep=target_group, group_hash_merge=other_group)
+                    for img_id, grp in list(image_to_group.items()):
+                        if grp == other_group:
+                            image_to_group[img_id] = target_group
+        else:
+            # Create new group
+            group_hash = f'phash_{dirty_id}'
+            all_members = [dirty_id] + matches
+            _insert_duplicate_group(conn, level=1, group_hash=group_hash, image_ids=all_members)
+            for member in all_members:
+                image_to_group[member] = group_hash
+            new_groups += 1
+
+    conn.commit()
+    logger.info(f'Incremental level 1: created {new_groups} new groups')
+    return new_groups
+
+
+def compute_duplicates_embedding_incremental(
+    conn: sqlite3.Connection,
+    dirty_ids: list[str],
+    level: int,
+    threshold: float,
+) -> int:
+    """Incrementally update embedding-based duplicates for dirty images.
+
+    Used for levels 2 and 3. For each dirty image, computes similarity
+    against all images and adds to or creates groups.
+
+    Args:
+        conn: Database connection.
+        dirty_ids: List of image IDs that need checking.
+        level: Duplicate level (2 or 3).
+        threshold: Minimum cosine similarity.
+
+    Returns:
+        Number of new groups created.
+    """
+    if not dirty_ids:
+        return 0
+
+    logger.info(f'Incremental level {level}: checking {len(dirty_ids)} images')
+
+    # Get current group mapping
+    image_to_group = get_image_to_group_mapping(conn, level=level)
+
+    # Get all images with embeddings
+    cursor = conn.execute(
+        'SELECT id, embedding FROM images WHERE deleted = 0 AND embedding IS NOT NULL'
+    )
+    rows = cursor.fetchall()
+
+    if len(rows) < 2:
+        return 0
+
+    # Build lookup structures
+    all_ids = [row['id'] for row in rows]
+    all_embeddings = {row['id']: embedding_to_numpy(row['embedding']) for row in rows}
+
+    # Stack all embeddings for vectorized comparison
+    id_list = list(all_embeddings.keys())
+    embedding_matrix = np.array([all_embeddings[id] for id in id_list])
+
+    # Normalize for cosine similarity
+    norms = np.linalg.norm(embedding_matrix, axis=1, keepdims=True)
+    norms[norms == 0] = 1  # Avoid division by zero
+    embedding_matrix = embedding_matrix / norms
+
+    new_groups = 0
+
+    for dirty_id in dirty_ids:
+        if dirty_id not in all_embeddings:
+            continue
+
+        dirty_emb = all_embeddings[dirty_id]
+        dirty_emb_norm = dirty_emb / (np.linalg.norm(dirty_emb) or 1)
+
+        # Compute similarities against all images
+        similarities = embedding_matrix @ dirty_emb_norm
+
+        # Find matches above threshold (excluding self)
+        matches = []
+        for i, (other_id, sim) in enumerate(zip(id_list, similarities)):
+            if other_id != dirty_id and sim >= threshold:
+                matches.append(other_id)
+
+        if not matches:
+            continue
+
+        # Check if any match is already in a group
+        existing_groups = set()
+        for match_id in matches:
+            if match_id in image_to_group:
+                existing_groups.add(image_to_group[match_id])
+
+        if existing_groups:
+            # Add dirty image to existing group
+            target_group = next(iter(existing_groups))
+            if dirty_id not in image_to_group:
+                add_image_to_group(conn, level=level, group_hash=target_group, image_id=dirty_id)
+                image_to_group[dirty_id] = target_group
+
+            # Merge any other groups
+            for other_group in existing_groups:
+                if other_group != target_group:
+                    merge_groups(conn, level=level, group_hash_keep=target_group, group_hash_merge=other_group)
+                    for img_id, grp in list(image_to_group.items()):
+                        if grp == other_group:
+                            image_to_group[img_id] = target_group
+        else:
+            # Create new group
+            group_hash = f'emb{level}_{dirty_id}'
+            all_members = [dirty_id] + matches
+            _insert_duplicate_group(conn, level=level, group_hash=group_hash, image_ids=all_members)
+            for member in all_members:
+                image_to_group[member] = group_hash
+            new_groups += 1
+
+    conn.commit()
+    logger.info(f'Incremental level {level}: created {new_groups} new groups')
+    return new_groups
+
+
+def compute_duplicates_level2_incremental(
+    conn: sqlite3.Connection,
+    dirty_ids: list[str],
+    threshold: float = 0.92,
+) -> int:
+    """Incrementally update level 2 duplicates for dirty images."""
+    return compute_duplicates_embedding_incremental(conn, dirty_ids, level=2, threshold=threshold)
+
+
+def compute_duplicates_level3_incremental(
+    conn: sqlite3.Connection,
+    dirty_ids: list[str],
+    threshold: float = 0.85,
+) -> int:
+    """Incrementally update level 3 duplicates for dirty images."""
+    return compute_duplicates_embedding_incremental(conn, dirty_ids, level=3, threshold=threshold)
+
+
 def compute_all_duplicate_groups(conn: sqlite3.Connection, config: Config | None = None) -> dict[int, int]:
     """Compute duplicate groups at all levels.
 
@@ -2627,6 +3106,115 @@ def get_duplicate_groups(conn: sqlite3.Connection, level: int) -> list[dict[str,
             })
 
     return groups
+
+
+def get_duplicate_groups_lightweight(
+    conn: sqlite3.Connection,
+    level: int,
+) -> list[dict[str, Any]]:
+    """Get duplicate groups with minimal data for efficient grid display.
+
+    Returns only the essential fields needed to display the duplicate stacks:
+    group_hash, image count, and the "best" image for the thumbnail.
+
+    The "best" image is selected by: highest resolution, then best laplacian
+    variance (sharpness), then lossless compression preference.
+
+    Args:
+        conn: Database connection.
+        level: Duplicate level (0-3).
+
+    Returns:
+        List of lightweight group dictionaries, each containing:
+            - group_hash: Unique group identifier
+            - count: Number of images in the group
+            - image_ids: List of image IDs in the group
+            - best_image: Dict with id, basename for the best image
+    """
+    # Get groups with their counts and best image in a single efficient query
+    # Uses window function to rank images within each group
+    cursor = conn.execute("""
+        WITH ranked AS (
+            SELECT
+                dg.group_hash,
+                i.id,
+                i.basename,
+                i.width,
+                i.height,
+                i.laplacian_var,
+                i.lossless,
+                ROW_NUMBER() OVER (
+                    PARTITION BY dg.group_hash
+                    ORDER BY
+                        (i.width * i.height) DESC,
+                        i.laplacian_var DESC,
+                        i.lossless DESC
+                ) as rank
+            FROM duplicate_groups dg
+            JOIN images i ON i.id = dg.image_id
+            WHERE dg.level = ? AND i.deleted = 0
+        ),
+        group_counts AS (
+            SELECT group_hash, COUNT(*) as cnt
+            FROM ranked
+            GROUP BY group_hash
+            HAVING cnt > 1
+        )
+        SELECT
+            r.group_hash,
+            gc.cnt as count,
+            r.id as best_id,
+            r.basename as best_basename
+        FROM ranked r
+        JOIN group_counts gc ON r.group_hash = gc.group_hash
+        WHERE r.rank = 1
+        ORDER BY gc.cnt DESC
+    """, (level,))
+
+    groups = []
+    for row in cursor.fetchall():
+        # Get all image IDs for this group (needed for Gallery filter)
+        id_cursor = conn.execute("""
+            SELECT i.id
+            FROM images i
+            JOIN duplicate_groups dg ON i.id = dg.image_id
+            WHERE dg.level = ? AND dg.group_hash = ? AND i.deleted = 0
+        """, (level, row['group_hash']))
+        image_ids = [r['id'] for r in id_cursor.fetchall()]
+
+        groups.append({
+            'group_hash': row['group_hash'],
+            'count': row['count'],
+            'image_ids': image_ids,
+            'best_image': {
+                'id': row['best_id'],
+                'basename': row['best_basename'],
+            },
+        })
+
+    return groups
+
+
+def get_duplicate_epoch(conn: sqlite3.Connection) -> str:
+    """Get the current epoch timestamp for duplicate groups.
+
+    The epoch changes whenever duplicate groups are recomputed.
+
+    Args:
+        conn: Database connection.
+
+    Returns:
+        ISO format timestamp string of the last duplicate computation,
+        or empty string if never computed.
+    """
+    cursor = conn.execute("""
+        SELECT MAX(updated_at) as epoch
+        FROM duplicate_groups
+    """)
+    row = cursor.fetchone()
+    if row and row['epoch']:
+        return row['epoch']
+    return ''
 
 
 # =============================================================================
@@ -3260,6 +3848,7 @@ class ImageDatabase:
 
         # Run one-time migrations
         self._migrate_recalculate_timestamps()
+        self._migrate_mark_existing_duplicate_checked()
 
         # Backfill description embeddings for images with descriptions but no embedding
         self._backfill_description_embeddings()
@@ -3359,6 +3948,49 @@ class ImageDatabase:
         self.conn.commit()
         record_migration(self.conn, migration_id)
         logger.info(f'        Updated {updated} image timestamps')
+
+    def _migrate_mark_existing_duplicate_checked(self) -> None:
+        """One-time migration to mark existing images as duplicate-checked.
+
+        When incremental duplicate detection is introduced, existing images
+        would all appear as 'dirty' because their duplicate_checked_at is NULL.
+        This migration sets duplicate_checked_at to the last duplicate computation
+        time for all existing images, so only truly new/modified images are checked.
+        """
+        migration_id = 'mark_duplicate_checked_v1'
+
+        if has_migration_run(self.conn, migration_id):
+            return
+
+        # Get the epoch from existing duplicate groups
+        epoch = get_duplicate_epoch(self.conn)
+
+        if not epoch:
+            # No duplicates computed yet, nothing to migrate
+            record_migration(self.conn, migration_id)
+            return
+
+        # Count images that need updating
+        cursor = self.conn.execute(
+            'SELECT COUNT(*) as cnt FROM images WHERE duplicate_checked_at IS NULL AND deleted = 0'
+        )
+        count = cursor.fetchone()['cnt']
+
+        if count == 0:
+            record_migration(self.conn, migration_id)
+            return
+
+        logger.info(f'Marking {count} existing images as duplicate-checked (one-time migration)...')
+
+        # Set duplicate_checked_at to the epoch for all images
+        self.conn.execute(
+            'UPDATE images SET duplicate_checked_at = ? WHERE duplicate_checked_at IS NULL',
+            (epoch,)
+        )
+
+        self.conn.commit()
+        record_migration(self.conn, migration_id)
+        logger.info(f'        Marked {count} images as duplicate-checked')
 
     def _rescan_all_folders(self) -> None:
         """Rescan all registered folders for new/changed/deleted files."""
@@ -3915,6 +4547,14 @@ class ImageDatabase:
         """Get duplicate groups at a specific level."""
         return get_duplicate_groups(self.conn, level)
 
+    def get_duplicate_groups_lightweight(self, level: int) -> list[dict[str, Any]]:
+        """Get duplicate groups with minimal data for efficient display."""
+        return get_duplicate_groups_lightweight(self.conn, level)
+
+    def get_duplicate_epoch(self) -> str:
+        """Get the current epoch timestamp for duplicate groups."""
+        return get_duplicate_epoch(self.conn)
+
     # =========================================================================
     # Public API - Stats and Status
     # =========================================================================
@@ -3973,36 +4613,122 @@ class ImageDatabase:
     def _compute_duplicates_with_status(self) -> None:
         """Compute all duplicate groups while tracking status per level.
 
-        Updates _duplicate_status before and after computing each level.
-        This allows the frontend to show progress to the user.
-        """
-        logger.info('Computing all duplicate groups with status tracking')
+        Uses incremental computation when possible:
+        - If no dirty images and duplicates exist, skip entirely
+        - Level 0: incremental if dirty_count <= threshold, else full
+        - Level 1: always full (LSH is more efficient than incremental)
+        - Levels 2/3: incremental if dirty_count <= threshold, else full
 
-        level_functions = [
-            (0, lambda: compute_duplicates_level0(self.conn)),
-            (1, lambda: compute_duplicates_level1(self.conn, self.config.perceptual_hash_threshold)),
-            (2, lambda: compute_duplicates_level2(self.conn, self.config.similarity_threshold_level2)),
-            (3, lambda: compute_duplicates_level3(self.conn, self.config.similarity_threshold_level3)),
-        ]
+        Updates _duplicate_status before and after computing each level.
+        """
+        # Get dirty images (new or modified since last duplicate check)
+        dirty_ids = get_dirty_image_ids(self.conn)
+
+        if not dirty_ids:
+            # No dirty images - check if duplicates have been computed at all
+            existing_epoch = get_duplicate_epoch(self.conn)
+            if existing_epoch:
+                logger.info(
+                    'Skipping duplicate computation: no dirty images and '
+                    f'duplicates already computed (epoch: {existing_epoch})'
+                )
+                with self._duplicate_status_lock:
+                    for level in range(4):
+                        self._duplicate_status[level] = 'done'
+                return
+            else:
+                # No epoch means first run with no images yet
+                logger.info('No images to process for duplicates')
+                with self._duplicate_status_lock:
+                    for level in range(4):
+                        self._duplicate_status[level] = 'done'
+                return
+
+        dirty_count = len(dirty_ids)
+        max_incremental = self.config.max_incremental_duplicates
+        use_incremental = dirty_count <= max_incremental
+
+        if use_incremental:
+            logger.info(
+                f'Processing {dirty_count} dirty images incrementally '
+                f'(threshold: {max_incremental})'
+            )
+        else:
+            logger.info(
+                f'{dirty_count} dirty images exceeds threshold ({max_incremental}), '
+                'doing full recomputation'
+            )
 
         results = {}
-        for level, compute_fn in level_functions:
-            # Mark as computing
+        for level in range(4):
             with self._duplicate_status_lock:
                 self._duplicate_status[level] = 'computing'
 
             try:
-                results[level] = compute_fn()
+                group_count = get_group_count(self.conn, level)
+
+                # Level 1 always uses full computation (LSH is more efficient)
+                # Other levels use incremental only if under threshold and groups exist
+                if level == 1:
+                    # Always full for level 1
+                    logger.info(f'Level {level}: full computation (LSH)')
+                    results[level] = compute_duplicates_level1(
+                        self.conn, self.config.perceptual_hash_threshold
+                    )
+                elif group_count == 0:
+                    # No existing groups - must do full computation
+                    logger.info(f'Level {level}: no existing groups, full computation')
+                    if level == 0:
+                        results[level] = compute_duplicates_level0(self.conn)
+                    elif level == 2:
+                        results[level] = compute_duplicates_level2(
+                            self.conn, self.config.similarity_threshold_level2
+                        )
+                    else:  # level == 3
+                        results[level] = compute_duplicates_level3(
+                            self.conn, self.config.similarity_threshold_level3
+                        )
+                elif use_incremental:
+                    # Groups exist and under threshold - incremental update
+                    logger.info(f'Level {level}: {group_count} groups, incremental update')
+                    if level == 0:
+                        results[level] = compute_duplicates_level0_incremental(
+                            self.conn, dirty_ids
+                        )
+                    elif level == 2:
+                        results[level] = compute_duplicates_level2_incremental(
+                            self.conn, dirty_ids, self.config.similarity_threshold_level2
+                        )
+                    else:  # level == 3
+                        results[level] = compute_duplicates_level3_incremental(
+                            self.conn, dirty_ids, self.config.similarity_threshold_level3
+                        )
+                else:
+                    # Groups exist but over threshold - full recomputation
+                    logger.info(f'Level {level}: over threshold, full recomputation')
+                    if level == 0:
+                        results[level] = compute_duplicates_level0(self.conn)
+                    elif level == 2:
+                        results[level] = compute_duplicates_level2(
+                            self.conn, self.config.similarity_threshold_level2
+                        )
+                    else:  # level == 3
+                        results[level] = compute_duplicates_level3(
+                            self.conn, self.config.similarity_threshold_level3
+                        )
+
             except Exception as e:
                 logger.error(f'Error computing level {level} duplicates: {e}')
                 results[level] = 0
 
-            # Mark as done
             with self._duplicate_status_lock:
                 self._duplicate_status[level] = 'done'
 
+        # Mark all dirty images as checked
+        mark_images_duplicate_checked(self.conn, dirty_ids)
+
         total = sum(results.values())
-        logger.info(f'Duplicate computation complete: {total} total groups')
+        logger.info(f'Duplicate computation complete: {total} groups from {dirty_count} dirty images')
 
     def queue_rescan_all(self) -> None:
         """Queue all registered folders for rescanning."""

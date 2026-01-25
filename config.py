@@ -99,6 +99,11 @@ similarity_threshold_level3: 0.85
 # Higher values speed up initial scanning but use more CPU/disk I/O.
 # Recommended: 4-8 for HDD, 8-16 for SSD
 indexing_threads: 4
+
+# Maximum number of new/modified images to process incrementally for duplicates.
+# If more images need checking, falls back to full recomputation which is faster
+# for large batches. Range: 1-10000
+max_incremental_duplicates: 500
 """
 
 
@@ -116,6 +121,8 @@ class Config:
         similarity_threshold_level2: Cosine similarity threshold for level 2.
         similarity_threshold_level3: Cosine similarity threshold for level 3.
         indexing_threads: Number of threads for parallel image indexing (1-16).
+        max_incremental_duplicates: Max dirty images for incremental duplicate detection.
+            If more images need checking, falls back to full recomputation.
     """
 
     image_extensions: set[str] = field(default_factory=lambda: {
@@ -129,6 +136,7 @@ class Config:
     similarity_threshold_level2: float = 0.95
     similarity_threshold_level3: float = 0.85
     indexing_threads: int = 4
+    max_incremental_duplicates: int = 500
 
     def __post_init__(self) -> None:
         """Validate configuration values after initialisation."""
@@ -175,6 +183,10 @@ class Config:
         # Validate indexing_threads
         if not 1 <= self.indexing_threads <= 16:
             raise ValueError(f'indexing_threads must be 1-16, got {self.indexing_threads}')
+
+        # Validate max_incremental_duplicates
+        if not 1 <= self.max_incremental_duplicates <= 10000:
+            raise ValueError(f'max_incremental_duplicates must be 1-10000, got {self.max_incremental_duplicates}')
 
 
 def load_config(config_path: Path | str | None = None) -> Config:
@@ -240,6 +252,9 @@ def load_config(config_path: Path | str | None = None) -> Config:
 
     if 'indexing_threads' in config_data:
         kwargs['indexing_threads'] = int(config_data['indexing_threads'])
+
+    if 'max_incremental_duplicates' in config_data:
+        kwargs['max_incremental_duplicates'] = int(config_data['max_incremental_duplicates'])
 
     return Config(**kwargs)
 
