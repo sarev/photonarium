@@ -177,8 +177,10 @@ const Duplicates = {
         };
 
         // Create VirtualGrid instance
+        // Use grid as both container and grid (same pattern as Gallery)
+        // This simplifies coordinate calculations in GridSelection
         this._grid = VirtualGrid.create({
-            container: this._els.container,
+            container: this._els.grid,
             grid: this._els.grid,
             getItems: () => this.state.groups,
             getItemId: (group) => group.group_hash,
@@ -258,7 +260,7 @@ const Duplicates = {
         } else {
             // Rebind grid and restore position
             this._grid.bind();
-            this._els.container.scrollTop = this.state.scrollTop;
+            this._els.grid.scrollTop = this.state.scrollTop;
             // Refresh visible items in case viewport changed
             this._grid.refresh();
             // Restore selection visual state
@@ -271,7 +273,7 @@ const Duplicates = {
      * Saves scroll position for restoration on return.
      */
     onLeave() {
-        this.state.scrollTop = this._els.container.scrollTop;
+        this.state.scrollTop = this._els.grid.scrollTop;
         this._grid.unbind();
         this._selection.unbind();
     },
@@ -469,6 +471,8 @@ Duplicates._setLevel = async function(level) {
     // Clear selection when changing level
     this._selection.clear();
 
+    App.showLoading('Loading duplicates…');
+
     try {
         const { groups, status } = await this._getGroupsForLevel(level);
         this.state.allGroups = groups;
@@ -483,6 +487,8 @@ Duplicates._setLevel = async function(level) {
         }
     } catch (err) {
         App.showError('Failed to load duplicates: ' + err.message);
+    } finally {
+        App.hideLoading();
     }
 };
 
@@ -501,7 +507,7 @@ Duplicates._scheduleStatusPoll = function(level) {
     this._pollTimeout = setTimeout(async () => {
         // Only poll if still on same level and screen is visible
         if (this.state.currentLevel !== level) return;
-        if (!this._els.container.offsetParent) return;
+        if (!this._els.grid.offsetParent) return;
 
         try {
             const { groups, status } = await this._getGroupsForLevel(level);
@@ -714,8 +720,8 @@ Duplicates._renderGroups = function() {
     // Render via VirtualGrid
     this._grid.render();
 
-    // Restore selection visual state
-    this._selection.updateVisualState();
+    // Bind selection handlers (ensures handlers are attached after render)
+    this._selection.bind();
 };
 
 /**
@@ -764,7 +770,7 @@ Duplicates._openGroupInGallery = function(hash) {
     if (!group?.image_ids?.length) return;
 
     // Save scroll position before leaving
-    this.state.scrollTop = this._els.container.scrollTop;
+    this.state.scrollTop = this._els.grid.scrollTop;
 
     const imageIds = group.image_ids;
     if (imageIds.length === 0) return;

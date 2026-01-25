@@ -263,9 +263,10 @@ const Gallery = {
     async _loadImages() {
         console.time('_loadImages total');
 
-        // Show loading indicator only on first load
-        if (this._els.grid && App.getCachedImageCount() === 0) {
-            this._els.grid.innerHTML = '<div class="gallery-loading">Loading images...</div>';
+        // Show loading overlay on first load
+        const isFirstLoad = App.getCachedImageCount() === 0;
+        if (isFirstLoad) {
+            App.showLoading('Loading images…');
         }
 
         try {
@@ -284,8 +285,10 @@ const Gallery = {
         } catch (error) {
             console.error('Failed to load images:', error);
             this.state.images = [];
-            if (this._els.grid) {
-                this._els.grid.innerHTML = '<div class="gallery-loading">Failed to load images</div>';
+            App.showError('Failed to load images');
+        } finally {
+            if (isFirstLoad) {
+                App.hideLoading();
             }
         }
 

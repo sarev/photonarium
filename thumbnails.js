@@ -1116,11 +1116,12 @@ const GridSelection = {
                 e.preventDefault();
                 const gridEl = this._getGridElement();
                 const rect = gridEl.getBoundingClientRect();
-                const container = this._getContainer();
 
+                // Grid is always the scroll container (container === grid),
+                // so rect is stable and we add scroll offset to get content position
                 this._dragState = {
-                    startX: e.clientX - rect.left + container.scrollLeft,
-                    startY: e.clientY - rect.top + container.scrollTop,
+                    startX: e.clientX - rect.left + gridEl.scrollLeft,
+                    startY: e.clientY - rect.top + gridEl.scrollTop,
                     isRightButton: e.button === 2,
                     dragged: false,
                     box: null,
@@ -1163,10 +1164,9 @@ const GridSelection = {
             _updateDragBox(e) {
                 const gridEl = this._getGridElement();
                 const rect = gridEl.getBoundingClientRect();
-                const container = this._getContainer();
 
-                const currentX = e.clientX - rect.left + container.scrollLeft;
-                const currentY = e.clientY - rect.top + container.scrollTop;
+                const currentX = e.clientX - rect.left + gridEl.scrollLeft;
+                const currentY = e.clientY - rect.top + gridEl.scrollTop;
 
                 const x = Math.min(this._dragState.startX, currentX);
                 const y = Math.min(this._dragState.startY, currentY);
