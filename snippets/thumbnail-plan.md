@@ -434,29 +434,29 @@ ThumbnailLoader then:
 
 ### Phase 3: Implement GridSelection
 
-- [ ] Implement `GridSelection.create(config)` factory function
-- [ ] Selection state management (Set of IDs, anchor tracking)
-- [ ] Click handlers:
-  - [ ] Single click (select one)
-  - [ ] Ctrl/Cmd+click (toggle)
-  - [ ] Shift+click (range)
-  - [ ] Right-click (toggle without clear)
-- [ ] Long-press handling for touch devices
-- [ ] Drag-box selection:
-  - [ ] Mouse down on empty space starts drag
-  - [ ] Mouse move updates box and calculates intersecting items
-  - [ ] Auto-scroll when near edges
-  - [ ] Mouse up finalizes selection
-  - [ ] Left-drag = select, right-drag = toggle
-- [ ] Keyboard navigation:
-  - [ ] Arrow keys (left/right/up/down)
-  - [ ] Shift+Arrow for extend selection
-  - [ ] Ctrl/Cmd+A for select all
-  - [ ] Escape for clear
-  - [ ] Enter for activate
-  - [ ] Delete for delete request
-- [ ] `updateVisualState()` to sync DOM with selection state
-- [ ] `bind()` and `unbind()` for lifecycle management
+- [x] Implement `GridSelection.create(config)` factory function
+- [x] Selection state management (Set of IDs, anchor tracking)
+- [x] Click handlers:
+  - [x] Single click (select one)
+  - [x] Ctrl/Cmd+click (toggle)
+  - [x] Shift+click (range)
+  - [x] Right-click (toggle without clear)
+- [x] Long-press handling for touch devices
+- [x] Drag-box selection:
+  - [x] Mouse down on empty space starts drag
+  - [x] Mouse move updates box and calculates intersecting items
+  - [x] Auto-scroll when near edges
+  - [x] Mouse up finalizes selection
+  - [x] Left-drag = select, right-drag = toggle
+- [x] Keyboard navigation:
+  - [x] Arrow keys (left/right/up/down)
+  - [x] Shift+Arrow for extend selection
+  - [x] Ctrl/Cmd+A for select all
+  - [x] Escape for clear
+  - [x] Enter for activate
+  - [x] Delete for delete request
+- [x] `updateVisualState()` to sync DOM with selection state
+- [x] `bind()` and `unbind()` for lifecycle management
 
 ### Phase 4: Integrate into Gallery.js
 

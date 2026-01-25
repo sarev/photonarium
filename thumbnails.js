@@ -877,3 +877,833 @@ const VirtualGrid = {
 
 // Make VirtualGrid available globally
 window.VirtualGrid = VirtualGrid;
+
+
+/* ==========================================================================
+   GRID SELECTION
+
+   Unified selection handling for thumbnail grids.
+   Supports click, keyboard, long-press, and drag-box selection.
+   ========================================================================== */
+
+/**
+ * Factory for creating grid selection managers.
+ *
+ * @namespace
+ */
+const GridSelection = {
+    /**
+     * Long-press threshold in milliseconds.
+     * @type {number}
+     * @constant
+     */
+    LONG_PRESS_MS: 500,
+
+    /**
+     * Auto-scroll edge zone in pixels.
+     * @type {number}
+     * @constant
+     */
+    AUTO_SCROLL_EDGE: 50,
+
+    /**
+     * Auto-scroll speed in pixels per frame.
+     * @type {number}
+     * @constant
+     */
+    AUTO_SCROLL_SPEED: 15,
+
+    /**
+     * Creates a new GridSelection instance.
+     *
+     * @param {Object} config - Configuration object
+     * @param {Object} config.grid - VirtualGrid instance
+     * @param {Function} config.getItems - Returns current data array
+     * @param {Function} config.getItemId - Extracts unique ID from an item
+     * @param {string} config.itemSelector - CSS selector for items
+     * @param {string} [config.selectedClass='selected'] - Class for selected items
+     * @param {Function} [config.onSelectionChanged] - Callback when selection changes (ids: string[])
+     * @param {Function} [config.onItemActivated] - Callback for Enter/double-click (id: string)
+     * @param {Function} [config.onDeleteRequested] - Callback for Delete key (ids: string[])
+     * @param {boolean} [config.enableKeyboard=true] - Enable keyboard navigation
+     * @param {boolean} [config.enableDragBox=true] - Enable drag-box selection
+     * @param {boolean} [config.enableLongPress=true] - Enable long-press selection
+     * @returns {Object} GridSelection instance
+     */
+    create(config) {
+        const instance = {
+            // Configuration
+            _config: {
+                grid: config.grid,
+                getItems: config.getItems,
+                getItemId: config.getItemId,
+                itemSelector: config.itemSelector,
+                selectedClass: config.selectedClass || 'selected',
+                onSelectionChanged: config.onSelectionChanged || null,
+                onItemActivated: config.onItemActivated || null,
+                onDeleteRequested: config.onDeleteRequested || null,
+                enableKeyboard: config.enableKeyboard !== false,
+                enableDragBox: config.enableDragBox !== false,
+                enableLongPress: config.enableLongPress !== false
+            },
+
+            // Selection state
+            _selected: new Set(),
+            _anchor: null,  // Anchor ID for shift-click ranges
+
+            // Long-press state
+            _longPressTimer: null,
+            _longPressTriggered: false,
+
+            // Drag-box state
+            _dragState: null,
+            _justDragged: false,
+
+            // Bound handlers (for cleanup)
+            _handlers: {},
+            _bound: false,
+
+            /**
+             * Gets the container element from the grid.
+             * @returns {HTMLElement}
+             * @private
+             */
+            _getContainer() {
+                return this._config.grid._config.container;
+            },
+
+            /**
+             * Gets the grid element from the grid.
+             * @returns {HTMLElement}
+             * @private
+             */
+            _getGridElement() {
+                return this._config.grid._config.grid;
+            },
+
+            /**
+             * Gets the item ID from an element or its parent.
+             * @param {HTMLElement} el - Element to check
+             * @returns {string|null} Item ID or null
+             * @private
+             */
+            _getItemId(el) {
+                const item = el.closest(this._config.itemSelector);
+                return item ? (item.dataset.id || item.dataset.groupHash) : null;
+            },
+
+            /**
+             * Notifies listeners of selection change.
+             * @private
+             */
+            _notifySelectionChanged() {
+                if (this._config.onSelectionChanged) {
+                    this._config.onSelectionChanged(Array.from(this._selected));
+                }
+            },
+
+            // ==================== Click Handlers ====================
+
+            /**
+             * Handles click on grid.
+             * @param {MouseEvent} e
+             * @private
+             */
+            _handleClick(e) {
+                // Ignore if this was a long-press or drag
+                if (this._longPressTriggered || this._dragState?.dragged || this._justDragged) {
+                    this._longPressTriggered = false;
+                    this._justDragged = false;
+                    return;
+                }
+
+                const id = this._getItemId(e.target);
+                if (id) {
+                    if (e.ctrlKey || e.metaKey) {
+                        // Ctrl+click: Toggle selection
+                        this.toggle(id);
+                        this._anchor = id;
+                    } else if (e.shiftKey && this._anchor) {
+                        // Shift+click: Select range from anchor
+                        this.selectRange(this._anchor, id);
+                    } else {
+                        // Regular click: Select only this item
+                        this.select(id);
+                        this._anchor = id;
+                    }
+                } else {
+                    // Clicked on empty space - clear selection
+                    this.clear();
+                    this._anchor = null;
+                }
+            },
+
+            /**
+             * Handles right-click on grid.
+             * @param {MouseEvent} e
+             * @private
+             */
+            _handleRightClick(e) {
+                e.preventDefault();
+                const id = this._getItemId(e.target);
+                if (id) {
+                    this.toggle(id);
+                }
+            },
+
+            /**
+             * Handles double-click on grid.
+             * @param {MouseEvent} e
+             * @private
+             */
+            _handleDoubleClick(e) {
+                const id = this._getItemId(e.target);
+                if (id && this._config.onItemActivated) {
+                    this._config.onItemActivated(id);
+                }
+            },
+
+            // ==================== Long-Press Handlers ====================
+
+            /**
+             * Handles pointer down for long-press detection.
+             * @param {PointerEvent} e
+             * @private
+             */
+            _handlePointerDown(e) {
+                if (!this._config.enableLongPress) return;
+
+                const id = this._getItemId(e.target);
+                if (!id) return;
+
+                this._longPressTriggered = false;
+                this._longPressTimer = setTimeout(() => {
+                    this._longPressTriggered = true;
+                    // Add to selection without clearing
+                    if (!this._selected.has(id)) {
+                        this._selected.add(id);
+                        this._updateItemVisualState(id, true);
+                        this._notifySelectionChanged();
+                    }
+                }, GridSelection.LONG_PRESS_MS);
+            },
+
+            /**
+             * Handles pointer up - cancels long-press timer.
+             * @private
+             */
+            _handlePointerUp() {
+                if (this._longPressTimer) {
+                    clearTimeout(this._longPressTimer);
+                    this._longPressTimer = null;
+                }
+            },
+
+            // ==================== Drag-Box Selection ====================
+
+            /**
+             * Handles mouse down for drag-box selection.
+             * @param {MouseEvent} e
+             * @private
+             */
+            _handleDragStart(e) {
+                if (!this._config.enableDragBox) return;
+
+                // Only handle left or right mouse button on grid background
+                if (e.button !== 0 && e.button !== 2) return;
+                if (this._getItemId(e.target)) return; // Clicked on an item
+
+                e.preventDefault();
+                const gridEl = this._getGridElement();
+                const rect = gridEl.getBoundingClientRect();
+                const container = this._getContainer();
+
+                this._dragState = {
+                    startX: e.clientX - rect.left + container.scrollLeft,
+                    startY: e.clientY - rect.top + container.scrollTop,
+                    isRightButton: e.button === 2,
+                    dragged: false,
+                    box: null,
+                    autoScrollInterval: null,
+                    lastMouseEvent: null,
+                    scrollDirection: 0
+                };
+
+                // Create selection box element
+                const box = document.createElement('div');
+                box.className = 'selection-box';
+                gridEl.appendChild(box);
+                this._dragState.box = box;
+
+                // Bind move and up handlers
+                this._handlers.dragMove = (e) => this._handleDragMove(e);
+                this._handlers.dragEnd = (e) => this._handleDragEnd(e);
+                document.addEventListener('mousemove', this._handlers.dragMove);
+                document.addEventListener('mouseup', this._handlers.dragEnd);
+            },
+
+            /**
+             * Handles drag move - updates selection box.
+             * @param {MouseEvent} e
+             * @private
+             */
+            _handleDragMove(e) {
+                if (!this._dragState) return;
+
+                this._dragState.lastMouseEvent = e;
+                this._updateDragBox(e);
+                this._updateAutoScroll(e);
+            },
+
+            /**
+             * Updates the drag selection box position.
+             * @param {MouseEvent} e
+             * @private
+             */
+            _updateDragBox(e) {
+                const gridEl = this._getGridElement();
+                const rect = gridEl.getBoundingClientRect();
+                const container = this._getContainer();
+
+                const currentX = e.clientX - rect.left + container.scrollLeft;
+                const currentY = e.clientY - rect.top + container.scrollTop;
+
+                const x = Math.min(this._dragState.startX, currentX);
+                const y = Math.min(this._dragState.startY, currentY);
+                const w = Math.abs(currentX - this._dragState.startX);
+                const h = Math.abs(currentY - this._dragState.startY);
+
+                // Mark as dragged if moved enough
+                if (w > 5 || h > 5) {
+                    this._dragState.dragged = true;
+                }
+
+                // Update box position
+                const box = this._dragState.box;
+                box.style.left = x + 'px';
+                box.style.top = y + 'px';
+                box.style.width = w + 'px';
+                box.style.height = h + 'px';
+            },
+
+            /**
+             * Updates auto-scroll based on mouse position.
+             * @param {MouseEvent} e
+             * @private
+             */
+            _updateAutoScroll(e) {
+                const container = this._getContainer();
+                const rect = container.getBoundingClientRect();
+                const mouseY = e.clientY;
+
+                const distFromTop = mouseY - rect.top;
+                const distFromBottom = rect.bottom - mouseY;
+
+                let scrollDirection = 0;
+                if (distFromTop < GridSelection.AUTO_SCROLL_EDGE && distFromTop >= 0) {
+                    scrollDirection = -1;
+                } else if (distFromBottom < GridSelection.AUTO_SCROLL_EDGE && distFromBottom >= 0) {
+                    scrollDirection = 1;
+                }
+
+                if (scrollDirection !== 0) {
+                    if (!this._dragState.autoScrollInterval) {
+                        this._dragState.autoScrollInterval = setInterval(() => {
+                            this._performAutoScroll();
+                        }, 16);
+                    }
+                    this._dragState.scrollDirection = scrollDirection;
+                } else {
+                    this._stopAutoScroll();
+                }
+            },
+
+            /**
+             * Performs one step of auto-scrolling.
+             * @private
+             */
+            _performAutoScroll() {
+                if (!this._dragState) return;
+
+                const container = this._getContainer();
+                const direction = this._dragState.scrollDirection || 0;
+                if (direction === 0) return;
+
+                container.scrollTop += direction * GridSelection.AUTO_SCROLL_SPEED;
+
+                if (this._dragState.lastMouseEvent) {
+                    this._updateDragBox(this._dragState.lastMouseEvent);
+                }
+            },
+
+            /**
+             * Stops auto-scrolling.
+             * @private
+             */
+            _stopAutoScroll() {
+                if (this._dragState?.autoScrollInterval) {
+                    clearInterval(this._dragState.autoScrollInterval);
+                    this._dragState.autoScrollInterval = null;
+                }
+            },
+
+            /**
+             * Handles drag end - selects items in box.
+             * @param {MouseEvent} e
+             * @private
+             */
+            _handleDragEnd(e) {
+                document.removeEventListener('mousemove', this._handlers.dragMove);
+                document.removeEventListener('mouseup', this._handlers.dragEnd);
+
+                this._stopAutoScroll();
+
+                if (!this._dragState) return;
+
+                const { box, isRightButton, dragged } = this._dragState;
+
+                if (dragged) {
+                    const boxRect = box.getBoundingClientRect();
+                    const gridEl = this._getGridElement();
+                    const items = gridEl.querySelectorAll(this._config.itemSelector);
+                    const idsInBox = [];
+
+                    for (const item of items) {
+                        const itemRect = item.getBoundingClientRect();
+                        if (this._rectsIntersect(boxRect, itemRect)) {
+                            const id = item.dataset.id || item.dataset.groupHash;
+                            if (id) idsInBox.push(id);
+                        }
+                    }
+
+                    if (isRightButton) {
+                        // Toggle selection for items in box
+                        for (const id of idsInBox) {
+                            this.toggle(id);
+                        }
+                    } else {
+                        // Set selection to items in box
+                        this.setSelected(idsInBox);
+                    }
+
+                    this._justDragged = true;
+                }
+
+                // Cleanup
+                box.remove();
+                this._dragState = null;
+            },
+
+            /**
+             * Checks if two rectangles intersect.
+             * @param {DOMRect} r1
+             * @param {DOMRect} r2
+             * @returns {boolean}
+             * @private
+             */
+            _rectsIntersect(r1, r2) {
+                return !(r1.right < r2.left || r1.left > r2.right ||
+                         r1.bottom < r2.top || r1.top > r2.bottom);
+            },
+
+            // ==================== Keyboard Navigation ====================
+
+            /**
+             * Handles keydown events.
+             * @param {KeyboardEvent} e
+             * @private
+             */
+            _handleKeyDown(e) {
+                // Ignore if modal dialog is open
+                if (document.querySelector('dialog[open]')) return;
+
+                // Ignore if typing in an input field
+                if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA') return;
+
+                switch (e.key) {
+                    case 'ArrowLeft':
+                        e.preventDefault();
+                        this.navigateRelative(-1, e.shiftKey);
+                        break;
+                    case 'ArrowRight':
+                        e.preventDefault();
+                        this.navigateRelative(1, e.shiftKey);
+                        break;
+                    case 'ArrowUp':
+                        e.preventDefault();
+                        this.navigateVertical(-1, e.shiftKey);
+                        break;
+                    case 'ArrowDown':
+                        e.preventDefault();
+                        this.navigateVertical(1, e.shiftKey);
+                        break;
+                    case 'Enter':
+                        e.preventDefault();
+                        if (this._selected.size === 1 && this._config.onItemActivated) {
+                            this._config.onItemActivated(Array.from(this._selected)[0]);
+                        }
+                        break;
+                    case 'Delete':
+                    case 'Backspace':
+                        e.preventDefault();
+                        if (this._selected.size > 0 && this._config.onDeleteRequested) {
+                            this._config.onDeleteRequested(Array.from(this._selected));
+                        }
+                        break;
+                    case 'Escape':
+                        e.preventDefault();
+                        this.clear();
+                        break;
+                    case 'a':
+                        if (e.ctrlKey || e.metaKey) {
+                            e.preventDefault();
+                            this.selectAll();
+                        }
+                        break;
+                }
+            },
+
+            // ==================== Visual State ====================
+
+            /**
+             * Updates visual state for a single item.
+             * @param {string} id - Item ID
+             * @param {boolean} selected - Whether selected
+             * @private
+             */
+            _updateItemVisualState(id, selected) {
+                this._config.grid.setItemClass(id, this._config.selectedClass, selected);
+            },
+
+            /**
+             * Updates visual state for all rendered items.
+             */
+            updateVisualState() {
+                const gridEl = this._getGridElement();
+                const items = gridEl.querySelectorAll(this._config.itemSelector);
+                const selectedClass = this._config.selectedClass;
+
+                for (const item of items) {
+                    const id = item.dataset.id || item.dataset.groupHash;
+                    if (id) {
+                        item.classList.toggle(selectedClass, this._selected.has(id));
+                    }
+                }
+            },
+
+            // ==================== Public API ====================
+
+            /**
+             * Selects a single item, clearing others.
+             * @param {string} id - Item ID to select
+             */
+            select(id) {
+                const changed = this._selected.size !== 1 || !this._selected.has(id);
+                if (!changed) return;
+
+                // Update visual state for previously selected
+                for (const prevId of this._selected) {
+                    this._updateItemVisualState(prevId, false);
+                }
+
+                this._selected.clear();
+                this._selected.add(id);
+                this._updateItemVisualState(id, true);
+                this._notifySelectionChanged();
+            },
+
+            /**
+             * Toggles selection of an item.
+             * @param {string} id - Item ID to toggle
+             */
+            toggle(id) {
+                if (this._selected.has(id)) {
+                    this._selected.delete(id);
+                    this._updateItemVisualState(id, false);
+                } else {
+                    this._selected.add(id);
+                    this._updateItemVisualState(id, true);
+                }
+                this._notifySelectionChanged();
+            },
+
+            /**
+             * Selects a range of items from anchor to target.
+             * @param {string} anchorId - Starting item ID
+             * @param {string} targetId - Ending item ID
+             */
+            selectRange(anchorId, targetId) {
+                const items = this._config.getItems();
+                const getItemId = this._config.getItemId;
+
+                const anchorIdx = items.findIndex(item => getItemId(item) === anchorId);
+                const targetIdx = items.findIndex(item => getItemId(item) === targetId);
+
+                if (anchorIdx === -1 || targetIdx === -1) {
+                    this.select(targetId);
+                    return;
+                }
+
+                const startIdx = Math.min(anchorIdx, targetIdx);
+                const endIdx = Math.max(anchorIdx, targetIdx);
+
+                // Clear previous selection visual state
+                for (const prevId of this._selected) {
+                    this._updateItemVisualState(prevId, false);
+                }
+
+                this._selected.clear();
+
+                for (let i = startIdx; i <= endIdx; i++) {
+                    const id = getItemId(items[i]);
+                    this._selected.add(id);
+                    this._updateItemVisualState(id, true);
+                }
+
+                this._notifySelectionChanged();
+            },
+
+            /**
+             * Selects all items.
+             */
+            selectAll() {
+                const items = this._config.getItems();
+                const getItemId = this._config.getItemId;
+
+                this._selected.clear();
+                for (const item of items) {
+                    this._selected.add(getItemId(item));
+                }
+
+                this.updateVisualState();
+                this._notifySelectionChanged();
+            },
+
+            /**
+             * Clears selection.
+             */
+            clear() {
+                if (this._selected.size === 0) return;
+
+                for (const id of this._selected) {
+                    this._updateItemVisualState(id, false);
+                }
+
+                this._selected.clear();
+                this._anchor = null;
+                this._notifySelectionChanged();
+            },
+
+            /**
+             * Gets the current selection.
+             * @returns {Array<string>} Selected item IDs
+             */
+            getSelected() {
+                return Array.from(this._selected);
+            },
+
+            /**
+             * Checks if an item is selected.
+             * @param {string} id - Item ID
+             * @returns {boolean}
+             */
+            isSelected(id) {
+                return this._selected.has(id);
+            },
+
+            /**
+             * Sets selection to specific IDs.
+             * @param {Array<string>} ids - Item IDs to select
+             */
+            setSelected(ids) {
+                // Clear previous selection visual state
+                for (const prevId of this._selected) {
+                    this._updateItemVisualState(prevId, false);
+                }
+
+                this._selected.clear();
+
+                for (const id of ids) {
+                    this._selected.add(id);
+                    this._updateItemVisualState(id, true);
+                }
+
+                if (ids.length > 0) {
+                    this._anchor = ids[ids.length - 1];
+                }
+
+                this._notifySelectionChanged();
+            },
+
+            /**
+             * Navigates selection horizontally.
+             * @param {number} delta - Direction (-1 left, 1 right)
+             * @param {boolean} [extend=false] - Extend selection instead of replacing
+             */
+            navigateRelative(delta, extend = false) {
+                const items = this._config.getItems();
+                if (items.length === 0) return;
+
+                const getItemId = this._config.getItemId;
+                let currentIndex = -1;
+
+                if (this._selected.size > 0) {
+                    const lastSelected = Array.from(this._selected).pop();
+                    currentIndex = items.findIndex(item => getItemId(item) === lastSelected);
+                }
+
+                let newIndex = currentIndex + delta;
+                if (newIndex < 0) newIndex = items.length - 1;
+                if (newIndex >= items.length) newIndex = 0;
+
+                const newId = getItemId(items[newIndex]);
+
+                if (extend && this._anchor) {
+                    this.selectRange(this._anchor, newId);
+                } else {
+                    this.select(newId);
+                    this._anchor = newId;
+                }
+
+                this._config.grid.scrollTo(newIndex);
+            },
+
+            /**
+             * Navigates selection vertically.
+             * @param {number} delta - Direction (-1 up, 1 down)
+             * @param {boolean} [extend=false] - Extend selection instead of replacing
+             */
+            navigateVertical(delta, extend = false) {
+                const items = this._config.getItems();
+                if (items.length === 0) return;
+
+                const getItemId = this._config.getItemId;
+                const itemsPerRow = this._config.grid.getItemsPerRow() || 1;
+                let currentIndex = -1;
+
+                if (this._selected.size > 0) {
+                    const lastSelected = Array.from(this._selected).pop();
+                    currentIndex = items.findIndex(item => getItemId(item) === lastSelected);
+                }
+
+                let newIndex = currentIndex + (delta * itemsPerRow);
+                if (newIndex < 0) newIndex = 0;
+                if (newIndex >= items.length) newIndex = items.length - 1;
+
+                const newId = getItemId(items[newIndex]);
+
+                if (extend && this._anchor) {
+                    this.selectRange(this._anchor, newId);
+                } else {
+                    this.select(newId);
+                    this._anchor = newId;
+                }
+
+                this._config.grid.scrollTo(newIndex);
+            },
+
+            /**
+             * Binds all event listeners.
+             */
+            bind() {
+                if (this._bound) return;
+
+                const gridEl = this._getGridElement();
+
+                // Click handlers
+                this._handlers.click = (e) => this._handleClick(e);
+                this._handlers.contextmenu = (e) => this._handleRightClick(e);
+                this._handlers.dblclick = (e) => this._handleDoubleClick(e);
+
+                gridEl.addEventListener('click', this._handlers.click);
+                gridEl.addEventListener('contextmenu', this._handlers.contextmenu);
+                gridEl.addEventListener('dblclick', this._handlers.dblclick);
+
+                // Long-press handlers
+                if (this._config.enableLongPress) {
+                    this._handlers.pointerdown = (e) => this._handlePointerDown(e);
+                    this._handlers.pointerup = () => this._handlePointerUp();
+                    this._handlers.pointerleave = () => this._handlePointerUp();
+
+                    gridEl.addEventListener('pointerdown', this._handlers.pointerdown);
+                    gridEl.addEventListener('pointerup', this._handlers.pointerup);
+                    gridEl.addEventListener('pointerleave', this._handlers.pointerleave);
+                }
+
+                // Drag-box handler
+                if (this._config.enableDragBox) {
+                    this._handlers.mousedown = (e) => this._handleDragStart(e);
+                    gridEl.addEventListener('mousedown', this._handlers.mousedown);
+                }
+
+                // Keyboard handler
+                if (this._config.enableKeyboard) {
+                    this._handlers.keydown = (e) => this._handleKeyDown(e);
+                    document.addEventListener('keydown', this._handlers.keydown);
+                }
+
+                this._bound = true;
+            },
+
+            /**
+             * Unbinds all event listeners.
+             */
+            unbind() {
+                if (!this._bound) return;
+
+                const gridEl = this._getGridElement();
+
+                gridEl.removeEventListener('click', this._handlers.click);
+                gridEl.removeEventListener('contextmenu', this._handlers.contextmenu);
+                gridEl.removeEventListener('dblclick', this._handlers.dblclick);
+
+                if (this._config.enableLongPress) {
+                    gridEl.removeEventListener('pointerdown', this._handlers.pointerdown);
+                    gridEl.removeEventListener('pointerup', this._handlers.pointerup);
+                    gridEl.removeEventListener('pointerleave', this._handlers.pointerleave);
+                }
+
+                if (this._config.enableDragBox) {
+                    gridEl.removeEventListener('mousedown', this._handlers.mousedown);
+                }
+
+                if (this._config.enableKeyboard) {
+                    document.removeEventListener('keydown', this._handlers.keydown);
+                }
+
+                // Cleanup any in-progress drag
+                if (this._dragState) {
+                    document.removeEventListener('mousemove', this._handlers.dragMove);
+                    document.removeEventListener('mouseup', this._handlers.dragEnd);
+                    this._stopAutoScroll();
+                    if (this._dragState.box) {
+                        this._dragState.box.remove();
+                    }
+                    this._dragState = null;
+                }
+
+                // Cleanup long-press timer
+                if (this._longPressTimer) {
+                    clearTimeout(this._longPressTimer);
+                    this._longPressTimer = null;
+                }
+
+                this._bound = false;
+            },
+
+            /**
+             * Cleans up all resources.
+             */
+            destroy() {
+                this.unbind();
+                this._selected.clear();
+                this._anchor = null;
+            }
+        };
+
+        return instance;
+    }
+};
+
+// Make GridSelection available globally
+window.GridSelection = GridSelection;
