@@ -957,6 +957,7 @@ const GridSelection = {
      * @param {Function} [config.onSelectionChanged] - Callback when selection changes (ids: string[])
      * @param {Function} [config.onItemActivated] - Callback for Enter/double-click (id: string)
      * @param {Function} [config.onDeleteRequested] - Callback for Delete key (ids: string[])
+     * @param {Function} [config.onGroupNavigate] - Callback for Alt+Arrow group navigation (direction: -1|1)
      * @param {boolean} [config.enableKeyboard=true] - Enable keyboard navigation
      * @param {boolean} [config.enableDragBox=true] - Enable drag-box selection
      * @param {boolean} [config.enableLongPress=true] - Enable long-press selection
@@ -974,6 +975,7 @@ const GridSelection = {
                 onSelectionChanged: config.onSelectionChanged || null,
                 onItemActivated: config.onItemActivated || null,
                 onDeleteRequested: config.onDeleteRequested || null,
+                onGroupNavigate: config.onGroupNavigate || null,
                 enableKeyboard: config.enableKeyboard !== false,
                 enableDragBox: config.enableDragBox !== false,
                 enableLongPress: config.enableLongPress !== false
@@ -1354,10 +1356,24 @@ const GridSelection = {
 
                 switch (e.key) {
                     case 'ArrowLeft':
+                        if (e.altKey) {
+                            if (this._config.onGroupNavigate) {
+                                e.preventDefault();
+                                this._config.onGroupNavigate(-1);
+                            }
+                            return;
+                        }
                         e.preventDefault();
                         this.navigateRelative(-1, e.shiftKey);
                         break;
                     case 'ArrowRight':
+                        if (e.altKey) {
+                            if (this._config.onGroupNavigate) {
+                                e.preventDefault();
+                                this._config.onGroupNavigate(1);
+                            }
+                            return;
+                        }
                         e.preventDefault();
                         this.navigateRelative(1, e.shiftKey);
                         break;

@@ -253,8 +253,12 @@ const Duplicates = {
             this._els.grid.scrollTop = this.state.scrollTop;
             // Refresh visible items in case viewport changed
             this._grid.refresh();
-            // Restore selection visual state
-            this._selection.updateVisualState();
+            // Restore selection visual state from state.selectedGroups
+            this._selection.setSelected(this.state.selectedGroups);
+            // Scroll to selected group if there is one
+            if (this.state.selectedGroups.length > 0) {
+                this._grid.scrollToId(this.state.selectedGroups[0], 'instant');
+            }
         }
     },
 
@@ -776,16 +780,9 @@ Duplicates.getGroups = function() {
 };
 
 /**
- * Gets the current similarity level.
- * @returns {number} Current similarity level (0-3)
- */
-Duplicates.getCurrentLevel = function() {
-    return this.state.currentLevel;
-};
-
-/**
  * Navigates to a duplicate group by hash.
  * Sets up the filter to show only that group's images and selects the best image.
+ * Also updates the Duplicates screen selection so returning shows the correct group.
  * Used by both _openGroupInGallery and Gallery's prev/next navigation.
  * @param {string} hash - The group hash to navigate to
  * @returns {boolean} True if navigation successful
@@ -796,18 +793,19 @@ Duplicates.navigateToGroup = function(hash) {
 
     const imageIds = group.image_ids;
     const bestId = group.best_image?.id;
-    const selection = bestId ? [bestId] : [imageIds[0]];
+
+    // Update Duplicates screen selection state (visual sync happens in onEnter)
+    this.state.selectedGroups = [hash];
 
     // Set filter to show only this group's images
+    // Include initialSelection so Gallery can apply it after loading
     App.setFilter({
         type: 'duplicates',
         imageIds,
         groupHash: hash,
-        sourceLevel: this.state.currentLevel
+        sourceLevel: this.state.currentLevel,
+        initialSelection: bestId ? [bestId] : [imageIds[0]]
     });
-
-    // Pre-select the best image
-    App.setSelectedImages(selection);
 
     return true;
 };

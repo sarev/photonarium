@@ -72,7 +72,8 @@ const Gallery = {
         contentSimilarities: null,
         contentReferenceId: null,
         refreshIntervalId: null,
-        lastImageCount: 0
+        lastImageCount: 0,
+        pendingSelection: null  // Selection to apply when item loads
     },
 
     /**
@@ -176,6 +177,9 @@ const Gallery = {
             },
             onDeleteRequested: (ids) => {
                 this._deleteImages(ids);
+            },
+            onGroupNavigate: (direction) => {
+                this._navigateDupGroup(direction);
             }
         });
 
@@ -269,6 +273,9 @@ const Gallery = {
             this.state.lastImageCount = images.length;
             this._renderGrid();
             this.state.needsRefresh = false;
+
+            // Apply initial selection from filter (e.g., best image in duplicate group)
+            this._applyInitialSelection();
         } catch (error) {
             console.error('Failed to load images:', error);
             this.state.images = [];
@@ -280,6 +287,22 @@ const Gallery = {
         }
 
         console.timeEnd('_loadImages total');
+    },
+
+    /**
+     * Stores initial selection from the current filter to be applied when items load.
+     * The actual selection is applied in _createThumbnailItem when the DOM element is created.
+     * @private
+     */
+    _applyInitialSelection() {
+        const filter = App.getFilter();
+        if (!filter?.initialSelection?.length) {
+            this.state.pendingSelection = null;
+            return;
+        }
+
+        // Store the selection to apply when the item's thumbnail loads
+        this.state.pendingSelection = new Set(filter.initialSelection);
     },
 
     /**
@@ -661,6 +684,7 @@ const Gallery = {
 
     /**
      * Creates a thumbnail item element with the thumbnail already loaded.
+     * Also applies pending selection if this item should be selected.
      * @param {Object} img - Image data
      * @param {string} blobUrl - Blob URL for the thumbnail
      * @returns {HTMLElement}
@@ -683,6 +707,17 @@ const Gallery = {
 
         item.appendChild(thumb);
         item.appendChild(label);
+
+        // Check if this item has a pending selection
+        if (this.state.pendingSelection?.has(img.id)) {
+            // Clear pending selection (only apply once)
+            this.state.pendingSelection = null;
+            // Apply selection after DOM is fully attached
+            const imageId = img.id;
+            setTimeout(() => {
+                App.setSelectedImages([imageId]);
+            }, 0);
+        }
 
         return item;
     },
@@ -1152,24 +1187,7 @@ const Gallery = {
         if (this._els.btnNextGroup) {
             this._els.btnNextGroup.addEventListener('click', () => this._navigateDupGroup(1));
         }
-
-        // Keyboard shortcuts: Alt+Left/Right for prev/next group
-        this._dupGroupKeyHandler = (e) => {
-            if (!e.altKey) return;
-            if (App.getScreen() !== 'gallery') return;
-
-            const filter = App.getFilter();
-            if (!filter || filter.type !== 'duplicates' || !filter.groupHash) return;
-
-            if (e.key === 'ArrowLeft') {
-                e.preventDefault();
-                this._navigateDupGroup(-1);
-            } else if (e.key === 'ArrowRight') {
-                e.preventDefault();
-                this._navigateDupGroup(1);
-            }
-        };
-        document.addEventListener('keydown', this._dupGroupKeyHandler);
+        // Keyboard shortcuts (Alt+Left/Right) are handled by GridSelection via onGroupNavigate
     },
 
     /**
