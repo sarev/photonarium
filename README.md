@@ -82,6 +82,58 @@ python app.py --generate-thumbnails    # Pre-generate thumbnails for all images
 3. **Browse** — Return to the Gallery to see your collection
 4. **Search** — Click the Filter button to search by text, date, or rating
 
+## Using the Gallery
+
+The Gallery is where you'll spend most of your time. It shows your image collection as a grid of thumbnails, with an information panel on the right showing details about the selected image.
+
+### Toolbar
+
+The toolbar across the top gives you quick access to common actions:
+
+**Left side (image actions):**
+- **Thumbnail size** — Make thumbnails smaller or larger to see more images or more detail
+- **Fullscreen** — Open the selected image in fullscreen view (or double-click a thumbnail)
+- **Open folder** — Reveal the selected image in your file manager
+- **Rotate** — Rotate images left or right (changes are saved to disk)
+
+**Centre (navigation):**
+- **Database** — Add or remove folders, see scanning progress
+- **Duplicates** — Find duplicate and similar images
+- **Filter** — Search and filter your collection
+
+**Right side (sorting and selection):**
+- **Sort buttons** — Sort by date, rating, or content similarity
+- **Sort direction** — Toggle between ascending and descending
+- **Select all / Clear** — Bulk selection controls
+- **Theme** — Switch between light and dark modes
+
+### Sorting by Visual Similarity
+
+A particularly useful feature: select any image, then click the "Sort by content" button. The entire gallery will reorder to show the most visually similar images first. This is great for finding related photos, or discovering images you'd forgotten about.
+
+A similarity slider appears when content sorting is active, letting you adjust how tightly grouped the results are.
+
+### Viewing Images
+
+Double-click any thumbnail (or press Enter) to open it in fullscreen view. In fullscreen you can:
+- Navigate between images with arrow keys or swipe gestures
+- Zoom with scroll wheel or pinch, pan by dragging
+- Double-click to toggle between fit-to-screen and actual size
+
+Press Escape or click the X button to return to the Gallery. Your selection and scroll position are preserved.
+
+### Image Information Panel
+
+When you select an image, the panel on the right shows:
+- Filename and folder path
+- Dimensions, file size, and date
+- An RGB histogram of the image
+- Editable description and rating fields
+
+Add descriptions to help with searching later—the AI search understands natural language, so detailed descriptions make images easier to find.
+
+See the [Controls](#controls) section for full details on mouse, touch, and keyboard navigation.
+
 ## Using the Filter Screen
 
 The Filter screen lets you narrow down which images appear in the Gallery. You can combine multiple criteria:
