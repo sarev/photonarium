@@ -81,29 +81,6 @@
                         </button>
                         <input type="text" id="dup-semantic-query" class="semantic-query-input" placeholder="Sort by similarity to..." disabled>
                     </div>
-                    <div class="toolbar-separator"></div>
-                    <div class="similarity-control">
-                        <label for="similarity-slider">Group:</label>
-                        <input type="range" id="similarity-slider" min="0" max="3" value="0" step="1">
-                        <span id="similarity-label">Identical</span>
-                    </div>
-                    <div class="toolbar-separator"></div>
-                    <div class="min-group-size-control">
-                        <label for="dup-min-group-size">Min size:</label>
-                        <select id="dup-min-group-size">
-                            <option value="2">2 (all)</option>
-                            <option value="3">3+</option>
-                            <option value="5">5+</option>
-                            <option value="8">8+</option>
-                            <option value="10">10+</option>
-                            <option value="15">15+</option>
-                            <option value="20">20+</option>
-                            <option value="30">30+</option>
-                            <option value="50">50+</option>
-                            <option value="75">75+</option>
-                            <option value="100">100+</option>
-                        </select>
-                    </div>
                 </div>
 
                 <!-- Database controls (visible when data-screen="database") -->
@@ -171,6 +148,32 @@
                     <button id="btn-clear-selection" class="toolbar-btn" title="Clear selection">
                         <span class="material-symbols-outlined">deselect</span>
                     </button>
+                </div>
+
+                <!-- Duplicates right controls (visible when data-screen="duplicates") -->
+                <div class="toolbar-group" data-for-screen="duplicates">
+                    <div class="similarity-control">
+                        <label for="similarity-slider">Group:</label>
+                        <input type="range" id="similarity-slider" min="0" max="3" value="0" step="1">
+                        <span id="similarity-label">Identical</span>
+                    </div>
+                    <div class="toolbar-separator"></div>
+                    <div class="min-group-size-control">
+                        <label for="dup-min-group-size">Min size:</label>
+                        <select id="dup-min-group-size">
+                            <option value="2">2 (all)</option>
+                            <option value="3">3+</option>
+                            <option value="5">5+</option>
+                            <option value="8">8+</option>
+                            <option value="10">10+</option>
+                            <option value="15">15+</option>
+                            <option value="20">20+</option>
+                            <option value="30">30+</option>
+                            <option value="50">50+</option>
+                            <option value="75">75+</option>
+                            <option value="100">100+</option>
+                        </select>
+                    </div>
                 </div>
 
                 <!-- Theme toggle (always visible in toolbar) -->
