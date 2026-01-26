@@ -53,6 +53,12 @@ image_extensions:
 # JPEG quality for generated thumbnails (1-100, higher = better quality, larger files)
 thumbnail_quality: 85
 
+# Maximum image dimension (width or height) to process.
+# Images larger than this will be downsampled before embedding/hashing.
+# This prevents memory issues with huge panoramas or scanned images.
+# Set to 0 to disable (not recommended). Range: 0 or 1024-65536
+max_image_dimension: 16384
+
 # ------------------------------------------------------------------------------
 # OpenCLIP Embedding Model
 # ------------------------------------------------------------------------------
@@ -149,6 +155,7 @@ class Config:
     Attributes:
         image_extensions: Set of lowercase file extensions to treat as images.
         thumbnail_quality: JPEG quality for thumbnails (1-100).
+        max_image_dimension: Max width/height before downsampling (0 to disable).
         openclip_model: OpenCLIP model architecture name.
         openclip_pretrained: OpenCLIP pretrained weights name.
         embedding_batch_size: Batch size for embedding computation.
@@ -171,6 +178,7 @@ class Config:
         '.jpg', '.jpeg', '.png', '.gif', '.bmp', '.tiff', '.tif', '.webp'
     })
     thumbnail_quality: int = 85
+    max_image_dimension: int = 16384
     openclip_model: str = 'ViT-B-32'
     openclip_pretrained: str = 'openai'
     embedding_batch_size: int = 16
@@ -207,6 +215,10 @@ class Config:
         # Validate thumbnail_quality
         if not 1 <= self.thumbnail_quality <= 100:
             raise ValueError(f'thumbnail_quality must be 1-100, got {self.thumbnail_quality}')
+
+        # Validate max_image_dimension (0 = disabled, or 1024-65536)
+        if self.max_image_dimension != 0 and not 1024 <= self.max_image_dimension <= 65536:
+            raise ValueError(f'max_image_dimension must be 0 or 1024-65536, got {self.max_image_dimension}')
 
         # Validate embedding_batch_size
         if not 1 <= self.embedding_batch_size <= 64:
@@ -295,6 +307,9 @@ def load_config(config_path: Path | str | None = None) -> Config:
 
     if 'thumbnail_quality' in config_data:
         kwargs['thumbnail_quality'] = int(config_data['thumbnail_quality'])
+
+    if 'max_image_dimension' in config_data:
+        kwargs['max_image_dimension'] = int(config_data['max_image_dimension'])
 
     if 'openclip_model' in config_data:
         kwargs['openclip_model'] = str(config_data['openclip_model'])

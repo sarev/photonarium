@@ -1331,7 +1331,10 @@ def compute_checksum(path: Path | str, algorithm: str = 'sha256') -> str:
     return hasher.hexdigest()
 
 
-def compute_perceptual_hash(path: Path | str) -> str | None:
+def compute_perceptual_hash(
+    path: Path | str,
+    max_dimension: int = 0,
+) -> str | None:
     """Compute a perceptual hash of an image.
 
     Uses the pHash algorithm which is robust to minor changes like
@@ -1339,6 +1342,7 @@ def compute_perceptual_hash(path: Path | str) -> str | None:
 
     Args:
         path: Path to the image file.
+        max_dimension: Max dimension before downsampling (0 to disable).
 
     Returns:
         Hex string representation of the perceptual hash,
@@ -1346,6 +1350,19 @@ def compute_perceptual_hash(path: Path | str) -> str | None:
     """
     try:
         with Image.open(path) as img:
+            # Downsample if oversized
+            if max_dimension > 0:
+                w, h = img.size
+                max_dim = max(w, h)
+                if max_dim > max_dimension:
+                    scale = max_dimension / max_dim
+                    new_w = int(w * scale)
+                    new_h = int(h * scale)
+                    logger.info(
+                        f'Downsampling oversized image for phash {path}: '
+                        f'{w}x{h} -> {new_w}x{new_h}'
+                    )
+                    img = img.resize((new_w, new_h), Image.Resampling.LANCZOS)
             phash = imagehash.phash(img)
             return str(phash)
     except Exception as e:
@@ -1353,7 +1370,10 @@ def compute_perceptual_hash(path: Path | str) -> str | None:
         return None
 
 
-def compute_laplacian_variance(path: Path | str) -> float | None:
+def compute_laplacian_variance(
+    path: Path | str,
+    max_dimension: int = 0,
+) -> float | None:
     """Compute the Laplacian variance of an image as a focus/sharpness metric.
 
     Higher values indicate sharper images. This metric is useful for
@@ -1361,6 +1381,7 @@ def compute_laplacian_variance(path: Path | str) -> float | None:
 
     Args:
         path: Path to the image file.
+        max_dimension: Max dimension before downsampling (0 to disable).
 
     Returns:
         Variance of the Laplacian, or None if image cannot be processed.
@@ -1370,6 +1391,20 @@ def compute_laplacian_variance(path: Path | str) -> float | None:
         if img is None:
             logger.warning(f'OpenCV failed to read image: {path}')
             return None
+
+        # Downsample if oversized
+        if max_dimension > 0:
+            h, w = img.shape[:2]
+            max_dim = max(w, h)
+            if max_dim > max_dimension:
+                scale = max_dimension / max_dim
+                new_w = int(w * scale)
+                new_h = int(h * scale)
+                logger.info(
+                    f'Downsampling oversized image for laplacian {path}: '
+                    f'{w}x{h} -> {new_w}x{new_h}'
+                )
+                img = cv2.resize(img, (new_w, new_h), interpolation=cv2.INTER_LANCZOS4)
 
         gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
         laplacian = cv2.Laplacian(gray, cv2.CV_64F)
@@ -1442,11 +1477,15 @@ class ImageMetadata:
     lossless: bool
 
 
-def extract_image_metadata(path: Path | str) -> ImageMetadata | None:
+def extract_image_metadata(
+    path: Path | str,
+    max_dimension: int = 0,
+) -> ImageMetadata | None:
     """Extract all metadata from an image file.
 
     Args:
         path: Path to the image file.
+        max_dimension: Max dimension for phash/laplacian (0 to disable).
 
     Returns:
         ImageMetadata object with all extracted data,
@@ -1482,10 +1521,10 @@ def extract_image_metadata(path: Path | str) -> ImageMetadata | None:
         return None
 
     # Compute perceptual hash (may fail for some images)
-    perceptual_hash = compute_perceptual_hash(path)
+    perceptual_hash = compute_perceptual_hash(path, max_dimension)
 
     # Compute Laplacian variance (may fail for some images)
-    laplacian_var = compute_laplacian_variance(path)
+    laplacian_var = compute_laplacian_variance(path, max_dimension)
 
     # Derive timestamp with confidence level
     timestamp, timestamp_confidence = derive_timestamp_with_confidence(path)
@@ -1537,6 +1576,7 @@ class IngestionThread(threading.Thread):
         db_lock: threading.RLock,
         pause_event: threading.Event | None = None,
         num_threads: int = 4,
+        max_image_dimension: int = 0,
     ):
         """Initialise the ingestion thread.
 
@@ -1548,6 +1588,7 @@ class IngestionThread(threading.Thread):
             db_lock: Shared lock for database access (from ImageDatabase).
             pause_event: Optional event to pause processing (for folder removal).
             num_threads: Number of worker threads for parallel metadata extraction.
+            max_image_dimension: Max dimension for image processing (0 to disable).
         """
         super().__init__(name='IngestionThread', daemon=True)
         self.conn = conn
@@ -1556,6 +1597,7 @@ class IngestionThread(threading.Thread):
         self.stop_event = stop_event
         self.pause_event = pause_event or threading.Event()
         self.num_threads = max(1, min(16, num_threads))
+        self.max_image_dimension = max_image_dimension
         self._processed_count = 0
         self._error_count = 0
         self._db_lock = db_lock  # Shared lock from ImageDatabase
@@ -1723,7 +1765,7 @@ class IngestionThread(threading.Thread):
                 if existing_checksum is None and existing_size > 0:
                     # Missing checksum - need to regenerate metadata
                     logger.info(f'Backfilling missing checksum for: {path}')
-                    metadata = extract_image_metadata(path)
+                    metadata = extract_image_metadata(path, self.max_image_dimension)
                     if metadata is not None:
                         with self._db_lock:
                             update_image_metadata(
@@ -1761,7 +1803,7 @@ class IngestionThread(threading.Thread):
 
             # File has changed (size or mtime differ) - re-extract metadata
             logger.info(f'Re-ingesting changed image: {path}')
-            metadata = extract_image_metadata(path)
+            metadata = extract_image_metadata(path, self.max_image_dimension)
             if metadata is None:
                 logger.warning(f'Failed to extract metadata for changed image: {path}')
                 return
@@ -1798,7 +1840,7 @@ class IngestionThread(threading.Thread):
 
         else:
             # New image - extract metadata (no lock - file I/O)
-            metadata = extract_image_metadata(path)
+            metadata = extract_image_metadata(path, self.max_image_dimension)
             if metadata is None:
                 logger.warning(f'Failed to extract metadata for new image: {path}')
                 return
@@ -1874,20 +1916,60 @@ class OpenCLIPModel:
         device: Torch device ('cuda' or 'cpu').
     """
 
-    def __init__(self, model_name: str = 'ViT-B-32', pretrained: str = 'openai'):
+    def __init__(
+        self,
+        model_name: str = 'ViT-B-32',
+        pretrained: str = 'openai',
+        max_dimension: int = 16384,
+    ):
         """Initialise the model wrapper.
 
         Args:
             model_name: OpenCLIP model architecture (e.g., 'ViT-B-32').
             pretrained: Pretrained weights (e.g., 'openai', 'laion2b_s34b_b79k').
+            max_dimension: Max image dimension before downsampling (0 to disable).
         """
         self.model_name = model_name
         self.pretrained = pretrained
+        self.max_dimension = max_dimension
         self.device = 'cuda' if torch.cuda.is_available() else 'cpu'
 
         self._model = None
         self._preprocess = None
         self._tokenizer = None
+
+    def _load_image_safe(self, path: Path | str) -> Image.Image | None:
+        """Load an image, downsampling if it exceeds max_dimension.
+
+        Args:
+            path: Path to the image file.
+
+        Returns:
+            PIL Image in RGB mode, or None if loading failed.
+        """
+        try:
+            img = Image.open(path)
+            img = ImageOps.exif_transpose(img)
+
+            # Check if downsampling is needed
+            if self.max_dimension > 0:
+                w, h = img.size
+                max_dim = max(w, h)
+                if max_dim > self.max_dimension:
+                    scale = self.max_dimension / max_dim
+                    new_w = int(w * scale)
+                    new_h = int(h * scale)
+                    logger.info(
+                        f'Downsampling oversized image {path}: '
+                        f'{w}x{h} -> {new_w}x{new_h}'
+                    )
+                    img = img.resize((new_w, new_h), Image.Resampling.LANCZOS)
+
+            return img.convert('RGB')
+
+        except Exception as e:
+            logger.warning(f'Failed to load image {path}: {e}')
+            return None
 
     def _load_model(self) -> None:
         """Load the model (called on first use)."""
@@ -1944,8 +2026,10 @@ class OpenCLIPModel:
             Normalised embedding as numpy array, or None if encoding fails.
         """
         try:
-            # Load and preprocess image
-            img = ImageOps.exif_transpose(Image.open(path)).convert('RGB')
+            # Load image (with downsampling if oversized)
+            img = self._load_image_safe(path)
+            if img is None:
+                return None
             x = self.preprocess(img).unsqueeze(0).to(self.device)
 
             # Encode with inference mode
@@ -1983,13 +2067,16 @@ class OpenCLIPModel:
 
         # Load and preprocess all images
         for i, path in enumerate(paths):
+            img = self._load_image_safe(path)
+            if img is None:
+                results.append((i, None))
+                continue
             try:
-                img = ImageOps.exif_transpose(Image.open(path)).convert('RGB')
                 x = self.preprocess(img)
                 tensors.append(x)
                 valid_indices.append(i)
             except Exception as e:
-                logger.warning(f'Failed to load image for embedding {path}: {e}')
+                logger.warning(f'Failed to preprocess image {path}: {e}')
                 results.append((i, None))
 
         if not tensors:
@@ -2108,6 +2195,7 @@ class EmbeddingThread(threading.Thread):
             self._clip_model = OpenCLIPModel(
                 model_name=self.config.openclip_model,
                 pretrained=self.config.openclip_pretrained,
+                max_dimension=self.config.max_image_dimension,
             )
         return self._clip_model
 
@@ -2470,6 +2558,7 @@ def get_or_create_thumbnail(
     size: int = 200,
     thumbnail_dir: Path | str = DEFAULT_THUMBNAIL_DIR,
     quality: int = 85,
+    max_source_dimension: int = 0,
 ) -> Path | None:
     """Get a thumbnail for an image, generating if necessary.
 
@@ -2484,6 +2573,7 @@ def get_or_create_thumbnail(
         size: Requested size (snapped to 200 or 400).
         thumbnail_dir: Root thumbnail cache directory.
         quality: JPEG quality for generated thumbnails.
+        max_source_dimension: Max dimension for draft mode (0 to disable).
 
     Returns:
         Path to the thumbnail file, or None if image not found or
@@ -2516,7 +2606,7 @@ def get_or_create_thumbnail(
         logger.warning(f'Source image not found for thumbnail: {source_path}')
         return None
 
-    if generate_thumbnail(source_path, cache_path, size, quality):
+    if generate_thumbnail(source_path, cache_path, size, quality, max_source_dimension):
         return cache_path
 
     return None
@@ -3179,6 +3269,7 @@ class ImageDatabase:
             db_lock=self._db_lock,
             pause_event=self._pause_event,
             num_threads=self.config.indexing_threads,
+            max_image_dimension=self.config.max_image_dimension,
         )
         self._ingestion_thread.start()
 
@@ -3765,6 +3856,7 @@ class ImageDatabase:
             self._clip_model_fallback = OpenCLIPModel(
                 model_name=self.config.openclip_model,
                 pretrained=self.config.openclip_pretrained,
+                max_dimension=self.config.max_image_dimension,
             )
         return self._clip_model_fallback
 
@@ -3797,7 +3889,8 @@ class ImageDatabase:
                 continue
             if not generate_thumbnail(
                 source_path, cache_path,
-                size=size, quality=self.config.thumbnail_quality
+                size=size, quality=self.config.thumbnail_quality,
+                max_source_dimension=self.config.max_image_dimension
             ):
                 success = False
         return success
@@ -3810,6 +3903,7 @@ class ImageDatabase:
             size,
             self.thumbnail_dir,
             self.config.thumbnail_quality,
+            self.config.max_image_dimension,
         )
 
     # =========================================================================

@@ -333,7 +333,10 @@ def get_thumbnail(image_id):
         if info is None:
             abort(404)
         _, source_path = info
-        if not generate_thumbnail(source_path, thumbnail_path, size, db.config.thumbnail_quality):
+        if not generate_thumbnail(
+            source_path, thumbnail_path, size,
+            db.config.thumbnail_quality, db.config.max_image_dimension
+        ):
             abort(404)
 
     # Read from disk and cache
@@ -921,6 +924,7 @@ def run_generate_thumbnails_cli():
         images=images,
         thumbnail_dir=db.thumbnail_dir,
         quality=db.config.thumbnail_quality,
+        max_source_dimension=db.config.max_image_dimension,
     )
 
 

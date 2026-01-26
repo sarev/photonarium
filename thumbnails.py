@@ -74,6 +74,7 @@ def generate_thumbnail(
     dest_path: Path | str,
     size: int,
     quality: int = 85,
+    max_source_dimension: int = 16384,
 ) -> bool:
     """Generate a thumbnail from a source image.
 
@@ -81,11 +82,15 @@ def generate_thumbnail(
     subtle UnsharpMask sharpening to counteract the blur introduced by
     downscaling.
 
+    For large images, uses PIL's draft mode to load at reduced resolution,
+    which is much faster and uses less memory.
+
     Args:
         source_path: Path to the source image.
         dest_path: Path where thumbnail should be saved.
         size: Maximum dimension (longest edge) in pixels.
         quality: JPEG quality (1-100).
+        max_source_dimension: Max dimension before using draft mode (0 to disable).
 
     Returns:
         True if thumbnail was generated successfully, False otherwise.
@@ -99,6 +104,28 @@ def generate_thumbnail(
 
         # Load image
         with Image.open(source_path) as img:
+            # For very large images, use draft mode to load at reduced resolution
+            # This is much faster and uses much less memory
+            if max_source_dimension > 0:
+                w, h = img.size
+                max_dim = max(w, h)
+                if max_dim > max_source_dimension:
+                    # Calculate scale to bring down to max dimension
+                    # Then further reduce to thumbnail size for efficiency
+                    target_size = max(size * 2, 1024)  # Load at 2x thumbnail size for quality
+                    scale = target_size / max_dim
+                    draft_size = (int(w * scale), int(h * scale))
+                    logger.info(
+                        f'Using draft mode for oversized image {source_path}: '
+                        f'{w}x{h} -> {draft_size[0]}x{draft_size[1]}'
+                    )
+                    # draft() only works for certain formats (JPEG, MPO)
+                    # For others, we fall through to normal processing
+                    try:
+                        img.draft('RGB', draft_size)
+                    except Exception:
+                        pass  # Draft not supported for this format
+
             # Handle EXIF orientation
             img = ImageOps.exif_transpose(img)
 
@@ -477,6 +504,7 @@ def _generate_thumbnails_for_image(
     thumbnail_dir: Path,
     quality: int,
     sizes: tuple[int, ...],
+    max_source_dimension: int = 0,
 ) -> tuple[int, int, int]:
     """Generate thumbnails for a single image (worker function).
 
@@ -485,6 +513,7 @@ def _generate_thumbnails_for_image(
         thumbnail_dir: Root thumbnail cache directory.
         quality: JPEG quality.
         sizes: Tuple of sizes to generate.
+        max_source_dimension: Max dimension for draft mode (0 to disable).
 
     Returns:
         Tuple of (generated, skipped, errors) counts.
@@ -513,7 +542,10 @@ def _generate_thumbnails_for_image(
                 errors += len(sizes) - skipped
                 break
 
-        if generate_thumbnail(source_path, cache_path, size=size, quality=quality):
+        if generate_thumbnail(
+            source_path, cache_path, size=size,
+            quality=quality, max_source_dimension=max_source_dimension
+        ):
             generated += 1
         else:
             errors += 1
@@ -526,6 +558,7 @@ def generate_missing_thumbnails(
     thumbnail_dir: Path | str,
     quality: int = 85,
     max_workers: int = 8,
+    max_source_dimension: int = 0,
 ) -> dict:
     """Generate thumbnails for images that don't have them cached.
 
@@ -537,6 +570,7 @@ def generate_missing_thumbnails(
         thumbnail_dir: Root thumbnail cache directory.
         quality: JPEG quality for generated thumbnails.
         max_workers: Maximum number of parallel worker threads.
+        max_source_dimension: Max dimension for draft mode (0 to disable).
 
     Returns:
         Dict with 'generated', 'skipped', and 'errors' counts.
@@ -560,7 +594,7 @@ def generate_missing_thumbnails(
         futures = {
             executor.submit(
                 _generate_thumbnails_for_image,
-                img, thumbnail_dir, quality, sizes
+                img, thumbnail_dir, quality, sizes, max_source_dimension
             ): img
             for img in images
         }
