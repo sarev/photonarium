@@ -848,45 +848,90 @@ def _compute_duplicates_level1_incremental(
 # LEVELS 2 & 3: EMBEDDING-BASED DUPLICATES
 # =============================================================================
 
+def _normalize_embeddings(embeddings: np.ndarray) -> np.ndarray:
+    """Normalize embeddings to unit length for cosine similarity.
+
+    After normalization, dot product equals cosine similarity.
+
+    Args:
+        embeddings: Array of shape (n, dim).
+
+    Returns:
+        Normalized array of same shape.
+    """
+    norms = np.linalg.norm(embeddings, axis=1, keepdims=True)
+    # Avoid division by zero for zero vectors
+    norms = np.where(norms == 0, 1, norms)
+    return embeddings / norms
+
+
 def _compute_embedding_duplicates_chunked(
     image_ids: list[str],
     embeddings: np.ndarray,
     threshold: float,
     chunk_size: int = 1000,
-) -> dict[int, list[str]]:
+) -> tuple[dict[int, list[str]], dict[str, Any]]:
     """Compute duplicate groups from embeddings using chunked processing.
 
     Uses chunked matrix multiplication to avoid O(n²) memory usage.
-    Only stores pairs above threshold, then builds clusters with union-find.
+    Embeddings should already be normalized for cosine similarity.
+
+    Algorithm:
+    1. Process embeddings in chunks to limit memory to O(chunk_size * n)
+    2. For each chunk, compute similarity matrix against all embeddings
+    3. Use vectorized numpy operations to find pairs above threshold
+    4. Union matching pairs in UnionFind structure
+    5. Extract final groups
+
+    Args:
+        image_ids: List of image IDs corresponding to embeddings.
+        embeddings: Normalized embedding matrix of shape (n, dim).
+        threshold: Minimum cosine similarity for a match.
+        chunk_size: Number of embeddings to process at once.
 
     Returns:
-        Dictionary mapping group root index to list of image IDs.
+        Tuple of (groups_dict, metrics_dict) where groups_dict maps
+        root index to list of image IDs.
     """
     n = len(image_ids)
+    dim = embeddings.shape[1] if len(embeddings.shape) > 1 else 0
 
     # Union-find for clustering
     uf = UnionFind(n=n)
 
-    # Process in chunks to avoid O(n²) memory
+    # Metrics
     pairs_found = 0
+    chunks_processed = 0
+    total_comparisons = 0
 
+    # Process in chunks to avoid O(n²) memory
     for chunk_start in range(0, n, chunk_size):
         chunk_end = min(chunk_start + chunk_size, n)
         chunk_embeddings = embeddings[chunk_start:chunk_end]
+        chunk_len = chunk_end - chunk_start
 
         # Compute similarities between chunk and all embeddings
+        # Shape: (chunk_len, n)
         similarities = chunk_embeddings @ embeddings.T
 
-        # Find pairs above threshold (only upper triangle)
-        for i_local in range(chunk_end - chunk_start):
+        # Vectorized: find all pairs above threshold in upper triangle
+        # We only want pairs where i_global < j to avoid duplicates
+        for i_local in range(chunk_len):
             i_global = chunk_start + i_local
-            start_j = max(i_global + 1, 0)
-            for j in range(start_j, n):
-                if similarities[i_local, j] >= threshold:
+            # Only check j > i_global (upper triangle)
+            if i_global + 1 < n:
+                # Get similarities for this row, only for j > i_global
+                row_sims = similarities[i_local, i_global + 1:]
+                # Find indices where similarity >= threshold
+                matches = np.where(row_sims >= threshold)[0]
+                # Convert to global indices
+                for match_offset in matches:
+                    j = i_global + 1 + match_offset
                     uf.union(i_global, j)
                     pairs_found += 1
+                total_comparisons += n - i_global - 1
 
-    logger.info(f'  Completed: {pairs_found:,} similar pairs found')
+        chunks_processed += 1
 
     # Build groups from union-find
     all_groups = uf.extract_groups()
@@ -896,15 +941,30 @@ def _compute_embedding_duplicates_chunked(
     for root, members in all_groups.items():
         groups[root] = [image_ids[idx] for idx in members]
 
-    return groups
+    metrics = {
+        'n_images': n,
+        'embedding_dim': dim,
+        'chunk_size': chunk_size,
+        'chunks_processed': chunks_processed,
+        'total_comparisons': total_comparisons,
+        'pairs_found': pairs_found,
+        'memory_per_chunk_mb': (chunk_size * n * 4) / (1024 * 1024),  # float32
+    }
+
+    return groups, metrics
 
 
-def _compute_duplicates_level2(conn: sqlite3.Connection, threshold: float = 0.95) -> int:
-    """Compute level 2 duplicates (similar embeddings)."""
-    logger.info(f'Computing level 2 duplicates (embedding similarity >= {threshold})')
+def _load_embeddings_normalized(
+    conn: sqlite3.Connection,
+) -> tuple[list[str], np.ndarray] | None:
+    """Load all image embeddings and normalize them.
 
-    _clear_duplicate_groups(conn, level=2)
+    Args:
+        conn: Database connection.
 
+    Returns:
+        Tuple of (image_ids, normalized_embeddings) or None if < 2 images.
+    """
     cursor = conn.execute("""
         SELECT id, embedding
         FROM images
@@ -913,17 +973,54 @@ def _compute_duplicates_level2(conn: sqlite3.Connection, threshold: float = 0.95
     rows = cursor.fetchall()
 
     if len(rows) < 2:
-        logger.info('Not enough images with embeddings for similarity detection')
-        return 0
+        return None
 
     image_ids = [row['id'] for row in rows]
     embeddings = np.array([embedding_to_numpy(row['embedding']) for row in rows])
 
-    logger.info(f'Processing {len(image_ids)} images with chunked similarity')
+    # Normalize once for all subsequent operations
+    embeddings = _normalize_embeddings(embeddings)
 
-    groups = _compute_embedding_duplicates_chunked(
+    return image_ids, embeddings
+
+
+def _compute_duplicates_level2(conn: sqlite3.Connection, threshold: float = 0.95) -> int:
+    """Compute level 2 duplicates (similar embeddings).
+
+    Groups images with high cosine similarity (>= threshold).
+    Level 2 uses a high threshold (default 0.95) for visually similar images
+    like crops, color adjustments, or shot sequences.
+
+    Args:
+        conn: Database connection.
+        threshold: Minimum cosine similarity (default 0.95).
+
+    Returns:
+        Number of duplicate groups found.
+    """
+    logger.info(f'Computing level 2 duplicates (embedding similarity >= {threshold})')
+
+    _clear_duplicate_groups(conn, level=2)
+
+    result = _load_embeddings_normalized(conn)
+    if result is None:
+        logger.info('Not enough images with embeddings for similarity detection')
+        return 0
+
+    image_ids, embeddings = result
+    n = len(image_ids)
+
+    logger.info(f'Processing {n} images ({embeddings.shape[1]}-dim embeddings)')
+
+    groups, metrics = _compute_embedding_duplicates_chunked(
         image_ids, embeddings, threshold, chunk_size=1000
     )
+
+    logger.info(
+        f'  Chunked processing: {metrics["chunks_processed"]} chunks, '
+        f'~{metrics["memory_per_chunk_mb"]:.1f} MB peak per chunk'
+    )
+    logger.info(f'  Completed: {metrics["pairs_found"]:,} similar pairs found')
 
     group_count = 0
     for root, members in groups.items():
@@ -938,30 +1035,42 @@ def _compute_duplicates_level2(conn: sqlite3.Connection, threshold: float = 0.95
 
 
 def _compute_duplicates_level3(conn: sqlite3.Connection, threshold: float = 0.85) -> int:
-    """Compute level 3 duplicates (related embeddings)."""
+    """Compute level 3 duplicates (related embeddings).
+
+    Groups images with moderate cosine similarity (>= threshold).
+    Level 3 uses a lower threshold (default 0.85) for thematically related
+    images that may not be visually identical.
+
+    Args:
+        conn: Database connection.
+        threshold: Minimum cosine similarity (default 0.85).
+
+    Returns:
+        Number of duplicate groups found.
+    """
     logger.info(f'Computing level 3 duplicates (embedding similarity >= {threshold})')
 
     _clear_duplicate_groups(conn, level=3)
 
-    cursor = conn.execute("""
-        SELECT id, embedding
-        FROM images
-        WHERE deleted = 0 AND embedding IS NOT NULL
-    """)
-    rows = cursor.fetchall()
-
-    if len(rows) < 2:
+    result = _load_embeddings_normalized(conn)
+    if result is None:
         logger.info('Not enough images with embeddings for similarity detection')
         return 0
 
-    image_ids = [row['id'] for row in rows]
-    embeddings = np.array([embedding_to_numpy(row['embedding']) for row in rows])
+    image_ids, embeddings = result
+    n = len(image_ids)
 
-    logger.info(f'Processing {len(image_ids)} images with chunked similarity')
+    logger.info(f'Processing {n} images ({embeddings.shape[1]}-dim embeddings)')
 
-    groups = _compute_embedding_duplicates_chunked(
+    groups, metrics = _compute_embedding_duplicates_chunked(
         image_ids, embeddings, threshold, chunk_size=1000
     )
+
+    logger.info(
+        f'  Chunked processing: {metrics["chunks_processed"]} chunks, '
+        f'~{metrics["memory_per_chunk_mb"]:.1f} MB peak per chunk'
+    )
+    logger.info(f'  Completed: {metrics["pairs_found"]:,} similar pairs found')
 
     group_count = 0
     for root, members in groups.items():
@@ -981,7 +1090,20 @@ def _compute_duplicates_embedding_incremental(
     level: int,
     threshold: float,
 ) -> int:
-    """Incrementally update embedding-based duplicates for dirty images."""
+    """Incrementally update embedding-based duplicates for dirty images.
+
+    For each dirty image, finds all images with similarity >= threshold
+    and either adds to existing groups or creates new ones.
+
+    Args:
+        conn: Database connection.
+        dirty_ids: List of image IDs that need checking.
+        level: Duplicate level (2 or 3).
+        threshold: Minimum cosine similarity for a match.
+
+    Returns:
+        Number of new groups created.
+    """
     if not dirty_ids:
         return 0
 
@@ -1002,12 +1124,13 @@ def _compute_duplicates_embedding_incremental(
 
     # Stack all embeddings for vectorized comparison
     id_list = list(all_embeddings.keys())
-    embedding_matrix = np.array([all_embeddings[id] for id in id_list])
+    embedding_matrix = np.array([all_embeddings[id_] for id_ in id_list])
 
-    # Normalize for cosine similarity
-    norms = np.linalg.norm(embedding_matrix, axis=1, keepdims=True)
-    norms[norms == 0] = 1
-    embedding_matrix = embedding_matrix / norms
+    # Normalize once for all comparisons
+    embedding_matrix = _normalize_embeddings(embedding_matrix)
+
+    # Build id -> index mapping for fast lookup
+    id_to_idx = {id_: idx for idx, id_ in enumerate(id_list)}
 
     new_groups = 0
 
@@ -1015,15 +1138,18 @@ def _compute_duplicates_embedding_incremental(
         if dirty_id not in all_embeddings:
             continue
 
-        dirty_emb = all_embeddings[dirty_id]
-        dirty_emb_norm = dirty_emb / (np.linalg.norm(dirty_emb) or 1)
+        # Get normalized embedding for dirty image
+        dirty_idx = id_to_idx[dirty_id]
+        dirty_emb_norm = embedding_matrix[dirty_idx]
 
+        # Vectorized similarity computation
         similarities = embedding_matrix @ dirty_emb_norm
 
-        matches = []
-        for i, (other_id, sim) in enumerate(zip(id_list, similarities)):
-            if other_id != dirty_id and sim >= threshold:
-                matches.append(other_id)
+        # Find matches above threshold (excluding self)
+        match_mask = (similarities >= threshold)
+        match_mask[dirty_idx] = False  # Exclude self
+        match_indices = np.where(match_mask)[0]
+        matches = [id_list[idx] for idx in match_indices]
 
         if not matches:
             continue
