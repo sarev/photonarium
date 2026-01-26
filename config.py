@@ -105,6 +105,11 @@ indexing_threads: 4
 # for large batches. Range: 1-10000
 max_incremental_duplicates: 500
 
+# Percentage of total images that triggers full recomputation instead of incremental.
+# If dirty_count > (total_count * threshold), does full rebuild.
+# Range: 5-50, recommended: 15-25
+incremental_threshold_percent: 20
+
 # ------------------------------------------------------------------------------
 # Thumbnail Loading (Frontend)
 # ------------------------------------------------------------------------------
@@ -153,6 +158,8 @@ class Config:
         indexing_threads: Number of threads for parallel image indexing (1-16).
         max_incremental_duplicates: Max dirty images for incremental duplicate detection.
             If more images need checking, falls back to full recomputation.
+        incremental_threshold_percent: Percentage of total images that triggers full
+            recomputation instead of incremental (5-50).
         thumbnail_concurrent_requests: Max concurrent thumbnail fetch requests (1-12).
         thumbnail_extra_rows: Extra rows above/below viewport to prefetch (1-20).
         thumbnail_timeout_ms: Timeout for thumbnail fetch requests in ms (1000-60000).
@@ -172,6 +179,7 @@ class Config:
     similarity_threshold_level3: float = 0.85
     indexing_threads: int = 4
     max_incremental_duplicates: int = 500
+    incremental_threshold_percent: int = 20
     thumbnail_concurrent_requests: int = 6
     thumbnail_extra_rows: int = 5
     thumbnail_timeout_ms: int = 10000
@@ -227,6 +235,10 @@ class Config:
         # Validate max_incremental_duplicates
         if not 1 <= self.max_incremental_duplicates <= 10000:
             raise ValueError(f'max_incremental_duplicates must be 1-10000, got {self.max_incremental_duplicates}')
+
+        # Validate incremental_threshold_percent
+        if not 5 <= self.incremental_threshold_percent <= 50:
+            raise ValueError(f'incremental_threshold_percent must be 5-50, got {self.incremental_threshold_percent}')
 
         # Validate thumbnail loading settings
         if not 1 <= self.thumbnail_concurrent_requests <= 12:
@@ -307,6 +319,9 @@ def load_config(config_path: Path | str | None = None) -> Config:
 
     if 'max_incremental_duplicates' in config_data:
         kwargs['max_incremental_duplicates'] = int(config_data['max_incremental_duplicates'])
+
+    if 'incremental_threshold_percent' in config_data:
+        kwargs['incremental_threshold_percent'] = int(config_data['incremental_threshold_percent'])
 
     if 'thumbnail_concurrent_requests' in config_data:
         kwargs['thumbnail_concurrent_requests'] = int(config_data['thumbnail_concurrent_requests'])

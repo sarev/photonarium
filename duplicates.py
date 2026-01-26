@@ -1667,14 +1667,26 @@ class DuplicateManager:
     # Computation
     # =========================================================================
 
-    def compute_all(self, conn: sqlite3.Connection | None = None) -> dict[int, int]:
+    def compute_all(
+        self,
+        conn: sqlite3.Connection | None = None,
+        force_full: bool = False,
+    ) -> dict[int, int]:
         """Compute all duplicate groups, using incremental updates when possible.
 
         Uses incremental computation when the number of dirty images is below
-        the configured threshold, otherwise does a full recomputation.
+        the configured thresholds (both absolute and percentage-based),
+        otherwise does a full recomputation.
+
+        Threshold logic:
+        - Absolute threshold: max_incremental_duplicates (default: 500)
+        - Percentage threshold: incremental_threshold_percent of total images (default: 20%)
+        - Minimum threshold: 50 (always allow small batches incrementally)
+        - Uses minimum of (absolute, percentage) but at least minimum threshold
 
         Args:
             conn: Optional database connection. If None, creates a new one.
+            force_full: If True, skip incremental and do full recomputation.
 
         Returns:
             Dict mapping level to number of groups found.
@@ -1703,18 +1715,37 @@ class DuplicateManager:
                     return {0: 0, 1: 0, 2: 0, 3: 0}
 
             dirty_count = len(dirty_ids)
-            max_incremental = self._config.max_incremental_duplicates
-            use_incremental = dirty_count <= max_incremental
 
-            if use_incremental:
+            # Get total image count for percentage calculation
+            cursor = conn.execute('SELECT COUNT(*) as cnt FROM images WHERE deleted = 0')
+            total_count = cursor.fetchone()['cnt']
+
+            # Calculate effective threshold using both absolute and percentage
+            absolute_threshold = self._config.max_incremental_duplicates
+            percent_threshold = int(total_count * self._config.incremental_threshold_percent / 100)
+
+            # Use the more conservative (lower) threshold, but maintain a minimum
+            # to avoid full rebuilds for tiny batches
+            min_threshold = 50
+            effective_threshold = max(min_threshold, min(absolute_threshold, percent_threshold))
+
+            # Determine whether to use incremental
+            use_incremental = not force_full and dirty_count <= effective_threshold
+
+            if force_full:
+                logger.info(
+                    f'Force full recomputation requested ({dirty_count} dirty images)'
+                )
+            elif use_incremental:
                 logger.info(
                     f'Processing {dirty_count} dirty images incrementally '
-                    f'(threshold: {max_incremental})'
+                    f'(threshold: {effective_threshold}, {dirty_count}/{total_count} = '
+                    f'{dirty_count * 100 / total_count:.1f}%)'
                 )
             else:
                 logger.info(
-                    f'{dirty_count} dirty images exceeds threshold ({max_incremental}), '
-                    'doing full recomputation'
+                    f'{dirty_count} dirty images ({dirty_count * 100 / total_count:.1f}%) '
+                    f'exceeds threshold ({effective_threshold}), doing full recomputation'
                 )
 
             results = {}
