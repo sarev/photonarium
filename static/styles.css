@@ -12,6 +12,19 @@
    Theme definitions, typography, and reset styles.
    ========================================================================== */
 
+/* Theme-independent colors (for overlays that may be outside themed containers) */
+:root {
+    --color-overlay-bg: rgba(0, 0, 0, 0.5);
+    --color-overlay-bg-solid: #000000;
+    --color-overlay-text: #ffffff;
+    --color-overlay-gradient: linear-gradient(transparent, rgba(0, 0, 0, 0.7));
+    --color-overlay-button-bg: rgba(0, 0, 0, 0.5);
+    --color-overlay-button-hover: rgba(0, 0, 0, 0.8);
+    --color-overlay-nav-bg: rgba(0, 0, 0, 0.4);
+    --color-overlay-nav-hover: rgba(0, 0, 0, 0.7);
+    --color-overlay-toast-bg: rgba(0, 0, 0, 0.7);
+}
+
 /* Light theme (warm grey) */
 [data-theme="light"] {
     --color-bg-primary: #eae5e3;
@@ -38,10 +51,58 @@
     --color-danger-hover: #8b4444;
 
     --color-success: #5a765b;
+    --color-warning: #ffc107;
 
     --shadow-sm: 0 1px 2px rgba(46, 42, 39, 0.08);
     --shadow-md: 0 2px 8px rgba(46, 42, 39, 0.12);
     --shadow-lg: 0 4px 16px rgba(46, 42, 39, 0.16);
+
+    /* Pastel button backgrounds */
+    --color-pastel-blue-bg: #e3f2fd;
+    --color-pastel-blue-fg: #1976d2;
+    --color-pastel-green-bg: #e8f5e9;
+    --color-pastel-green-fg: #388e3c;
+    --color-pastel-orange-bg: #fff3e0;
+    --color-pastel-orange-fg: #f57c00;
+    --color-pastel-pink-bg: #fce4ec;
+    --color-pastel-pink-fg: #c2185b;
+    --color-pastel-purple-bg: #f3e5f5;
+    --color-pastel-purple-fg: #7b1fa2;
+    --color-pastel-teal-bg: #e0f2f1;
+    --color-pastel-teal-fg: #00897b;
+    --color-pastel-yellow-bg: #fffde7;
+    --color-pastel-yellow-fg: #f9a825;
+    --color-pastel-indigo-bg: #e8eaf6;
+    --color-pastel-indigo-fg: #3949ab;
+    --color-pastel-brown-bg: #efebe9;
+    --color-pastel-brown-fg: #6d4c41;
+    --color-pastel-grey-bg: #eceff1;
+    --color-pastel-grey-fg: #546e7a;
+
+    /* Text accent colors */
+    --color-text-blue: #1565c0;
+    --color-text-green: #388e3c;
+    --color-text-orange: #f57c00;
+    --color-text-pink: #c2185b;
+    --color-text-purple: #7b1fa2;
+    --color-text-teal: #00897b;
+    --color-text-amber: #ff8f00;
+    --color-text-indigo: #5c6bc0;
+    --color-text-indigo-dark: #3949ab;
+
+    /* Histogram */
+    --color-histogram-bg: #3f3835;
+
+    /* Histogram channel colors (semantic - R/G/B indicators) */
+    --color-histogram-red: #ff4444;
+    --color-histogram-green: #44cc44;
+    --color-histogram-blue: #4488ff;
+    --color-histogram-active-text: #ffffff;
+
+    /* Miscellaneous */
+    --color-danger-light: rgba(168, 84, 84, 0.1);
+    --color-divider-light: rgba(0, 0, 0, 0.15);
+    --color-shadow-light: rgba(0, 0, 0, 0.2);
 }
 
 /* Dark theme (warm grey) */
@@ -70,11 +131,60 @@
     --color-danger-hover: #c87c7d;
 
     --color-success: #7c9d7c;
+    --color-warning: #ffca28;
 
     --shadow-sm: 0 1px 2px rgba(10, 4, 5, 0.2);
     --shadow-md: 0 2px 8px rgba(10, 4, 5, 0.3);
     --shadow-lg: 0 4px 16px rgba(10, 4, 5, 0.4);
+
+    /* Pastel button backgrounds (darker for dark theme) */
+    --color-pastel-blue-bg: #1e3a5f;
+    --color-pastel-blue-fg: #90caf9;
+    --color-pastel-green-bg: #1b3d2f;
+    --color-pastel-green-fg: #a5d6a7;
+    --color-pastel-orange-bg: #4a3728;
+    --color-pastel-orange-fg: #ffcc80;
+    --color-pastel-pink-bg: #3d2836;
+    --color-pastel-pink-fg: #f48fb1;
+    --color-pastel-purple-bg: #352840;
+    --color-pastel-purple-fg: #ce93d8;
+    --color-pastel-teal-bg: #1a3735;
+    --color-pastel-teal-fg: #80cbc4;
+    --color-pastel-yellow-bg: #3d3520;
+    --color-pastel-yellow-fg: #fff59d;
+    --color-pastel-indigo-bg: #283050;
+    --color-pastel-indigo-fg: #9fa8da;
+    --color-pastel-brown-bg: #3e3028;
+    --color-pastel-brown-fg: #bcaaa4;
+    --color-pastel-grey-bg: #2d3940;
+    --color-pastel-grey-fg: #b0bec5;
+
+    /* Text accent colors */
+    --color-text-blue: #64b5f6;
+    --color-text-green: #81c784;
+    --color-text-orange: #ffb74d;
+    --color-text-pink: #f48fb1;
+    --color-text-purple: #ba68c8;
+    --color-text-teal: #4db6ac;
+    --color-text-amber: #ffca28;
+    --color-text-indigo: #9fa8da;
+    --color-text-indigo-dark: #7986cb;
+
+    /* Histogram */
+    --color-histogram-bg: #3f3835;
+
+    /* Histogram channel colors (semantic - R/G/B indicators) */
+    --color-histogram-red: #ff4444;
+    --color-histogram-green: #44cc44;
+    --color-histogram-blue: #4488ff;
+    --color-histogram-active-text: #ffffff;
+
+    /* Miscellaneous */
+    --color-danger-light: rgba(168, 84, 84, 0.15);
+    --color-divider-light: rgba(255, 255, 255, 0.1);
+    --color-shadow-light: rgba(0, 0, 0, 0.3);
 }
+
 /* Base reset */
 *,
 *::before,
@@ -265,6 +375,70 @@ a:hover {
 
 .toolbar-btn .material-symbols-outlined {
     font-size: 22px;
+}
+
+/* Pastel color hints for toolbar buttons */
+#btn-thumb-smaller:hover,
+#btn-thumb-larger:hover,
+#btn-dup-thumb-smaller:hover,
+#btn-dup-thumb-larger:hover {
+    background-color: var(--color-pastel-blue-bg);
+    color: var(--color-pastel-blue-fg);
+}
+
+#btn-fullscreen:hover,
+#btn-reveal-folder:hover {
+    background-color: var(--color-pastel-green-bg);
+    color: var(--color-pastel-green-fg);
+}
+
+#btn-rotate-ccw:hover,
+#btn-rotate-cw:hover {
+    background-color: var(--color-pastel-orange-bg);
+    color: var(--color-pastel-orange-fg);
+}
+
+#btn-database:hover {
+    background-color: var(--color-pastel-pink-bg);
+    color: var(--color-pastel-pink-fg);
+}
+
+#btn-duplicates:hover {
+    background-color: var(--color-pastel-purple-bg);
+    color: var(--color-pastel-purple-fg);
+}
+
+#btn-filter:hover {
+    background-color: var(--color-pastel-teal-bg);
+    color: var(--color-pastel-teal-fg);
+}
+
+#btn-sort-date:hover,
+#btn-sort-rating:hover,
+#btn-sort-content:hover,
+#btn-sort-direction:hover,
+#btn-dup-sort-size:hover,
+#btn-dup-sort-semantic:hover {
+    background-color: var(--color-pastel-yellow-bg);
+    color: var(--color-pastel-yellow-fg);
+}
+
+#btn-select-all:hover,
+#btn-clear-selection:hover {
+    background-color: var(--color-pastel-indigo-bg);
+    color: var(--color-pastel-indigo-fg);
+}
+
+#btn-theme:hover {
+    background-color: var(--color-pastel-brown-bg);
+    color: var(--color-pastel-brown-fg);
+}
+
+#btn-prev-group:hover,
+#btn-next-group:hover,
+#btn-back-gallery:hover {
+    background-color: var(--color-pastel-grey-bg);
+    color: var(--color-pastel-grey-fg);
 }
 
 /* Sort controls */
@@ -565,6 +739,7 @@ a:hover {
     padding-bottom: 0.75rem;
     border-bottom: 1px solid var(--color-border);
     margin-bottom: 1rem;
+    color: var(--color-text-indigo);
 }
 
 #info-content {
@@ -601,7 +776,7 @@ a:hover {
 
 .info-selection-count {
     font-size: 0.85rem;
-    color: var(--color-accent);
+    color: var(--color-text-indigo-dark);
     font-weight: 500;
     margin-bottom: 0.5rem;
 }
@@ -609,7 +784,7 @@ a:hover {
 .info-filename {
     font-weight: 600;
     word-break: break-word;
-    color: var(--color-text-primary);
+    color: var(--color-text-blue);
 }
 
 .info-path {
@@ -637,9 +812,24 @@ a:hover {
     text-align: right;
 }
 
+/* Colored info labels */
+.info-row:nth-child(1) .info-label { color: var(--color-pastel-blue-fg); } /* Dimensions */
+.info-row:nth-child(2) .info-label { color: var(--color-text-green); } /* File size */
+.info-row:nth-child(3) .info-label { color: var(--color-text-orange); } /* Date */
+
 .info-editable .info-label {
     display: block;
     margin-bottom: 0.5rem;
+}
+
+/* Description label - teal */
+.info-editable:nth-of-type(1) .info-label {
+    color: var(--color-text-teal);
+}
+
+/* Rating label - amber */
+.info-editable:nth-of-type(2) .info-label {
+    color: var(--color-text-amber);
 }
 
 .info-input {
@@ -693,13 +883,14 @@ a:hover {
 .info-histogram .info-label {
     display: block;
     margin-bottom: 0.5rem;
+    color: var(--color-text-purple);
 }
 
 .histogram-container {
     position: relative;
     width: 100%;
     aspect-ratio: 1;
-    background-color: var(--color-bg-elevated);
+    background-color: var(--color-histogram-bg);
     border: 1px solid var(--color-border);
     border-radius: 4px;
     overflow: hidden;
@@ -748,33 +939,33 @@ a:hover {
 }
 
 .histogram-toggle-r {
-    color: #ff4444;
-    border-color: #ff4444;
+    color: var(--color-histogram-red);
+    border-color: var(--color-histogram-red);
 }
 
 .histogram-toggle-g {
-    color: #44cc44;
-    border-color: #44cc44;
+    color: var(--color-histogram-green);
+    border-color: var(--color-histogram-green);
 }
 
 .histogram-toggle-b {
-    color: #4488ff;
-    border-color: #4488ff;
+    color: var(--color-histogram-blue);
+    border-color: var(--color-histogram-blue);
 }
 
 .histogram-toggle-r.active {
-    background-color: #ff4444;
-    color: white;
+    background-color: var(--color-histogram-red);
+    color: var(--color-histogram-active-text);
 }
 
 .histogram-toggle-g.active {
-    background-color: #44cc44;
-    color: white;
+    background-color: var(--color-histogram-green);
+    color: var(--color-histogram-active-text);
 }
 
 .histogram-toggle-b.active {
-    background-color: #4488ff;
-    color: white;
+    background-color: var(--color-histogram-blue);
+    color: var(--color-histogram-active-text);
 }
 
 .histogram-toggle:hover {
@@ -791,7 +982,7 @@ a:hover {
 #screen-fullscreen {
     position: fixed;
     inset: 0;
-    background-color: #000;
+    background-color: var(--color-overlay-bg-solid);
     z-index: 1000;
     flex-direction: column;
     align-items: center;
@@ -821,8 +1012,8 @@ a:hover {
     left: 0;
     right: 0;
     padding: 1rem;
-    background: linear-gradient(transparent, rgba(0, 0, 0, 0.7));
-    color: #fff;
+    background: var(--color-overlay-gradient);
+    color: var(--color-overlay-text);
     text-align: center;
     font-size: 0.9rem;
     pointer-events: none;
@@ -843,8 +1034,8 @@ a:hover {
     height: 2.5rem;
     border: none;
     border-radius: 50%;
-    background: rgba(0, 0, 0, 0.5);
-    color: #fff;
+    background: var(--color-overlay-button-bg);
+    color: var(--color-overlay-text);
     cursor: pointer;
     display: flex;
     align-items: center;
@@ -855,7 +1046,7 @@ a:hover {
 }
 
 #fullscreen-close:hover {
-    background: rgba(0, 0, 0, 0.8);
+    background: var(--color-overlay-button-hover);
 }
 
 #fullscreen-close .material-symbols-outlined {
@@ -876,8 +1067,8 @@ a:hover {
     height: 4rem;
     border: none;
     border-radius: 4px;
-    background: rgba(0, 0, 0, 0.4);
-    color: #fff;
+    background: var(--color-overlay-nav-bg);
+    color: var(--color-overlay-text);
     cursor: pointer;
     display: flex;
     align-items: center;
@@ -888,7 +1079,7 @@ a:hover {
 }
 
 .fullscreen-nav:hover {
-    background: rgba(0, 0, 0, 0.7);
+    background: var(--color-overlay-nav-hover);
 }
 
 .fullscreen-nav .material-symbols-outlined {
@@ -938,6 +1129,7 @@ a:hover {
 
 .database-section h2 {
     margin-bottom: 1rem;
+    color: var(--color-text-pink);
 }
 
 .folder-controls {
@@ -981,7 +1173,8 @@ a:hover {
 
 .folder-count {
     font-size: 0.8rem;
-    color: var(--color-text-muted);
+    color: var(--color-text-purple);
+    font-weight: 500;
     margin: 0 1rem;
 }
 
@@ -991,7 +1184,7 @@ a:hover {
 
 .folder-remove:hover {
     color: var(--color-danger-hover);
-    background-color: rgba(168, 84, 84, 0.1);
+    background-color: var(--color-danger-light);
 }
 
 /* Database status */
@@ -1039,11 +1232,11 @@ a:hover {
 }
 
 .status-indicator.up-to-date {
-    background-color: var(--color-success, #28a745);
+    background-color: var(--color-success);
 }
 
 .status-indicator.updating {
-    background-color: var(--color-warning, #ffc107);
+    background-color: var(--color-warning);
     animation: pulse 1.5s ease-in-out infinite;
 }
 
@@ -1054,7 +1247,11 @@ a:hover {
 
 .status-text {
     font-weight: 500;
-    color: var(--color-text-primary);
+    color: var(--color-text-green);
+}
+
+.status-text.updating {
+    color: var(--color-text-orange);
 }
 
 .queue-counts {
@@ -1112,6 +1309,7 @@ a:hover {
 
 .search-section h2 {
     margin-bottom: 1.5rem;
+    color: var(--color-text-teal);
 }
 
 .filter-group {
@@ -1212,7 +1410,7 @@ a:hover {
     background: var(--color-accent);
     cursor: pointer;
     border: 2px solid var(--color-bg-primary);
-    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.2);
+    box-shadow: 0 1px 3px var(--color-shadow-light);
 }
 
 .similarity-slider input[type="range"]::-moz-range-thumb {
@@ -1222,7 +1420,7 @@ a:hover {
     background: var(--color-accent);
     cursor: pointer;
     border: 2px solid var(--color-bg-primary);
-    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.2);
+    box-shadow: 0 1px 3px var(--color-shadow-light);
 }
 
 .similarity-hints {
@@ -1328,7 +1526,7 @@ a:hover {
 .duplicate-stack-count {
     margin-top: 0.5rem;
     font-size: 0.85rem;
-    color: var(--color-text-secondary);
+    color: var(--color-text-purple);
     font-weight: 500;
 }
 
@@ -1368,7 +1566,7 @@ a:hover {
     align-items: center;
     justify-content: center;
     gap: 1rem;
-    background-color: rgba(0, 0, 0, 0.5);
+    background-color: var(--color-overlay-bg);
     z-index: 9999;
     opacity: 0;
     visibility: hidden;
@@ -1394,10 +1592,10 @@ a:hover {
 }
 
 .loading-message {
-    color: #fff;
+    color: var(--color-overlay-text);
     font-size: 1.25rem;
     font-weight: 600;
-    background-color: rgba(0, 0, 0, 0.7);
+    background-color: var(--color-overlay-toast-bg);
     padding: 0.75rem 1.5rem;
     border-radius: 8px;
 }
@@ -1409,8 +1607,8 @@ a:hover {
     left: 50%;
     transform: translateX(-50%) translateY(1rem);
     padding: 0.875rem 1.5rem;
-    background-color: var(--color-danger, #dc3545);
-    color: #fff;
+    background-color: var(--color-danger);
+    color: var(--color-overlay-text);
     border-radius: 8px;
     box-shadow: var(--shadow-lg);
     font-size: 0.9rem;
@@ -1439,7 +1637,7 @@ dialog {
 }
 
 dialog::backdrop {
-    background-color: rgba(0, 0, 0, 0.5);
+    background-color: var(--color-overlay-bg);
 }
 
 .dialog-content {
@@ -1478,7 +1676,7 @@ dialog::backdrop {
     grid-column: 1 / -1;
     margin: 8px 0;
     padding-top: 8px;
-    border-top: 1px solid rgba(0, 0, 0, 0.15);
+    border-top: 1px solid var(--color-divider-light);
     font-size: 12px;
     opacity: 0.75;
     color: var(--color-text-primary);
