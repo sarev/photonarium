@@ -1072,9 +1072,26 @@ const Gallery = {
                     </button>
                 </div>
             </div>
+
+            <div class="info-section info-histogram">
+                <label class="info-label">Histogram</label>
+                <div class="histogram-container" id="histogram-container">
+                    <img id="histogram-r" class="histogram-channel" alt="Red">
+                    <img id="histogram-g" class="histogram-channel" alt="Green">
+                    <img id="histogram-b" class="histogram-channel" alt="Blue">
+                    <div class="histogram-loading">Loading...</div>
+                </div>
+                <div class="histogram-toggles">
+                    <button type="button" id="histogram-toggle-r" class="histogram-toggle histogram-toggle-r active" title="Toggle red channel">R</button>
+                    <button type="button" id="histogram-toggle-g" class="histogram-toggle histogram-toggle-g active" title="Toggle green channel">G</button>
+                    <button type="button" id="histogram-toggle-b" class="histogram-toggle histogram-toggle-b active" title="Toggle blue channel">B</button>
+                </div>
+            </div>
         `;
 
         this._bindInfoPanelEvents(imageId);
+        this._bindHistogramToggles();
+        this._loadHistogram(imageId);
     },
 
     /**
@@ -1138,6 +1155,72 @@ const Gallery = {
         } catch (error) {
             console.error(`Failed to save ${field}:`, error);
         }
+    },
+
+    /**
+     * Binds histogram channel toggle buttons.
+     * @private
+     */
+    _bindHistogramToggles() {
+        const channels = ['r', 'g', 'b'];
+        channels.forEach(ch => {
+            const btn = App.$(`histogram-toggle-${ch}`);
+            const img = App.$(`histogram-${ch}`);
+            if (btn && img) {
+                btn.addEventListener('click', () => {
+                    btn.classList.toggle('active');
+                    img.classList.toggle('hidden');
+                });
+            }
+        });
+    },
+
+    /**
+     * Pending histogram load timer (for debouncing).
+     * @type {number|null}
+     * @private
+     */
+    _histogramTimer: null,
+
+    /**
+     * Loads histogram images for an image (debounced).
+     * @param {string} imageId
+     * @private
+     */
+    _loadHistogram(imageId) {
+        // Cancel any pending histogram load
+        if (this._histogramTimer) {
+            clearTimeout(this._histogramTimer);
+            this._histogramTimer = null;
+        }
+
+        // Debounce: wait 200ms before fetching
+        this._histogramTimer = setTimeout(async () => {
+            this._histogramTimer = null;
+
+            const container = App.$('histogram-container');
+            const loading = container?.querySelector('.histogram-loading');
+
+            try {
+                const data = await App.apiGet(`/images/${imageId}/histogram`);
+
+                // Set image sources from data URLs
+                const rImg = App.$('histogram-r');
+                const gImg = App.$('histogram-g');
+                const bImg = App.$('histogram-b');
+
+                if (rImg) rImg.src = data.r;
+                if (gImg) gImg.src = data.g;
+                if (bImg) bImg.src = data.b;
+
+                // Hide loading indicator
+                if (loading) loading.style.display = 'none';
+
+            } catch (error) {
+                console.error('Failed to load histogram:', error);
+                if (loading) loading.textContent = 'Failed to load';
+            }
+        }, 200);
     },
 
     /* ----------------------------------------------------------------------

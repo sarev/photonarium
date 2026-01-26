@@ -995,6 +995,11 @@ const App = {
         if (endpoint === '/stats' && method === 'GET') {
             return { totalImages: this._mockImages.length, totalFolders: this._mockFolders.length };
         }
+        if (endpoint.match(/\/images\/[^/]+\/histogram$/) && method === 'GET') {
+            // Return mock histogram data URLs (1x1 transparent PNGs)
+            const transparentPng = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==';
+            return { r: transparentPng, g: transparentPng, b: transparentPng };
+        }
 
         console.warn(`Mock API: unhandled ${method} ${endpoint}`);
         return null;

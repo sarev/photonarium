@@ -689,6 +689,98 @@ a:hover {
     color: var(--color-text-primary);
 }
 
+/* Histogram widget */
+.info-histogram .info-label {
+    display: block;
+    margin-bottom: 0.5rem;
+}
+
+.histogram-container {
+    position: relative;
+    width: 100%;
+    aspect-ratio: 1;
+    background-color: var(--color-bg-elevated);
+    border: 1px solid var(--color-border);
+    border-radius: 4px;
+    overflow: hidden;
+}
+
+.histogram-channel {
+    position: absolute;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 100%;
+    mix-blend-mode: lighten;
+    transition: opacity 0.15s ease;
+}
+
+.histogram-channel.hidden {
+    opacity: 0;
+}
+
+.histogram-loading {
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    transform: translate(-50%, -50%);
+    font-size: 0.85rem;
+    color: var(--color-text-muted);
+}
+
+.histogram-toggles {
+    display: flex;
+    gap: 0.5rem;
+    margin-top: 0.5rem;
+    justify-content: center;
+}
+
+.histogram-toggle {
+    width: 2rem;
+    height: 2rem;
+    border: 2px solid;
+    border-radius: 4px;
+    font-weight: 600;
+    font-size: 0.85rem;
+    cursor: pointer;
+    transition: all 0.15s ease;
+    background: transparent;
+}
+
+.histogram-toggle-r {
+    color: #ff4444;
+    border-color: #ff4444;
+}
+
+.histogram-toggle-g {
+    color: #44cc44;
+    border-color: #44cc44;
+}
+
+.histogram-toggle-b {
+    color: #4488ff;
+    border-color: #4488ff;
+}
+
+.histogram-toggle-r.active {
+    background-color: #ff4444;
+    color: white;
+}
+
+.histogram-toggle-g.active {
+    background-color: #44cc44;
+    color: white;
+}
+
+.histogram-toggle-b.active {
+    background-color: #4488ff;
+    color: white;
+}
+
+.histogram-toggle:hover {
+    transform: scale(1.1);
+}
+
 
 /* ==========================================================================
    FULLSCREEN VIEW

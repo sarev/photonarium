@@ -349,6 +349,113 @@ def get_thumbnail(image_id):
         abort(404)
 
 
+@app.route('/api/images/<image_id>/histogram', methods=['GET'])
+def get_histogram_images(image_id):
+    """Get histogram images for all color channels.
+
+    Returns a JSON object with base64-encoded PNG data URLs for each
+    channel (red, green, blue). Each image is 1000x1000 with transparent
+    background.
+
+    Uses the thumbnail RAM cache when available to avoid disk reads.
+
+    Args:
+        image_id: The unique identifier of the image.
+
+    Returns:
+        JSON with {r: "data:image/png;base64,...", g: "...", b: "..."}
+        or 404 if image not found.
+    """
+    import io
+    import base64
+    from PIL import Image
+
+    try:
+        db = get_db()
+        cache = get_thumbnail_cache()
+        size = 400
+
+        # Get checksum for cache lookup
+        checksum = db.get_checksum(image_id)
+        if checksum is None:
+            abort(404)
+
+        # Try RAM cache first
+        cached_bytes = cache.get(checksum, size)
+        if cached_bytes is not None:
+            # Load from cached bytes
+            thumb = Image.open(io.BytesIO(cached_bytes))
+        else:
+            # Fall back to disk
+            thumbnail_path = get_thumbnail_cache_path(checksum, size, db.thumbnail_dir)
+
+            if not thumbnail_path.exists():
+                # Generate thumbnail if missing
+                info = db.get_image_thumbnail_info(image_id)
+                if info is None:
+                    abort(404)
+                _, source_path = info
+                if not generate_thumbnail(
+                    source_path, thumbnail_path, size,
+                    db.config.thumbnail_quality, db.config.max_image_dimension
+                ):
+                    abort(404)
+
+            # Read from disk and cache
+            with open(thumbnail_path, 'rb') as f:
+                data = f.read()
+            cache.put(checksum, size, data)
+            thumb = Image.open(io.BytesIO(data))
+
+        # Compute histograms from thumbnail
+        thumb_rgb = thumb.convert('RGB')
+        histogram = thumb_rgb.histogram()
+        r_hist = histogram[0:256]
+        g_hist = histogram[256:512]
+        b_hist = histogram[512:768]
+
+        # Generate histogram images
+        from PIL import ImageDraw
+        hist_size = 1000
+
+        def create_histogram_image(hist, color):
+            img = Image.new('RGBA', (hist_size, hist_size), (0, 0, 0, 0))
+            draw = ImageDraw.Draw(img)
+            max_val = max(hist) if max(hist) > 0 else 1
+            bin_width = hist_size / 256
+            for i, count in enumerate(hist):
+                if count == 0:
+                    continue
+                x1 = int(i * bin_width)
+                x2 = int((i + 1) * bin_width)
+                height = int((count / max_val) * hist_size)
+                y1 = hist_size - height
+                draw.rectangle([x1, y1, x2, hist_size], fill=color)
+            return img
+
+        red_img = create_histogram_image(r_hist, (255, 0, 0, 255))
+        green_img = create_histogram_image(g_hist, (0, 255, 0, 255))
+        blue_img = create_histogram_image(b_hist, (0, 0, 255, 255))
+
+        def img_to_data_url(img):
+            buffer = io.BytesIO()
+            img.save(buffer, format='PNG')
+            b64 = base64.b64encode(buffer.getvalue()).decode('ascii')
+            return f'data:image/png;base64,{b64}'
+
+        return jsonify({
+            'r': img_to_data_url(red_img),
+            'g': img_to_data_url(green_img),
+            'b': img_to_data_url(blue_img),
+        })
+
+    except Exception as e:
+        logger.error(f'Error generating histogram for {image_id}: {e}')
+        import traceback
+        traceback.print_exc()
+        abort(500)
+
+
 @app.route('/api/images/<image_id>/full', methods=['GET'])
 def get_full_image(image_id):
     """Get the full-resolution image file.
