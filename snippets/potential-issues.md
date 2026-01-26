@@ -110,10 +110,12 @@ Can we just move `index.html`, `styles.css`, `*.png`, `*.js` into a 'static' fol
 **Done:** Moved all frontend files to `static/` folder and updated Flask configuration.
 
 ## Issue 4: GUI folder picker on non-desktop environments
-- [ ] Review `/api/pick-folder` implementation for thread safety and cleanup
-- [ ] Add detection for headless environments and return appropriate error
-- [ ] Ensure thread is properly terminated on timeout
-- [ ] Consider making this endpoint optional/configurable
+- [x] Review `/api/pick-folder` implementation for thread safety and cleanup
+- [-] Add detection for headless environments and return appropriate error
+- [x] Ensure thread is properly terminated on timeout
+- [-] Consider making this endpoint optional/configurable
+
+**Done:** Made thread daemon, added timeout auto-close, added try/catch for headless failures.
 
 ## Issue 5: Blob URL memory leaks
 - [ ] Review VirtualGrid item removal code path
@@ -218,17 +220,11 @@ Can we just move `index.html`, `styles.css`, `*.png`, `*.js` into a 'static' fol
 
 **Recommendations:**
 
-1. Add headless environment detection at the start of the endpoint:
-   ```
-   Check if DISPLAY env var exists (Linux) or if running in a GUI session (Windows/macOS)
-   Return an error response like {'error': 'No GUI available'} if headless
-   ```
+1. Make the thread a daemon thread so it doesn't prevent process shutdown.
 
-2. Make the thread a daemon thread so it doesn't prevent process shutdown.
+2. Consider adding a mechanism to terminate the tkinter mainloop after timeout (though this is tricky with tkinter).
 
-3. Consider adding a mechanism to terminate the tkinter mainloop after timeout (though this is tricky with tkinter).
-
-4. Document that this endpoint is only functional on desktop environments with a display.
+3. Document that this endpoint is only functional on desktop environments with a display.
 
 ---
 

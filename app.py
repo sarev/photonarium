@@ -480,38 +480,56 @@ def pick_folder():
     """Open a native folder picker dialog and return the selected path.
 
     This uses tkinter to show a native OS folder selection dialog.
-    The dialog runs on the main thread to ensure proper GUI interaction.
+    The dialog runs in a separate thread to avoid blocking the server.
+
+    Note: This endpoint only works on desktop environments with a display.
+    On headless servers, it will fail silently and return null.
 
     Returns:
         JSON object with:
-            - path: Selected folder path, or null if cancelled
+            - path: Selected folder path, or null if cancelled/failed
     """
     import tkinter as tk
     from tkinter import filedialog
 
     selected_path = None
+    dialog_timeout_ms = 5 * 60 * 1000  # 5 minutes in milliseconds
 
     def show_dialog():
         nonlocal selected_path
-        # Create a hidden root window
-        root = tk.Tk()
-        root.withdraw()  # Hide the root window
-        root.attributes('-topmost', True)  # Bring dialog to front
+        root = None
+        try:
+            # Create a hidden root window
+            root = tk.Tk()
+            root.withdraw()  # Hide the root window
+            root.attributes('-topmost', True)  # Bring dialog to front
 
-        # Show folder selection dialog
-        path = filedialog.askdirectory(
-            title='Select Image Folder',
-            mustexist=True,
-        )
+            # Schedule auto-close after timeout to prevent orphaned dialogs
+            def on_timeout():
+                if root:
+                    root.destroy()
+            root.after(dialog_timeout_ms, on_timeout)
 
-        root.destroy()
+            # Show folder selection dialog
+            path = filedialog.askdirectory(
+                title='Select Image Folder',
+                mustexist=True,
+            )
 
-        if path:
-            selected_path = path
+            if path:
+                selected_path = path
+        except Exception as e:
+            # Handle tkinter failures (e.g., no display on headless systems)
+            logger.debug(f'Folder picker failed: {e}')
+        finally:
+            if root:
+                try:
+                    root.destroy()
+                except Exception:
+                    pass  # Already destroyed by timeout or error
 
-    # Run dialog in a separate thread and wait for it
-    # (tkinter must run on the thread that created it)
-    dialog_thread = threading.Thread(target=show_dialog)
+    # Run dialog in a daemon thread (won't block process shutdown)
+    dialog_thread = threading.Thread(target=show_dialog, daemon=True)
     dialog_thread.start()
     dialog_thread.join(timeout=300)  # 5 minute timeout
 
