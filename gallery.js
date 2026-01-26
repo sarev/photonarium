@@ -1024,7 +1024,7 @@ const Gallery = {
      */
     async _renderInfoPanel(imageId) {
         const content = this._els.infoContent;
-        content.innerHTML = '<p class="info-placeholder">Loading...</p>';
+        content.innerHTML = '<p class="info-placeholder info-loading">Loading...</p>';
 
         let img;
         try {
