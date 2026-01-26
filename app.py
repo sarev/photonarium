@@ -944,9 +944,14 @@ if __name__ == '__main__':
         help='Port to run the server on (default: 5000)'
     )
     parser.add_argument(
-        '--generate-thumbnails',
+        '-g', '--generate-thumbnails',
         action='store_true',
         help='Generate missing thumbnails for all images and exit'
+    )
+    parser.add_argument(
+        '-r', '--rebuild-duplicates',
+        action='store_true',
+        help='Force full recomputation of all duplicate groups and exit'
     )
     args = parser.parse_args()
 
@@ -956,6 +961,20 @@ if __name__ == '__main__':
         _skip_scan = True
         get_db()
         run_generate_thumbnails_cli()
+        sys.exit(0)
+
+    # Handle duplicate rebuild command
+    if args.rebuild_duplicates:
+        import time
+        _skip_scan = True
+        db = get_db()
+        logger.info('Starting full duplicate group recomputation...')
+        start_time = time.time()
+        group_counts = db._duplicate_manager.compute_all(force_full=True)
+        elapsed = time.time() - start_time
+        logger.info(f'Duplicate recomputation completed in {elapsed:.1f}s')
+        for level, count in sorted(group_counts.items()):
+            logger.info(f'  Level {level}: {count} groups')
         sys.exit(0)
 
     # Set module-level flag before initializing database
