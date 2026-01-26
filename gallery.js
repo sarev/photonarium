@@ -160,7 +160,13 @@ const Gallery = {
             getItemId: (img) => img.id,
             createItem: (img, index, blobUrl) => this._createThumbnailItem(img, blobUrl),
             getThumbnailId: (img) => img.id,
-            itemSelector: '.gallery-item'
+            itemSelector: '.gallery-item',
+            onItemCreated: (id, el) => {
+                // Sync selection state when item is added to DOM
+                if (this._selection && this._selection.isSelected(id)) {
+                    el.classList.add('selected');
+                }
+            }
         });
 
         // Create GridSelection instance

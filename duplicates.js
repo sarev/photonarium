@@ -195,6 +195,12 @@ const Duplicates = {
                 const thumbnailHeight = itemWidth;
                 const labelHeight = 24;
                 return thumbnailHeight + labelHeight + 16;
+            },
+            onItemCreated: (id, el) => {
+                // Sync selection state when item is added to DOM
+                if (this._selection && this._selection.isSelected(id)) {
+                    el.classList.add('selected');
+                }
             }
         });
 

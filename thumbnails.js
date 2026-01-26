@@ -376,6 +376,7 @@ const VirtualGrid = {
      * @param {number} [config.gap=16] - Gap between items in pixels
      * @param {number} [config.padding=16] - Container padding in pixels
      * @param {Function} [config.getItemHeight] - Custom item height calculator: (thumbSize, itemWidth) => height
+     * @param {Function} [config.onItemCreated] - Called when item is added to DOM: (id, element) => void
      * @returns {Object} VirtualGrid instance
      */
     create(config) {
@@ -390,7 +391,8 @@ const VirtualGrid = {
                 itemSelector: config.itemSelector || '.grid-item',
                 gap: config.gap ?? 16,
                 padding: config.padding ?? 16,
-                getItemHeight: config.getItemHeight || null
+                getItemHeight: config.getItemHeight || null,
+                onItemCreated: config.onItemCreated || null
             },
 
             // Layout state
@@ -542,13 +544,13 @@ const VirtualGrid = {
                 // Calculate items per row
                 this._state.itemsPerRow = Math.max(1, Math.floor((availableWidth + gap) / (thumbSize + gap)));
 
-                // Actual item width
-                const actualItemWidth = (availableWidth - gap * (this._state.itemsPerRow - 1)) / this._state.itemsPerRow;
+                // Actual item width (rounded to avoid floating point accumulation)
+                const actualItemWidth = Math.floor((availableWidth - gap * (this._state.itemsPerRow - 1)) / this._state.itemsPerRow);
                 this._state.itemWidth = actualItemWidth;
 
-                // Item height - use custom calculator if provided
+                // Item height - use custom calculator if provided (also rounded)
                 if (this._config.getItemHeight) {
-                    this._state.itemHeight = this._config.getItemHeight(thumbSize, actualItemWidth) + gap;
+                    this._state.itemHeight = Math.floor(this._config.getItemHeight(thumbSize, actualItemWidth)) + gap;
                 } else {
                     // Default: square thumbnail + label area
                     const thumbnailHeight = actualItemWidth - 16;
@@ -715,6 +717,11 @@ const VirtualGrid = {
                         // Add to container and track
                         this._innerContainer.appendChild(el);
                         state.renderedItems.set(id, el);
+
+                        // Notify that item was created (for selection state sync)
+                        if (config.onItemCreated) {
+                            config.onItemCreated(id, el);
+                        }
                     });
                 }
             },
@@ -839,6 +846,14 @@ const VirtualGrid = {
              */
             getItemHeight() {
                 return this._state.itemHeight;
+            },
+
+            /**
+             * Gets the number of visible rows.
+             * @returns {number} Visible rows
+             */
+            getVisibleRows() {
+                return this._state.visibleRows;
             },
 
             /**
@@ -1110,13 +1125,14 @@ const GridSelection = {
                 const id = this._getItemId(e.target);
                 if (!id) return;
 
+                const normalizedId = String(id);
                 this._longPressTriggered = false;
                 this._longPressTimer = setTimeout(() => {
                     this._longPressTriggered = true;
                     // Add to selection without clearing
-                    if (!this._selected.has(id)) {
-                        this._selected.add(id);
-                        this._updateItemVisualState(id, true);
+                    if (!this._selected.has(normalizedId)) {
+                        this._selected.add(normalizedId);
+                        this._updateItemVisualState(normalizedId, true);
                         this._notifySelectionChanged();
                     }
                 }, GridSelection.LONG_PRESS_MS);
@@ -1379,11 +1395,27 @@ const GridSelection = {
                         break;
                     case 'ArrowUp':
                         e.preventDefault();
-                        this.navigateVertical(-1, e.shiftKey);
+                        if (e.ctrlKey || e.metaKey) {
+                            this.navigateToEnd(-1, e.shiftKey);
+                        } else {
+                            this.navigateVertical(-1, e.shiftKey);
+                        }
                         break;
                     case 'ArrowDown':
                         e.preventDefault();
-                        this.navigateVertical(1, e.shiftKey);
+                        if (e.ctrlKey || e.metaKey) {
+                            this.navigateToEnd(1, e.shiftKey);
+                        } else {
+                            this.navigateVertical(1, e.shiftKey);
+                        }
+                        break;
+                    case 'PageUp':
+                        e.preventDefault();
+                        this.navigatePage(-1, e.shiftKey);
+                        break;
+                    case 'PageDown':
+                        e.preventDefault();
+                        this.navigatePage(1, e.shiftKey);
                         break;
                     case 'Enter':
                         e.preventDefault();
@@ -1446,7 +1478,8 @@ const GridSelection = {
              * @param {string} id - Item ID to select
              */
             select(id) {
-                const changed = this._selected.size !== 1 || !this._selected.has(id);
+                const normalizedId = String(id);
+                const changed = this._selected.size !== 1 || !this._selected.has(normalizedId);
                 if (!changed) return;
 
                 // Update visual state for previously selected
@@ -1455,8 +1488,8 @@ const GridSelection = {
                 }
 
                 this._selected.clear();
-                this._selected.add(id);
-                this._updateItemVisualState(id, true);
+                this._selected.add(normalizedId);
+                this._updateItemVisualState(normalizedId, true);
                 this._notifySelectionChanged();
             },
 
@@ -1465,12 +1498,13 @@ const GridSelection = {
              * @param {string} id - Item ID to toggle
              */
             toggle(id) {
-                if (this._selected.has(id)) {
-                    this._selected.delete(id);
-                    this._updateItemVisualState(id, false);
+                const normalizedId = String(id);
+                if (this._selected.has(normalizedId)) {
+                    this._selected.delete(normalizedId);
+                    this._updateItemVisualState(normalizedId, false);
                 } else {
-                    this._selected.add(id);
-                    this._updateItemVisualState(id, true);
+                    this._selected.add(normalizedId);
+                    this._updateItemVisualState(normalizedId, true);
                 }
                 this._notifySelectionChanged();
             },
@@ -1481,14 +1515,16 @@ const GridSelection = {
              * @param {string} targetId - Ending item ID
              */
             selectRange(anchorId, targetId) {
+                const normalizedAnchor = String(anchorId);
+                const normalizedTarget = String(targetId);
                 const items = this._config.getItems();
                 const getItemId = this._config.getItemId;
 
-                const anchorIdx = items.findIndex(item => getItemId(item) === anchorId);
-                const targetIdx = items.findIndex(item => getItemId(item) === targetId);
+                const anchorIdx = items.findIndex(item => String(getItemId(item)) === normalizedAnchor);
+                const targetIdx = items.findIndex(item => String(getItemId(item)) === normalizedTarget);
 
                 if (anchorIdx === -1 || targetIdx === -1) {
-                    this.select(targetId);
+                    this.select(normalizedTarget);
                     return;
                 }
 
@@ -1503,7 +1539,7 @@ const GridSelection = {
                 this._selected.clear();
 
                 for (let i = startIdx; i <= endIdx; i++) {
-                    const id = getItemId(items[i]);
+                    const id = String(getItemId(items[i]));
                     this._selected.add(id);
                     this._updateItemVisualState(id, true);
                 }
@@ -1520,7 +1556,7 @@ const GridSelection = {
 
                 this._selected.clear();
                 for (const item of items) {
-                    this._selected.add(getItemId(item));
+                    this._selected.add(String(getItemId(item)));
                 }
 
                 this.updateVisualState();
@@ -1556,7 +1592,7 @@ const GridSelection = {
              * @returns {boolean}
              */
             isSelected(id) {
-                return this._selected.has(id);
+                return this._selected.has(String(id));
             },
 
             /**
@@ -1564,6 +1600,15 @@ const GridSelection = {
              * @param {Array<string>} ids - Item IDs to select
              */
             setSelected(ids) {
+                // Normalize to strings for consistent comparison
+                const normalizedIds = ids.map(id => String(id));
+
+                // Check if selection is actually changing to avoid feedback loops
+                if (normalizedIds.length === this._selected.size &&
+                    normalizedIds.every(id => this._selected.has(id))) {
+                    return;
+                }
+
                 // Clear previous selection visual state
                 for (const prevId of this._selected) {
                     this._updateItemVisualState(prevId, false);
@@ -1571,13 +1616,13 @@ const GridSelection = {
 
                 this._selected.clear();
 
-                for (const id of ids) {
+                for (const id of normalizedIds) {
                     this._selected.add(id);
                     this._updateItemVisualState(id, true);
                 }
 
-                if (ids.length > 0) {
-                    this._anchor = ids[ids.length - 1];
+                if (normalizedIds.length > 0) {
+                    this._anchor = normalizedIds[normalizedIds.length - 1];
                 }
 
                 this._notifySelectionChanged();
@@ -1597,14 +1642,14 @@ const GridSelection = {
 
                 if (this._selected.size > 0) {
                     const lastSelected = Array.from(this._selected).pop();
-                    currentIndex = items.findIndex(item => getItemId(item) === lastSelected);
+                    currentIndex = items.findIndex(item => String(getItemId(item)) === lastSelected);
                 }
 
                 let newIndex = currentIndex + delta;
                 if (newIndex < 0) newIndex = items.length - 1;
                 if (newIndex >= items.length) newIndex = 0;
 
-                const newId = getItemId(items[newIndex]);
+                const newId = String(getItemId(items[newIndex]));
 
                 if (extend && this._anchor) {
                     this.selectRange(this._anchor, newId);
@@ -1631,14 +1676,73 @@ const GridSelection = {
 
                 if (this._selected.size > 0) {
                     const lastSelected = Array.from(this._selected).pop();
-                    currentIndex = items.findIndex(item => getItemId(item) === lastSelected);
+                    currentIndex = items.findIndex(item => String(getItemId(item)) === lastSelected);
                 }
 
                 let newIndex = currentIndex + (delta * itemsPerRow);
                 if (newIndex < 0) newIndex = 0;
                 if (newIndex >= items.length) newIndex = items.length - 1;
 
-                const newId = getItemId(items[newIndex]);
+                const newId = String(getItemId(items[newIndex]));
+
+                if (extend && this._anchor) {
+                    this.selectRange(this._anchor, newId);
+                } else {
+                    this.select(newId);
+                    this._anchor = newId;
+                }
+
+                this._config.grid.scrollTo(newIndex);
+            },
+
+            /**
+             * Navigates selection by a page (visible rows).
+             * @param {number} delta - Direction (-1 up, 1 down)
+             * @param {boolean} [extend=false] - Extend selection instead of replacing
+             */
+            navigatePage(delta, extend = false) {
+                const items = this._config.getItems();
+                if (items.length === 0) return;
+
+                const getItemId = this._config.getItemId;
+                const itemsPerRow = this._config.grid.getItemsPerRow() || 1;
+                const visibleRows = this._config.grid.getVisibleRows() || 1;
+                const pageSize = itemsPerRow * Math.max(1, visibleRows - 1); // Leave one row overlap
+                let currentIndex = -1;
+
+                if (this._selected.size > 0) {
+                    const lastSelected = Array.from(this._selected).pop();
+                    currentIndex = items.findIndex(item => String(getItemId(item)) === lastSelected);
+                }
+
+                let newIndex = currentIndex + (delta * pageSize);
+                if (newIndex < 0) newIndex = 0;
+                if (newIndex >= items.length) newIndex = items.length - 1;
+
+                const newId = String(getItemId(items[newIndex]));
+
+                if (extend && this._anchor) {
+                    this.selectRange(this._anchor, newId);
+                } else {
+                    this.select(newId);
+                    this._anchor = newId;
+                }
+
+                this._config.grid.scrollTo(newIndex);
+            },
+
+            /**
+             * Navigates selection to the first or last item.
+             * @param {number} delta - Direction (-1 for first, 1 for last)
+             * @param {boolean} [extend=false] - Extend selection instead of replacing
+             */
+            navigateToEnd(delta, extend = false) {
+                const items = this._config.getItems();
+                if (items.length === 0) return;
+
+                const getItemId = this._config.getItemId;
+                const newIndex = delta < 0 ? 0 : items.length - 1;
+                const newId = String(getItemId(items[newIndex]));
 
                 if (extend && this._anchor) {
                     this.selectRange(this._anchor, newId);
