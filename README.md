@@ -111,8 +111,6 @@ The toolbar across the top gives you quick access to common actions:
 
 A particularly useful feature: select any image, then click the "Sort by content" button. The entire gallery will reorder to show the most visually similar images first. This is great for finding related photos, or discovering images you'd forgotten about.
 
-A similarity slider appears when content sorting is active, letting you adjust how tightly grouped the results are.
-
 ### Viewing Images
 
 Double-click any thumbnail (or press Enter) to open it in fullscreen view. In fullscreen you can:
@@ -138,7 +136,7 @@ See the [Controls](#controls) section for full details on mouse, touch, and keyb
 
 The Filter screen lets you narrow down which images appear in the Gallery. You can combine multiple criteria:
 
-**Text Search** — Enter a description of what you're looking for. This uses AI semantic search, so "people at a beach" will find beach photos even if you never described them that way. Results are ranked by relevance when you sort by Content.
+**Text Search** — Enter a description of what you're looking for. This uses AI semantic search, so "people at a beach" will find beach photos even if you never described them that way. Results are ranked by relevance. When a text search is active, a similarity slider appears in the Gallery toolbar letting you adjust how strict the matching is—lower values return more results.
 
 **Date Range** — Set a start date, end date, or both to filter by when photos were taken. Setting both dates to the same day shows only photos from that specific date.
 
