@@ -84,6 +84,205 @@ def rows_to_dicts(rows: list) -> list[dict[str, Any]]:
 
 
 # =============================================================================
+# UNION-FIND DATA STRUCTURE
+# =============================================================================
+
+class UnionFind:
+    """Union-Find (Disjoint Set Union) data structure with path compression and union-by-rank.
+
+    This data structure efficiently manages groups/clusters and supports:
+    - Near O(1) amortized time for union and find operations
+    - Initialization from existing groups
+    - Extraction of final groups
+
+    Can operate in two modes:
+    - Index mode: elements are integers 0..n-1 (for array-based algorithms)
+    - ID mode: elements are arbitrary hashable IDs (for image_id based operations)
+
+    Example usage (index mode):
+        uf = UnionFind(n=100)
+        uf.union(0, 1)
+        uf.union(1, 2)
+        groups = uf.extract_groups()  # {0: [0, 1, 2], ...}
+
+    Example usage (ID mode):
+        uf = UnionFind(ids=['img1', 'img2', 'img3'])
+        uf.union_ids('img1', 'img2')
+        groups = uf.extract_groups_by_id()  # {'img1': ['img1', 'img2'], ...}
+    """
+
+    def __init__(self, n: int = 0, ids: list[str] | None = None):
+        """Initialize UnionFind.
+
+        Args:
+            n: Number of elements (for index mode). Elements are 0..n-1.
+            ids: List of IDs (for ID mode). If provided, n is ignored.
+        """
+        if ids is not None:
+            self._ids = list(ids)
+            self._id_to_idx = {id_: idx for idx, id_ in enumerate(self._ids)}
+            n = len(self._ids)
+        else:
+            self._ids = None
+            self._id_to_idx = None
+
+        self._n = n
+        self._parent = list(range(n))
+        self._rank = [0] * n
+
+    def find(self, x: int) -> int:
+        """Find the root of element x with path compression.
+
+        Args:
+            x: Element index.
+
+        Returns:
+            Root index of the set containing x.
+        """
+        if self._parent[x] != x:
+            self._parent[x] = self.find(self._parent[x])  # Path compression
+        return self._parent[x]
+
+    def union(self, x: int, y: int) -> bool:
+        """Union the sets containing elements x and y.
+
+        Uses union-by-rank to keep trees balanced.
+
+        Args:
+            x: First element index.
+            y: Second element index.
+
+        Returns:
+            True if the sets were merged, False if already in same set.
+        """
+        px, py = self.find(x), self.find(y)
+        if px == py:
+            return False
+
+        # Union by rank: attach smaller tree under larger tree
+        if self._rank[px] < self._rank[py]:
+            px, py = py, px
+        self._parent[py] = px
+        if self._rank[px] == self._rank[py]:
+            self._rank[px] += 1
+
+        return True
+
+    def find_id(self, id_: str) -> str:
+        """Find the root ID for an element (ID mode).
+
+        Args:
+            id_: Element ID.
+
+        Returns:
+            Root ID of the set containing this element.
+        """
+        if self._id_to_idx is None:
+            raise ValueError("UnionFind not initialized with IDs")
+        idx = self._id_to_idx[id_]
+        root_idx = self.find(idx)
+        return self._ids[root_idx]
+
+    def union_ids(self, id1: str, id2: str) -> bool:
+        """Union the sets containing two IDs (ID mode).
+
+        Args:
+            id1: First element ID.
+            id2: Second element ID.
+
+        Returns:
+            True if the sets were merged, False if already in same set.
+        """
+        if self._id_to_idx is None:
+            raise ValueError("UnionFind not initialized with IDs")
+        return self.union(self._id_to_idx[id1], self._id_to_idx[id2])
+
+    def connected(self, x: int, y: int) -> bool:
+        """Check if two elements are in the same set.
+
+        Args:
+            x: First element index.
+            y: Second element index.
+
+        Returns:
+            True if in the same set.
+        """
+        return self.find(x) == self.find(y)
+
+    def extract_groups(self) -> dict[int, list[int]]:
+        """Extract all groups as a dictionary (index mode).
+
+        Returns:
+            Dict mapping root index to list of member indices.
+            Only includes groups with more than one member.
+        """
+        groups: dict[int, list[int]] = {}
+        for i in range(self._n):
+            root = self.find(i)
+            if root not in groups:
+                groups[root] = []
+            groups[root].append(i)
+        return groups
+
+    def extract_groups_by_id(self) -> dict[str, list[str]]:
+        """Extract all groups as a dictionary (ID mode).
+
+        Returns:
+            Dict mapping root ID to list of member IDs.
+            Only includes groups with more than one member.
+        """
+        if self._ids is None:
+            raise ValueError("UnionFind not initialized with IDs")
+
+        groups: dict[str, list[str]] = {}
+        for i in range(self._n):
+            root = self.find(i)
+            root_id = self._ids[root]
+            if root_id not in groups:
+                groups[root_id] = []
+            groups[root_id].append(self._ids[i])
+        return groups
+
+    def extract_groups_filtered(self, min_size: int = 2) -> dict[int, list[int]]:
+        """Extract groups with at least min_size members (index mode).
+
+        Args:
+            min_size: Minimum group size to include.
+
+        Returns:
+            Dict mapping root index to list of member indices.
+        """
+        all_groups = self.extract_groups()
+        return {root: members for root, members in all_groups.items()
+                if len(members) >= min_size}
+
+    def load_existing_groups(self, groups: list[set[str]]) -> None:
+        """Initialize from existing groups (ID mode).
+
+        Unions all members of each group together.
+
+        Args:
+            groups: List of sets, each containing IDs in the same group.
+        """
+        if self._id_to_idx is None:
+            raise ValueError("UnionFind not initialized with IDs")
+
+        for group in groups:
+            group_list = list(group)
+            if len(group_list) < 2:
+                continue
+            first = group_list[0]
+            for other in group_list[1:]:
+                if first in self._id_to_idx and other in self._id_to_idx:
+                    self.union_ids(first, other)
+
+    @property
+    def size(self) -> int:
+        """Return the number of elements."""
+        return self._n
+
+
+# =============================================================================
 # DATABASE HELPER FUNCTIONS
 # =============================================================================
 
@@ -392,17 +591,7 @@ def _compute_duplicates_level1(conn: sqlite3.Connection, threshold: int = 4) -> 
             band_indices[band][band_value].append(idx)
 
     # Union-find for clustering
-    parent = list(range(n))
-
-    def find(x: int) -> int:
-        if parent[x] != x:
-            parent[x] = find(parent[x])
-        return parent[x]
-
-    def union(x: int, y: int) -> None:
-        px, py = find(x), find(y)
-        if px != py:
-            parent[px] = py
+    uf = UnionFind(n=n)
 
     # Compare only candidate pairs that share at least one band
     compared = set()
@@ -429,7 +618,7 @@ def _compute_duplicates_level1(conn: sqlite3.Connection, threshold: int = 4) -> 
                     comparisons += 1
 
                     if dist <= threshold:
-                        union(idx1, idx2)
+                        uf.union(idx1, idx2)
                         matches += 1
 
     brute_force = n * (n - 1) // 2
@@ -437,19 +626,15 @@ def _compute_duplicates_level1(conn: sqlite3.Connection, threshold: int = 4) -> 
     logger.info(f'  Completed: {comparisons:,} comparisons ({reduction:.1f}% reduction from brute force)')
 
     # Build groups from union-find
-    groups: dict[int, list[str]] = {}
-    for idx, (img_id, _) in enumerate(image_data):
-        root = find(idx)
-        if root not in groups:
-            groups[root] = []
-        groups[root].append(img_id)
+    all_groups = uf.extract_groups()
 
     # Insert groups with more than one member
     group_count = 0
-    for root, members in groups.items():
+    for root, members in all_groups.items():
         if len(members) > 1:
+            member_ids = [image_data[idx][0] for idx in members]
             group_hash = f'phash_{image_data[root][0]}'
-            _insert_duplicate_group(conn, level=1, group_hash=group_hash, image_ids=members)
+            _insert_duplicate_group(conn, level=1, group_hash=group_hash, image_ids=member_ids)
             group_count += 1
 
     conn.commit()
@@ -550,28 +735,11 @@ def _compute_embedding_duplicates_chunked(
     """
     n = len(image_ids)
 
-    # Union-find with path compression and union by rank
-    parent = list(range(n))
-    rank = [0] * n
-
-    def find(x: int) -> int:
-        if parent[x] != x:
-            parent[x] = find(parent[x])
-        return parent[x]
-
-    def union(x: int, y: int) -> None:
-        px, py = find(x), find(y)
-        if px == py:
-            return
-        if rank[px] < rank[py]:
-            px, py = py, px
-        parent[py] = px
-        if rank[px] == rank[py]:
-            rank[px] += 1
+    # Union-find for clustering
+    uf = UnionFind(n=n)
 
     # Process in chunks to avoid O(n²) memory
     pairs_found = 0
-    total_chunks = (n + chunk_size - 1) // chunk_size
 
     for chunk_start in range(0, n, chunk_size):
         chunk_end = min(chunk_start + chunk_size, n)
@@ -586,18 +754,18 @@ def _compute_embedding_duplicates_chunked(
             start_j = max(i_global + 1, 0)
             for j in range(start_j, n):
                 if similarities[i_local, j] >= threshold:
-                    union(i_global, j)
+                    uf.union(i_global, j)
                     pairs_found += 1
 
     logger.info(f'  Completed: {pairs_found:,} similar pairs found')
 
     # Build groups from union-find
+    all_groups = uf.extract_groups()
+
+    # Convert indices to image IDs
     groups: dict[int, list[str]] = {}
-    for i, img_id in enumerate(image_ids):
-        root = find(i)
-        if root not in groups:
-            groups[root] = []
-        groups[root].append(img_id)
+    for root, members in all_groups.items():
+        groups[root] = [image_ids[idx] for idx in members]
 
     return groups
 
