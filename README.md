@@ -8,7 +8,7 @@ A local image catalogue for people who want to organise their photo collection w
 
 Your photos are personal. They live on your hard drive, and that's where they should stay. Imaginary helps you browse, search, and manage your image collection entirely on your own computer—no subscriptions, no cloud uploads, no privacy concerns.
 
-It uses AI-powered semantic search, so you can find photos by describing what's in them ("sunset over mountains", "birthday cake", "dog playing in snow") rather than relying on filenames or folders.
+Imaginary is designed to run fast even with huge photo libraries. It uses a locally-running, AI-powered semantic search, so you can find photos by describing what's in them ("sunset over mountains", "birthday cake", "dog playing in snow") rather than relying on filenames or folders.
 
 ## Features
 
@@ -82,6 +82,36 @@ python app.py --generate-thumbnails    # Pre-generate thumbnails for all images
 3. **Browse** — Return to the Gallery to see your collection
 4. **Search** — Click the Filter button to search by text, date, or rating
 
+## Using the Filter Screen
+
+The Filter screen lets you narrow down which images appear in the Gallery. You can combine multiple criteria:
+
+**Text Search** — Enter a description of what you're looking for. This uses AI semantic search, so "people at a beach" will find beach photos even if you never described them that way. Results are ranked by relevance when you sort by Content.
+
+**Date Range** — Set a start date, end date, or both to filter by when photos were taken. Setting both dates to the same day shows only photos from that specific date.
+
+**Rating Filter** — Enter emoji to find images you've rated. You can type emoji directly or use the picker. If you enter multiple emoji, images matching any of them will be shown.
+
+Click **Apply Filter** to return to the Gallery with your filter active. The filter button in the toolbar will highlight to show a filter is active. Click it again to clear the filter.
+
+## Using the Duplicates Screen
+
+The Duplicates screen helps you find and manage duplicate or similar images in your collection.
+
+**Similarity Levels** — Use the slider to control how strict the matching is:
+- **Identical** (rightmost) — Exact file matches with the same checksum
+- **Near-identical** — Same image at different sizes or compression levels
+- **Similar** — Photos from the same sequence or with similar composition
+- **Related** (leftmost) — Thematically related images
+
+**Stacks** — Each stack represents a group of similar images. The count shows how many images are in the group. The image shown on top is automatically chosen as the "best" one based on resolution, focus quality, and whether it's losslessly compressed.
+
+**Opening a Stack** — Double-click (or press Enter) to open a stack. This takes you to the Gallery filtered to show only that group, with the best image pre-selected. Use the toolbar buttons or Alt+Left/Right to move between groups without returning to the Duplicates screen.
+
+**Sorting Stacks** — By default, stacks are sorted by size (largest groups first). Click the semantic sort button to sort by a text query instead—enter a description and stacks will be ordered by how well their best image matches your query. This is useful for finding specific duplicates in a large list.
+
+**Minimum Group Size** — Use the dropdown to hide smaller groups and focus on stacks with more duplicates.
+
 ## Controls
 
 ### Gallery View
@@ -97,7 +127,9 @@ python app.py --generate-thumbnails    # Pre-generate thumbnails for all images
 | Select multiple | Drag box | — | — |
 | Open fullscreen | Double-click | Double-tap | Enter |
 | Delete selected | — | — | Delete |
-| Adjust thumbnail size | Slider or buttons | Slider or buttons | — |
+| Previous/Next duplicate group | Toolbar buttons | Toolbar buttons | Alt+Left / Alt+Right |
+| Jump to start/end | — | — | Ctrl+Up / Ctrl+Down |
+| Page up/down | — | — | Page Up / Page Down |
 
 ### Fullscreen Viewer
 
@@ -110,6 +142,20 @@ python app.py --generate-thumbnails    # Pre-generate thumbnails for all images
 | Toggle zoom (fit ↔ 100%) | Double-click | Double-tap | — |
 | Pan (when zoomed) | Click and drag | Drag | — |
 
+### Duplicates View
+
+| Action | Mouse | Touch | Keyboard |
+|--------|-------|-------|----------|
+| Select stack | Click | Tap | Arrow keys |
+| Add to selection | Ctrl+Click | — | Shift+Arrows |
+| Select range | Shift+Click | — | Shift+Arrows |
+| Select all | — | — | Ctrl+A |
+| Clear selection | — | — | Escape |
+| Select multiple | Drag box | — | — |
+| Open stack in Gallery | Double-click | Double-tap | Enter |
+| Jump to start/end | — | — | Ctrl+Up / Ctrl+Down |
+| Page up/down | — | — | Page Up / Page Down |
+
 ### Global Shortcuts
 
 | Shortcut | Action |
@@ -118,13 +164,6 @@ python app.py --generate-thumbnails    # Pre-generate thumbnails for all images
 | Ctrl+M | Go to Database Management |
 | Ctrl+D | Go to Duplicates |
 | Ctrl+F | Go to Search/Filter |
-
-### Duplicates View
-
-| Action | Mouse/Touch | Keyboard |
-|--------|-------------|----------|
-| Open stack | Double-click / Double-tap | Enter |
-| Previous/Next group | Toolbar buttons | Alt+Left / Alt+Right |
 
 ## Configuration
 
@@ -139,9 +178,10 @@ Settings are stored in `.imaginary.yml` (created automatically on first run). Ke
 ## Tips
 
 - **Large collections** — Imaginary handles tens of thousands of images, but initial scanning takes time. Let it run in the background.
-- **Duplicate detection** — Use the similarity slider to adjust sensitivity. Level 0 finds exact copies, Level 3 finds thematically related images.
+- **Duplicate detection** — Start with "Similar" or "Related" to see what's there, then move to stricter levels to find exact copies.
 - **Descriptions & ratings** — Add personal notes and emoji ratings to help you find favourites later.
+- **Semantic sorting** — In Duplicates view, use semantic sort with queries like "blurry" or "dark" to find low-quality duplicates to delete.
 
 ## License
 
-MIT
+Apache 2.0
