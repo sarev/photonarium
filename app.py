@@ -28,7 +28,7 @@ import threading
 from pathlib import Path
 
 from flask import Flask, Response, jsonify, request, send_file, abort
-from flask_cors import CORS
+# flask_cors not needed for localhost-only deployment (same-origin requests)
 
 from imagedb import ImageDatabase, register_signal_handlers
 from thumbnails import (
@@ -48,9 +48,10 @@ logger = logging.getLogger(__name__)
 
 app = Flask(__name__, static_folder='.', static_url_path='')
 
-# Enable CORS for development (frontend on different port)
-# In production, remove or restrict to specific origins
-CORS(app)
+# CORS is not needed for localhost-only deployment since the frontend
+# is served from the same origin. If you need to run a separate frontend
+# dev server, uncomment and restrict origins appropriately:
+# CORS(app, origins=['http://localhost:5000', 'http://127.0.0.1:5000'])
 
 
 # =============================================================================
@@ -953,15 +954,16 @@ if __name__ == '__main__':
     logger.info('=' * 60)
 
     # Try to use waitress (production WSGI server), fall back to Flask dev server
+    # Bind to 127.0.0.1 (localhost only) for security - no network exposure
     try:
         from waitress import serve
         logger.info('Using waitress WSGI server')
-        serve(app, host='0.0.0.0', port=args.port, threads=8)
+        serve(app, host='127.0.0.1', port=args.port, threads=8)
     except ImportError:
         logger.warning('waitress not installed, using Flask dev server (slow!)')
         logger.warning('Install with: pip install waitress')
         app.run(
-            host='0.0.0.0',
+            host='127.0.0.1',
             port=args.port,
             debug=False,
             threaded=True,
