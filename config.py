@@ -104,6 +104,31 @@ indexing_threads: 4
 # If more images need checking, falls back to full recomputation which is faster
 # for large batches. Range: 1-10000
 max_incremental_duplicates: 500
+
+# ------------------------------------------------------------------------------
+# Thumbnail Loading (Frontend)
+# ------------------------------------------------------------------------------
+
+# Maximum concurrent thumbnail fetch requests from the browser.
+# Higher values load thumbnails faster but increase backend load.
+# Range: 1-12, recommended: 4-8
+thumbnail_concurrent_requests: 6
+
+# Extra rows above/below the viewport to prefetch thumbnails for.
+# Higher values reduce blank thumbnails when scrolling but increase memory usage.
+# Range: 1-20, recommended: 3-8
+thumbnail_extra_rows: 5
+
+# Timeout for thumbnail fetch requests in milliseconds.
+# If a request takes longer than this, it's aborted and the slot freed.
+# Range: 1000-60000, recommended: 5000-15000
+thumbnail_timeout_ms: 10000
+
+# Scroll event throttle in milliseconds.
+# How often the thumbnail queue is re-evaluated during scrolling.
+# Lower values = more responsive, higher values = less CPU usage.
+# Range: 50-1000, recommended: 150-300
+thumbnail_scroll_throttle_ms: 250
 """
 
 
@@ -123,6 +148,10 @@ class Config:
         indexing_threads: Number of threads for parallel image indexing (1-16).
         max_incremental_duplicates: Max dirty images for incremental duplicate detection.
             If more images need checking, falls back to full recomputation.
+        thumbnail_concurrent_requests: Max concurrent thumbnail fetch requests (1-12).
+        thumbnail_extra_rows: Extra rows above/below viewport to prefetch (1-20).
+        thumbnail_timeout_ms: Timeout for thumbnail fetch requests in ms (1000-60000).
+        thumbnail_scroll_throttle_ms: Scroll event throttle in ms (50-1000).
     """
 
     image_extensions: set[str] = field(default_factory=lambda: {
@@ -137,6 +166,10 @@ class Config:
     similarity_threshold_level3: float = 0.85
     indexing_threads: int = 4
     max_incremental_duplicates: int = 500
+    thumbnail_concurrent_requests: int = 6
+    thumbnail_extra_rows: int = 5
+    thumbnail_timeout_ms: int = 10000
+    thumbnail_scroll_throttle_ms: int = 250
 
     def __post_init__(self) -> None:
         """Validate configuration values after initialisation."""
@@ -187,6 +220,16 @@ class Config:
         # Validate max_incremental_duplicates
         if not 1 <= self.max_incremental_duplicates <= 10000:
             raise ValueError(f'max_incremental_duplicates must be 1-10000, got {self.max_incremental_duplicates}')
+
+        # Validate thumbnail loading settings
+        if not 1 <= self.thumbnail_concurrent_requests <= 12:
+            raise ValueError(f'thumbnail_concurrent_requests must be 1-12, got {self.thumbnail_concurrent_requests}')
+        if not 1 <= self.thumbnail_extra_rows <= 20:
+            raise ValueError(f'thumbnail_extra_rows must be 1-20, got {self.thumbnail_extra_rows}')
+        if not 1000 <= self.thumbnail_timeout_ms <= 60000:
+            raise ValueError(f'thumbnail_timeout_ms must be 1000-60000, got {self.thumbnail_timeout_ms}')
+        if not 50 <= self.thumbnail_scroll_throttle_ms <= 1000:
+            raise ValueError(f'thumbnail_scroll_throttle_ms must be 50-1000, got {self.thumbnail_scroll_throttle_ms}')
 
 
 def load_config(config_path: Path | str | None = None) -> Config:
@@ -255,6 +298,18 @@ def load_config(config_path: Path | str | None = None) -> Config:
 
     if 'max_incremental_duplicates' in config_data:
         kwargs['max_incremental_duplicates'] = int(config_data['max_incremental_duplicates'])
+
+    if 'thumbnail_concurrent_requests' in config_data:
+        kwargs['thumbnail_concurrent_requests'] = int(config_data['thumbnail_concurrent_requests'])
+
+    if 'thumbnail_extra_rows' in config_data:
+        kwargs['thumbnail_extra_rows'] = int(config_data['thumbnail_extra_rows'])
+
+    if 'thumbnail_timeout_ms' in config_data:
+        kwargs['thumbnail_timeout_ms'] = int(config_data['thumbnail_timeout_ms'])
+
+    if 'thumbnail_scroll_throttle_ms' in config_data:
+        kwargs['thumbnail_scroll_throttle_ms'] = int(config_data['thumbnail_scroll_throttle_ms'])
 
     return Config(**kwargs)
 

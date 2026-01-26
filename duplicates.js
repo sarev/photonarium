@@ -5,6 +5,11 @@
  * duplicate or near-duplicate images. It registers with the core App module
  * and provides a specialised view for duplicate group management.
  *
+ * Uses shared infrastructure from thumbnails.js:
+ * - VirtualGrid: Virtual scrolling with absolute positioning
+ * - GridSelection: Unified selection handling (click, keyboard, drag-box)
+ * - ThumbnailLoader: Scroll-aware thumbnail fetching with distance-based priority
+ *
  * RESPONSIBILITIES:
  *
  * Duplicate Detection Levels:
@@ -49,8 +54,9 @@
  * Performance:
  *   - Duplicate groups are computed on backend during scan
  *   - Frontend caches group data for quick slider changes
- *   - Lazy loads stack thumbnails via ThumbnailLoader LIFO queue
- *   - Virtual scrolling via VirtualGrid for large collections
+ *   - Thumbnails loaded via ThumbnailLoader with distance-based priority
+ *   - Virtual scrolling via VirtualGrid with absolute positioning
+ *   - DOM elements created only after thumbnail blob URL is ready
  *
  * LIFECYCLE HOOKS:
  *   - onEnter(): Fetches duplicate groups from backend, renders stacks
@@ -177,27 +183,11 @@ const Duplicates = {
         };
 
         // Create VirtualGrid instance
-        // Use grid as both container and grid (same pattern as Gallery)
-        // This simplifies coordinate calculations in GridSelection
         this._grid = VirtualGrid.create({
             container: this._els.grid,
-            grid: this._els.grid,
             getItems: () => this.state.groups,
             getItemId: (group) => group.group_hash,
-            createItem: (group, index) => this._createStackElement(group, index),
-            onItemVisible: (group, el) => {
-                const imgEl = el.querySelector('img');
-                const imageId = group.best_image?.id;
-                if (imgEl && imageId) {
-                    ThumbnailLoader.request(imageId, imgEl, 'visible');
-                }
-            },
-            onItemRemoved: (hash) => {
-                const group = this.state.groups.find(g => g.group_hash === hash);
-                if (group?.best_image?.id) {
-                    ThumbnailLoader.cancel(group.best_image.id);
-                }
-            },
+            createItem: (group, index, blobUrl) => this._createStackElement(group, index, blobUrl),
             getThumbnailId: (group) => group.best_image?.id,
             itemSelector: '.duplicate-stack',
             getItemHeight: (thumbSize, itemWidth) => {
@@ -725,21 +715,22 @@ Duplicates._renderGroups = function() {
 };
 
 /**
- * Creates a stack element for a duplicate group.
- * Note: Does NOT set img.src - ThumbnailLoader handles that via onItemVisible.
+ * Creates a stack element for a duplicate group with thumbnail already loaded.
  * @param {Object} group - The duplicate group (lightweight format)
  * @param {number} index - Group index for data attribute
+ * @param {string} blobUrl - Blob URL for the thumbnail
  * @returns {HTMLElement} The stack element
  * @private
  */
-Duplicates._createStackElement = function(group, index) {
+Duplicates._createStackElement = function(group, index, blobUrl) {
     const stack = document.createElement('div');
-    stack.className = 'duplicate-stack';
+    stack.className = 'duplicate-stack loaded';
     stack.dataset.groupIndex = index;
     stack.dataset.groupHash = group.group_hash;
 
-    // Best image preview (thumbnail) - src will be set by ThumbnailLoader
+    // Best image preview (thumbnail) with blob URL already set
     const img = document.createElement('img');
+    img.src = blobUrl;
     img.alt = group.best_image?.basename || 'Duplicate group preview';
     img.dataset.imageId = group.best_image?.id || '';
     stack.appendChild(img);

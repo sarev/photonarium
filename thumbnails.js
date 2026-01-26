@@ -2,9 +2,18 @@
  * @fileoverview Shared thumbnail infrastructure for the Imaginary application.
  *
  * This module provides reusable components for thumbnail grid management:
- * - ThumbnailLoader: Centralized, priority-based thumbnail loading with LIFO queue
- * - VirtualGrid: Reusable virtual scrolling infrastructure (Phase 2)
- * - GridSelection: Unified selection handling (Phase 3)
+ * - ThumbnailLoader: Fetches thumbnails with scroll-aware prioritization
+ * - VirtualGrid: Virtual scrolling with absolute positioning
+ * - GridSelection: Unified selection handling (click, keyboard, drag-box)
+ *
+ * Architecture:
+ * - DOM elements are only created AFTER their thumbnail blob URL is ready
+ * - Items are absolutely positioned based on their index (no insertion order dependency)
+ * - One unified buffer zone: visible rows ± extraRows (from ThumbnailConfig)
+ * - Elements are destroyed when they leave this zone
+ * - Priority is determined by absolute distance from the center of the visible area
+ * - Re-prioritization happens each time a fetch slot becomes available
+ * - A faint grid pattern shows placeholder positions during scroll
  *
  * @module thumbnails
  * @requires core
@@ -13,37 +22,27 @@
 /* ==========================================================================
    THUMBNAIL LOADER
 
-   Centralized thumbnail loading with LIFO priority queue, deduplication,
-   and request cancellation support.
+   Fetches thumbnails and triggers DOM creation via callbacks.
+   DOM elements are only created after the blob URL is ready.
    ========================================================================== */
 
 /**
- * Centralized thumbnail loader with priority-based LIFO queue.
+ * Thumbnail loader with scroll-aware prioritization.
  *
  * Features:
- * - LIFO queue: Most recent requests processed first
- * - Priority tiers: 'visible' > 'buffer' > 'background'
- * - Deduplication: Multiple elements can listen for the same thumbnail
- * - Cancellation: Pending/in-flight requests can be cancelled
+ * - Real-time prioritization: Sorts queue based on current scroll position
+ * - Automatic pruning: Discards requests outside buffer zone
+ * - Timeout protection: Aborts slow requests to free slots
+ * - Scroll-abort: Cancels in-flight requests when user scrolls away
  * - Cache busting: Support for rotated images
+ * - Callback-based: Calls onReady callback with blob URL when fetch completes
  *
  * @namespace
  */
 const ThumbnailLoader = {
     /**
-     * Priority levels (higher number = higher priority).
-     * @type {Object<string, number>}
-     * @constant
-     */
-    PRIORITY: {
-        background: 0,
-        buffer: 1,
-        visible: 2
-    },
-
-    /**
      * Pending request queue.
-     * Each entry: { imageId, priority, listeners: Set<HTMLImageElement> }
+     * Each entry: { imageId, index, onReady }
      * @type {Array<Object>}
      * @private
      */
@@ -51,7 +50,7 @@ const ThumbnailLoader = {
 
     /**
      * In-flight requests.
-     * Map of imageId -> { controller: AbortController, listeners: Set<HTMLImageElement> }
+     * Map of imageId -> { controller: AbortController, index: number }
      * @type {Map<string, Object>}
      * @private
      */
@@ -66,13 +65,6 @@ const ThumbnailLoader = {
     _cacheBust: new Map(),
 
     /**
-     * Maximum concurrent thumbnail fetches.
-     * @type {number}
-     * @private
-     */
-    _maxConcurrent: 6,
-
-    /**
      * Current number of active fetches.
      * @type {number}
      * @private
@@ -80,157 +72,67 @@ const ThumbnailLoader = {
     _activeCount: 0,
 
     /**
-     * Sequence counter for LIFO ordering within priority levels.
-     * Higher = more recent = should load first.
-     * @type {number}
+     * Current scroll state for prioritization.
+     * Updated by updateScrollState().
+     * @type {Object}
      * @private
      */
-    _sequence: 0,
+    _scrollState: {
+        itemsPerRow: 1,
+        visibleStartRow: 0,
+        visibleEndRow: 0
+    },
+
+    /**
+     * Gets the current configuration from App.
+     * @returns {Object} Config with concurrentRequests, extraRows, timeoutMs
+     * @private
+     */
+    _getConfig() {
+        return App.getThumbnailConfig();
+    },
+
+    /**
+     * Updates the scroll state for prioritization.
+     * Called by VirtualGrid on scroll.
+     *
+     * @param {number} itemsPerRow - Number of items per row
+     * @param {number} visibleStartRow - First visible row index
+     * @param {number} visibleEndRow - Last visible row index
+     */
+    updateScrollState(itemsPerRow, visibleStartRow, visibleEndRow) {
+        this._scrollState = {
+            itemsPerRow,
+            visibleStartRow,
+            visibleEndRow
+        };
+
+        // Prune in-flight requests that are now outside buffer zone
+        this._pruneInFlight();
+    },
 
     /**
      * Requests a thumbnail load for an image.
-     *
-     * If the imageId is already queued, adds the element as a listener and
-     * updates priority if the new priority is higher.
-     *
-     * If the imageId is already in-flight, adds the element as a listener
-     * to receive the result when it completes.
+     * When the thumbnail is ready, onReady(blobUrl) is called.
      *
      * @param {string} imageId - The image ID to load
-     * @param {HTMLImageElement} imgElement - The img element to populate
-     * @param {string} [priority='visible'] - Priority: 'visible', 'buffer', or 'background'
+     * @param {number} index - Index in the items array (for row calculation)
+     * @param {Function} onReady - Callback: (blobUrl) => void, called when thumbnail is ready
      */
-    request(imageId, imgElement, priority = 'visible') {
-        if (!imageId || !imgElement) return;
+    request(imageId, index, onReady) {
+        if (!imageId || !onReady) return;
 
-        const priorityNum = this.PRIORITY[priority] ?? this.PRIORITY.visible;
+        // Already fetching this image
+        if (this._inFlight.has(imageId)) return;
 
-        // Check if already in-flight
-        const inFlight = this._inFlight.get(imageId);
-        if (inFlight) {
-            // Add element as listener - it will receive the result when fetch completes
-            inFlight.listeners.add(imgElement);
-            return;
-        }
+        // Already in queue
+        if (this._queue.some(item => item.imageId === imageId)) return;
 
-        // Check if already in queue
-        const existing = this._queue.find(item => item.imageId === imageId);
-        if (existing) {
-            // Add element as listener
-            existing.listeners.add(imgElement);
-            // Update priority and sequence if higher priority (makes it "fresh" again)
-            if (priorityNum > existing.priority) {
-                existing.priority = priorityNum;
-                existing.sequence = ++this._sequence;
-            }
-            return;
-        }
-
-        // New request - add to queue with sequence number for LIFO ordering
-        this._queue.push({
-            imageId,
-            priority: priorityNum,
-            sequence: ++this._sequence,
-            listeners: new Set([imgElement])
-        });
+        // Add to queue
+        this._queue.push({ imageId, index, onReady });
 
         // Process queue
         this._processQueue();
-    },
-
-    /**
-     * Cancels a thumbnail request for a specific element.
-     *
-     * Removes the element from the listeners. If no listeners remain,
-     * removes from queue or aborts the in-flight request.
-     *
-     * @param {string} imageId - The image ID
-     * @param {HTMLImageElement} [imgElement] - Specific element to remove, or all if omitted
-     */
-    cancel(imageId, imgElement) {
-        if (!imageId) return;
-
-        // Check queue first
-        const queueIdx = this._queue.findIndex(item => item.imageId === imageId);
-        if (queueIdx !== -1) {
-            const item = this._queue[queueIdx];
-            if (imgElement) {
-                item.listeners.delete(imgElement);
-            } else {
-                item.listeners.clear();
-            }
-
-            // Remove from queue if no listeners left
-            if (item.listeners.size === 0) {
-                this._queue.splice(queueIdx, 1);
-            }
-            return;
-        }
-
-        // Check in-flight
-        const inFlight = this._inFlight.get(imageId);
-        if (inFlight) {
-            if (imgElement) {
-                inFlight.listeners.delete(imgElement);
-            } else {
-                inFlight.listeners.clear();
-            }
-
-            // Abort if no listeners left
-            if (inFlight.listeners.size === 0) {
-                inFlight.controller.abort();
-                this._inFlight.delete(imageId);
-                this._activeCount--;
-                // Process next items in queue
-                this._processQueue();
-            }
-        }
-    },
-
-    /**
-     * Re-prioritizes the queue based on what's currently visible.
-     *
-     * Called on scroll updates to ensure visible items are processed first.
-     * Items in visibleIds get 'visible' priority, bufferIds get 'buffer',
-     * everything else becomes 'background'.
-     *
-     * After updating priorities, the queue is re-sorted so highest priority
-     * items are at the front (LIFO within each priority tier).
-     *
-     * @param {Array<string>} visibleIds - Image IDs currently visible in viewport
-     * @param {Array<string>} bufferIds - Image IDs in buffer zone (not visible but nearby)
-     */
-    prioritize(visibleIds, bufferIds) {
-        const visibleSet = new Set(visibleIds);
-        const bufferSet = new Set(bufferIds);
-
-        // Update priorities in queue, refreshing sequence for items that become visible
-        for (const item of this._queue) {
-            const oldPriority = item.priority;
-            if (visibleSet.has(item.imageId)) {
-                item.priority = this.PRIORITY.visible;
-                // Refresh sequence when becoming visible (makes it LIFO among visible)
-                if (oldPriority !== this.PRIORITY.visible) {
-                    item.sequence = ++this._sequence;
-                }
-            } else if (bufferSet.has(item.imageId)) {
-                item.priority = this.PRIORITY.buffer;
-            } else {
-                item.priority = this.PRIORITY.background;
-            }
-        }
-
-        // Sort queue: highest priority first, then LIFO within priority (higher sequence = more recent)
-        this._queue.sort((a, b) => (b.priority - a.priority) || (b.sequence - a.sequence));
-
-        // Cancel background items that are no longer needed
-        // Keep queue focused on visible and buffer items
-        const maxQueueSize = (visibleIds.length + bufferIds.length) * 2;
-        if (this._queue.length > maxQueueSize) {
-            // Remove excess background items from the end
-            const removed = this._queue.splice(maxQueueSize);
-            // These items are dropped - their img elements will remain without src
-        }
     },
 
     /**
@@ -260,13 +162,88 @@ const ThumbnailLoader = {
     },
 
     /**
-     * Processes the queue, starting new fetches up to the concurrency limit.
+     * Calculates the row for an item index.
+     * @param {number} index - Item index
+     * @returns {number} Row number
+     * @private
+     */
+    _getRow(index) {
+        return Math.floor(index / this._scrollState.itemsPerRow);
+    },
+
+    /**
+     * Checks if a row is within the buffer zone.
+     * @param {number} row - Row number
+     * @returns {boolean} True if in buffer zone
+     * @private
+     */
+    _isInBuffer(row) {
+        const { visibleStartRow, visibleEndRow } = this._scrollState;
+        const extraRows = this._getConfig().extraRows;
+        return row >= (visibleStartRow - extraRows) && row <= (visibleEndRow + extraRows);
+    },
+
+    /**
+     * Checks if a row is in the visible zone.
+     * @param {number} row - Row number
+     * @returns {boolean} True if visible
+     * @private
+     */
+    _isVisible(row) {
+        const { visibleStartRow, visibleEndRow } = this._scrollState;
+        return row >= visibleStartRow && row <= visibleEndRow;
+    },
+
+    /**
+     * Prunes in-flight requests that are now outside the buffer zone.
+     * Called when scroll state changes.
+     * @private
+     */
+    _pruneInFlight() {
+        for (const [imageId, { controller, index }] of this._inFlight) {
+            const row = this._getRow(index);
+            if (!this._isInBuffer(row)) {
+                controller.abort();
+                // Note: Don't delete from map here - finally block handles cleanup
+            }
+        }
+    },
+
+    /**
+     * Processes the queue, filling available slots with highest priority items.
+     * Re-prioritizes on each iteration based on current scroll position.
      * @private
      */
     _processQueue() {
-        while (this._activeCount < this._maxConcurrent && this._queue.length > 0) {
-            // Take from front (highest priority due to sort)
-            const item = this._queue.shift();
+        const config = this._getConfig();
+        const { visibleStartRow, visibleEndRow } = this._scrollState;
+
+        // Calculate center of visible area for distance calculation
+        const centerRow = (visibleStartRow + visibleEndRow) / 2;
+
+        // Prune items outside buffer zone
+        this._queue = this._queue.filter(item => {
+            const row = this._getRow(item.index);
+            return this._isInBuffer(row);
+        });
+
+        // Fill available slots, re-prioritizing on each iteration
+        while (this._activeCount < config.concurrentRequests && this._queue.length > 0) {
+            // Find the item closest to center (minimum absolute distance)
+            let bestIndex = 0;
+            let bestDistance = Infinity;
+
+            for (let i = 0; i < this._queue.length; i++) {
+                const row = this._getRow(this._queue[i].index);
+                const distance = Math.abs(row - centerRow);
+                if (distance < bestDistance) {
+                    bestDistance = distance;
+                    bestIndex = i;
+                }
+            }
+
+            // Remove best item from queue and load it
+            const [item] = this._queue.splice(bestIndex, 1);
             this._loadThumbnail(item);
         }
     },
@@ -274,26 +251,19 @@ const ThumbnailLoader = {
     /**
      * Loads a thumbnail for a queue item.
      *
-     * @param {Object} item - Queue item with imageId, priority, listeners
+     * @param {Object} item - Queue item with imageId, index, onReady
      * @private
      */
     async _loadThumbnail(item) {
-        const { imageId, listeners } = item;
+        const { imageId, index, onReady } = item;
+        const config = this._getConfig();
 
-        // Skip if no listeners (were all cancelled)
-        if (listeners.size === 0) {
-            this._processQueue();
-            return;
-        }
-
-        // Create abort controller
+        // Create abort controller with timeout
         const controller = new AbortController();
+        const timeoutId = setTimeout(() => controller.abort(), config.timeoutMs);
 
         // Track as in-flight
-        this._inFlight.set(imageId, {
-            controller,
-            listeners
-        });
+        this._inFlight.set(imageId, { controller, index });
         this._activeCount++;
 
         const url = this._getThumbnailUrl(imageId);
@@ -303,58 +273,34 @@ const ThumbnailLoader = {
                 signal: controller.signal
             });
 
+            clearTimeout(timeoutId);
+
             if (!response.ok) {
                 throw new Error(`HTTP ${response.status}`);
             }
 
             const blob = await response.blob();
+            const blobUrl = URL.createObjectURL(blob);
 
-            // Create object URL for the blob
-            const objectUrl = URL.createObjectURL(blob);
-
-            // Apply to all listeners that are still connected to DOM
-            const inFlight = this._inFlight.get(imageId);
-            if (inFlight) {
-                for (const img of inFlight.listeners) {
-                    if (img.isConnected) {
-                        img.src = objectUrl;
-                        // Mark parent as loaded if it has the pattern
-                        const parent = img.closest('.gallery-item, .duplicate-stack');
-                        if (parent) {
-                            parent.classList.add('loaded');
-                        }
-                    }
-                }
+            // Check if still in buffer zone before calling callback
+            const row = this._getRow(index);
+            if (this._isInBuffer(row)) {
+                onReady(blobUrl);
+            } else {
+                // Clean up blob URL if we're no longer in the zone
+                URL.revokeObjectURL(blobUrl);
             }
-
-            // Note: We don't revoke the object URL immediately because
-            // the browser needs it to display the image. The URLs will be
-            // cleaned up when the page is navigated away or tab is closed.
 
         } catch (error) {
-            if (error.name === 'AbortError') {
-                // Request was cancelled - this is expected
-                return;
-            }
+            clearTimeout(timeoutId);
 
-            console.error(`Failed to load thumbnail for ${imageId}:`, error);
-
-            // Mark as error for all listeners
-            const inFlight = this._inFlight.get(imageId);
-            if (inFlight) {
-                for (const img of inFlight.listeners) {
-                    const parent = img.closest('.gallery-item, .duplicate-stack');
-                    if (parent) {
-                        parent.classList.add('error');
-                    }
-                }
+            if (error.name !== 'AbortError') {
+                console.error(`Failed to load thumbnail for ${imageId}:`, error);
             }
+            // AbortError is expected (timeout or scroll-away)
         } finally {
-            // Cleanup
             this._inFlight.delete(imageId);
             this._activeCount--;
-
-            // Process next items
             this._processQueue();
         }
     },
@@ -365,14 +311,13 @@ const ThumbnailLoader = {
      */
     clear() {
         // Cancel all in-flight requests
-        for (const [imageId, inFlight] of this._inFlight) {
-            inFlight.controller.abort();
+        for (const [imageId, { controller }] of this._inFlight) {
+            controller.abort();
         }
 
         this._queue = [];
         this._inFlight.clear();
         this._activeCount = 0;
-        this._sequence = 0;
         // Keep _cacheBust - those are still valid
     },
 
@@ -387,15 +332,6 @@ const ThumbnailLoader = {
             activeCount: this._activeCount,
             cacheBustCount: this._cacheBust.size
         };
-    },
-
-    /**
-     * Re-sorts the queue and processes it.
-     * Call after batch-adding items via request() to ensure proper ordering.
-     */
-    flush() {
-        this._queue.sort((a, b) => (b.priority - a.priority) || (b.sequence - a.sequence));
-        this._processQueue();
     }
 };
 
@@ -406,12 +342,23 @@ window.ThumbnailLoader = ThumbnailLoader;
 /* ==========================================================================
    VIRTUAL GRID
 
-   Reusable virtual scrolling infrastructure for thumbnail grids.
-   Only renders visible items plus a buffer for smooth scrolling.
+   Virtual scrolling with absolute positioning.
+
+   The grid container has a fixed total height based on total items.
+   Each thumbnail is absolutely positioned at its calculated location.
+   Elements don't depend on each other - they can load in any order.
    ========================================================================== */
 
 /**
  * Factory for creating virtual scrolling grid instances.
+ *
+ * VirtualGrid uses absolute positioning for all items. The container has a fixed
+ * total height based on the number of items, and each item is positioned at a
+ * calculated (top, left) based on its index. Items can load in any order without
+ * affecting each other's positions.
+ *
+ * The grid shows a faint placeholder pattern during scroll, so users see visual
+ * feedback even before thumbnails load.
  *
  * @namespace
  */
@@ -420,20 +367,15 @@ const VirtualGrid = {
      * Creates a new VirtualGrid instance.
      *
      * @param {Object} config - Configuration object
-     * @param {HTMLElement} config.container - Scroll container element
-     * @param {HTMLElement} config.grid - Grid element for items (can be same as container)
+     * @param {HTMLElement} config.container - Scroll container element (overflow-y: auto)
      * @param {Function} config.getItems - Returns current data array
-     * @param {Function} config.getItemId - Extracts unique ID from an item
-     * @param {Function} config.createItem - Creates DOM element for an item (item, index) => HTMLElement
-     * @param {Function} [config.onItemVisible] - Called when item enters render zone (item, element)
-     * @param {Function} [config.onItemRemoved] - Called when item leaves retain zone (id)
-     * @param {Function} [config.getThumbnailId] - Gets thumbnail imageId from item for ThumbnailLoader (item) => string
-     * @param {string} [config.itemSelector='.grid-item'] - CSS selector for items
-     * @param {number} [config.bufferRows=3] - Extra rows to pre-render above/below viewport
-     * @param {number} [config.retainRows=30] - Extra rows to keep cached once rendered
+     * @param {Function} config.getItemId - Extracts unique ID from an item: (item) => string
+     * @param {Function} config.createItem - Creates DOM element when thumbnail ready: (item, index, blobUrl) => HTMLElement
+     * @param {Function} config.getThumbnailId - Gets thumbnail imageId from item: (item) => string
+     * @param {string} [config.itemSelector='.grid-item'] - CSS selector for items (used by GridSelection)
      * @param {number} [config.gap=16] - Gap between items in pixels
      * @param {number} [config.padding=16] - Container padding in pixels
-     * @param {Function} [config.getItemHeight] - Custom item height calculator (thumbSize, itemWidth) => height
+     * @param {Function} [config.getItemHeight] - Custom item height calculator: (thumbSize, itemWidth) => height
      * @returns {Object} VirtualGrid instance
      */
     create(config) {
@@ -441,59 +383,49 @@ const VirtualGrid = {
             // Configuration
             _config: {
                 container: config.container,
-                grid: config.grid || config.container,
                 getItems: config.getItems,
                 getItemId: config.getItemId,
                 createItem: config.createItem,
-                onItemVisible: config.onItemVisible || null,
-                onItemRemoved: config.onItemRemoved || null,
-                getThumbnailId: config.getThumbnailId || null,
+                getThumbnailId: config.getThumbnailId,
                 itemSelector: config.itemSelector || '.grid-item',
-                bufferRows: config.bufferRows ?? 3,
-                retainRows: config.retainRows ?? 30,
                 gap: config.gap ?? 16,
                 padding: config.padding ?? 16,
                 getItemHeight: config.getItemHeight || null
             },
 
-            // Virtual scroll state
+            // Layout state
             _state: {
                 itemHeight: 0,
                 itemWidth: 0,
                 itemsPerRow: 0,
                 visibleRows: 0,
                 totalHeight: 0,
-                startIndex: -1,
-                endIndex: -1,
                 renderedItems: new Map(),  // id -> HTMLElement
-                scrollRAF: null
+                pendingItems: new Set(),   // ids with pending thumbnail requests
+                lastScrollProcess: 0       // Timestamp for scroll throttle
             },
 
-            // DOM elements
-            _topSpacer: null,
-            _bottomSpacer: null,
+            // Inner container for absolute positioning
+            _innerContainer: null,
             _scrollHandler: null,
             _resizeHandler: null,
+            _trailingScrollTimeout: null,
             _bound: false,
 
             /**
-             * Initializes the virtual grid (creates spacers, binds handlers).
+             * Initializes the virtual grid.
              */
             _init() {
-                // Create spacer elements
-                this._topSpacer = document.createElement('div');
-                this._topSpacer.className = 'virtual-spacer';
-                this._bottomSpacer = document.createElement('div');
-                this._bottomSpacer.className = 'virtual-spacer';
+                // Create inner container for absolute positioning
+                this._innerContainer = document.createElement('div');
+                this._innerContainer.className = 'virtual-grid-inner';
+                this._innerContainer.style.position = 'relative';
 
                 // Bind handlers
                 this._scrollHandler = this._onScroll.bind(this);
                 this._resizeHandler = App.debounce(() => {
                     if (this._bound && this._config.getItems().length > 0) {
-                        this._calculateDimensions();
-                        this._state.startIndex = -1;
-                        this._state.endIndex = -1;
-                        this._updateVisibleItems(this._config.container.scrollTop);
+                        this._onResize();
                     }
                 }, 100);
 
@@ -501,21 +433,100 @@ const VirtualGrid = {
             },
 
             /**
-             * Handles scroll events with RAF throttling.
+             * Handles scroll events with throttling and trailing call.
+             * Ensures the final scroll position is always processed.
              * @param {Event} e - Scroll event
              * @private
              */
             _onScroll(e) {
-                if (this._state.scrollRAF) return;
+                const now = Date.now();
+                const throttleMs = App.getThumbnailConfig().scrollThrottleMs;
                 const scrollTop = e.target.scrollTop;
-                this._state.scrollRAF = requestAnimationFrame(() => {
-                    this._state.scrollRAF = null;
-                    this._updateVisibleItems(scrollTop);
-                });
+
+                // Clear any pending trailing call
+                if (this._trailingScrollTimeout) {
+                    clearTimeout(this._trailingScrollTimeout);
+                    this._trailingScrollTimeout = null;
+                }
+
+                // If within throttle window, schedule a trailing call
+                if (now - this._state.lastScrollProcess < throttleMs) {
+                    this._trailingScrollTimeout = setTimeout(() => {
+                        this._trailingScrollTimeout = null;
+                        this._state.lastScrollProcess = Date.now();
+                        this._updateVisibleItems(this._config.container.scrollTop);
+                    }, throttleMs);
+                    return;
+                }
+
+                // Process immediately
+                this._state.lastScrollProcess = now;
+                this._updateVisibleItems(scrollTop);
             },
 
             /**
-             * Calculates dimensions for virtual scrolling.
+             * Handles resize - recalculates layout and repositions all items.
+             * @private
+             */
+            _onResize() {
+                const oldItemsPerRow = this._state.itemsPerRow;
+                this._calculateDimensions();
+
+                // Update container height and grid pattern
+                this._innerContainer.style.height = this._state.totalHeight + 'px';
+                this._updateGridPattern();
+
+                // If items per row changed, reposition all rendered items
+                if (oldItemsPerRow !== this._state.itemsPerRow) {
+                    const items = this._config.getItems();
+                    for (const [id, el] of this._state.renderedItems) {
+                        const index = items.findIndex(it => this._config.getItemId(it) === id);
+                        if (index !== -1) {
+                            this._positionElement(el, index);
+                        }
+                    }
+                }
+
+                // Update visible items (may need to load more or remove some)
+                this._updateVisibleItems(this._config.container.scrollTop);
+            },
+
+            /**
+             * Updates the background grid pattern to match current cell dimensions.
+             * Shows a faint grid of rounded rectangles as placeholders.
+             * @private
+             */
+            _updateGridPattern() {
+                const { itemWidth, itemHeight } = this._state;
+                const { gap, padding } = this._config;
+
+                const cellWidth = itemWidth;
+                const cellHeight = itemHeight - gap;
+                const tileWidth = itemWidth + gap;
+                const tileHeight = itemHeight;
+
+                // Get colors from CSS custom properties
+                const style = getComputedStyle(document.documentElement);
+                const fillColor = style.getPropertyValue('--color-bg-tertiary').trim() || 'rgba(128,128,128,0.08)';
+                const strokeColor = style.getPropertyValue('--color-border').trim() || 'rgba(128,128,128,0.15)';
+
+                // Create SVG pattern for one cell - a faint rounded rectangle
+                const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="${tileWidth}" height="${tileHeight}">
+                    <rect x="0" y="0" width="${cellWidth}" height="${cellHeight}" rx="8"
+                          fill="${fillColor}" stroke="${strokeColor}" stroke-width="1"/>
+                </svg>`;
+
+                const encoded = encodeURIComponent(svg)
+                    .replace(/'/g, '%27')
+                    .replace(/"/g, '%22');
+
+                this._innerContainer.style.backgroundImage = `url("data:image/svg+xml,${encoded}")`;
+                this._innerContainer.style.backgroundPosition = `${padding}px ${padding}px`;
+                this._innerContainer.style.backgroundRepeat = 'repeat';
+            },
+
+            /**
+             * Calculates dimensions for the grid layout.
              * @private
              */
             _calculateDimensions() {
@@ -524,15 +535,14 @@ const VirtualGrid = {
                 const gap = this._config.gap;
                 const padding = this._config.padding;
 
-                // Calculate available width
+                // Calculate available width (account for scrollbar)
+                const scrollbarWidth = container.offsetWidth - container.clientWidth;
                 const availableWidth = container.clientWidth - padding * 2;
 
-                // Calculate items per row (must match CSS grid auto-fill behavior)
-                // CSS: grid-template-columns: repeat(auto-fill, minmax(var(--thumb-size), 1fr))
-                // Formula: floor((availableWidth + gap) / (thumbSize + gap))
+                // Calculate items per row
                 this._state.itemsPerRow = Math.max(1, Math.floor((availableWidth + gap) / (thumbSize + gap)));
 
-                // Actual item width when using 1fr
+                // Actual item width
                 const actualItemWidth = (availableWidth - gap * (this._state.itemsPerRow - 1)) / this._state.itemsPerRow;
                 this._state.itemWidth = actualItemWidth;
 
@@ -541,7 +551,7 @@ const VirtualGrid = {
                     this._state.itemHeight = this._config.getItemHeight(thumbSize, actualItemWidth) + gap;
                 } else {
                     // Default: square thumbnail + label area
-                    const thumbnailHeight = actualItemWidth - 16; // Minus item padding
+                    const thumbnailHeight = actualItemWidth - 16;
                     const labelHeight = 24;
                     this._state.itemHeight = thumbnailHeight + labelHeight + 16 + gap;
                 }
@@ -553,11 +563,63 @@ const VirtualGrid = {
                 // Calculate total height
                 const items = this._config.getItems();
                 const totalRows = Math.ceil(items.length / this._state.itemsPerRow);
-                this._state.totalHeight = totalRows * this._state.itemHeight;
+                this._state.totalHeight = totalRows * this._state.itemHeight + padding;
+            },
+
+            /**
+             * Calculates the absolute position for an item by index.
+             * @param {number} index - Item index
+             * @returns {Object} { top, left }
+             * @private
+             */
+            _getItemPosition(index) {
+                const { itemsPerRow, itemWidth, itemHeight } = this._state;
+                const { gap, padding } = this._config;
+
+                const row = Math.floor(index / itemsPerRow);
+                const col = index % itemsPerRow;
+
+                const top = padding + row * itemHeight;
+                const left = padding + col * (itemWidth + gap);
+
+                return { top, left };
+            },
+
+            /**
+             * Positions an element at the correct location.
+             * @param {HTMLElement} el - Element to position
+             * @param {number} index - Item index
+             * @private
+             */
+            _positionElement(el, index) {
+                const { top, left } = this._getItemPosition(index);
+                const { itemWidth, itemHeight } = this._state;
+                const { gap } = this._config;
+
+                el.style.position = 'absolute';
+                el.style.top = top + 'px';
+                el.style.left = left + 'px';
+                el.style.width = itemWidth + 'px';
+                el.style.height = (itemHeight - gap) + 'px';
+            },
+
+            /**
+             * Gets the buffer zone boundaries (visible + extraRows).
+             * @param {number} firstVisibleRow - First visible row index
+             * @param {number} totalRows - Total number of rows
+             * @returns {Object} bufferStartRow, bufferEndRow
+             * @private
+             */
+            _getBufferZone(firstVisibleRow, totalRows) {
+                const extraRows = App.getThumbnailConfig().extraRows;
+                const bufferStartRow = Math.max(0, firstVisibleRow - extraRows);
+                const bufferEndRow = Math.min(totalRows, firstVisibleRow + this._state.visibleRows + extraRows);
+                return { bufferStartRow, bufferEndRow };
             },
 
             /**
              * Updates visible items based on scroll position.
+             * Requests thumbnails for items in buffer zone, removes items outside.
              * @param {number} scrollTop - Current scroll position
              * @private
              */
@@ -565,151 +627,96 @@ const VirtualGrid = {
                 const state = this._state;
                 const config = this._config;
                 const items = config.getItems();
-                const grid = config.grid;
 
                 if (items.length === 0) return;
 
                 const totalRows = Math.ceil(items.length / state.itemsPerRow);
                 const firstVisibleRow = Math.floor(scrollTop / state.itemHeight);
 
-                // Render zone: must have these items in DOM
-                const renderStartRow = Math.max(0, firstVisibleRow - config.bufferRows);
-                const renderEndRow = Math.min(totalRows, firstVisibleRow + state.visibleRows + config.bufferRows);
+                // Buffer zone: visible + extraRows
+                const { bufferStartRow, bufferEndRow } = this._getBufferZone(firstVisibleRow, totalRows);
 
-                // Retain zone: keep these items cached longer
-                const retainStartRow = Math.max(0, firstVisibleRow - config.retainRows);
-                const retainEndRow = Math.min(totalRows, firstVisibleRow + state.visibleRows + config.retainRows);
+                // Visible zone boundaries (for ThumbnailLoader priority)
+                const visibleStartRow = firstVisibleRow;
+                const visibleEndRow = Math.min(totalRows - 1, firstVisibleRow + state.visibleRows - 1);
+
+                // Update ThumbnailLoader scroll state FIRST
+                ThumbnailLoader.updateScrollState(state.itemsPerRow, visibleStartRow, visibleEndRow);
 
                 // Convert to item indices
-                const renderStart = renderStartRow * state.itemsPerRow;
-                const renderEnd = Math.min(renderEndRow * state.itemsPerRow, items.length);
-                const retainStart = retainStartRow * state.itemsPerRow;
-                const retainEnd = Math.min(retainEndRow * state.itemsPerRow, items.length);
+                const bufferStart = bufferStartRow * state.itemsPerRow;
+                const bufferEnd = Math.min(bufferEndRow * state.itemsPerRow, items.length);
 
-                // Visible zone (for ThumbnailLoader priority)
-                const visibleStart = firstVisibleRow * state.itemsPerRow;
-                const visibleEnd = Math.min((firstVisibleRow + state.visibleRows) * state.itemsPerRow, items.length);
-
-                // Build id->index map for O(1) lookups (avoids O(n) findIndex calls)
-                const idToIndex = new Map();
-                for (let i = retainStart; i < retainEnd; i++) {
-                    idToIndex.set(config.getItemId(items[i]), i);
+                // Build set of indices that should be in buffer zone
+                const bufferIndices = new Set();
+                for (let i = bufferStart; i < bufferEnd; i++) {
+                    bufferIndices.add(i);
                 }
 
-                // Remove items outside retain zone
-                const currentItems = grid.querySelectorAll(config.itemSelector);
-                for (const el of currentItems) {
-                    const id = el.dataset.id || el.dataset.groupHash;
-                    const idx = idToIndex.get(id);
-                    if (idx === undefined) {
-                        state.renderedItems.delete(id);
+                // Remove items outside buffer zone
+                for (const [id, el] of state.renderedItems) {
+                    const index = items.findIndex(it => config.getItemId(it) === id);
+                    if (index === -1 || !bufferIndices.has(index)) {
                         el.remove();
-                        // Notify removal
-                        if (config.onItemRemoved) {
-                            config.onItemRemoved(id);
-                        }
+                        state.renderedItems.delete(id);
                     }
                 }
 
-                // Add missing items in render zone
-                for (let i = renderStart; i < renderEnd; i++) {
+                // Clean up pending items outside buffer zone
+                for (const id of state.pendingItems) {
+                    const index = items.findIndex(it => config.getItemId(it) === id);
+                    if (index === -1 || !bufferIndices.has(index)) {
+                        state.pendingItems.delete(id);
+                    }
+                }
+
+                // Request thumbnails for items in buffer zone that aren't rendered or pending
+                for (let i = bufferStart; i < bufferEnd; i++) {
                     const item = items[i];
                     const id = config.getItemId(item);
-                    if (!state.renderedItems.has(id)) {
-                        const el = config.createItem(item, i);
+
+                    // Skip if already rendered or pending
+                    if (state.renderedItems.has(id) || state.pendingItems.has(id)) continue;
+
+                    const thumbId = config.getThumbnailId(item);
+                    if (!thumbId) continue;
+
+                    // Mark as pending
+                    state.pendingItems.add(id);
+
+                    // Capture index for closure
+                    const itemIndex = i;
+
+                    // Request thumbnail with callback that creates DOM element
+                    ThumbnailLoader.request(thumbId, i, (blobUrl) => {
+                        // Remove from pending
+                        state.pendingItems.delete(id);
+
+                        // Check if still in buffer zone
+                        const currentItems = config.getItems();
+                        const currentIndex = currentItems.findIndex(it => config.getItemId(it) === id);
+                        if (currentIndex === -1) {
+                            URL.revokeObjectURL(blobUrl);
+                            return;
+                        }
+
+                        // Already rendered? (safety check)
+                        if (state.renderedItems.has(id)) {
+                            URL.revokeObjectURL(blobUrl);
+                            return;
+                        }
+
+                        // Create DOM element with the blob URL
+                        const el = config.createItem(item, currentIndex, blobUrl);
+
+                        // Position it absolutely
+                        this._positionElement(el, currentIndex);
+
+                        // Add to container and track
+                        this._innerContainer.appendChild(el);
                         state.renderedItems.set(id, el);
-                        this._insertItemAtPosition(el, i, idToIndex);
-                        // Notify visibility
-                        if (config.onItemVisible) {
-                            config.onItemVisible(item, el);
-                        }
-                    }
+                    });
                 }
-
-                // Update spacer heights based on render zone
-                // (no need to iterate renderedItems - we know the range)
-                const topRow = renderStartRow;
-                const bottomRow = renderEndRow;
-                const topHeight = topRow * state.itemHeight;
-                const bottomHeight = Math.max(0, (totalRows - bottomRow) * state.itemHeight);
-
-                this._topSpacer.style.height = topHeight + 'px';
-                this._bottomSpacer.style.height = bottomHeight + 'px';
-
-                state.startIndex = renderStart;
-                state.endIndex = renderEnd;
-
-                // Update ThumbnailLoader priorities if we have a getThumbnailId function
-                if (config.getThumbnailId) {
-                    const visibleIds = [];
-                    const bufferIds = [];
-
-                    for (let i = renderStart; i < renderEnd; i++) {
-                        const thumbId = config.getThumbnailId(items[i]);
-                        if (thumbId) {
-                            if (i >= visibleStart && i < visibleEnd) {
-                                visibleIds.push(thumbId);
-                            } else {
-                                bufferIds.push(thumbId);
-                            }
-                        }
-                    }
-
-                    ThumbnailLoader.prioritize(visibleIds, bufferIds);
-
-                    // Re-request thumbnails for visible items that were pruned from the queue.
-                    // Items in retain zone keep their DOM element but may have had their
-                    // thumbnail request pruned when they were in the background priority.
-                    // When they become visible again, onItemVisible isn't called (already rendered),
-                    // so we need to explicitly re-request their thumbnails here.
-                    let requeued = false;
-                    for (let i = visibleStart; i < visibleEnd; i++) {
-                        const item = items[i];
-                        const id = config.getItemId(item);
-                        const el = state.renderedItems.get(id);
-                        if (el && !el.classList.contains('loaded')) {
-                            const thumbId = config.getThumbnailId(item);
-                            if (thumbId) {
-                                const img = el.querySelector('img');
-                                if (img) {
-                                    ThumbnailLoader.request(thumbId, img, 'visible');
-                                    requeued = true;
-                                }
-                            }
-                        }
-                    }
-
-                    // If we re-queued any items, flush to re-sort and process
-                    if (requeued) {
-                        ThumbnailLoader.flush();
-                    }
-                }
-            },
-
-            /**
-             * Inserts an item at the correct position in the grid.
-             * @param {HTMLElement} el - Element to insert
-             * @param {number} targetIndex - Target index in items array
-             * @private
-             */
-            _insertItemAtPosition(el, targetIndex, idToIndex) {
-                const grid = this._config.grid;
-                const selector = this._config.itemSelector;
-
-                // Find the right position among existing items
-                const existingItems = grid.querySelectorAll(selector);
-                let insertBefore = this._bottomSpacer;
-
-                for (const existing of existingItems) {
-                    const existingId = existing.dataset.id || existing.dataset.groupHash;
-                    const existingIdx = idToIndex.get(existingId);
-                    if (existingIdx !== undefined && existingIdx > targetIndex) {
-                        insertBefore = existing;
-                        break;
-                    }
-                }
-
-                grid.insertBefore(el, insertBefore);
             },
 
             /**
@@ -739,17 +746,16 @@ const VirtualGrid = {
 
             /**
              * Performs a full render of the grid.
-             * Clears existing items and re-renders visible items.
+             * Sets up container and requests thumbnails for visible items.
              */
             render() {
-                const grid = this._config.grid;
+                const container = this._config.container;
                 const items = this._config.getItems();
 
-                // Clear existing content and cache
-                grid.innerHTML = '';
+                // Clear existing content and state
+                container.innerHTML = '';
                 this._state.renderedItems.clear();
-                this._state.startIndex = -1;
-                this._state.endIndex = -1;
+                this._state.pendingItems.clear();
 
                 // Handle empty state
                 if (items.length === 0) {
@@ -759,12 +765,14 @@ const VirtualGrid = {
                 // Calculate dimensions
                 this._calculateDimensions();
 
-                // Add spacers
-                grid.appendChild(this._topSpacer);
-                grid.appendChild(this._bottomSpacer);
+                // Set up inner container with total height and grid pattern
+                this._innerContainer.innerHTML = '';
+                this._innerContainer.style.height = this._state.totalHeight + 'px';
+                this._updateGridPattern();
+                container.appendChild(this._innerContainer);
 
-                // Render initial visible items
-                this._updateVisibleItems(this._config.container.scrollTop);
+                // Request thumbnails for visible items
+                this._updateVisibleItems(container.scrollTop);
 
                 // Attach scroll listener
                 this._attachScrollListener();
@@ -772,17 +780,11 @@ const VirtualGrid = {
             },
 
             /**
-             * Refreshes the grid without full re-render.
-             * Recalculates dimensions and updates visible items.
+             * Refreshes the grid - recalculates layout.
              */
             refresh() {
                 if (!this._bound) return;
-
-                const container = this._config.container;
-                this._calculateDimensions();
-                this._state.startIndex = -1;
-                this._state.endIndex = -1;
-                this._updateVisibleItems(container.scrollTop);
+                this._onResize();
             },
 
             /**
@@ -796,18 +798,17 @@ const VirtualGrid = {
 
                 if (index < 0 || index >= items.length) return;
 
-                const row = Math.floor(index / this._state.itemsPerRow);
-                const targetY = row * this._state.itemHeight;
+                const { top } = this._getItemPosition(index);
 
                 // Check if item is already visible
                 const viewTop = container.scrollTop;
                 const viewBottom = viewTop + container.clientHeight;
-                const itemBottom = targetY + this._state.itemHeight;
+                const itemBottom = top + this._state.itemHeight;
 
-                if (targetY < viewTop) {
-                    container.scrollTo({ top: targetY, behavior });
+                if (top < viewTop) {
+                    container.scrollTo({ top: top - this._config.padding, behavior });
                 } else if (itemBottom > viewBottom) {
-                    container.scrollTo({ top: itemBottom - container.clientHeight, behavior });
+                    container.scrollTo({ top: itemBottom - container.clientHeight + this._config.padding, behavior });
                 }
             },
 
@@ -822,17 +823,6 @@ const VirtualGrid = {
                 if (index !== -1) {
                     this.scrollTo(index, behavior);
                 }
-            },
-
-            /**
-             * Gets the currently visible item range.
-             * @returns {{start: number, end: number}} Start and end indices
-             */
-            getVisibleRange() {
-                return {
-                    start: this._state.startIndex,
-                    end: this._state.endIndex
-                };
             },
 
             /**
@@ -878,6 +868,10 @@ const VirtualGrid = {
              */
             unbind() {
                 this._detachScrollListener();
+                if (this._trailingScrollTimeout) {
+                    clearTimeout(this._trailingScrollTimeout);
+                    this._trailingScrollTimeout = null;
+                }
                 this._bound = false;
             },
 
@@ -895,13 +889,13 @@ const VirtualGrid = {
             destroy() {
                 this._detachScrollListener();
                 window.removeEventListener('resize', this._resizeHandler);
-
-                if (this._state.scrollRAF) {
-                    cancelAnimationFrame(this._state.scrollRAF);
+                if (this._trailingScrollTimeout) {
+                    clearTimeout(this._trailingScrollTimeout);
+                    this._trailingScrollTimeout = null;
                 }
-
                 this._state.renderedItems.clear();
-                this._config.grid.innerHTML = '';
+                this._state.pendingItems.clear();
+                this._config.container.innerHTML = '';
                 this._bound = false;
             }
         };
@@ -1002,7 +996,7 @@ const GridSelection = {
             _bound: false,
 
             /**
-             * Gets the container element from the grid.
+             * Gets the scroll container element.
              * @returns {HTMLElement}
              * @private
              */
@@ -1011,12 +1005,12 @@ const GridSelection = {
             },
 
             /**
-             * Gets the grid element from the grid.
+             * Gets the inner grid element where items are rendered.
              * @returns {HTMLElement}
              * @private
              */
             _getGridElement() {
-                return this._config.grid._config.grid;
+                return this._config.grid._innerContainer;
             },
 
             /**

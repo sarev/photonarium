@@ -430,19 +430,20 @@ a:hover {
     background-color: var(--color-bg-primary);
 }
 
-/* Thumbnail grid */
+/* Thumbnail grid - scroll container for absolutely positioned items */
 .gallery-grid {
     --thumb-size: 200px;
 
     flex: 1;
-    display: grid;
-    grid-template-columns: repeat(auto-fill, minmax(var(--thumb-size), 1fr));
-    gap: 1rem;
-    padding: 1rem;
     overflow-y: auto;
-    align-content: start;
     position: relative;
     background-color: var(--color-bg-primary);
+}
+
+/* Inner container for absolute positioning */
+.virtual-grid-inner {
+    position: relative;
+    width: 100%;
 }
 
 /* Gallery item */
@@ -1164,12 +1165,7 @@ a:hover {
     --thumb-size: 200px;
 
     flex: 1;
-    display: grid;
-    grid-template-columns: repeat(auto-fill, minmax(var(--thumb-size), 1fr));
-    gap: 1rem;
-    padding: 1rem;
     overflow-y: auto;
-    align-content: start;
     position: relative;
 }
 
@@ -1497,12 +1493,10 @@ dialog::backdrop {
         font-size: 20px;
     }
 
-    /* Smaller thumbnails */
+    /* Smaller thumbnails on mobile */
     .gallery-grid,
     .duplicates-grid {
         --thumb-size: 140px;
-        gap: 0.5rem;
-        padding: 0.5rem;
     }
 
     /* Full-width dialogs */

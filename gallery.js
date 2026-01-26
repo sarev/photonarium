@@ -6,9 +6,15 @@
  * with the core App module and responds to screen lifecycle events.
  *
  * Uses shared infrastructure from thumbnails.js:
- * - VirtualGrid: Virtual scrolling for large image collections
+ * - VirtualGrid: Virtual scrolling with absolute positioning
  * - GridSelection: Unified selection handling (click, keyboard, drag-box)
- * - ThumbnailLoader: Priority-based thumbnail loading
+ * - ThumbnailLoader: Scroll-aware thumbnail fetching with distance-based priority
+ *
+ * Thumbnail Loading:
+ *   - DOM elements are only created after their thumbnail blob URL is fetched
+ *   - Items are absolutely positioned and can load in any order
+ *   - A faint grid pattern shows placeholder positions during scroll
+ *   - Priority based on absolute distance from center of visible area
  *
  * RESPONSIBILITIES:
  *
@@ -145,23 +151,11 @@ const Gallery = {
         // Create VirtualGrid instance
         this._grid = VirtualGrid.create({
             container: this._els.grid,
-            grid: this._els.grid,
             getItems: () => this.state.filteredImages,
             getItemId: (img) => img.id,
-            createItem: (img, index) => this._createThumbnailItem(img),
-            onItemVisible: (img, el) => {
-                const imgEl = el.querySelector('img');
-                if (imgEl) {
-                    ThumbnailLoader.request(img.id, imgEl, 'visible');
-                }
-            },
-            onItemRemoved: (id) => {
-                ThumbnailLoader.cancel(id);
-            },
+            createItem: (img, index, blobUrl) => this._createThumbnailItem(img, blobUrl),
             getThumbnailId: (img) => img.id,
-            itemSelector: '.gallery-item',
-            bufferRows: 3,
-            retainRows: this._loadRetainRows()
+            itemSelector: '.gallery-item'
         });
 
         // Create GridSelection instance
@@ -191,22 +185,6 @@ const Gallery = {
         App.on('selectionChanged', (sel) => this._onSelectionChanged(sel));
         App.on('selectAll', () => this._selection.selectAll());
         App.on('imageRotated', (imageId) => this._onImageRotated(imageId));
-    },
-
-    /**
-     * Loads retain rows setting from localStorage.
-     * @returns {number} Retain rows value
-     * @private
-     */
-    _loadRetainRows() {
-        const saved = localStorage.getItem('imaginary-retainRows');
-        if (saved) {
-            const retain = parseInt(saved, 10);
-            if (!isNaN(retain) && retain >= 0) {
-                return retain;
-            }
-        }
-        return 30; // Default
     },
 
     /**
@@ -610,15 +588,15 @@ const Gallery = {
         // Use ThumbnailLoader cache bust
         ThumbnailLoader.bustCache(imageId);
 
-        // Find and reload the thumbnail
+        // Remove the element so it gets re-fetched with the new thumbnail
         const item = this._els.grid.querySelector(`.gallery-item[data-id="${imageId}"]`);
         if (item) {
-            const img = item.querySelector('img');
-            if (img) {
-                // Re-request with cache bust
-                ThumbnailLoader.cancel(imageId, img);
-                ThumbnailLoader.request(imageId, img, 'visible');
-            }
+            // Remove from rendered items tracking
+            this._grid._state.renderedItems.delete(imageId);
+            item.remove();
+
+            // Trigger a refresh to re-request the thumbnail
+            this._grid.refresh();
         }
     },
 
@@ -670,19 +648,21 @@ const Gallery = {
     },
 
     /**
-     * Creates a thumbnail item element.
-     * @param {Object} img
+     * Creates a thumbnail item element with the thumbnail already loaded.
+     * @param {Object} img - Image data
+     * @param {string} blobUrl - Blob URL for the thumbnail
      * @returns {HTMLElement}
      * @private
      */
-    _createThumbnailItem(img) {
+    _createThumbnailItem(img, blobUrl) {
         const item = App.createElement('div', {
-            className: 'gallery-item',
+            className: 'gallery-item loaded',
             dataId: img.id
         });
 
-        // Thumbnail image - src will be set by ThumbnailLoader
+        // Thumbnail image with blob URL already set
         const thumb = App.createElement('img', {
+            src: blobUrl,
             alt: img.basename
         });
 
@@ -1135,7 +1115,6 @@ const Gallery = {
             try {
                 await App.apiDelete(`/images/${id}`);
                 this.state.images = this.state.images.filter(img => img.id !== id);
-                ThumbnailLoader.cancel(id);
             } catch (error) {
                 console.error(`Failed to delete image ${id}:`, error);
             }

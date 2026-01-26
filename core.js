@@ -118,6 +118,19 @@ const App = {
     _modules: {},
 
     /**
+     * Thumbnail loading configuration from backend.
+     * Loaded async on init; defaults used until loaded.
+     * @type {Object}
+     * @private
+     */
+    _thumbnailConfig: {
+        concurrentRequests: 6,
+        extraRows: 5,
+        timeoutMs: 10000,
+        scrollThrottleMs: 250
+    },
+
+    /**
      * Callbacks to run when App is ready.
      * @type {Array<Function>}
      * @private
@@ -796,6 +809,41 @@ const App = {
      */
     async apiDelete(endpoint) {
         return this.api(endpoint, { method: 'DELETE' });
+    },
+
+    /* ----------------------------------------------------------------------
+       Thumbnail Configuration
+       ---------------------------------------------------------------------- */
+
+    /**
+     * Gets the thumbnail loading configuration.
+     * Returns cached config (defaults until loadThumbnailConfig completes).
+     * @returns {Object} Thumbnail config with concurrentRequests, extraRows, timeoutMs, scrollThrottleMs
+     */
+    getThumbnailConfig() {
+        return this._thumbnailConfig;
+    },
+
+    /**
+     * Loads thumbnail configuration from the backend.
+     * Updates _thumbnailConfig with values from API.
+     * Called during init; safe to call multiple times.
+     * @returns {Promise<Object>} The loaded config
+     */
+    async loadThumbnailConfig() {
+        try {
+            const response = await this.apiGet('/config');
+            this._thumbnailConfig = {
+                concurrentRequests: response.thumbnail_concurrent_requests,
+                extraRows: response.thumbnail_extra_rows,
+                timeoutMs: response.thumbnail_timeout_ms,
+                scrollThrottleMs: response.thumbnail_scroll_throttle_ms
+            };
+            console.log('Thumbnail config loaded:', this._thumbnailConfig);
+        } catch (error) {
+            console.warn('Failed to load thumbnail config, using defaults:', error);
+        }
+        return this._thumbnailConfig;
     },
 
     /* ----------------------------------------------------------------------
@@ -1846,6 +1894,11 @@ const App = {
     _init() {
         // Load persisted state
         this._loadPersistedState();
+
+        // Load thumbnail config from backend (async, uses defaults until loaded)
+        if (!this.mockMode) {
+            this.loadThumbnailConfig();
+        }
 
         // Prime mock data so Gallery has a stable dataset from the outset.
         // Level 3 includes all lower levels in the current mock generator.

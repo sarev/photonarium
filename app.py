@@ -547,6 +547,29 @@ def get_status():
     return jsonify(status)
 
 
+@app.route('/api/config', methods=['GET'])
+def get_config():
+    """Get frontend configuration values.
+
+    Returns configuration values needed by the frontend, particularly
+    for thumbnail loading behaviour.
+
+    Returns:
+        JSON object with:
+            - thumbnail_concurrent_requests: Max concurrent fetches
+            - thumbnail_extra_rows: Buffer rows above/below viewport
+            - thumbnail_timeout_ms: Fetch timeout in milliseconds
+            - thumbnail_scroll_throttle_ms: Scroll throttle in milliseconds
+    """
+    config = get_db().config
+    return jsonify({
+        'thumbnail_concurrent_requests': config.thumbnail_concurrent_requests,
+        'thumbnail_extra_rows': config.thumbnail_extra_rows,
+        'thumbnail_timeout_ms': config.thumbnail_timeout_ms,
+        'thumbnail_scroll_throttle_ms': config.thumbnail_scroll_throttle_ms,
+    })
+
+
 @app.route('/api/rescan', methods=['POST'])
 def rescan_folders():
     """Trigger a rescan of all registered folders.
