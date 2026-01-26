@@ -100,12 +100,14 @@ Localhost-only.
 - [-] Consider adding confirmation tokens or referer checks as defense-in-depth
 
 ## Issue 3: Static file serving exposes working directory
-- [-] Review Flask static file configuration in `app.py`
-- [-] Test if sensitive files (`.imaginary.yml`, `imaginary.db`, `.thumbnails/`) are accessible via HTTP
-- [-] Restrict static serving to only necessary files (index.html, JS, CSS, favicon)
-- [-] Move or exclude sensitive files from static serving scope
+- [x] Review Flask static file configuration in `app.py`
+- [x] Test if sensitive files (`.imaginary.yml`, `imaginary.db`, `.thumbnails/`) are accessible via HTTP
+- [x] Restrict static serving to only necessary files (index.html, JS, CSS, favicon)
+- [x] Move or exclude sensitive files from static serving scope
 
 Can we just move `index.html`, `styles.css`, `*.png`, `*.js` into a 'static' folder and run with that?
+
+**Done:** Moved all frontend files to `static/` folder and updated Flask configuration.
 
 ## Issue 4: GUI folder picker on non-desktop environments
 - [ ] Review `/api/pick-folder` implementation for thread safety and cleanup

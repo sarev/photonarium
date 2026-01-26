@@ -46,7 +46,7 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-app = Flask(__name__, static_folder='.', static_url_path='')
+app = Flask(__name__, static_folder='static', static_url_path='')
 
 # CORS is not needed for localhost-only deployment since the frontend
 # is served from the same origin. If you need to run a separate frontend
@@ -174,7 +174,7 @@ def serve_index():
     Returns:
         The index.html file contents.
     """
-    return send_file('index.html')
+    return send_file('static/index.html')
 
 
 # =============================================================================
