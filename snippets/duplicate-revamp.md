@@ -141,3 +141,93 @@
   3. Batch operations - process all dirty images together, not one at a time
   4. Numpy vectorization for embedding similarity (orders of magnitude faster)
   5. Smarter threshold based on percentage, not absolute count
+
+---
+
+## Implementation Plan
+
+The duplicate detection code has been extracted into `duplicates.py` with a
+`DuplicateManager` class. The following phases build on that foundation.
+
+### Phase 1: In-Memory Group Cache
+
+Add `DuplicateGroupCache` to avoid repeated DB queries for group lookups.
+
+**Changes:**
+- Add `_groups` dict (level → group_hash → set of image_ids)
+- Add `_image_to_group` reverse index (level → image_id → group_hash)
+- Load on startup or lazily on first access
+- Invalidate entries when images are deleted/modified
+- Batch flush to DB (on idle or after N changes)
+
+**Files:** `duplicates.py`
+
+### Phase 2: Union-Find for Group Management
+
+Replace ad-hoc group merging with proper Union-Find data structure.
+
+**Changes:**
+- Add `UnionFind` class with path compression and union-by-rank
+- Load existing groups into Union-Find before processing dirty batch
+- Use `union()` for all matches, let data structure handle merges
+- Extract final groups with `extract_groups()` at the end
+
+**Files:** `duplicates.py`
+
+### Phase 3: Level 1 Multi-Index Hashing (LSH)
+
+Current level 1 already uses LSH bands. Improve with:
+
+**Changes:**
+- Tune band count based on threshold (currently threshold + 1)
+- Add metrics logging for comparison reduction percentage
+- Consider BK-tree as alternative for small datasets
+
+**Files:** `duplicates.py` (`_compute_duplicates_level1`)
+
+### Phase 4: Vectorized Embedding Similarity
+
+Improve levels 2-3 with better numpy operations.
+
+**Changes:**
+- Pre-normalize all embeddings once at load time (store normalized)
+- Use chunked matrix multiplication for memory efficiency (already done)
+- Add option for FAISS approximate NN for very large datasets (100k+)
+- Return sparse similarity results (only pairs above threshold)
+
+**Files:** `duplicates.py` (`_compute_embedding_duplicates_chunked`)
+
+### Phase 5: Percentage-Based Threshold
+
+Replace fixed dirty count threshold with percentage-based logic.
+
+**Changes:**
+- Add `incremental_threshold_percent` config option (default: 20%)
+- Compute: `use_incremental = dirty_count < (total_count * threshold_percent)`
+- Keep minimum absolute threshold to avoid full rebuild for tiny batches
+- Add "force rebuild" option for manual trigger
+
+**Files:** `duplicates.py`, `config.py`
+
+### Phase 6: Deletion/Modification Handling
+
+Clean up groups when images are removed or changed.
+
+**Changes:**
+- On delete: remove image from group, dissolve if singleton
+- On modify: remove from group, add to dirty set
+- Batch the cleanup (don't rebuild groups on every delete)
+- Add `invalidate_image(image_id)` method to DuplicateManager
+
+**Files:** `duplicates.py`, `imagedb.py` (delete_image hook)
+
+---
+
+### Priority Order
+
+1. **Phase 2 (Union-Find)** - Foundational, simplifies everything else
+2. **Phase 1 (Cache)** - Big performance win for repeated queries
+3. **Phase 5 (Threshold)** - Quick config change, immediate benefit
+4. **Phase 6 (Deletion)** - Important for correctness
+5. **Phase 4 (Embeddings)** - Already decent, optimize later
+6. **Phase 3 (LSH)** - Already working, tune if needed

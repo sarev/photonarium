@@ -3452,6 +3452,8 @@ class ImageDatabase:
         # Remove from checksum cache
         with self._checksum_cache_lock:
             self._checksum_cache.pop(image_id, None)
+        # Remove from duplicate group cache
+        self._duplicate_manager.invalidate_image(image_id)
         return result
 
     def rotate_images(

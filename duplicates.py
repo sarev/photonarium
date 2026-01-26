@@ -938,9 +938,17 @@ class DuplicateManager:
     - Computing duplicates at all 4 levels
     - Incremental updates for small batches
     - Status tracking per level
-    - Group retrieval
+    - Group retrieval with in-memory caching
 
-    Thread-safe: uses locks for status tracking and database operations.
+    Thread-safe: uses locks for status tracking, cache access, and database operations.
+
+    Cache Structure:
+        _group_cache[level][group_hash] = set of image_ids
+        _image_to_group[level][image_id] = group_hash
+
+    The cache is loaded lazily on first access and invalidated when:
+    - Images are deleted or modified (call invalidate_image())
+    - Duplicates are recomputed (automatic)
     """
 
     def __init__(self, db_path: str, config: Config | None = None):
@@ -955,11 +963,161 @@ class DuplicateManager:
         self._status_lock = threading.Lock()
         self._status: dict[int, str] = {0: 'pending', 1: 'pending', 2: 'pending', 3: 'pending'}
 
+        # In-memory group cache (lazy loaded)
+        self._cache_lock = threading.Lock()
+        self._group_cache: dict[int, dict[str, set[str]]] | None = None  # level -> group_hash -> image_ids
+        self._image_to_group: dict[int, dict[str, str]] | None = None    # level -> image_id -> group_hash
+        self._cache_loaded = False
+
     def _get_db(self) -> sqlite3.Connection:
         """Get a database connection."""
         conn = sqlite3.connect(self._db_path)
         conn.row_factory = sqlite3.Row
         return conn
+
+    # =========================================================================
+    # Group Cache
+    # =========================================================================
+
+    def _ensure_cache_loaded(self) -> None:
+        """Load the group cache if not already loaded.
+
+        Thread-safe: uses _cache_lock to prevent concurrent loading.
+        """
+        if self._cache_loaded:
+            return
+
+        with self._cache_lock:
+            # Double-check after acquiring lock
+            if self._cache_loaded:
+                return
+
+            logger.debug('Loading duplicate group cache from database')
+            self._group_cache = {0: {}, 1: {}, 2: {}, 3: {}}
+            self._image_to_group = {0: {}, 1: {}, 2: {}, 3: {}}
+
+            conn = self._get_db()
+            try:
+                for level in range(4):
+                    cursor = conn.execute("""
+                        SELECT dg.group_hash, dg.image_id
+                        FROM duplicate_groups dg
+                        JOIN images i ON i.id = dg.image_id
+                        WHERE dg.level = ? AND i.deleted = 0
+                    """, (level,))
+
+                    for row in cursor.fetchall():
+                        group_hash = row['group_hash']
+                        image_id = row['image_id']
+
+                        if group_hash not in self._group_cache[level]:
+                            self._group_cache[level][group_hash] = set()
+                        self._group_cache[level][group_hash].add(image_id)
+                        self._image_to_group[level][image_id] = group_hash
+
+                total_groups = sum(len(groups) for groups in self._group_cache.values())
+                total_images = sum(len(imgs) for imgs in self._image_to_group.values())
+                logger.debug(f'Loaded {total_groups} groups with {total_images} image mappings')
+
+            finally:
+                conn.close()
+
+            self._cache_loaded = True
+
+    def _invalidate_cache(self) -> None:
+        """Invalidate the entire cache, forcing reload on next access.
+
+        Called after duplicate computation completes.
+        """
+        with self._cache_lock:
+            self._group_cache = None
+            self._image_to_group = None
+            self._cache_loaded = False
+            logger.debug('Duplicate group cache invalidated')
+
+    def invalidate_image(self, image_id: str) -> None:
+        """Remove an image from the cache when it's deleted or modified.
+
+        This removes the image from its group at all levels. If the group
+        becomes a singleton (only one image), the group is dissolved.
+
+        Args:
+            image_id: ID of the image to remove from cache.
+        """
+        if not self._cache_loaded:
+            return  # Nothing to invalidate
+
+        with self._cache_lock:
+            if not self._cache_loaded:
+                return
+
+            for level in range(4):
+                if image_id in self._image_to_group[level]:
+                    group_hash = self._image_to_group[level].pop(image_id)
+
+                    if group_hash in self._group_cache[level]:
+                        self._group_cache[level][group_hash].discard(image_id)
+
+                        # Dissolve singleton groups (they're no longer duplicates)
+                        if len(self._group_cache[level][group_hash]) <= 1:
+                            # Remove remaining image from reverse index
+                            for remaining_id in self._group_cache[level][group_hash]:
+                                self._image_to_group[level].pop(remaining_id, None)
+                            del self._group_cache[level][group_hash]
+
+    def get_group_for_image(self, level: int, image_id: str) -> str | None:
+        """Get the group hash for an image at a specific level.
+
+        Args:
+            level: Duplicate level (0-3).
+            image_id: ID of the image.
+
+        Returns:
+            Group hash if the image is in a group, None otherwise.
+        """
+        self._ensure_cache_loaded()
+        with self._cache_lock:
+            return self._image_to_group[level].get(image_id)
+
+    def get_images_in_group(self, level: int, group_hash: str) -> set[str]:
+        """Get all image IDs in a group.
+
+        Args:
+            level: Duplicate level (0-3).
+            group_hash: The group identifier.
+
+        Returns:
+            Set of image IDs in the group (empty set if group not found).
+        """
+        self._ensure_cache_loaded()
+        with self._cache_lock:
+            return self._group_cache[level].get(group_hash, set()).copy()
+
+    def get_group_count(self, level: int) -> int:
+        """Get the number of groups at a level from cache.
+
+        Args:
+            level: Duplicate level (0-3).
+
+        Returns:
+            Number of duplicate groups at this level.
+        """
+        self._ensure_cache_loaded()
+        with self._cache_lock:
+            return len(self._group_cache[level])
+
+    def get_all_group_hashes(self, level: int) -> list[str]:
+        """Get all group hashes at a level.
+
+        Args:
+            level: Duplicate level (0-3).
+
+        Returns:
+            List of group hashes.
+        """
+        self._ensure_cache_loaded()
+        with self._cache_lock:
+            return list(self._group_cache[level].keys())
 
     # =========================================================================
     # Status
@@ -1001,10 +1159,76 @@ class DuplicateManager:
             conn.close()
 
     def get_groups_lightweight(self, level: int) -> list[dict[str, Any]]:
-        """Get duplicate groups with minimal data for efficient display."""
+        """Get duplicate groups with minimal data for efficient display.
+
+        Uses the in-memory cache for image_ids to avoid per-group DB queries.
+        Still queries DB for best_image selection (requires sorting by metadata).
+        """
+        self._ensure_cache_loaded()
+
         conn = self._get_db()
         try:
-            return _get_duplicate_groups_lightweight(conn, level)
+            # Query for best image per group (still needs DB for sorting)
+            cursor = conn.execute("""
+                WITH ranked AS (
+                    SELECT
+                        dg.group_hash,
+                        i.id,
+                        i.basename,
+                        i.width,
+                        i.height,
+                        i.size,
+                        i.laplacian_var,
+                        i.lossless,
+                        ROW_NUMBER() OVER (
+                            PARTITION BY dg.group_hash
+                            ORDER BY
+                                (i.width * i.height) DESC,
+                                i.lossless DESC,
+                                i.size DESC,
+                                i.laplacian_var DESC,
+                                i.id ASC
+                        ) as rank
+                    FROM duplicate_groups dg
+                    JOIN images i ON i.id = dg.image_id
+                    WHERE dg.level = ? AND i.deleted = 0
+                ),
+                group_counts AS (
+                    SELECT group_hash, COUNT(*) as cnt
+                    FROM ranked
+                    GROUP BY group_hash
+                    HAVING cnt > 1
+                )
+                SELECT
+                    r.group_hash,
+                    gc.cnt as count,
+                    r.id as best_id,
+                    r.basename as best_basename
+                FROM ranked r
+                JOIN group_counts gc ON r.group_hash = gc.group_hash
+                WHERE r.rank = 1
+                ORDER BY gc.cnt DESC
+            """, (level,))
+
+            groups = []
+            with self._cache_lock:
+                for row in cursor.fetchall():
+                    group_hash = row['group_hash']
+
+                    # Get image_ids from cache instead of DB query
+                    image_ids = list(self._group_cache[level].get(group_hash, set()))
+
+                    groups.append({
+                        'group_hash': group_hash,
+                        'count': row['count'],
+                        'image_ids': image_ids,
+                        'best_image': {
+                            'id': row['best_id'],
+                            'basename': row['best_basename'],
+                        },
+                    })
+
+            return groups
         finally:
             conn.close()
 
@@ -1133,6 +1357,9 @@ class DuplicateManager:
 
             # Update epoch
             _set_duplicate_epoch(conn, datetime.now().isoformat())
+
+            # Invalidate cache so it reloads with fresh data
+            self._invalidate_cache()
 
             total = sum(results.values())
             logger.info(f'Duplicate computation complete: {total} groups from {dirty_count} dirty images')
