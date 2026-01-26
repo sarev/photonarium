@@ -630,15 +630,11 @@ const Gallery = {
         ThumbnailLoader.bustCache(imageId);
 
         // Remove the element so it gets re-fetched with the new thumbnail
-        const item = this._els.grid.querySelector(`.gallery-item[data-id="${imageId}"]`);
-        if (item) {
-            // Remove from rendered items tracking
-            this._grid._state.renderedItems.delete(imageId);
-            item.remove();
+        // This also revokes the old blob URL to prevent memory leaks
+        this._grid.removeRenderedItem(imageId, true);
 
-            // Trigger a refresh to re-request the thumbnail
-            this._grid.refresh();
-        }
+        // Trigger a refresh to re-request the thumbnail
+        this._grid.refresh();
     },
 
     /* ----------------------------------------------------------------------

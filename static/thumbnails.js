@@ -402,7 +402,7 @@ const VirtualGrid = {
                 itemsPerRow: 0,
                 visibleRows: 0,
                 totalHeight: 0,
-                renderedItems: new Map(),  // id -> HTMLElement
+                renderedItems: new Map(),  // id -> {el: HTMLElement, blobUrl: string}
                 pendingItems: new Set(),   // ids with pending thumbnail requests
                 lastScrollProcess: 0       // Timestamp for scroll throttle
             },
@@ -481,7 +481,7 @@ const VirtualGrid = {
                 // If items per row changed, reposition all rendered items
                 if (oldItemsPerRow !== this._state.itemsPerRow) {
                     const items = this._config.getItems();
-                    for (const [id, el] of this._state.renderedItems) {
+                    for (const [id, {el}] of this._state.renderedItems) {
                         const index = items.findIndex(it => this._config.getItemId(it) === id);
                         if (index !== -1) {
                             this._positionElement(el, index);
@@ -655,10 +655,11 @@ const VirtualGrid = {
                     bufferIndices.add(i);
                 }
 
-                // Remove items outside buffer zone
-                for (const [id, el] of state.renderedItems) {
+                // Remove items outside buffer zone and revoke their blob URLs
+                for (const [id, {el, blobUrl}] of state.renderedItems) {
                     const index = items.findIndex(it => config.getItemId(it) === id);
                     if (index === -1 || !bufferIndices.has(index)) {
+                        URL.revokeObjectURL(blobUrl);
                         el.remove();
                         state.renderedItems.delete(id);
                     }
@@ -714,9 +715,9 @@ const VirtualGrid = {
                         // Position it absolutely
                         this._positionElement(el, currentIndex);
 
-                        // Add to container and track
+                        // Add to container and track (store blobUrl for cleanup)
                         this._innerContainer.appendChild(el);
-                        state.renderedItems.set(id, el);
+                        state.renderedItems.set(id, {el, blobUrl});
 
                         // Notify that item was created (for selection state sync)
                         if (config.onItemCreated) {
@@ -758,6 +759,11 @@ const VirtualGrid = {
             render() {
                 const container = this._config.container;
                 const items = this._config.getItems();
+
+                // Revoke all blob URLs before clearing
+                for (const [, {blobUrl}] of this._state.renderedItems) {
+                    URL.revokeObjectURL(blobUrl);
+                }
 
                 // Clear existing content and state
                 container.innerHTML = '';
@@ -862,7 +868,8 @@ const VirtualGrid = {
              * @returns {HTMLElement|null} Element or null if not rendered
              */
             getRenderedElement(id) {
-                return this._state.renderedItems.get(id) || null;
+                const item = this._state.renderedItems.get(id);
+                return item ? item.el : null;
             },
 
             /**
@@ -872,9 +879,9 @@ const VirtualGrid = {
              * @param {boolean} state - Add or remove
              */
             setItemClass(id, className, state) {
-                const el = this._state.renderedItems.get(id);
-                if (el) {
-                    el.classList.toggle(className, state);
+                const item = this._state.renderedItems.get(id);
+                if (item) {
+                    item.el.classList.toggle(className, state);
                 }
             },
 
@@ -908,10 +915,30 @@ const VirtualGrid = {
                     clearTimeout(this._trailingScrollTimeout);
                     this._trailingScrollTimeout = null;
                 }
+                // Revoke all blob URLs before clearing
+                for (const [, {blobUrl}] of this._state.renderedItems) {
+                    URL.revokeObjectURL(blobUrl);
+                }
                 this._state.renderedItems.clear();
                 this._state.pendingItems.clear();
                 this._config.container.innerHTML = '';
                 this._bound = false;
+            },
+
+            /**
+             * Removes a rendered item from tracking and revokes its blob URL.
+             * @param {string} id - Item ID
+             * @param {boolean} [removeFromDom=false] - Also remove element from DOM
+             */
+            removeRenderedItem(id, removeFromDom = false) {
+                const item = this._state.renderedItems.get(id);
+                if (item) {
+                    URL.revokeObjectURL(item.blobUrl);
+                    if (removeFromDom) {
+                        item.el.remove();
+                    }
+                    this._state.renderedItems.delete(id);
+                }
             }
         };
 

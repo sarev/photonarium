@@ -118,10 +118,12 @@ Can we just move `index.html`, `styles.css`, `*.png`, `*.js` into a 'static' fol
 **Done:** Made thread daemon, added timeout auto-close, added try/catch for headless failures.
 
 ## Issue 5: Blob URL memory leaks
-- [ ] Review VirtualGrid item removal code path
-- [ ] Trace lifecycle of blob URLs from creation to element removal
-- [ ] Add `URL.revokeObjectURL()` when items are removed from DOM
+- [x] Review VirtualGrid item removal code path
+- [x] Trace lifecycle of blob URLs from creation to element removal
+- [x] Add `URL.revokeObjectURL()` when items are removed from DOM
 - [ ] Test memory usage during extended scrolling session with browser dev tools
+
+**Done:** VirtualGrid now stores `{el, blobUrl}` and revokes URLs on removal, render(), and destroy().
 
 ## Issue 6: Similarity endpoint performance
 - [-] Review `/api/similar/<id>` implementation and response size
@@ -142,10 +144,12 @@ Can we just move `index.html`, `styles.css`, `*.png`, `*.js` into a 'static' fol
 - [ ] Re-test scroll smoothness after optimization
 
 ## Issue 9: Encapsulation leak in Gallery
-- [ ] Locate the `_grid._state.renderedItems` access in Gallery
-- [ ] Add a public method to VirtualGrid for removing rendered items
-- [ ] Update Gallery to use the new public API
+- [x] Locate the `_grid._state.renderedItems` access in Gallery
+- [x] Add a public method to VirtualGrid for removing rendered items
+- [x] Update Gallery to use the new public API
 - [ ] Review for any other direct `_state` accesses across modules
+
+**Done:** Added `removeRenderedItem(id, removeFromDom)` to VirtualGrid, updated Gallery to use it.
 
 ---
 
