@@ -151,9 +151,10 @@ data since items may change between callback invocations.
 - [x] Locate the `_grid._state.renderedItems` access in Gallery
 - [x] Add a public method to VirtualGrid for removing rendered items
 - [x] Update Gallery to use the new public API
-- [ ] Review for any other direct `_state` accesses across modules
+- [x] Review for any other direct `_state` accesses across modules
 
 **Done:** Added `removeRenderedItem(id, removeFromDom)` to VirtualGrid, updated Gallery to use it.
+Verified no other `_grid._` or `_state` accesses exist in gallery.js, duplicates.js, or other modules.
 
 ---
 
