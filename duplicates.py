@@ -1943,23 +1943,22 @@ class DuplicateManager:
             conn = self._get_db()
 
         try:
-            # Get dirty images
-            epoch = _get_duplicate_epoch(conn)
-            dirty_ids = _get_dirty_image_ids(conn, epoch)
+            # Get dirty images (or all images if force_full)
+            if force_full:
+                # Treat all images as dirty for full recomputation
+                cursor = conn.execute(
+                    'SELECT id FROM images WHERE deleted = 0'
+                )
+                dirty_ids = [row['id'] for row in cursor.fetchall()]
+                logger.info(f'Force full: treating all {len(dirty_ids)} images as dirty')
+            else:
+                epoch = _get_duplicate_epoch(conn)
+                dirty_ids = _get_dirty_image_ids(conn, epoch)
 
             if not dirty_ids:
-                existing_epoch = _get_duplicate_epoch(conn)
-                if existing_epoch:
-                    logger.info(
-                        'Skipping duplicate computation: no dirty images and '
-                        f'duplicates already computed (epoch: {existing_epoch})'
-                    )
-                    self._set_all_status('done')
-                    return {0: 0, 1: 0, 2: 0, 3: 0}
-                else:
-                    logger.info('No images to process for duplicates')
-                    self._set_all_status('done')
-                    return {0: 0, 1: 0, 2: 0, 3: 0}
+                logger.info('No images to process for duplicates')
+                self._set_all_status('done')
+                return {0: 0, 1: 0, 2: 0, 3: 0}
 
             dirty_count = len(dirty_ids)
 
@@ -1979,11 +1978,7 @@ class DuplicateManager:
             # Determine whether to use incremental
             use_incremental = not force_full and dirty_count <= effective_threshold
 
-            if force_full:
-                logger.info(
-                    f'Force full recomputation requested ({dirty_count} dirty images)'
-                )
-            elif use_incremental:
+            if use_incremental:
                 logger.info(
                     f'Processing {dirty_count} dirty images incrementally '
                     f'(threshold: {effective_threshold}, {dirty_count}/{total_count} = '
