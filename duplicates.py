@@ -528,14 +528,169 @@ def _compute_duplicates_level0_incremental(
 # LEVEL 1: NEAR-IDENTICAL DUPLICATES (PERCEPTUAL HASH)
 # =============================================================================
 
+# Threshold below which brute-force is faster than building LSH index
+_LSH_MIN_IMAGES = 200
+
+
+def _hamming_distance_fast(hash1: int, hash2: int) -> int:
+    """Compute Hamming distance between two integer hashes.
+
+    Uses int.bit_count() which is optimized in CPython 3.10+.
+    Falls back to bin().count('1') for compatibility.
+    """
+    xor = hash1 ^ hash2
+    # int.bit_count() is faster in Python 3.10+
+    if hasattr(xor, 'bit_count'):
+        return xor.bit_count()
+    return bin(xor).count('1')
+
+
+def _compute_level1_brute_force(
+    image_data: list[tuple[str, int]],
+    threshold: int,
+) -> tuple[UnionFind, int, int]:
+    """Brute-force O(n²) comparison for small datasets.
+
+    For small n, the overhead of building LSH index exceeds the cost of
+    direct comparison. Returns UnionFind with clusters and match stats.
+    """
+    n = len(image_data)
+    uf = UnionFind(n=n)
+    comparisons = 0
+    matches = 0
+
+    for i in range(n):
+        hash1 = image_data[i][1]
+        for j in range(i + 1, n):
+            hash2 = image_data[j][1]
+            dist = _hamming_distance_fast(hash1, hash2)
+            comparisons += 1
+            if dist <= threshold:
+                uf.union(i, j)
+                matches += 1
+
+    return uf, comparisons, matches
+
+
+def _compute_level1_lsh(
+    image_data: list[tuple[str, int]],
+    threshold: int,
+) -> tuple[UnionFind, int, int, dict[str, Any]]:
+    """Multi-index hashing (LSH) for large datasets.
+
+    Splits 64-bit perceptual hashes into bands. By pigeonhole principle,
+    if two hashes differ by at most `threshold` bits and we use
+    `threshold + 1` bands, at least one band must be identical.
+
+    This guarantees no false negatives while dramatically reducing
+    the number of comparisons needed.
+
+    Band count formula:
+    - num_bands = threshold + 1 (pigeonhole guarantee)
+    - bits_per_band = 64 // num_bands
+
+    For threshold=4: 5 bands of ~12 bits each
+    For threshold=8: 9 bands of ~7 bits each
+
+    Returns:
+        Tuple of (UnionFind, comparisons, matches, metrics_dict)
+    """
+    n = len(image_data)
+
+    # Band configuration based on pigeonhole principle
+    num_bands = threshold + 1
+    bits_per_band = 64 // num_bands
+    leftover_bits = 64 - (bits_per_band * num_bands)
+
+    # Build inverted index: band_value -> list of image indices
+    band_indices: list[dict[int, list[int]]] = [{} for _ in range(num_bands)]
+
+    for idx, (img_id, hash_int) in enumerate(image_data):
+        for band in range(num_bands):
+            shift = band * bits_per_band
+            if band == num_bands - 1:
+                # Last band gets any leftover bits
+                band_value = hash_int >> shift
+            else:
+                mask = (1 << bits_per_band) - 1
+                band_value = (hash_int >> shift) & mask
+
+            if band_value not in band_indices[band]:
+                band_indices[band][band_value] = []
+            band_indices[band][band_value].append(idx)
+
+    # Compute bucket statistics for metrics
+    total_buckets = sum(len(band) for band in band_indices)
+    non_singleton_buckets = sum(
+        1 for band in band_indices
+        for bucket in band.values()
+        if len(bucket) > 1
+    )
+    max_bucket_size = max(
+        (len(bucket) for band in band_indices for bucket in band.values()),
+        default=0
+    )
+
+    # Union-find for clustering
+    uf = UnionFind(n=n)
+
+    # Compare only candidate pairs that share at least one band
+    compared: set[tuple[int, int]] = set()
+    comparisons = 0
+    matches = 0
+
+    for band in range(num_bands):
+        for bucket in band_indices[band].values():
+            if len(bucket) < 2:
+                continue
+            for i in range(len(bucket)):
+                for j in range(i + 1, len(bucket)):
+                    idx1, idx2 = bucket[i], bucket[j]
+                    if idx1 > idx2:
+                        idx1, idx2 = idx2, idx1
+                    pair = (idx1, idx2)
+                    if pair in compared:
+                        continue
+                    compared.add(pair)
+
+                    hash1 = image_data[idx1][1]
+                    hash2 = image_data[idx2][1]
+                    dist = _hamming_distance_fast(hash1, hash2)
+                    comparisons += 1
+
+                    if dist <= threshold:
+                        uf.union(idx1, idx2)
+                        matches += 1
+
+    metrics = {
+        'num_bands': num_bands,
+        'bits_per_band': bits_per_band,
+        'total_buckets': total_buckets,
+        'non_singleton_buckets': non_singleton_buckets,
+        'max_bucket_size': max_bucket_size,
+        'candidate_pairs': len(compared),
+    }
+
+    return uf, comparisons, matches, metrics
+
+
 def _compute_duplicates_level1(conn: sqlite3.Connection, threshold: int = 4) -> int:
     """Compute level 1 duplicates (perceptual hash similarity).
 
     Groups images with perceptual hash Hamming distance <= threshold.
 
-    Uses multi-index hashing (locality-sensitive hashing) to avoid O(n²)
-    comparisons. By splitting each hash into bands, we only compare images
-    that share at least one band.
+    Algorithm selection:
+    - For small datasets (< 200 images): brute-force O(n²) comparison
+    - For larger datasets: multi-index hashing (LSH) for ~90% reduction
+
+    The LSH approach splits 64-bit hashes into bands. By pigeonhole
+    principle, if two hashes differ by at most `threshold` bits and we
+    use `threshold + 1` bands, at least one band must be identical.
+    This guarantees no false negatives.
+
+    Args:
+        conn: Database connection.
+        threshold: Maximum Hamming distance for near-identical matches.
 
     Returns:
         Number of duplicate groups found.
@@ -556,74 +711,48 @@ def _compute_duplicates_level1(conn: sqlite3.Connection, threshold: int = 4) -> 
         return 0
 
     # Convert hashes to integers for fast comparison
-    image_data = []
+    image_data: list[tuple[str, int]] = []
+    invalid_hashes = 0
     for row in images:
         try:
             hash_int = int(row['perceptual_hash'], 16)
             image_data.append((row['id'], hash_int))
         except ValueError:
+            invalid_hashes += 1
             continue
+
+    if invalid_hashes > 0:
+        logger.warning(f'Skipped {invalid_hashes} images with invalid perceptual hashes')
 
     if len(image_data) < 2:
         return 0
 
     n = len(image_data)
-    logger.info(f'Processing {n} images with multi-index hashing')
+    brute_force_total = n * (n - 1) // 2
 
-    # Multi-index hashing: split 64-bit hash into bands
-    num_bands = threshold + 1
-    bits_per_band = 64 // num_bands
+    # Choose algorithm based on dataset size
+    if n < _LSH_MIN_IMAGES:
+        logger.info(f'Processing {n} images with brute-force (small dataset)')
+        uf, comparisons, matches = _compute_level1_brute_force(image_data, threshold)
+        logger.info(f'  Completed: {comparisons:,} comparisons, {matches:,} matches')
+    else:
+        logger.info(f'Processing {n} images with multi-index hashing (LSH)')
+        uf, comparisons, matches, metrics = _compute_level1_lsh(image_data, threshold)
 
-    # Build inverted index: band_value -> list of image indices
-    band_indices: list[dict[int, list[int]]] = [{} for _ in range(num_bands)]
-
-    for idx, (img_id, hash_int) in enumerate(image_data):
-        for band in range(num_bands):
-            shift = band * bits_per_band
-            if band == num_bands - 1:
-                band_value = hash_int >> shift
-            else:
-                mask = (1 << bits_per_band) - 1
-                band_value = (hash_int >> shift) & mask
-
-            if band_value not in band_indices[band]:
-                band_indices[band][band_value] = []
-            band_indices[band][band_value].append(idx)
-
-    # Union-find for clustering
-    uf = UnionFind(n=n)
-
-    # Compare only candidate pairs that share at least one band
-    compared = set()
-    comparisons = 0
-    matches = 0
-
-    for band in range(num_bands):
-        for bucket in band_indices[band].values():
-            if len(bucket) < 2:
-                continue
-            for i in range(len(bucket)):
-                for j in range(i + 1, len(bucket)):
-                    idx1, idx2 = bucket[i], bucket[j]
-                    if idx1 > idx2:
-                        idx1, idx2 = idx2, idx1
-                    pair = (idx1, idx2)
-                    if pair in compared:
-                        continue
-                    compared.add(pair)
-
-                    hash1 = image_data[idx1][1]
-                    hash2 = image_data[idx2][1]
-                    dist = bin(hash1 ^ hash2).count('1')
-                    comparisons += 1
-
-                    if dist <= threshold:
-                        uf.union(idx1, idx2)
-                        matches += 1
-
-    brute_force = n * (n - 1) // 2
-    reduction = (1 - comparisons / brute_force) * 100 if brute_force > 0 else 0
-    logger.info(f'  Completed: {comparisons:,} comparisons ({reduction:.1f}% reduction from brute force)')
+        reduction = (1 - comparisons / brute_force_total) * 100 if brute_force_total > 0 else 0
+        logger.info(
+            f'  LSH config: {metrics["num_bands"]} bands × {metrics["bits_per_band"]} bits, '
+            f'{metrics["candidate_pairs"]:,} candidate pairs'
+        )
+        logger.info(
+            f'  Completed: {comparisons:,} comparisons ({reduction:.1f}% reduction), '
+            f'{matches:,} matches'
+        )
+        if metrics['max_bucket_size'] > 100:
+            logger.debug(
+                f'  Bucket stats: {metrics["non_singleton_buckets"]} non-singleton buckets, '
+                f'max size {metrics["max_bucket_size"]}'
+            )
 
     # Build groups from union-find
     all_groups = uf.extract_groups()
