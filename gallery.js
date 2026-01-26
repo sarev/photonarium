@@ -135,7 +135,11 @@ const Gallery = {
             infoContent: App.$('info-content'),
             similarityControl: App.$('gallery-similarity-control'),
             similaritySlider: App.$('gallery-similarity-slider'),
-            similarityValue: App.$('gallery-similarity-value')
+            similarityValue: App.$('gallery-similarity-value'),
+            // Duplicate group navigation
+            btnPrevGroup: App.$('btn-prev-group'),
+            btnNextGroup: App.$('btn-next-group'),
+            dupGroupNavSeparator: document.querySelector('.dup-group-nav-separator')
         };
 
         // Create scroll indicator overlay
@@ -178,6 +182,9 @@ const Gallery = {
         // Set up similarity slider handler
         this._initSimilaritySlider();
 
+        // Set up duplicate group navigation
+        this._initDupGroupNav();
+
         // Subscribe to app events
         App.on('thumbnailSizeChanged', () => this._onThumbnailSizeChanged());
         App.on('sortChanged', () => this._onSortChanged());
@@ -201,6 +208,8 @@ const Gallery = {
         this._selection.bind();
         // Start background refresh while database is updating
         this._startBackgroundRefresh();
+        // Update duplicate group nav button state
+        this._updateDupGroupNavState();
     },
 
     /**
@@ -541,6 +550,9 @@ const Gallery = {
                 this._els.similarityValue.textContent = pct + '%';
             }
         }
+
+        // Update duplicate group navigation button state
+        this._updateDupGroupNavState();
 
         if (isSemanticFilter) {
             App.setSortBy('content');
@@ -1122,6 +1134,99 @@ const Gallery = {
 
         App.clearSelection();
         this._renderGrid();
+    },
+
+    /* ----------------------------------------------------------------------
+       DUPLICATE GROUP NAVIGATION
+       ---------------------------------------------------------------------- */
+
+    /**
+     * Initialises duplicate group navigation controls.
+     * @private
+     */
+    _initDupGroupNav() {
+        // Button click handlers
+        if (this._els.btnPrevGroup) {
+            this._els.btnPrevGroup.addEventListener('click', () => this._navigateDupGroup(-1));
+        }
+        if (this._els.btnNextGroup) {
+            this._els.btnNextGroup.addEventListener('click', () => this._navigateDupGroup(1));
+        }
+
+        // Keyboard shortcuts: Alt+Left/Right for prev/next group
+        this._dupGroupKeyHandler = (e) => {
+            if (!e.altKey) return;
+            if (App.getScreen() !== 'gallery') return;
+
+            const filter = App.getFilter();
+            if (!filter || filter.type !== 'duplicates' || !filter.groupHash) return;
+
+            if (e.key === 'ArrowLeft') {
+                e.preventDefault();
+                this._navigateDupGroup(-1);
+            } else if (e.key === 'ArrowRight') {
+                e.preventDefault();
+                this._navigateDupGroup(1);
+            }
+        };
+        document.addEventListener('keydown', this._dupGroupKeyHandler);
+    },
+
+    /**
+     * Updates the visibility and enabled state of duplicate group nav buttons.
+     * Called when filter changes.
+     * @private
+     */
+    _updateDupGroupNavState() {
+        const filter = App.getFilter();
+        const isDupFilter = filter && filter.type === 'duplicates' && filter.groupHash;
+
+        // Show/hide buttons and separator
+        const show = isDupFilter;
+        if (this._els.btnPrevGroup) {
+            this._els.btnPrevGroup.hidden = !show;
+            this._els.btnPrevGroup.disabled = !show;
+        }
+        if (this._els.btnNextGroup) {
+            this._els.btnNextGroup.hidden = !show;
+            this._els.btnNextGroup.disabled = !show;
+        }
+        if (this._els.dupGroupNavSeparator) {
+            this._els.dupGroupNavSeparator.hidden = !show;
+        }
+    },
+
+    /**
+     * Navigates to the previous or next duplicate group.
+     * @param {number} direction - -1 for previous, +1 for next
+     * @private
+     */
+    _navigateDupGroup(direction) {
+        const filter = App.getFilter();
+        if (!filter || filter.type !== 'duplicates' || !filter.groupHash) return;
+
+        // Get groups from Duplicates module
+        const groups = typeof Duplicates !== 'undefined' ? Duplicates.getGroups() : [];
+        if (groups.length === 0) return;
+
+        // Find current group index
+        const currentHash = filter.groupHash;
+        const currentIndex = groups.findIndex(g => g.group_hash === currentHash);
+        if (currentIndex === -1) return;
+
+        // Calculate new index with wrapping
+        let newIndex = currentIndex + direction;
+        if (newIndex < 0) {
+            newIndex = groups.length - 1; // Wrap to last
+        } else if (newIndex >= groups.length) {
+            newIndex = 0; // Wrap to first
+        }
+
+        // Navigate to new group
+        const newGroup = groups[newIndex];
+        if (newGroup && typeof Duplicates !== 'undefined') {
+            Duplicates.navigateToGroup(newGroup.group_hash);
+        }
     }
 };
 

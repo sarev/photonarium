@@ -757,29 +757,59 @@ Duplicates._createStackElement = function(group, index, blobUrl) {
  * @private
  */
 Duplicates._openGroupInGallery = function(hash) {
-    const group = this.state.groups.find(g => g.group_hash === hash);
-    if (!group?.image_ids?.length) return;
-
     // Save scroll position before leaving
     this.state.scrollTop = this._els.grid.scrollTop;
 
-    const imageIds = group.image_ids;
-    if (imageIds.length === 0) return;
+    // Use shared navigation logic
+    if (this.navigateToGroup(hash)) {
+        App.showGallery();
+    }
+};
 
+/**
+ * Gets the current list of duplicate groups (after filtering).
+ * Used by Gallery for prev/next group navigation.
+ * @returns {Array<Object>} Array of duplicate groups
+ */
+Duplicates.getGroups = function() {
+    return this.state.groups;
+};
+
+/**
+ * Gets the current similarity level.
+ * @returns {number} Current similarity level (0-3)
+ */
+Duplicates.getCurrentLevel = function() {
+    return this.state.currentLevel;
+};
+
+/**
+ * Navigates to a duplicate group by hash.
+ * Sets up the filter to show only that group's images and selects the best image.
+ * Used by both _openGroupInGallery and Gallery's prev/next navigation.
+ * @param {string} hash - The group hash to navigate to
+ * @returns {boolean} True if navigation successful
+ */
+Duplicates.navigateToGroup = function(hash) {
+    const group = this.state.groups.find(g => g.group_hash === hash);
+    if (!group?.image_ids?.length) return false;
+
+    const imageIds = group.image_ids;
     const bestId = group.best_image?.id;
     const selection = bestId ? [bestId] : [imageIds[0]];
 
-    // Set a gallery filter to show only this group's images
+    // Set filter to show only this group's images
     App.setFilter({
         type: 'duplicates',
         imageIds,
+        groupHash: hash,
         sourceLevel: this.state.currentLevel
     });
 
-    // Pre-select the best image for convenience
+    // Pre-select the best image
     App.setSelectedImages(selection);
 
-    App.showGallery();
+    return true;
 };
 
 // Register module with App
