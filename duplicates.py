@@ -1458,17 +1458,25 @@ class DuplicateManager:
             self._cache_loaded = False
             logger.debug('Duplicate group cache invalidated')
 
-    def invalidate_image(self, image_id: str) -> None:
-        """Remove an image from the cache when it's deleted or modified.
+    def invalidate_image(self, image_id: str, update_db: bool = True) -> None:
+        """Remove an image from duplicate groups when it's deleted or modified.
 
-        This removes the image from its group at all levels. If the group
-        becomes a singleton (only one image), the group is dissolved.
+        This removes the image from its group at all levels in both the cache
+        and the database. If a group becomes a singleton (only one image),
+        the group is dissolved since it's no longer a "duplicate" group.
 
         Args:
-            image_id: ID of the image to remove from cache.
+            image_id: ID of the image to remove.
+            update_db: If True, also update the database. Set to False if
+                the image is already being deleted from the database.
         """
+        # Update database first
+        if update_db:
+            self._remove_image_from_db_groups(image_id)
+
+        # Update cache if loaded
         if not self._cache_loaded:
-            return  # Nothing to invalidate
+            return
 
         with self._cache_lock:
             if not self._cache_loaded:
@@ -1487,6 +1495,146 @@ class DuplicateManager:
                             for remaining_id in self._group_cache[level][group_hash]:
                                 self._image_to_group[level].pop(remaining_id, None)
                             del self._group_cache[level][group_hash]
+
+    def _remove_image_from_db_groups(self, image_id: str) -> None:
+        """Remove an image from all duplicate groups in the database.
+
+        Also cleans up singleton groups that result from the removal.
+
+        Args:
+            image_id: ID of the image to remove.
+        """
+        conn = self._get_db()
+        try:
+            # Get all groups this image belongs to (before removing)
+            cursor = conn.execute(
+                'SELECT level, group_hash FROM duplicate_groups WHERE image_id = ?',
+                (image_id,)
+            )
+            affected_groups = [(row['level'], row['group_hash']) for row in cursor.fetchall()]
+
+            if not affected_groups:
+                return
+
+            # Remove the image from all groups
+            conn.execute(
+                'DELETE FROM duplicate_groups WHERE image_id = ?',
+                (image_id,)
+            )
+
+            # Check each affected group for singleton status
+            for level, group_hash in affected_groups:
+                cursor = conn.execute(
+                    'SELECT COUNT(*) as cnt FROM duplicate_groups WHERE level = ? AND group_hash = ?',
+                    (level, group_hash)
+                )
+                count = cursor.fetchone()['cnt']
+
+                # If only 1 member left, dissolve the group (no longer a duplicate)
+                if count <= 1:
+                    conn.execute(
+                        'DELETE FROM duplicate_groups WHERE level = ? AND group_hash = ?',
+                        (level, group_hash)
+                    )
+                    logger.debug(f'Dissolved singleton group {group_hash} at level {level}')
+
+            conn.commit()
+            logger.debug(f'Removed image {image_id} from {len(affected_groups)} duplicate groups')
+
+        finally:
+            conn.close()
+
+    def invalidate_images(self, image_ids: list[str]) -> int:
+        """Remove multiple images from duplicate groups (batch operation).
+
+        More efficient than calling invalidate_image() repeatedly for bulk
+        deletions. Updates both the database and cache.
+
+        Args:
+            image_ids: List of image IDs to remove.
+
+        Returns:
+            Number of images that were in at least one group.
+        """
+        if not image_ids:
+            return 0
+
+        conn = self._get_db()
+        affected_count = 0
+
+        try:
+            # Get all affected groups before removing
+            placeholders = ','.join('?' * len(image_ids))
+            cursor = conn.execute(
+                f'SELECT DISTINCT level, group_hash FROM duplicate_groups WHERE image_id IN ({placeholders})',
+                image_ids
+            )
+            affected_groups = [(row['level'], row['group_hash']) for row in cursor.fetchall()]
+
+            if not affected_groups:
+                return 0
+
+            # Count how many images were actually in groups
+            cursor = conn.execute(
+                f'SELECT COUNT(DISTINCT image_id) as cnt FROM duplicate_groups WHERE image_id IN ({placeholders})',
+                image_ids
+            )
+            affected_count = cursor.fetchone()['cnt']
+
+            # Remove all images from groups in one query
+            conn.execute(
+                f'DELETE FROM duplicate_groups WHERE image_id IN ({placeholders})',
+                image_ids
+            )
+
+            # Check each affected group for singleton status
+            dissolved_count = 0
+            for level, group_hash in affected_groups:
+                cursor = conn.execute(
+                    'SELECT COUNT(*) as cnt FROM duplicate_groups WHERE level = ? AND group_hash = ?',
+                    (level, group_hash)
+                )
+                count = cursor.fetchone()['cnt']
+
+                if count <= 1:
+                    conn.execute(
+                        'DELETE FROM duplicate_groups WHERE level = ? AND group_hash = ?',
+                        (level, group_hash)
+                    )
+                    dissolved_count += 1
+
+            conn.commit()
+
+            if dissolved_count > 0:
+                logger.debug(f'Dissolved {dissolved_count} singleton groups')
+            logger.info(f'Removed {affected_count} images from duplicate groups')
+
+        finally:
+            conn.close()
+
+        # Update cache if loaded
+        def remove_from_cache(img_id: str) -> None:
+            """Remove a single image from cache, dissolving singleton groups."""
+            for level in range(4):
+                if img_id not in self._image_to_group[level]:
+                    continue
+                group_hash = self._image_to_group[level].pop(img_id)
+                if group_hash not in self._group_cache[level]:
+                    continue
+                self._group_cache[level][group_hash].discard(img_id)
+                # Dissolve singleton groups
+                if len(self._group_cache[level][group_hash]) <= 1:
+                    for remaining_id in self._group_cache[level][group_hash]:
+                        self._image_to_group[level].pop(remaining_id, None)
+                    del self._group_cache[level][group_hash]
+
+        if self._cache_loaded:
+            with self._cache_lock:
+                if self._cache_loaded:
+                    for image_id in image_ids:
+                        remove_from_cache(image_id)
+
+        return affected_count
 
     def get_group_for_image(self, level: int, image_id: str) -> str | None:
         """Get the group hash for an image at a specific level.

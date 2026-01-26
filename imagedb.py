@@ -3338,13 +3338,55 @@ class ImageDatabase:
         try:
             # Clear ingestion queue of paths from this folder
             self._clear_folder_from_queue(path)
+
+            # Get image IDs that will be orphaned (for duplicate cleanup)
+            orphaned_ids = self._get_orphaned_image_ids(path)
+
             with self._db_lock:
                 result = remove_folder(self.conn, path)
+
             if result:
+                # Clean up duplicate groups for orphaned images
+                if orphaned_ids:
+                    self._duplicate_manager.invalidate_images(orphaned_ids)
                 emit_folder_removed(self.event_queue, path)
+
             return result
         finally:
             self._pause_event.clear()
+
+    def _get_orphaned_image_ids(self, folder_path: str) -> list[str]:
+        """Get IDs of images that will be orphaned when a folder is removed.
+
+        An image is orphaned if it's within the folder being removed and not
+        within any other registered folder.
+        """
+        folder = canonicalise_path(folder_path)
+        folder_str = str(folder)
+
+        # Get all remaining folders (excluding the one being removed)
+        cursor = self.conn.execute(
+            'SELECT path FROM folders WHERE path != ?',
+            (folder_str,)
+        )
+        remaining_folders = [row['path'] for row in cursor.fetchall()]
+
+        # Find images in this folder that won't be covered by remaining folders
+        if remaining_folders:
+            # Images that start with this folder but don't start with any remaining folder
+            placeholders = ' AND '.join(['path NOT LIKE ? || \'%\''] * len(remaining_folders))
+            cursor = self.conn.execute(
+                f'SELECT id FROM images WHERE path LIKE ? || \'%\' AND deleted = 0 AND {placeholders}',
+                [folder_str] + remaining_folders
+            )
+        else:
+            # No other folders, all images in this folder will be orphaned
+            cursor = self.conn.execute(
+                'SELECT id FROM images WHERE path LIKE ? || \'%\' AND deleted = 0',
+                (folder_str + '%',)
+            )
+
+        return [row['id'] for row in cursor.fetchall()]
 
     def _clear_folder_from_queue(self, folder_path: str) -> None:
         """Remove paths from ingestion queue that are within a folder."""
