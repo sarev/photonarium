@@ -1241,6 +1241,39 @@ const App = {
     },
 
     /**
+     * Initialises global keyboard shortcuts for navigation.
+     * @private
+     */
+    _initGlobalKeyboardShortcuts() {
+        document.addEventListener('keydown', (e) => {
+            // Ignore if typing in an input field
+            if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA') return;
+
+            // Ignore if no modifier key (we only handle Ctrl/Cmd shortcuts here)
+            if (!e.ctrlKey && !e.metaKey) return;
+
+            switch (e.key.toLowerCase()) {
+                case 'g':
+                    e.preventDefault();
+                    this.showGallery();
+                    break;
+                case 'm':
+                    e.preventDefault();
+                    this.showDatabase();
+                    break;
+                case 'd':
+                    e.preventDefault();
+                    this.showDuplicates();
+                    break;
+                case 'f':
+                    e.preventDefault();
+                    this.showSearch();
+                    break;
+            }
+        });
+    },
+
+    /**
      * Binds a click handler to a button by ID.
      * @param {string} id - Button element ID
      * @param {Function} handler - Click handler
@@ -1911,6 +1944,9 @@ const App = {
 
         // Initialise toolbar
         this._initToolbar();
+
+        // Initialise global keyboard shortcuts
+        this._initGlobalKeyboardShortcuts();
 
         // Update initial toolbar states
         this._updateThemeButton();

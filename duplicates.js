@@ -266,6 +266,15 @@ const Duplicates = {
                 this._grid.scrollToId(this.state.selectedGroups[0], 'instant');
             }
         }
+
+        // Bind Escape key to return to gallery
+        this._escapeHandler = (e) => {
+            if (e.key === 'Escape') {
+                e.preventDefault();
+                App.showGallery();
+            }
+        };
+        document.addEventListener('keydown', this._escapeHandler);
     },
 
     /**
@@ -276,6 +285,12 @@ const Duplicates = {
         this.state.scrollTop = this._els.grid.scrollTop;
         this._grid.unbind();
         this._selection.unbind();
+
+        // Remove Escape key handler
+        if (this._escapeHandler) {
+            document.removeEventListener('keydown', this._escapeHandler);
+            this._escapeHandler = null;
+        }
     },
 
     /**

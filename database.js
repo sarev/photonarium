@@ -120,6 +120,15 @@ const Database = {
     onEnter() {
         this._refresh();
         this._startPolling();
+
+        // Bind Escape key to return to gallery
+        this._escapeHandler = (e) => {
+            if (e.key === 'Escape') {
+                e.preventDefault();
+                App.showGallery();
+            }
+        };
+        document.addEventListener('keydown', this._escapeHandler);
     },
 
     /**
@@ -127,6 +136,12 @@ const Database = {
      */
     onLeave() {
         this._stopPolling();
+
+        // Remove Escape key handler
+        if (this._escapeHandler) {
+            document.removeEventListener('keydown', this._escapeHandler);
+            this._escapeHandler = null;
+        }
     },
 
     /**

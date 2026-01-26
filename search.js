@@ -103,13 +103,26 @@ const Search = {
         this._populateForm();
         // Focus the text input for quick typing
         this._els.textInput.focus();
+
+        // Bind Escape key to return to gallery
+        this._escapeHandler = (e) => {
+            if (e.key === 'Escape') {
+                e.preventDefault();
+                App.showGallery();
+            }
+        };
+        document.addEventListener('keydown', this._escapeHandler);
     },
 
     /**
      * Called when leaving the search screen.
      */
     onLeave() {
-        // Nothing to clean up
+        // Remove Escape key handler
+        if (this._escapeHandler) {
+            document.removeEventListener('keydown', this._escapeHandler);
+            this._escapeHandler = null;
+        }
     },
 
     /**
