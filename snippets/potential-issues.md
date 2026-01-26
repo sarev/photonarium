@@ -132,16 +132,20 @@ Can we just move `index.html`, `styles.css`, `*.png`, `*.js` into a 'static' fol
 - [-] Consider caching similarity results
 
 ## Issue 7: On-demand thumbnail generation abuse
-- [ ] Review thumbnail generation code path
-- [ ] Confirm thumbnails are pre-generated during indexing (as per CLAUDE.md)
-- [ ] Test what happens when requesting non-existent thumbnail
-- [ ] Consider rate limiting or queue-based generation
+- [-] Review thumbnail generation code path
+- [-] Confirm thumbnails are pre-generated during indexing (as per CLAUDE.md)
+- [-] Test what happens when requesting non-existent thumbnail
+- [-] Consider rate limiting or queue-based generation
 
 ## Issue 8: O(n²) findIndex in VirtualGrid
 - [-] Profile scroll performance with large datasets (1000+ visible items)
-- [ ] Identify the specific `findIndex` calls in `_updateVisibleItems`
-- [ ] If problematic, implement id-to-index Map built once per render cycle
+- [x] Identify the specific `findIndex` calls in `_updateVisibleItems`
+- [x] If problematic, implement id-to-index Map built once per render cycle
 - [ ] Re-test scroll smoothness after optimization
+
+**Done:** Added `idToIndex` Map in `_updateVisibleItems` and `_onResize`. One findIndex remains
+in the async thumbnail callback, but that's a single lookup (not in a loop) and needs fresh
+data since items may change between callback invocations.
 
 ## Issue 9: Encapsulation leak in Gallery
 - [x] Locate the `_grid._state.renderedItems` access in Gallery
@@ -274,53 +278,6 @@ This only handles the case where the fetch completes AFTER the item has scrolled
 3. Also revoke in `_onImageRotated` when removing the old element for the same reason.
 
 **Testing:** Use Chrome DevTools Memory tab to profile. Navigate gallery, scroll through many thumbnails, take heap snapshot. The "Blob" or "ArrayBuffer" retained size will show unreleased blob data.
-
----
-
-## Issue 7 Findings: On-Demand Thumbnail Generation
-
-**Code Location:** `app.py:298-346` (get_thumbnail endpoint)
-
-**Thumbnail Generation Path:**
-```python
-if not thumbnail_path.exists():
-    info = db.get_image_thumbnail_info(image_id)
-    if info is None:
-        abort(404)
-    _, source_path = info
-    if not generate_thumbnail(source_path, thumbnail_path, size, db.config.thumbnail_quality):
-        abort(404)
-```
-
-**Findings:**
-
-1. **Pre-generation:** According to CLAUDE.md, thumbnails ARE pre-generated during image indexing in `_process_image()`. Both 200px and 400px sizes are created immediately when an image is indexed.
-
-2. **On-demand as Fallback:** If thumbnails are missing (e.g., `.thumbnails/` deleted, or an edge case during initial indexing), they're generated on request.
-
-3. **No Rate Limiting:** A client can request many thumbnails rapidly. Each missing thumbnail triggers:
-   - Database query for source path
-   - Reading the source image from disk
-   - Image resizing and JPEG encoding
-   - Writing the thumbnail to disk
-
-4. **Abuse Scenario:** If `.thumbnails/` is deleted while the server runs, every thumbnail request would trigger generation. A rapid scroll through 1000 images = 1000 thumbnail generations.
-
-5. **Practical Risk:** Low in normal operation because thumbnails are pre-generated. Higher risk if:
-   - Thumbnails are cleared manually
-   - Disk space issues prevent thumbnail storage
-   - Concurrent indexing and viewing of new images
-
-**Recommendations:**
-
-1. The current design is acceptable for localhost-only use since the user can only "attack" themselves.
-
-2. For added robustness, consider:
-   - Queue-based generation: Return a placeholder and generate asynchronously
-   - In-memory throttle: Track recent generation requests per IP/session
-   - Log warnings when generating on-demand (indicates pre-generation failure)
-
-3. The `--generate-thumbnails` CLI flag exists for bulk generation. Document this as a recovery step if thumbnails are lost.
 
 ---
 

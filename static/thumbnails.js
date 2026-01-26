@@ -481,9 +481,14 @@ const VirtualGrid = {
                 // If items per row changed, reposition all rendered items
                 if (oldItemsPerRow !== this._state.itemsPerRow) {
                     const items = this._config.getItems();
+                    // Build id->index map once for O(1) lookups
+                    const idToIndex = new Map();
+                    for (let i = 0; i < items.length; i++) {
+                        idToIndex.set(this._config.getItemId(items[i]), i);
+                    }
                     for (const [id, {el}] of this._state.renderedItems) {
-                        const index = items.findIndex(it => this._config.getItemId(it) === id);
-                        if (index !== -1) {
+                        const index = idToIndex.get(id);
+                        if (index !== undefined) {
                             this._positionElement(el, index);
                         }
                     }
@@ -649,6 +654,12 @@ const VirtualGrid = {
                 const bufferStart = bufferStartRow * state.itemsPerRow;
                 const bufferEnd = Math.min(bufferEndRow * state.itemsPerRow, items.length);
 
+                // Build id->index map once for O(1) lookups (avoids O(n²) findIndex in loops)
+                const idToIndex = new Map();
+                for (let i = 0; i < items.length; i++) {
+                    idToIndex.set(config.getItemId(items[i]), i);
+                }
+
                 // Build set of indices that should be in buffer zone
                 const bufferIndices = new Set();
                 for (let i = bufferStart; i < bufferEnd; i++) {
@@ -657,8 +668,8 @@ const VirtualGrid = {
 
                 // Remove items outside buffer zone and revoke their blob URLs
                 for (const [id, {el, blobUrl}] of state.renderedItems) {
-                    const index = items.findIndex(it => config.getItemId(it) === id);
-                    if (index === -1 || !bufferIndices.has(index)) {
+                    const index = idToIndex.get(id);
+                    if (index === undefined || !bufferIndices.has(index)) {
                         URL.revokeObjectURL(blobUrl);
                         el.remove();
                         state.renderedItems.delete(id);
@@ -667,8 +678,8 @@ const VirtualGrid = {
 
                 // Clean up pending items outside buffer zone
                 for (const id of state.pendingItems) {
-                    const index = items.findIndex(it => config.getItemId(it) === id);
-                    if (index === -1 || !bufferIndices.has(index)) {
+                    const index = idToIndex.get(id);
+                    if (index === undefined || !bufferIndices.has(index)) {
                         state.pendingItems.delete(id);
                     }
                 }
