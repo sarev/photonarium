@@ -531,6 +531,28 @@ def _compute_duplicates_level0_incremental(
 # Threshold below which brute-force is faster than building LSH index
 _LSH_MIN_IMAGES = 200
 
+# Minimum bucket size to use vectorized comparison (smaller buckets use scalar)
+_VECTORIZE_MIN_BUCKET = 8
+
+# Lookup table for popcount of bytes 0-255 (computed once at module load)
+_POPCOUNT_TABLE = np.array([bin(i).count('1') for i in range(256)], dtype=np.uint8)
+
+
+def _popcount_vectorized(arr: np.ndarray) -> np.ndarray:
+    """Compute popcount (number of 1 bits) for each element in array.
+
+    Uses byte-wise lookup table for efficiency. Works with uint64 arrays.
+
+    Args:
+        arr: Array of unsigned integers.
+
+    Returns:
+        Array of same shape with popcount values.
+    """
+    # View as bytes and sum popcount of each byte
+    arr_bytes = arr.view(np.uint8).reshape(arr.shape + (-1,))
+    return _POPCOUNT_TABLE[arr_bytes].sum(axis=-1)
+
 
 def _hamming_distance_fast(hash1: int, hash2: int) -> int:
     """Compute Hamming distance between two integer hashes.
@@ -545,30 +567,85 @@ def _hamming_distance_fast(hash1: int, hash2: int) -> int:
     return bin(xor).count('1')
 
 
+def _find_matches_in_bucket_vectorized(
+    bucket_indices: list[int],
+    hashes: np.ndarray,
+    threshold: int,
+) -> list[tuple[int, int]]:
+    """Find all matching pairs within a bucket using vectorized operations.
+
+    Computes all pairwise hamming distances in the bucket and returns
+    pairs that are within threshold.
+
+    Args:
+        bucket_indices: List of global indices of images in this bucket.
+        hashes: Array of all hash values (uint64), indexed by global index.
+        threshold: Maximum hamming distance for a match.
+
+    Returns:
+        List of (idx1, idx2) tuples where idx1 < idx2 and distance <= threshold.
+    """
+    bucket_size = len(bucket_indices)
+    bucket_idx_arr = np.array(bucket_indices, dtype=np.int32)
+    bucket_hashes = hashes[bucket_idx_arr]
+
+    # Compute XOR of all pairs using broadcasting: (n, 1) XOR (1, n) -> (n, n)
+    xor_matrix = bucket_hashes[:, np.newaxis] ^ bucket_hashes[np.newaxis, :]
+
+    # Compute hamming distances (popcount of XOR)
+    distances = _popcount_vectorized(xor_matrix.ravel()).reshape(bucket_size, bucket_size)
+
+    # Find matches in upper triangle (i < j) within threshold
+    i_indices, j_indices = np.where(
+        (distances <= threshold) &
+        (np.triu(np.ones((bucket_size, bucket_size), dtype=bool), k=1))
+    )
+
+    # Convert bucket-local indices to global indices
+    matches = [
+        (int(bucket_idx_arr[i]), int(bucket_idx_arr[j]))
+        for i, j in zip(i_indices, j_indices)
+    ]
+
+    return matches
+
+
 def _compute_level1_brute_force(
     image_data: list[tuple[str, int]],
     threshold: int,
 ) -> tuple[UnionFind, int, int]:
-    """Brute-force O(n²) comparison for small datasets.
+    """Brute-force comparison for small datasets using vectorized operations.
 
-    For small n, the overhead of building LSH index exceeds the cost of
-    direct comparison. Returns UnionFind with clusters and match stats.
+    Computes all pairwise hamming distances using numpy broadcasting.
+    For small n, this is faster than building an LSH index.
+
+    Returns:
+        Tuple of (UnionFind, comparisons, matches).
     """
     n = len(image_data)
     uf = UnionFind(n=n)
-    comparisons = 0
-    matches = 0
 
-    for i in range(n):
-        hash1 = image_data[i][1]
-        for j in range(i + 1, n):
-            hash2 = image_data[j][1]
-            dist = _hamming_distance_fast(hash1, hash2)
-            comparisons += 1
-            if dist <= threshold:
-                uf.union(i, j)
-                matches += 1
+    # Extract hashes into numpy array
+    hashes = np.array([h for _, h in image_data], dtype=np.uint64)
 
+    # Compute all pairwise XOR using broadcasting
+    xor_matrix = hashes[:, np.newaxis] ^ hashes[np.newaxis, :]
+
+    # Compute hamming distances
+    distances = _popcount_vectorized(xor_matrix.ravel()).reshape(n, n)
+
+    # Find matches in upper triangle
+    i_indices, j_indices = np.where(
+        (distances <= threshold) &
+        (np.triu(np.ones((n, n), dtype=bool), k=1))
+    )
+
+    # Union all matches
+    matches = len(i_indices)
+    for i, j in zip(i_indices, j_indices):
+        uf.union(int(i), int(j))
+
+    comparisons = n * (n - 1) // 2
     return uf, comparisons, matches
 
 
@@ -631,36 +708,58 @@ def _compute_level1_lsh(
         default=0
     )
 
+    # Pre-extract hashes into numpy array for vectorized operations
+    hashes = np.array([h for _, h in image_data], dtype=np.uint64)
+
     # Union-find for clustering
     uf = UnionFind(n=n)
 
-    # Compare only candidate pairs that share at least one band
+    # Track compared pairs to avoid duplicates across bands
     compared: set[tuple[int, int]] = set()
     comparisons = 0
     matches = 0
 
     for band in range(num_bands):
         for bucket in band_indices[band].values():
-            if len(bucket) < 2:
+            bucket_size = len(bucket)
+            if bucket_size < 2:
                 continue
-            for i in range(len(bucket)):
-                for j in range(i + 1, len(bucket)):
-                    idx1, idx2 = bucket[i], bucket[j]
+
+            if bucket_size >= _VECTORIZE_MIN_BUCKET:
+                # Vectorized comparison for larger buckets
+                bucket_matches = _find_matches_in_bucket_vectorized(
+                    bucket, hashes, threshold
+                )
+                for idx1, idx2 in bucket_matches:
+                    # Normalize pair ordering
                     if idx1 > idx2:
                         idx1, idx2 = idx2, idx1
                     pair = (idx1, idx2)
-                    if pair in compared:
-                        continue
-                    compared.add(pair)
-
-                    hash1 = image_data[idx1][1]
-                    hash2 = image_data[idx2][1]
-                    dist = _hamming_distance_fast(hash1, hash2)
-                    comparisons += 1
-
-                    if dist <= threshold:
+                    if pair not in compared:
+                        compared.add(pair)
+                        comparisons += 1
                         uf.union(idx1, idx2)
                         matches += 1
+            else:
+                # Scalar comparison for small buckets (less overhead)
+                for i in range(bucket_size):
+                    for j in range(i + 1, bucket_size):
+                        idx1, idx2 = bucket[i], bucket[j]
+                        if idx1 > idx2:
+                            idx1, idx2 = idx2, idx1
+                        pair = (idx1, idx2)
+                        if pair in compared:
+                            continue
+                        compared.add(pair)
+
+                        dist = _hamming_distance_fast(
+                            int(hashes[idx1]), int(hashes[idx2])
+                        )
+                        comparisons += 1
+
+                        if dist <= threshold:
+                            uf.union(idx1, idx2)
+                            matches += 1
 
     metrics = {
         'num_bands': num_bands,
