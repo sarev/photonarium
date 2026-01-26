@@ -413,7 +413,7 @@ const VirtualGrid = {
             _bound: false,
 
             /**
-             * Initializes the virtual grid.
+             * Initialises the virtual grid.
              */
             _init() {
                 // Create inner container for absolute positioning
@@ -900,7 +900,7 @@ const VirtualGrid = {
             }
         };
 
-        // Initialize
+        // Initialise
         instance._init();
 
         return instance;

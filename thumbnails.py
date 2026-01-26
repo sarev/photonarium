@@ -374,7 +374,7 @@ class ThumbnailCache:
     """
 
     def __init__(self, max_size_bytes: int):
-        """Initialize the cache.
+        """Initialise the cache.
 
         Args:
             max_size_bytes: Maximum cache size in bytes. Set to 0 to disable.

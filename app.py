@@ -74,7 +74,7 @@ def get_db() -> ImageDatabase:
     """Get the database instance, initializing if necessary."""
     global db
     if db is None:
-        logger.info('Initializing ImageDatabase...')
+        logger.info('Initialising ImageDatabase...')
         db = ImageDatabase(
             db_path=DATABASE_PATH,
             thumbnail_dir=THUMBNAIL_CACHE_DIR,
@@ -259,6 +259,8 @@ def update_image(image_id):
         allowed_updates['rating'] = data['rating']
     if 'timestamp' in data:
         allowed_updates['timestamp'] = data['timestamp']
+        # User-assigned timestamp has highest confidence (0)
+        allowed_updates['timestamp_confidence'] = 0
 
     if not allowed_updates:
         return error_response('No valid fields to update')

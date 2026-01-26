@@ -391,6 +391,18 @@ def parse_timestamp_from_path(path: Path | str) -> datetime | None:
 # MAIN TIMESTAMP DERIVATION
 # =============================================================================
 
+# =============================================================================
+# TIMESTAMP CONFIDENCE LEVELS
+# =============================================================================
+
+# Confidence levels for timestamp sources (lower = more reliable)
+CONFIDENCE_USER = 0       # User assigned (via info panel)
+CONFIDENCE_EXIF = 1       # From EXIF metadata
+CONFIDENCE_FILENAME = 2   # Parsed from filename/path
+CONFIDENCE_FILESYSTEM = 3 # From filesystem metadata
+CONFIDENCE_UNKNOWN = 4    # None/unknown
+
+
 def derive_timestamp(path: Path | str) -> datetime | None:
     """Derive the best timestamp for an image using multiple sources.
 
@@ -408,25 +420,49 @@ def derive_timestamp(path: Path | str) -> datetime | None:
         datetime object from the highest-priority available source,
         or None if no timestamp could be determined.
     """
+    timestamp, _ = derive_timestamp_with_confidence(path)
+    return timestamp
+
+
+def derive_timestamp_with_confidence(path: Path | str) -> tuple[datetime | None, int]:
+    """Derive the best timestamp for an image with confidence level.
+
+    Tries sources in priority order:
+    1. EXIF DateTimeOriginal tag (confidence 1)
+    2. EXIF DateTime tag (confidence 1)
+    3. Parsed from filename/path (confidence 2)
+    4. Filesystem creation/modification time (confidence 3)
+
+    Args:
+        path: Path to the image file.
+
+    Returns:
+        Tuple of (datetime, confidence) where confidence is:
+        - 0: user assigned (not returned by this function)
+        - 1: from EXIF
+        - 2: from filename
+        - 3: from filesystem
+        - 4: none/unknown
+    """
     path = Path(path)
 
     # Try EXIF first (handles both DateTimeOriginal and DateTime internally)
     timestamp = extract_exif_timestamp(path)
     if timestamp:
         logger.debug(f'Timestamp from EXIF: {timestamp} for {path}')
-        return timestamp
+        return (timestamp, CONFIDENCE_EXIF)
 
     # Try parsing from filename/path (before filesystem, as files get copied around)
     timestamp = parse_timestamp_from_path(path)
     if timestamp:
         logger.debug(f'Timestamp from filename: {timestamp} for {path}')
-        return timestamp
+        return (timestamp, CONFIDENCE_FILENAME)
 
     # Try filesystem timestamp as last resort
     timestamp = extract_filesystem_timestamp(path)
     if timestamp:
         logger.debug(f'Timestamp from filesystem: {timestamp} for {path}')
-        return timestamp
+        return (timestamp, CONFIDENCE_FILESYSTEM)
 
     logger.debug(f'No timestamp found for {path}')
-    return None
+    return (None, CONFIDENCE_UNKNOWN)

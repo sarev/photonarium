@@ -207,9 +207,15 @@ from thumbnails import (
 )
 from timestamps import (
     derive_timestamp,
+    derive_timestamp_with_confidence,
     extract_exif_timestamp,
     extract_filesystem_timestamp,
     parse_timestamp_from_path,
+    CONFIDENCE_USER,
+    CONFIDENCE_EXIF,
+    CONFIDENCE_FILENAME,
+    CONFIDENCE_FILESYSTEM,
+    CONFIDENCE_UNKNOWN,
 )
 
 # Configure module logger
@@ -237,6 +243,7 @@ CREATE TABLE IF NOT EXISTS images (
     width                 INTEGER NOT NULL,
     height                INTEGER NOT NULL,
     timestamp             TEXT,
+    timestamp_confidence  INTEGER NOT NULL DEFAULT 4,
     checksum              TEXT,
     perceptual_hash       TEXT,
     laplacian_var         REAL,
@@ -260,6 +267,8 @@ _SQL_MIGRATIONS = [
     "ALTER TABLE images ADD COLUMN mtime REAL",
     # Add updated_at column for duplicate epoch tracking
     "ALTER TABLE duplicate_groups ADD COLUMN updated_at TEXT",
+    # Add timestamp_confidence column (0=user, 1=EXIF, 2=filename, 3=filesystem, 4=unknown)
+    "ALTER TABLE images ADD COLUMN timestamp_confidence INTEGER NOT NULL DEFAULT 4",
 ]
 
 # SQL schema for the duplicate_groups table
@@ -694,8 +703,8 @@ def get_all_images(
     if include_deleted:
         cursor = conn.execute("""
             SELECT id, path, basename, size, width, height, timestamp,
-                   checksum, perceptual_hash, laplacian_var, lossless,
-                   description, rating, deleted, created_at, updated_at,
+                   timestamp_confidence, checksum, perceptual_hash, laplacian_var,
+                   lossless, description, rating, deleted, created_at, updated_at,
                    mtime
             FROM images
             ORDER BY timestamp DESC, path ASC
@@ -703,8 +712,8 @@ def get_all_images(
     else:
         cursor = conn.execute("""
             SELECT id, path, basename, size, width, height, timestamp,
-                   checksum, perceptual_hash, laplacian_var, lossless,
-                   description, rating, deleted, created_at, updated_at,
+                   timestamp_confidence, checksum, perceptual_hash, laplacian_var,
+                   lossless, description, rating, deleted, created_at, updated_at,
                    mtime
             FROM images
             WHERE deleted = 0
@@ -726,10 +735,10 @@ def get_all_images_lightweight(conn: sqlite3.Connection) -> list[dict[str, Any]]
 
     Returns:
         List of image dictionaries with minimal fields:
-        id, basename, width, height, timestamp, rating, description.
+        id, basename, width, height, timestamp, timestamp_confidence, rating, description.
     """
     cursor = conn.execute("""
-        SELECT id, basename, width, height, timestamp, rating, description
+        SELECT id, basename, width, height, timestamp, timestamp_confidence, rating, description
         FROM images
         WHERE deleted = 0
         ORDER BY timestamp DESC, path ASC
@@ -789,7 +798,7 @@ def get_images_delta(
 
     # Get all images changed since the given timestamp
     cursor = conn.execute("""
-        SELECT id, basename, width, height, timestamp, rating, description, deleted, updated_at
+        SELECT id, basename, width, height, timestamp, timestamp_confidence, rating, description, deleted, updated_at
         FROM images
         WHERE updated_at > ?
         ORDER BY updated_at ASC
@@ -841,8 +850,8 @@ def get_image(conn: sqlite3.Connection, image_id: str) -> dict[str, Any] | None:
     """
     cursor = conn.execute("""
         SELECT id, path, basename, size, width, height, timestamp,
-               checksum, perceptual_hash, laplacian_var, lossless,
-               description, rating, deleted, created_at, updated_at,
+               timestamp_confidence, checksum, perceptual_hash, laplacian_var,
+               lossless, description, rating, deleted, created_at, updated_at,
                mtime
         FROM images
         WHERE id = ?
@@ -891,9 +900,9 @@ def get_image_by_path(conn: sqlite3.Connection, path: Path | str) -> dict[str, A
 
     cursor = conn.execute("""
         SELECT id, path, basename, size, width, height, timestamp,
-               checksum, perceptual_hash, laplacian_var, lossless,
-               description, rating, embedding, deleted, created_at, updated_at,
-               mtime
+               timestamp_confidence, checksum, perceptual_hash, laplacian_var,
+               lossless, description, rating, embedding, deleted, created_at,
+               updated_at, mtime
         FROM images
         WHERE path = ?
     """, (path_str,))
@@ -909,6 +918,7 @@ def create_image(
     width: int,
     height: int,
     timestamp: datetime | None = None,
+    timestamp_confidence: int = CONFIDENCE_UNKNOWN,
     checksum: str | None = None,
     perceptual_hash: str | None = None,
     laplacian_var: float | None = None,
@@ -927,6 +937,7 @@ def create_image(
         width: Image width in pixels.
         height: Image height in pixels.
         timestamp: Image timestamp (from EXIF, filesystem, or filename).
+        timestamp_confidence: Confidence level (0=user, 1=EXIF, 2=filename, 3=FS, 4=unknown).
         checksum: SHA256 hex digest of file contents.
         perceptual_hash: Perceptual hash hex string.
         laplacian_var: Laplacian variance (focus score).
@@ -949,12 +960,12 @@ def create_image(
 
     conn.execute("""
         INSERT INTO images (
-            id, path, basename, size, width, height, timestamp,
+            id, path, basename, size, width, height, timestamp, timestamp_confidence,
             checksum, perceptual_hash, laplacian_var, lossless, mtime,
             description, rating, embedding, deleted, created_at, updated_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, 0, ?, ?)
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, 0, ?, ?)
     """, (
-        image_id, path_str, basename, size, width, height, timestamp_str,
+        image_id, path_str, basename, size, width, height, timestamp_str, timestamp_confidence,
         checksum, perceptual_hash, laplacian_var, int(lossless), mtime,
         description, rating, now, now
     ))
@@ -970,6 +981,7 @@ def create_image(
         'width': width,
         'height': height,
         'timestamp': timestamp_str,
+        'timestamp_confidence': timestamp_confidence,
         'checksum': checksum,
         'perceptual_hash': perceptual_hash,
         'laplacian_var': laplacian_var,
@@ -1001,6 +1013,7 @@ def update_image(
             - rating: User rating emoji string
             - size, width, height: Dimensions (for re-ingestion)
             - timestamp: Image timestamp
+            - timestamp_confidence: Confidence level (0=user, 1=EXIF, 2=filename, 3=FS, 4=unknown)
             - checksum: SHA256 hash
             - perceptual_hash: Perceptual hash
             - laplacian_var: Focus score
@@ -1019,8 +1032,8 @@ def update_image(
     # Allowed fields for update
     allowed_fields = {
         'description', 'rating', 'size', 'width', 'height', 'timestamp',
-        'checksum', 'perceptual_hash', 'laplacian_var', 'lossless',
-        'embedding', 'description_embedding', 'deleted'
+        'timestamp_confidence', 'checksum', 'perceptual_hash', 'laplacian_var',
+        'lossless', 'embedding', 'description_embedding', 'deleted'
     }
 
     # Filter to only allowed fields that are present in data
@@ -1060,6 +1073,7 @@ def update_image_metadata(
     width: int,
     height: int,
     timestamp: datetime | None,
+    timestamp_confidence: int,
     checksum: str,
     perceptual_hash: str | None,
     laplacian_var: float | None,
@@ -1078,6 +1092,7 @@ def update_image_metadata(
         width: Image width in pixels.
         height: Image height in pixels.
         timestamp: Image timestamp.
+        timestamp_confidence: Confidence level (0=user, 1=EXIF, 2=filename, 3=FS, 4=unknown).
         checksum: SHA256 hex digest.
         perceptual_hash: Perceptual hash hex string.
         laplacian_var: Laplacian variance.
@@ -1096,6 +1111,7 @@ def update_image_metadata(
             width = ?,
             height = ?,
             timestamp = ?,
+            timestamp_confidence = ?,
             checksum = ?,
             perceptual_hash = ?,
             laplacian_var = ?,
@@ -1105,7 +1121,7 @@ def update_image_metadata(
             updated_at = ?
         WHERE id = ?
     """, (
-        size, width, height, timestamp_str, checksum,
+        size, width, height, timestamp_str, timestamp_confidence, checksum,
         perceptual_hash, laplacian_var, int(lossless), mtime, now, image_id
     ))
     conn.commit()
@@ -1262,8 +1278,8 @@ def get_images_in_folder(
     if include_deleted:
         cursor = conn.execute("""
             SELECT id, path, basename, size, width, height, timestamp,
-                   checksum, perceptual_hash, laplacian_var, lossless,
-                   description, rating, deleted, created_at, updated_at
+                   timestamp_confidence, checksum, perceptual_hash, laplacian_var,
+                   lossless, description, rating, deleted, created_at, updated_at
             FROM images
             WHERE path LIKE ? || '%'
             ORDER BY path ASC
@@ -1271,8 +1287,8 @@ def get_images_in_folder(
     else:
         cursor = conn.execute("""
             SELECT id, path, basename, size, width, height, timestamp,
-                   checksum, perceptual_hash, laplacian_var, lossless,
-                   description, rating, deleted, created_at, updated_at
+                   timestamp_confidence, checksum, perceptual_hash, laplacian_var,
+                   lossless, description, rating, deleted, created_at, updated_at
             FROM images
             WHERE path LIKE ? || '%' AND deleted = 0
             ORDER BY path ASC
@@ -1406,6 +1422,7 @@ class ImageMetadata:
         width: Image width in pixels.
         height: Image height in pixels.
         timestamp: Derived timestamp (may be None).
+        timestamp_confidence: Confidence level (0=user, 1=EXIF, 2=filename, 3=FS, 4=unknown).
         checksum: SHA256 hex digest.
         perceptual_hash: Perceptual hash hex string (may be None).
         laplacian_var: Focus/sharpness score (may be None).
@@ -1417,6 +1434,7 @@ class ImageMetadata:
     width: int
     height: int
     timestamp: datetime | None
+    timestamp_confidence: int
     checksum: str
     perceptual_hash: str | None
     laplacian_var: float | None
@@ -1468,8 +1486,8 @@ def extract_image_metadata(path: Path | str) -> ImageMetadata | None:
     # Compute Laplacian variance (may fail for some images)
     laplacian_var = compute_laplacian_variance(path)
 
-    # Derive timestamp
-    timestamp = derive_timestamp(path)
+    # Derive timestamp with confidence level
+    timestamp, timestamp_confidence = derive_timestamp_with_confidence(path)
 
     # Check if lossless format
     lossless = is_lossless_format(path)
@@ -1481,6 +1499,7 @@ def extract_image_metadata(path: Path | str) -> ImageMetadata | None:
         width=width,
         height=height,
         timestamp=timestamp,
+        timestamp_confidence=timestamp_confidence,
         checksum=checksum,
         perceptual_hash=perceptual_hash,
         laplacian_var=laplacian_var,
@@ -1713,6 +1732,7 @@ class IngestionThread(threading.Thread):
                                 width=metadata.width,
                                 height=metadata.height,
                                 timestamp=metadata.timestamp,
+                                timestamp_confidence=metadata.timestamp_confidence,
                                 checksum=metadata.checksum,
                                 perceptual_hash=metadata.perceptual_hash,
                                 laplacian_var=metadata.laplacian_var,
@@ -1754,6 +1774,7 @@ class IngestionThread(threading.Thread):
                     width=metadata.width,
                     height=metadata.height,
                     timestamp=metadata.timestamp,
+                    timestamp_confidence=metadata.timestamp_confidence,
                     checksum=metadata.checksum,
                     perceptual_hash=metadata.perceptual_hash,
                     laplacian_var=metadata.laplacian_var,
@@ -1794,6 +1815,7 @@ class IngestionThread(threading.Thread):
                     width=metadata.width,
                     height=metadata.height,
                     timestamp=metadata.timestamp,
+                    timestamp_confidence=metadata.timestamp_confidence,
                     checksum=metadata.checksum,
                     perceptual_hash=metadata.perceptual_hash,
                     laplacian_var=metadata.laplacian_var,
@@ -3158,8 +3180,9 @@ def get_duplicate_groups(conn: sqlite3.Connection, level: int) -> list[dict[str,
         # Get images in this group
         cursor = conn.execute("""
             SELECT i.id, i.path, i.basename, i.size, i.width, i.height,
-                   i.timestamp, i.checksum, i.perceptual_hash, i.laplacian_var,
-                   i.lossless, i.description, i.rating
+                   i.timestamp, i.timestamp_confidence, i.checksum,
+                   i.perceptual_hash, i.laplacian_var, i.lossless,
+                   i.description, i.rating
             FROM images i
             JOIN duplicate_groups dg ON i.id = dg.image_id
             WHERE dg.level = ? AND dg.group_hash = ? AND i.deleted = 0
@@ -3443,8 +3466,8 @@ def semantic_search(
     placeholders = ','.join('?' * len(top_ids))
     cursor = conn.execute(f"""
         SELECT id, path, basename, size, width, height, timestamp,
-               checksum, perceptual_hash, laplacian_var, lossless,
-               description, rating
+               timestamp_confidence, checksum, perceptual_hash, laplacian_var,
+               lossless, description, rating
         FROM images
         WHERE id IN ({placeholders})
     """, top_ids)
@@ -3507,8 +3530,8 @@ def get_images_by_similarity(
     # we return all images sorted by similarity as the original function did.
     cursor = conn.execute("""
         SELECT id, path, basename, size, width, height, timestamp,
-               checksum, perceptual_hash, laplacian_var, lossless,
-               description, rating
+               timestamp_confidence, checksum, perceptual_hash, laplacian_var,
+               lossless, description, rating
         FROM images
         WHERE deleted = 0 AND embedding IS NOT NULL
     """)
@@ -3978,6 +4001,7 @@ class ImageDatabase:
         # (duplicate epoch migration must complete before completion callback fires)
         self._migrate_recalculate_timestamps()
         self._migrate_duplicate_epoch_to_metadata()
+        self._migrate_add_timestamp_confidence()
 
         # Steps 6-7: Start background threads
         self.start_threads()
@@ -4117,6 +4141,53 @@ class ImageDatabase:
             logger.debug('No existing duplicate epoch to migrate')
 
         record_migration(self.conn, migration_id)
+
+    def _migrate_add_timestamp_confidence(self) -> None:
+        """One-time migration to add timestamp_confidence to all images.
+
+        Re-derives timestamps for all images to determine the confidence level
+        (0=user, 1=EXIF, 2=filename, 3=filesystem, 4=unknown).
+
+        Only runs once; tracked via the migrations table.
+        """
+        migration_id = 'add_timestamp_confidence_v1'
+
+        if has_migration_run(self.conn, migration_id):
+            return
+
+        # Get all non-deleted images
+        cursor = self.conn.execute("""
+            SELECT id, path
+            FROM images
+            WHERE deleted = 0
+        """)
+        rows = cursor.fetchall()
+
+        if not rows:
+            record_migration(self.conn, migration_id)
+            return
+
+        logger.info(f'Adding timestamp_confidence for {len(rows)} images (one-time migration)...')
+
+        updated = 0
+        for row in rows:
+            image_id = row['id']
+            path = row['path']
+
+            try:
+                new_timestamp, confidence = derive_timestamp_with_confidence(path)
+                timestamp_str = new_timestamp.isoformat() if new_timestamp else None
+                self.conn.execute(
+                    'UPDATE images SET timestamp = ?, timestamp_confidence = ? WHERE id = ?',
+                    (timestamp_str, confidence, image_id)
+                )
+                updated += 1
+            except Exception as e:
+                logger.warning(f'Failed to derive timestamp confidence for {path}: {e}')
+
+        self.conn.commit()
+        record_migration(self.conn, migration_id)
+        logger.info(f'        Updated {updated} images with timestamp_confidence')
 
     def _load_checksum_cache(self) -> None:
         """Load all image_id -> checksum mappings into RAM.
