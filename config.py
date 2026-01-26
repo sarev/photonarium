@@ -129,6 +129,11 @@ thumbnail_timeout_ms: 10000
 # Lower values = more responsive, higher values = less CPU usage.
 # Range: 50-1000, recommended: 150-300
 thumbnail_scroll_throttle_ms: 250
+
+# RAM cache size for thumbnail bytes in megabytes.
+# Caches recently-accessed thumbnails in memory to avoid disk reads.
+# Set to 0 to disable caching. Range: 0-1000, recommended: 50-200
+thumbnail_cache_size_mb: 100
 """
 
 
@@ -152,6 +157,7 @@ class Config:
         thumbnail_extra_rows: Extra rows above/below viewport to prefetch (1-20).
         thumbnail_timeout_ms: Timeout for thumbnail fetch requests in ms (1000-60000).
         thumbnail_scroll_throttle_ms: Scroll event throttle in ms (50-1000).
+        thumbnail_cache_size_mb: RAM cache size for thumbnail bytes in MB (0-1000).
     """
 
     image_extensions: set[str] = field(default_factory=lambda: {
@@ -170,6 +176,7 @@ class Config:
     thumbnail_extra_rows: int = 5
     thumbnail_timeout_ms: int = 10000
     thumbnail_scroll_throttle_ms: int = 250
+    thumbnail_cache_size_mb: int = 100
 
     def __post_init__(self) -> None:
         """Validate configuration values after initialisation."""
@@ -230,6 +237,8 @@ class Config:
             raise ValueError(f'thumbnail_timeout_ms must be 1000-60000, got {self.thumbnail_timeout_ms}')
         if not 50 <= self.thumbnail_scroll_throttle_ms <= 1000:
             raise ValueError(f'thumbnail_scroll_throttle_ms must be 50-1000, got {self.thumbnail_scroll_throttle_ms}')
+        if not 0 <= self.thumbnail_cache_size_mb <= 1000:
+            raise ValueError(f'thumbnail_cache_size_mb must be 0-1000, got {self.thumbnail_cache_size_mb}')
 
 
 def load_config(config_path: Path | str | None = None) -> Config:
@@ -310,6 +319,9 @@ def load_config(config_path: Path | str | None = None) -> Config:
 
     if 'thumbnail_scroll_throttle_ms' in config_data:
         kwargs['thumbnail_scroll_throttle_ms'] = int(config_data['thumbnail_scroll_throttle_ms'])
+
+    if 'thumbnail_cache_size_mb' in config_data:
+        kwargs['thumbnail_cache_size_mb'] = int(config_data['thumbnail_cache_size_mb'])
 
     return Config(**kwargs)
 

@@ -738,6 +738,30 @@ def get_all_images_lightweight(conn: sqlite3.Connection) -> list[dict[str, Any]]
     return rows_to_dicts(cursor.fetchall())
 
 
+def get_images_for_thumbnail_generation(
+    conn: sqlite3.Connection,
+) -> list[dict[str, Any]]:
+    """Get images with fields needed for bulk thumbnail generation.
+
+    Returns id, basename, path, and checksum for all non-deleted images
+    that have a checksum. Used by the --generate-thumbnails CLI command.
+
+    Args:
+        conn: Database connection.
+
+    Returns:
+        List of image dictionaries with: id, basename, path, checksum.
+    """
+    cursor = conn.execute("""
+        SELECT id, basename, path, checksum
+        FROM images
+        WHERE deleted = 0 AND checksum IS NOT NULL
+        ORDER BY path ASC
+    """)
+
+    return rows_to_dicts(cursor.fetchall())
+
+
 def get_images_delta(
     conn: sqlite3.Connection,
     since: str,
@@ -825,6 +849,32 @@ def get_image(conn: sqlite3.Connection, image_id: str) -> dict[str, Any] | None:
     """, (image_id,))
 
     return row_to_dict(cursor.fetchone())
+
+
+def get_image_thumbnail_info(
+    conn: sqlite3.Connection,
+    image_id: str,
+) -> tuple[str, str] | None:
+    """Get checksum and path for an image (for thumbnail lookup).
+
+    Lightweight query that only fetches the fields needed for thumbnail
+    generation/lookup.
+
+    Args:
+        conn: Database connection.
+        image_id: UUID of the image.
+
+    Returns:
+        Tuple of (checksum, path) or None if not found or no checksum.
+    """
+    cursor = conn.execute(
+        'SELECT checksum, path FROM images WHERE id = ? AND deleted = 0',
+        (image_id,)
+    )
+    row = cursor.fetchone()
+    if row is None or row[0] is None:
+        return None
+    return (row[0], row[1])
 
 
 def get_image_by_path(conn: sqlite3.Connection, path: Path | str) -> dict[str, Any] | None:
@@ -1711,6 +1761,15 @@ class IngestionThread(threading.Thread):
                     mtime=metadata.mtime,
                 )
 
+            # Update checksum cache
+            if metadata.checksum:
+                with self._checksum_cache_lock:
+                    self._checksum_cache[existing['id']] = metadata.checksum
+
+            # Generate thumbnail for changed image
+            if metadata.checksum:
+                self._generate_thumbnails(path, metadata.checksum)
+
             # Queue for embedding (metadata cleared embedding)
             self.embedding_queue.put(existing['id'])
             logger.debug(f'Queued changed image for embedding: {path}')
@@ -1741,6 +1800,15 @@ class IngestionThread(threading.Thread):
                     lossless=metadata.lossless,
                     mtime=metadata.mtime,
                 )
+
+            # Add to checksum cache
+            if metadata.checksum:
+                with self._checksum_cache_lock:
+                    self._checksum_cache[image_id] = metadata.checksum
+
+            # Generate thumbnail for new image
+            if metadata.checksum:
+                self._generate_thumbnails(path, metadata.checksum)
 
             # Queue for embedding
             self.embedding_queue.put(image_id)
@@ -3472,10 +3540,15 @@ def get_or_create_thumbnail(
 ) -> Path | None:
     """Get a thumbnail for an image, generating if necessary.
 
+    Only two canonical sizes are supported: 200px and 400px. Any other
+    size is snapped to the nearest canonical size. Thumbnails are
+    pre-generated during indexing, so this should rarely need to
+    generate on-demand.
+
     Args:
         conn: Database connection.
         image_id: UUID of the image.
-        size: Thumbnail size in pixels (clamped to 50-800).
+        size: Requested size (snapped to 200 or 400).
         thumbnail_dir: Root thumbnail cache directory.
         quality: JPEG quality for generated thumbnails.
 
@@ -3483,8 +3556,8 @@ def get_or_create_thumbnail(
         Path to the thumbnail file, or None if image not found or
         thumbnail cannot be generated.
     """
-    # Clamp size to valid range
-    size = max(50, min(800, size))
+    # Snap to canonical size (200 or 400)
+    size = 400 if size > 300 else 200
 
     # Get image info
     image = get_image(conn, image_id)
@@ -3859,6 +3932,11 @@ class ImageDatabase:
         }
         self._duplicate_status_lock = threading.Lock()
 
+        # RAM cache for image_id -> checksum lookups (avoids DB query per thumbnail)
+        self._checksum_cache: dict[str, str] = {}
+        self._checksum_cache_lock = threading.Lock()
+        self._load_checksum_cache()
+
         # Ensure thumbnail directory exists
         self.thumbnail_dir.mkdir(parents=True, exist_ok=True)
 
@@ -4039,6 +4117,20 @@ class ImageDatabase:
             logger.debug('No existing duplicate epoch to migrate')
 
         record_migration(self.conn, migration_id)
+
+    def _load_checksum_cache(self) -> None:
+        """Load all image_id -> checksum mappings into RAM.
+
+        Called during startup to populate the cache. This eliminates
+        DB queries for thumbnail lookups.
+        """
+        cursor = self.conn.execute(
+            'SELECT id, checksum FROM images WHERE checksum IS NOT NULL AND deleted = 0'
+        )
+        cache = {row[0]: row[1] for row in cursor}
+        with self._checksum_cache_lock:
+            self._checksum_cache = cache
+        logger.info(f'        Loaded {len(cache)} checksums into cache')
 
     def _rescan_all_folders(self) -> None:
         """Rescan all registered folders for new/changed/deleted files."""
@@ -4311,6 +4403,10 @@ class ImageDatabase:
         """Get all images with minimal fields for gallery grid."""
         return get_all_images_lightweight(self.conn)
 
+    def get_images_for_thumbnail_generation(self) -> list[dict[str, Any]]:
+        """Get images with fields needed for bulk thumbnail generation."""
+        return get_images_for_thumbnail_generation(self.conn)
+
     def get_images_delta(self, since: str) -> dict[str, Any]:
         """Get image changes since a given timestamp."""
         return get_images_delta(self.conn, since)
@@ -4322,6 +4418,35 @@ class ImageDatabase:
     def get_image(self, image_id: str) -> dict[str, Any] | None:
         """Get a single image by ID."""
         return get_image(self.conn, image_id)
+
+    def get_checksum(self, image_id: str) -> str | None:
+        """Get checksum for an image from RAM cache.
+
+        This is the fast path for thumbnail lookups - no DB query needed.
+        Thread-safe.
+        """
+        with self._checksum_cache_lock:
+            return self._checksum_cache.get(image_id)
+
+    def get_image_thumbnail_info(self, image_id: str) -> tuple[str, str] | None:
+        """Get checksum and path for an image (for thumbnail lookup).
+
+        Uses RAM cache for checksum, only queries DB for path if needed.
+        Thread-safe.
+        """
+        with self._checksum_cache_lock:
+            checksum = self._checksum_cache.get(image_id)
+        if checksum is None:
+            return None
+        # Still need path from DB (could cache this too, but it's less critical)
+        cursor = self.conn.execute(
+            'SELECT path FROM images WHERE id = ? AND deleted = 0',
+            (image_id,)
+        )
+        row = cursor.fetchone()
+        if row is None:
+            return None
+        return (checksum, row[0])
 
     def update_image(self, image_id: str, data: dict[str, Any]) -> dict[str, Any] | None:
         """Update image metadata (description, rating).
@@ -4349,7 +4474,11 @@ class ImageDatabase:
     def delete_image(self, image_id: str, from_disk: bool = False) -> bool:
         """Delete an image (soft delete or from disk)."""
         with self._db_lock:
-            return delete_image(self.conn, image_id, from_disk)
+            result = delete_image(self.conn, image_id, from_disk)
+        # Remove from checksum cache
+        with self._checksum_cache_lock:
+            self._checksum_cache.pop(image_id, None)
+        return result
 
     def rotate_images(
         self,
@@ -4624,6 +4753,36 @@ class ImageDatabase:
     # =========================================================================
     # Public API - Thumbnails
     # =========================================================================
+
+    def _generate_thumbnails(self, source_path: Path, checksum: str) -> bool:
+        """Generate and cache thumbnails for an image at standard sizes.
+
+        Called during image ingestion to pre-generate thumbnails at both
+        200px and 400px sizes. The frontend uses CSS to resize whichever
+        is closest to the current display size.
+
+        Skips generation for sizes that already exist in cache.
+
+        Args:
+            source_path: Path to the source image file.
+            checksum: SHA256 checksum of the image (used as cache key).
+
+        Returns:
+            True if all thumbnails were generated or already exist.
+        """
+        success = True
+        for size in (200, 400):
+            cache_path = get_thumbnail_cache_path(
+                checksum, size=size, thumbnail_dir=self.thumbnail_dir
+            )
+            if cache_path.exists():
+                continue
+            if not generate_thumbnail(
+                source_path, cache_path,
+                size=size, quality=self.config.thumbnail_quality
+            ):
+                success = False
+        return success
 
     def get_thumbnail_path(self, image_id: str, size: int = 200) -> Path | None:
         """Get or create a thumbnail for an image."""

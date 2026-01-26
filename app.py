@@ -23,12 +23,20 @@ Example:
 import atexit
 import logging
 import os
+import sys
 import threading
+from pathlib import Path
 
 from flask import Flask, Response, jsonify, request, send_file, abort
 from flask_cors import CORS
 
 from imagedb import ImageDatabase, register_signal_handlers
+from thumbnails import (
+    get_thumbnail_cache_path,
+    generate_thumbnail,
+    generate_missing_thumbnails,
+    ThumbnailCache,
+)
 
 # Configure logging
 logging.basicConfig(
@@ -91,6 +99,28 @@ def shutdown_db():
 
 # Register shutdown handler
 atexit.register(shutdown_db)
+
+
+# =============================================================================
+# Thumbnail RAM Cache Instance
+# =============================================================================
+
+# Global thumbnail cache instance (initialized lazily)
+_thumbnail_cache: ThumbnailCache | None = None
+
+
+def get_thumbnail_cache() -> ThumbnailCache:
+    """Get the thumbnail cache instance, initializing if necessary."""
+    global _thumbnail_cache
+    if _thumbnail_cache is None:
+        config = get_db().config
+        max_bytes = config.thumbnail_cache_size_mb * 1024 * 1024
+        _thumbnail_cache = ThumbnailCache(max_bytes)
+        if max_bytes > 0:
+            logger.info(f'Thumbnail cache initialized: {config.thumbnail_cache_size_mb}MB')
+        else:
+            logger.info('Thumbnail cache disabled (size=0)')
+    return _thumbnail_cache
 
 
 # =============================================================================
@@ -267,29 +297,50 @@ def delete_image(image_id):
 def get_thumbnail(image_id):
     """Get a thumbnail for an image.
 
-    Thumbnails are generated on-demand and cached. If a cached thumbnail
-    exists at the requested size, it is served directly. Otherwise, a new
-    thumbnail is generated from the original image.
+    Only two canonical sizes are cached: 200px and 400px. The requested
+    size is snapped to the nearest canonical size. The frontend uses CSS
+    to resize the thumbnail to the exact display size.
 
-    Args:
-        image_id: The unique identifier of the image.
-
-    Query Parameters:
-        size: Thumbnail size in pixels (longest edge). Defaults to 200.
-
-    Returns:
-        JPEG image data, or 404 if image not found.
+    Thumbnails are served from a RAM cache when available, falling back
+    to disk. This eliminates filesystem reads for frequently-accessed
+    thumbnails.
     """
-    size = request.args.get('size', 200, type=int)
+    requested_size = request.args.get('size', 200, type=int)
+    size = 400 if requested_size > 300 else 200
 
-    # Clamp size to reasonable bounds
-    size = max(50, min(800, size))
+    db = get_db()
+    cache = get_thumbnail_cache()
 
-    thumbnail_path = get_db().get_thumbnail_path(image_id, size)
-    if thumbnail_path is None:
+    # Fast path: checksum from RAM cache
+    checksum = db.get_checksum(image_id)
+    if checksum is None:
         abort(404)
 
-    return send_file(thumbnail_path, mimetype='image/jpeg')
+    # Check RAM cache first - no disk access needed
+    cached_bytes = cache.get(checksum, size)
+    if cached_bytes is not None:
+        return Response(cached_bytes, mimetype='image/jpeg')
+
+    # Slow path: read from disk
+    thumbnail_path = get_thumbnail_cache_path(checksum, size, db.thumbnail_dir)
+
+    if not thumbnail_path.exists():
+        # Need to generate - get source path from DB
+        info = db.get_image_thumbnail_info(image_id)
+        if info is None:
+            abort(404)
+        _, source_path = info
+        if not generate_thumbnail(source_path, thumbnail_path, size, db.config.thumbnail_quality):
+            abort(404)
+
+    # Read from disk and cache
+    try:
+        with open(thumbnail_path, 'rb') as f:
+            data = f.read()
+        cache.put(checksum, size, data)
+        return Response(data, mimetype='image/jpeg')
+    except IOError:
+        abort(404)
 
 
 @app.route('/api/images/<image_id>/full', methods=['GET'])
@@ -772,6 +823,25 @@ def get_stats():
     return jsonify(stats)
 
 
+@app.route('/api/stats/cache', methods=['GET'])
+def get_cache_stats():
+    """Get thumbnail cache statistics.
+
+    Returns information about the RAM thumbnail cache performance.
+
+    Returns:
+        JSON object with:
+            - hits: Number of cache hits
+            - misses: Number of cache misses
+            - hit_rate: Cache hit rate (0.0-1.0)
+            - size_bytes: Current cache size in bytes
+            - size_mb: Current cache size in megabytes
+            - count: Number of cached thumbnails
+            - max_size_mb: Maximum cache size in megabytes
+    """
+    return jsonify(get_thumbnail_cache().stats())
+
+
 # =============================================================================
 # SSE Events Endpoint (Optional)
 # =============================================================================
@@ -819,6 +889,21 @@ def internal_error(error):
 
 
 # =============================================================================
+# CLI Commands
+# =============================================================================
+
+def run_generate_thumbnails_cli():
+    """CLI wrapper for generate_missing_thumbnails."""
+    db = get_db()
+    images = db.get_images_for_thumbnail_generation()
+    generate_missing_thumbnails(
+        images=images,
+        thumbnail_dir=db.thumbnail_dir,
+        quality=db.config.thumbnail_quality,
+    )
+
+
+# =============================================================================
 # Main Entry Point
 # =============================================================================
 
@@ -837,7 +922,20 @@ if __name__ == '__main__':
         default=5000,
         help='Port to run the server on (default: 5000)'
     )
+    parser.add_argument(
+        '--generate-thumbnails',
+        action='store_true',
+        help='Generate missing thumbnails for all images and exit'
+    )
     args = parser.parse_args()
+
+    # Handle thumbnail generation command
+    if args.generate_thumbnails:
+        # Skip scanning, just open database
+        _skip_scan = True
+        get_db()
+        run_generate_thumbnails_cli()
+        sys.exit(0)
 
     # Set module-level flag before initializing database
     _skip_scan = args.no_scan
@@ -852,11 +950,17 @@ if __name__ == '__main__':
     logger.info(f'Open http://localhost:{args.port} in your browser')
     logger.info('=' * 60)
 
-    # Run development server
-    # In production, use a proper WSGI server like gunicorn
-    app.run(
-        host='0.0.0.0',
-        port=args.port,
-        debug=False,  # Set to False to avoid reloader issues with threads
-        threaded=True,
-    )
+    # Try to use waitress (production WSGI server), fall back to Flask dev server
+    try:
+        from waitress import serve
+        logger.info('Using waitress WSGI server')
+        serve(app, host='0.0.0.0', port=args.port, threads=8)
+    except ImportError:
+        logger.warning('waitress not installed, using Flask dev server (slow!)')
+        logger.warning('Install with: pip install waitress')
+        app.run(
+            host='0.0.0.0',
+            port=args.port,
+            debug=False,
+            threaded=True,
+        )
