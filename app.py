@@ -58,6 +58,8 @@ from faces import (
     batch_identify_faces,
     reassess_unknown_faces_async,
     get_reassessment_status,
+    compute_unknown_face_groups_async,
+    get_group_computation_status,
 )
 
 # Configure logging
@@ -1568,6 +1570,116 @@ def get_face_thumbnail(face_id):
         mimetype='image/jpeg',
         max_age=31536000,  # 1 year cache
     )
+
+
+@app.route('/api/faces/<face_id>/unassign', methods=['POST'])
+def unassign_face(face_id):
+    """Remove a face from its person and return to unknown pool.
+
+    Unlike unidentify, this is designed for the pick-preferred mode where
+    the user is reviewing a person's faces and wants to remove incorrect ones.
+
+    Args:
+        face_id: Face's UUID.
+
+    Returns:
+        Success message with the updated person (new preferred face if needed).
+    """
+    db = get_db()
+
+    face = get_face(db.conn, face_id)
+    if face is None:
+        return error_response('Face not found', 404)
+
+    old_person_id = face.get('person_id')
+    if not old_person_id:
+        return error_response('Face is not assigned to any person', 400)
+
+    # Get person details before unassigning
+    person = get_person(db.conn, old_person_id)
+
+    # Unlink face from person
+    update_face_person(db.conn, face_id, None)
+
+    # If this was the preferred face, auto-select a new one
+    if person and person.get('preferred_face_id') == face_id:
+        remaining_faces = get_faces_for_person(db.conn, old_person_id)
+        if remaining_faces:
+            # Select the first remaining face as preferred
+            new_preferred = remaining_faces[0]['id']
+            update_person(db.conn, old_person_id, preferred_face_id=new_preferred)
+
+    # Delete person if they have no more faces
+    delete_people_without_faces(db.conn)
+
+    # Get updated person (or None if deleted)
+    updated_person = get_person(db.conn, old_person_id)
+
+    # Trigger group recalculation for the face returning to unknown pool
+    compute_unknown_face_groups_async(DATABASE_PATH)
+
+    return success_response({
+        'message': 'Face unassigned',
+        'person': updated_person,  # Will be None if person was deleted
+    })
+
+
+@app.route('/api/faces/group-status', methods=['GET'])
+def get_faces_group_status():
+    """Get status of async face grouping computation.
+
+    Returns:
+        JSON object with 'status' ('idle', 'computing', 'done', 'error').
+    """
+    status = get_group_computation_status()
+    return success_response(status)
+
+
+@app.route('/api/people/<person_id>/set-preferred', methods=['POST'])
+def set_preferred_face(person_id):
+    """Set the preferred face for a person.
+
+    The preferred face is used as the person's thumbnail.
+
+    Args:
+        person_id: Person's UUID.
+
+    Request Body:
+        JSON object with:
+            - face_id: UUID of the face to set as preferred
+
+    Returns:
+        JSON object with the updated person.
+    """
+    data = request.get_json()
+    if not data:
+        return error_response('Request body is required')
+
+    face_id = data.get('face_id')
+    if not face_id:
+        return error_response('face_id is required')
+
+    db = get_db()
+
+    # Verify person exists
+    person = get_person(db.conn, person_id)
+    if person is None:
+        return error_response('Person not found', 404)
+
+    # Verify face exists and belongs to this person
+    face = get_face(db.conn, face_id)
+    if face is None:
+        return error_response('Face not found', 404)
+    if face.get('person_id') != person_id:
+        return error_response('Face does not belong to this person', 400)
+
+    # Update the preferred face
+    update_person(db.conn, person_id, preferred_face_id=face_id)
+
+    # Get updated person
+    updated_person = get_person(db.conn, person_id)
+
+    return success_response(updated_person)
 
 
 # =============================================================================

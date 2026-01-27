@@ -118,6 +118,13 @@
                     <button id="btn-faces-thumb-larger" class="toolbar-btn" title="Larger thumbnails">
                         <span class="material-symbols-outlined">add</span>
                     </button>
+                    <div class="toolbar-separator"></div>
+                    <button id="btn-faces-only-unknowns" class="toolbar-btn" title="Show only unknown faces">
+                        <span class="material-symbols-outlined">help</span>
+                    </button>
+                    <button id="btn-faces-focus-person" class="toolbar-btn" title="Focus on one person" disabled>
+                        <span class="material-symbols-outlined">center_focus_strong</span>
+                    </button>
                 </div>
             </div>
 
@@ -201,11 +208,6 @@
 
                 <!-- Faces right controls (visible when data-screen="faces") -->
                 <div class="toolbar-group" data-for-screen="faces">
-                    <label class="toolbar-checkbox">
-                        <input type="checkbox" id="faces-only-unknowns">
-                        <span>Only unknowns</span>
-                    </label>
-                    <div class="toolbar-separator"></div>
                     <button id="btn-faces-sort-direction" class="toolbar-btn" title="Toggle sort direction">
                         <span class="material-symbols-outlined">arrow_downward</span>
                     </button>

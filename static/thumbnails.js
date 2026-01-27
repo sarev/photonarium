@@ -118,8 +118,9 @@ const ThumbnailLoader = {
      * @param {string} imageId - The image ID to load
      * @param {number} index - Index in the items array (for row calculation)
      * @param {Function} onReady - Callback: (blobUrl) => void, called when thumbnail is ready
+     * @param {Function} [urlBuilder] - Optional custom URL builder: (id) => string
      */
-    request(imageId, index, onReady) {
+    request(imageId, index, onReady, urlBuilder) {
         if (!imageId || !onReady) return;
 
         // Already fetching this image
@@ -129,7 +130,7 @@ const ThumbnailLoader = {
         if (this._queue.some(item => item.imageId === imageId)) return;
 
         // Add to queue
-        this._queue.push({ imageId, index, onReady });
+        this._queue.push({ imageId, index, onReady, urlBuilder });
 
         // Process queue
         this._processQueue();
@@ -251,11 +252,11 @@ const ThumbnailLoader = {
     /**
      * Loads a thumbnail for a queue item.
      *
-     * @param {Object} item - Queue item with imageId, index, onReady
+     * @param {Object} item - Queue item with imageId, index, onReady, urlBuilder
      * @private
      */
     async _loadThumbnail(item) {
-        const { imageId, index, onReady } = item;
+        const { imageId, index, onReady, urlBuilder } = item;
         const config = this._getConfig();
 
         // Create abort controller with timeout
@@ -266,7 +267,8 @@ const ThumbnailLoader = {
         this._inFlight.set(imageId, { controller, index });
         this._activeCount++;
 
-        const url = this._getThumbnailUrl(imageId);
+        // Use custom URL builder if provided, otherwise default
+        const url = urlBuilder ? urlBuilder(imageId) : this._getThumbnailUrl(imageId);
 
         try {
             const response = await fetch(url, {
@@ -379,6 +381,7 @@ const VirtualGrid = {
      * @param {number} [config.padding=16] - Container padding in pixels
      * @param {Function} [config.getItemHeight] - Custom item height calculator: (thumbSize, itemWidth) => height
      * @param {Function} [config.onItemCreated] - Called when item is added to DOM: (id, element) => void
+     * @param {Function} [config.getThumbnailUrl] - Custom URL builder: (thumbId) => string (defaults to App.thumbnailUrl)
      * @returns {Object} VirtualGrid instance
      */
     create(config) {
@@ -394,7 +397,8 @@ const VirtualGrid = {
                 gap: config.gap ?? 16,
                 padding: config.padding ?? 16,
                 getItemHeight: config.getItemHeight || null,
-                onItemCreated: config.onItemCreated || null
+                onItemCreated: config.onItemCreated || null,
+                getThumbnailUrl: config.getThumbnailUrl || null
             },
 
             // Layout state
@@ -717,6 +721,7 @@ const VirtualGrid = {
                     const itemIndex = i;
 
                     // Request thumbnail with callback that creates DOM element
+                    // Pass custom URL builder if configured
                     ThumbnailLoader.request(thumbId, i, (blobUrl) => {
                         // Remove from pending
                         state.pendingItems.delete(id);
@@ -754,7 +759,7 @@ const VirtualGrid = {
                         if (config.onItemCreated) {
                             config.onItemCreated(id, el);
                         }
-                    });
+                    }, config.getThumbnailUrl);
                 }
             },
 

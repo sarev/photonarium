@@ -100,8 +100,11 @@
     /** @type {HTMLButtonElement} */
     let btnFacesThumbLarger;
 
-    /** @type {HTMLInputElement} */
-    let facesOnlyUnknowns;
+    /** @type {HTMLButtonElement} */
+    let btnFacesOnlyUnknowns;
+
+    /** @type {HTMLButtonElement} */
+    let btnFacesFocusPerson;
 
     /** @type {HTMLButtonElement} */
     let btnFacesSortDirection;
@@ -109,7 +112,7 @@
     /** @type {Object|null} GridSelection instance for faces screen */
     let facesSelection = null;
 
-    /** @type {Array<Object>} Currently displayed faces (after filtering/sorting) */
+    /** @type {Array<Object>} Currently displayed unknown faces (for selection) */
     let displayedFaces = [];
 
     /** @type {number|null} Reassessment polling timer */
@@ -117,6 +120,27 @@
 
     /** @type {boolean} Whether a reload is pending (skipped due to active selection) */
     let reloadPending = false;
+
+    /** @type {Object|null} VirtualGrid instance for unknown faces */
+    let unknownFacesGrid = null;
+
+    /** @type {Array<Object>} Known people with their faces (for static section) */
+    let knownPeople = [];
+
+    /** @type {string} Current view mode: 'all' | 'unknowns' | 'pick-preferred' */
+    let viewMode = 'all';
+
+    /** @type {string|null} Person ID when in pick-preferred mode */
+    let pickPreferredPersonId = null;
+
+    /** @type {string|null} Person name when in pick-preferred mode */
+    let pickPreferredPersonName = null;
+
+    /** @type {Object|null} VirtualGrid for pick-preferred mode */
+    let pickPreferredGrid = null;
+
+    /** @type {Array<Object>} Faces for the selected person in pick-preferred mode */
+    let pickPreferredFaces = [];
 
     // =========================================================================
     // INITIALIZATION
@@ -140,7 +164,8 @@
         facesLoading = document.getElementById('faces-loading');
         btnFacesThumbSmaller = document.getElementById('btn-faces-thumb-smaller');
         btnFacesThumbLarger = document.getElementById('btn-faces-thumb-larger');
-        facesOnlyUnknowns = document.getElementById('faces-only-unknowns');
+        btnFacesOnlyUnknowns = document.getElementById('btn-faces-only-unknowns');
+        btnFacesFocusPerson = document.getElementById('btn-faces-focus-person');
         btnFacesSortDirection = document.getElementById('btn-faces-sort-direction');
 
         // Check if face detection is enabled
@@ -166,10 +191,8 @@
             needsRefresh = true;
         });
 
-        // Initialize GridSelection for faces screen
-        initFacesSelection();
-
         // Register the faces screen module
+        // Note: GridSelection is initialized in renderFacesGrid after VirtualGrid is set up
         registerFacesModule();
     }
 
@@ -251,12 +274,22 @@
             });
         }
 
-        // Only unknowns checkbox
-        if (facesOnlyUnknowns) {
-            facesOnlyUnknowns.addEventListener('change', () => {
-                showOnlyUnknowns = facesOnlyUnknowns.checked;
+        // Only unknowns toggle button
+        if (btnFacesOnlyUnknowns) {
+            btnFacesOnlyUnknowns.addEventListener('click', () => {
+                if (viewMode === 'pick-preferred') {
+                    // Exit pick-preferred mode first
+                    exitPickPreferredMode();
+                }
+                showOnlyUnknowns = !showOnlyUnknowns;
+                updateOnlyUnknownsButton();
                 renderFacesGrid();
             });
+        }
+
+        // Focus person button (for pick-preferred mode)
+        if (btnFacesFocusPerson) {
+            btnFacesFocusPerson.addEventListener('click', handleFocusButtonClick);
         }
 
         // Sort direction button
@@ -270,73 +303,339 @@
     }
 
     /**
+     * Update the only-unknowns button active state.
+     */
+    function updateOnlyUnknownsButton() {
+        if (btnFacesOnlyUnknowns) {
+            btnFacesOnlyUnknowns.classList.toggle('active', showOnlyUnknowns);
+        }
+    }
+
+    /**
+     * Update the focus button state based on current selection.
+     */
+    function updateFocusButtonState() {
+        if (!btnFacesFocusPerson) return;
+
+        if (viewMode === 'pick-preferred') {
+            // In pick-preferred mode, button is active and enabled (to exit)
+            btnFacesFocusPerson.classList.add('active');
+            btnFacesFocusPerson.disabled = false;
+            btnFacesFocusPerson.title = 'Exit focus mode';
+        } else {
+            // Normal mode: disabled unless a known person is selected
+            btnFacesFocusPerson.classList.remove('active');
+            btnFacesFocusPerson.title = 'Focus on one person';
+
+            // Check if exactly one person card is selected (not face card)
+            const selectedPersonId = getSelectedKnownPersonId();
+            btnFacesFocusPerson.disabled = !selectedPersonId;
+        }
+    }
+
+    /**
+     * Get the person ID if a known person card is selected.
+     * Returns null if no known person is selected.
+     */
+    function getSelectedKnownPersonId() {
+        // Look for selected person cards in the known section
+        const selectedPersonCard = facesGrid?.querySelector('.face-card.person-card.selected');
+        return selectedPersonCard?.dataset.personId || null;
+    }
+
+    /**
+     * Handle focus button click.
+     */
+    function handleFocusButtonClick() {
+        if (viewMode === 'pick-preferred') {
+            // Exit pick-preferred mode
+            exitPickPreferredMode();
+        } else {
+            // Enter pick-preferred mode for selected person
+            const selectedPersonId = getSelectedKnownPersonId();
+            if (selectedPersonId) {
+                enterPickPreferredMode(selectedPersonId);
+            }
+        }
+    }
+
+    /**
+     * Enter pick-preferred mode for a person.
+     * @param {string} personId - Person ID to focus on
+     */
+    async function enterPickPreferredMode(personId) {
+        // Get person details
+        const person = knownPeople.find(p => p.id === personId);
+        if (!person) return;
+
+        viewMode = 'pick-preferred';
+        pickPreferredPersonId = personId;
+        pickPreferredPersonName = person.name;
+
+        // Load all faces for this person
+        try {
+            const faces = await App.api(`/people/${personId}/faces`);
+            pickPreferredFaces = faces || [];
+        } catch (error) {
+            console.error('Failed to load faces for person:', error);
+            pickPreferredFaces = [];
+        }
+
+        // Render pick-preferred view
+        renderPickPreferredMode();
+        updateFocusButtonState();
+    }
+
+    /**
+     * Exit pick-preferred mode and return to normal view.
+     */
+    function exitPickPreferredMode() {
+        viewMode = 'all';
+        pickPreferredPersonId = null;
+        pickPreferredPersonName = null;
+        pickPreferredFaces = [];
+
+        // Clean up pick-preferred grid
+        if (pickPreferredGrid) {
+            pickPreferredGrid.unbind();
+            pickPreferredGrid.destroy();
+            pickPreferredGrid = null;
+        }
+
+        // Re-render normal faces grid
+        renderFacesGrid();
+        updateFocusButtonState();
+    }
+
+    /**
+     * Render the pick-preferred mode view.
+     */
+    function renderPickPreferredMode() {
+        if (!facesGrid) return;
+
+        // Clear current grid and unbind
+        if (unknownFacesGrid) {
+            unknownFacesGrid.unbind();
+            unknownFacesGrid.destroy();
+            unknownFacesGrid = null;
+        }
+        if (facesSelection) {
+            facesSelection.unbind();
+            facesSelection = null;
+        }
+
+        facesGrid.innerHTML = '';
+
+        // Create header
+        const header = document.createElement('div');
+        header.className = 'faces-pick-preferred-header';
+        header.innerHTML = `
+            <h3>${App.escapeHtml(pickPreferredPersonName)}</h3>
+            <span class="hint">Click a star to set as preferred face. Press Delete to unassign faces.</span>
+        `;
+        facesGrid.appendChild(header);
+
+        // Create container for the grid
+        const container = document.createElement('div');
+        container.className = 'faces-pick-preferred-container';
+        facesGrid.appendChild(container);
+
+        // Set displayed faces for selection
+        displayedFaces = pickPreferredFaces;
+
+        // Create VirtualGrid for pick-preferred mode
+        pickPreferredGrid = VirtualGrid.create({
+            container: container,
+            getItems: () => pickPreferredFaces,
+            getItemId: (face) => face.id,
+            createItem: (face, index, blobUrl) => createPickPreferredFaceCard(face, blobUrl),
+            getThumbnailId: (face) => face.id,
+            getThumbnailUrl: (faceId) => `/api/faces/${faceId}/thumbnail`,
+            itemSelector: '.face-card',
+            gap: 16,
+            padding: 16,
+            getItemHeight: (thumbSize, itemWidth) => itemWidth + 50,
+            onItemCreated: (id, el) => {
+                if (facesSelection && facesSelection.isSelected(id)) {
+                    el.classList.add('selected');
+                }
+            }
+        });
+
+        pickPreferredGrid.render();
+        pickPreferredGrid.bind();
+
+        // Initialize selection for pick-preferred mode
+        facesSelection = GridSelection.create({
+            grid: pickPreferredGrid,
+            getItems: () => pickPreferredFaces,
+            getItemId: (face) => face.id,
+            itemSelector: '.face-card',
+            selectedClass: 'selected',
+            onSelectionChanged: handlePickPreferredSelectionChanged,
+            onItemActivated: handlePickPreferredFaceActivated,
+            onDeleteRequested: handlePickPreferredDeleteRequested,
+            enableKeyboard: true,
+            enableDragBox: true,
+            enableLongPress: true
+        });
+
+        facesSelection.bind();
+    }
+
+    /**
+     * Create a face card for pick-preferred mode with star overlay.
+     * @param {Object} face - Face object
+     * @param {string} blobUrl - Blob URL for the thumbnail
+     * @returns {HTMLElement}
+     */
+    function createPickPreferredFaceCard(face, blobUrl) {
+        const card = document.createElement('div');
+        card.className = 'face-card';
+        card.dataset.id = face.id;
+
+        const thumb = document.createElement('div');
+        thumb.className = 'face-card-thumb';
+
+        const img = document.createElement('img');
+        img.src = blobUrl;
+        img.alt = pickPreferredPersonName || 'Face';
+        thumb.appendChild(img);
+
+        // Add star overlay
+        const star = document.createElement('div');
+        star.className = 'face-card-star' + (face.is_preferred ? ' preferred' : '');
+        star.dataset.faceId = face.id;
+        star.innerHTML = '<span class="material-symbols-outlined">star</span>';
+        star.addEventListener('click', (e) => {
+            e.stopPropagation();
+            handleStarClick(face.id);
+        });
+        thumb.appendChild(star);
+
+        card.appendChild(thumb);
+
+        // Name label (read-only in pick-preferred mode)
+        const nameLabel = document.createElement('div');
+        nameLabel.className = 'face-card-name';
+        nameLabel.textContent = pickPreferredPersonName;
+        card.appendChild(nameLabel);
+
+        return card;
+    }
+
+    /**
+     * Handle star click to set preferred face.
+     * @param {string} faceId - Face ID to set as preferred
+     */
+    async function handleStarClick(faceId) {
+        if (!pickPreferredPersonId) return;
+
+        try {
+            const result = await App.api(`/people/${pickPreferredPersonId}/set-preferred`, {
+                method: 'POST',
+                body: JSON.stringify({ face_id: faceId })
+            });
+
+            if (result && result.success) {
+                // Update local state
+                for (const face of pickPreferredFaces) {
+                    face.is_preferred = (face.id === faceId);
+                }
+
+                // Update star visuals
+                const allStars = facesGrid.querySelectorAll('.face-card-star');
+                allStars.forEach(star => {
+                    star.classList.toggle('preferred', star.dataset.faceId === faceId);
+                });
+            }
+        } catch (error) {
+            console.error('Failed to set preferred face:', error);
+            App.showError('Failed to set preferred face.');
+        }
+    }
+
+    /**
+     * Handle selection change in pick-preferred mode.
+     */
+    function handlePickPreferredSelectionChanged(selectedIds) {
+        // Nothing special to do here
+    }
+
+    /**
+     * Handle face activation in pick-preferred mode (Enter/double-click).
+     */
+    function handlePickPreferredFaceActivated(faceId) {
+        // Set as preferred on activation
+        handleStarClick(faceId);
+    }
+
+    /**
+     * Handle delete request in pick-preferred mode (unassign faces).
+     * @param {Array<string>} faceIds - Selected face IDs to unassign
+     */
+    async function handlePickPreferredDeleteRequested(faceIds) {
+        if (!faceIds || faceIds.length === 0) return;
+
+        const count = faceIds.length;
+        const message = count === 1
+            ? 'Remove this face from the person? It will return to the unknown pool.'
+            : `Remove ${count} faces from the person? They will return to the unknown pool.`;
+
+        const confirmed = await App.confirm('Unassign Faces', message);
+        if (!confirmed) return;
+
+        let successCount = 0;
+        for (const faceId of faceIds) {
+            try {
+                const result = await App.api(`/faces/${faceId}/unassign`, { method: 'POST' });
+                if (result && result.success) {
+                    successCount++;
+                }
+            } catch (error) {
+                console.error(`Failed to unassign face ${faceId}:`, error);
+            }
+        }
+
+        if (successCount > 0) {
+            // Remove unassigned faces from local state
+            pickPreferredFaces = pickPreferredFaces.filter(f => !faceIds.includes(f.id));
+
+            // Clear selection
+            if (facesSelection) {
+                facesSelection.clear();
+            }
+
+            // If all faces removed, exit pick-preferred mode
+            if (pickPreferredFaces.length === 0) {
+                exitPickPreferredMode();
+                // Mark for refresh to show the faces in unknown section
+                peopleCacheTime = 0;
+                loadAllFaces();
+            } else {
+                // Re-render pick-preferred view
+                displayedFaces = pickPreferredFaces;
+                pickPreferredGrid.refresh();
+            }
+        }
+    }
+
+    /**
      * Initialize GridSelection for faces screen.
-     * Creates a simple grid adapter since we don't use VirtualGrid.
+     * Works with the VirtualGrid for unknown faces.
      */
     function initFacesSelection() {
-        if (!facesGrid || typeof GridSelection === 'undefined') return;
-
-        // Create a simple adapter that provides the methods GridSelection needs
-        const gridAdapter = {
-            _config: {
-                container: facesGrid
-            },
-            _innerContainer: facesGrid,
-
-            /**
-             * Update visual class on an item.
-             */
-            setItemClass(id, className, value) {
-                const item = facesGrid.querySelector(`.face-card[data-id="${id}"]`);
-                if (item) {
-                    item.classList.toggle(className, value);
-                }
-            },
-
-            /**
-             * Scroll to an item by index.
-             */
-            scrollTo(index) {
-                if (index < 0 || index >= displayedFaces.length) return;
-                const id = displayedFaces[index].id;
-                const item = facesGrid.querySelector(`.face-card[data-id="${id}"]`);
-                if (item) {
-                    item.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
-                }
-            },
-
-            /**
-             * Get approximate items per row (based on grid layout).
-             */
-            getItemsPerRow() {
-                const firstCard = facesGrid.querySelector('.face-card');
-                if (!firstCard) return 1;
-                const gridWidth = facesGrid.clientWidth;
-                const cardWidth = firstCard.offsetWidth + 8; // 8px gap
-                return Math.max(1, Math.floor(gridWidth / cardWidth));
-            },
-
-            /**
-             * Get approximate visible rows.
-             */
-            getVisibleRows() {
-                const firstCard = facesGrid.querySelector('.face-card');
-                if (!firstCard) return 1;
-                const gridHeight = facesGrid.clientHeight;
-                const cardHeight = firstCard.offsetHeight + 8; // 8px gap
-                return Math.max(1, Math.floor(gridHeight / cardHeight));
-            }
-        };
+        if (!unknownFacesGrid || typeof GridSelection === 'undefined') return;
 
         facesSelection = GridSelection.create({
-            grid: gridAdapter,
+            grid: unknownFacesGrid,
             getItems: () => displayedFaces,
             getItemId: (face) => face.id,
             itemSelector: '.face-card',
             selectedClass: 'selected',
             onSelectionChanged: handleFacesSelectionChanged,
             onItemActivated: handleFaceActivated,
-            onDeleteRequested: handleFacesDeleteRequested
+            onDeleteRequested: handleFacesDeleteRequested,
             enableKeyboard: true,
             enableDragBox: true,
             enableLongPress: true
@@ -424,20 +723,33 @@
                 if (needsRefresh) {
                     loadAllFaces(); // Selection is bound after load completes
                 } else {
-                    // Restore scroll position
-                    if (facesGrid) {
+                    // Restore scroll position (now from unknown container if exists)
+                    const unknownContainer = facesGrid?.querySelector('.faces-unknown-container');
+                    if (unknownContainer) {
+                        unknownContainer.scrollTop = savedScrollTop;
+                    } else if (facesGrid) {
                         facesGrid.scrollTop = savedScrollTop;
                     }
-                    // Bind selection handlers (grid already has content)
+                    // Bind VirtualGrid and selection handlers
+                    if (unknownFacesGrid) {
+                        unknownFacesGrid.bind();
+                    }
                     if (facesSelection) {
                         facesSelection.bind();
                     }
                 }
             },
             onLeave() {
-                // Save scroll position
-                if (facesGrid) {
+                // Save scroll position from unknown container
+                const unknownContainer = facesGrid?.querySelector('.faces-unknown-container');
+                if (unknownContainer) {
+                    savedScrollTop = unknownContainer.scrollTop;
+                } else if (facesGrid) {
                     savedScrollTop = facesGrid.scrollTop;
+                }
+                // Unbind VirtualGrid
+                if (unknownFacesGrid) {
+                    unknownFacesGrid.unbind();
                 }
                 // Unbind selection handlers
                 if (facesSelection) {
@@ -594,6 +906,7 @@
 
     /**
      * Render the faces grid with sections.
+     * Known faces section is static DOM, unknown faces use VirtualGrid.
      */
     function renderFacesGrid() {
         if (!facesGrid) return;
@@ -601,6 +914,13 @@
         // Clear selection when re-rendering
         if (facesSelection) {
             facesSelection.clear();
+        }
+
+        // Unbind and destroy existing unknown grid
+        if (unknownFacesGrid) {
+            unknownFacesGrid.unbind();
+            unknownFacesGrid.destroy();
+            unknownFacesGrid = null;
         }
 
         // Clear grid
@@ -612,104 +932,134 @@
             faces = faces.filter(f => !f.person_id);
         }
 
-        // Sort faces - known faces by name, unknown faces by image timestamp
-        faces.sort((a, b) => {
-            // Known faces first
-            if (a.person_name && !b.person_name) return -1;
-            if (!a.person_name && b.person_name) return 1;
+        // Group faces by known/unknown
+        const knownFaces = faces.filter(f => f.person_id);
+        const unknownFaces = faces.filter(f => !f.person_id);
 
-            // Both known - sort by name
-            if (a.person_name && b.person_name) {
-                const cmp = a.person_name.localeCompare(b.person_name);
-                return sortAscending ? cmp : -cmp;
-            }
-
-            // Both unknown - sort by face ID (proxy for creation time)
+        // Sort unknown faces
+        unknownFaces.sort((a, b) => {
             const cmp = (a.id || '').localeCompare(b.id || '');
             return sortAscending ? cmp : -cmp;
         });
 
-        // Update displayedFaces for GridSelection (unknown faces only for selection)
-        displayedFaces = faces.filter(f => !f.person_id);
+        // Update displayedFaces for GridSelection (unknown faces only)
+        displayedFaces = unknownFaces;
+
+        // Build known people list for static section
+        knownPeople = buildKnownPeopleList(knownFaces);
 
         // Check for empty state
         if (faces.length === 0) {
             displayedFaces = [];
+            knownPeople = [];
             if (facesEmpty) facesEmpty.hidden = false;
             return;
         }
         if (facesEmpty) facesEmpty.hidden = true;
 
-        // Group faces by known/unknown
-        const knownFaces = faces.filter(f => f.person_id);
-        const unknownFaces = faces.filter(f => !f.person_id);
-
-        // Render known faces section
-        if (knownFaces.length > 0 && !showOnlyUnknowns) {
-            const section = createFacesSection('Known', knownFaces.length, 'known');
-            const grid = section.querySelector('.faces-section-grid');
-
-            // Group by person for known faces
-            const byPerson = new Map();
-            for (const face of knownFaces) {
-                if (!byPerson.has(face.person_id)) {
-                    byPerson.set(face.person_id, []);
-                }
-                byPerson.get(face.person_id).push(face);
-            }
-
-            // Get unique people and sort by name
-            const people = Array.from(byPerson.entries()).map(([personId, personFaces]) => ({
-                id: personId,
-                name: personFaces[0].person_name,
-                faces: personFaces,
-                preferredFace: personFaces.find(f => f.is_preferred) || personFaces[0],
-            }));
-
-            people.sort((a, b) => {
-                const cmp = a.name.localeCompare(b.name);
-                return sortAscending ? cmp : -cmp;
-            });
-
-            for (const person of people) {
-                const card = createPersonCard(person);
-                grid.appendChild(card);
-            }
-
+        // Render known faces section (static DOM - one card per person)
+        if (knownPeople.length > 0 && !showOnlyUnknowns) {
+            const section = createKnownFacesSection(knownPeople);
             facesGrid.appendChild(section);
         }
 
-        // Render unknown faces section
+        // Render unknown faces section using VirtualGrid
         if (unknownFaces.length > 0) {
-            const section = createFacesSection('Unknown', unknownFaces.length, 'unknown');
-            const grid = section.querySelector('.faces-section-grid');
-
-            for (const face of unknownFaces) {
-                const card = createFaceCard(face);
-                grid.appendChild(card);
-            }
-
+            const section = createUnknownFacesSection(unknownFaces.length);
             facesGrid.appendChild(section);
+
+            // Initialize VirtualGrid in the unknown section container
+            const unknownContainer = section.querySelector('.faces-unknown-container');
+            if (unknownContainer) {
+                initUnknownFacesGridInContainer(unknownContainer);
+            }
         }
+
+        // Initialize selection after grid is set up
+        initFacesSelection();
     }
 
     /**
-     * Create a faces section element.
-     * @param {string} title - Section title
-     * @param {number} count - Number of faces
-     * @param {string} type - 'known' or 'unknown'
+     * Build list of known people from faces.
+     * @param {Array<Object>} knownFaces - Faces with person_id
+     * @returns {Array<Object>} People with faces array
+     */
+    function buildKnownPeopleList(knownFaces) {
+        const byPerson = new Map();
+        for (const face of knownFaces) {
+            if (!byPerson.has(face.person_id)) {
+                byPerson.set(face.person_id, []);
+            }
+            byPerson.get(face.person_id).push(face);
+        }
+
+        const people = Array.from(byPerson.entries()).map(([personId, personFaces]) => ({
+            id: personId,
+            name: personFaces[0].person_name,
+            faces: personFaces,
+            preferredFace: personFaces.find(f => f.is_preferred) || personFaces[0],
+        }));
+
+        // Sort by name
+        people.sort((a, b) => {
+            const cmp = a.name.localeCompare(b.name);
+            return sortAscending ? cmp : -cmp;
+        });
+
+        return people;
+    }
+
+    /**
+     * Create the known faces section (static DOM).
+     * @param {Array<Object>} people - List of people with faces
      * @returns {HTMLElement}
      */
-    function createFacesSection(title, count, type) {
+    function createKnownFacesSection(people) {
         const section = document.createElement('div');
-        section.className = `faces-section ${type}`;
+        section.className = 'faces-section known';
 
         const header = document.createElement('div');
         header.className = 'faces-section-header';
 
         const titleEl = document.createElement('h3');
-        titleEl.className = `faces-section-title ${type}`;
-        titleEl.textContent = title;
+        titleEl.className = 'faces-section-title known';
+        titleEl.textContent = 'Known';
+        header.appendChild(titleEl);
+
+        const countEl = document.createElement('span');
+        countEl.className = 'faces-section-count';
+        countEl.textContent = `(${people.length})`;
+        header.appendChild(countEl);
+
+        section.appendChild(header);
+
+        const grid = document.createElement('div');
+        grid.className = 'faces-section-grid';
+
+        for (const person of people) {
+            const card = createPersonCard(person);
+            grid.appendChild(card);
+        }
+
+        section.appendChild(grid);
+        return section;
+    }
+
+    /**
+     * Create the unknown faces section with VirtualGrid container.
+     * @param {number} count - Number of unknown faces
+     * @returns {HTMLElement}
+     */
+    function createUnknownFacesSection(count) {
+        const section = document.createElement('div');
+        section.className = 'faces-section unknown';
+
+        const header = document.createElement('div');
+        header.className = 'faces-section-header';
+
+        const titleEl = document.createElement('h3');
+        titleEl.className = 'faces-section-title unknown';
+        titleEl.textContent = 'Unknown';
         header.appendChild(titleEl);
 
         const countEl = document.createElement('span');
@@ -719,74 +1069,65 @@
 
         section.appendChild(header);
 
-        const grid = document.createElement('div');
-        grid.className = 'faces-section-grid';
-        section.appendChild(grid);
+        // Container for VirtualGrid
+        const container = document.createElement('div');
+        container.className = 'faces-unknown-container';
+        section.appendChild(container);
 
         return section;
     }
 
     /**
-     * Create a person card (for known faces - shows representative face).
-     * @param {Object} person - Person object with faces array
-     * @returns {HTMLElement}
+     * Initialize VirtualGrid in a specific container.
+     * @param {HTMLElement} container - Container element for the grid
      */
-    function createPersonCard(person) {
-        const card = document.createElement('div');
-        card.className = 'face-card';
-        card.dataset.personId = person.id;
+    function initUnknownFacesGridInContainer(container) {
+        if (typeof VirtualGrid === 'undefined') return;
 
-        const thumb = document.createElement('div');
-        thumb.className = 'face-card-thumb';
-
-        const img = document.createElement('img');
-        img.src = `/api/people/${person.id}/thumbnail`;
-        img.alt = person.name;
-        img.loading = 'lazy';
-        thumb.appendChild(img);
-
-        // Add preferred indicator if multiple faces
-        if (person.faces.length > 1) {
-            const preferred = document.createElement('div');
-            preferred.className = 'face-card-preferred';
-            preferred.innerHTML = '<span class="material-symbols-outlined">star</span>';
-            preferred.title = `${person.faces.length} faces`;
-            thumb.appendChild(preferred);
-        }
-
-        card.appendChild(thumb);
-
-        const name = document.createElement('div');
-        name.className = 'face-card-name';
-        name.textContent = person.name;
-        card.appendChild(name);
-
-        // Double-click to navigate to gallery filtered by this person
-        card.addEventListener('dblclick', () => {
-            App.setFilter({ people: [{ id: person.id, name: person.name }] });
-            App.navigateTo('gallery');
+        unknownFacesGrid = VirtualGrid.create({
+            container: container,
+            getItems: () => displayedFaces,
+            getItemId: (face) => face.id,
+            createItem: (face, index, blobUrl) => createUnknownFaceCard(face, blobUrl),
+            getThumbnailId: (face) => face.id,
+            getThumbnailUrl: (faceId) => `/api/faces/${faceId}/thumbnail`,
+            itemSelector: '.face-card',
+            gap: 16,
+            padding: 0,  // Section already has padding
+            getItemHeight: (thumbSize, itemWidth) => {
+                // Face card: thumbnail (square) + input height + padding
+                return itemWidth + 50;
+            },
+            onItemCreated: (id, el) => {
+                // Sync selection state when item is created
+                if (facesSelection && facesSelection.isSelected(id)) {
+                    el.classList.add('selected');
+                }
+            }
         });
 
-        return card;
+        // Render the grid
+        unknownFacesGrid.render();
+        unknownFacesGrid.bind();
     }
 
     /**
-     * Create a face card (for unknown faces - editable name).
+     * Create an unknown face card for VirtualGrid (with blob URL).
      * @param {Object} face - Face object
+     * @param {string} blobUrl - Blob URL for the thumbnail
      * @returns {HTMLElement}
      */
-    function createFaceCard(face) {
+    function createUnknownFaceCard(face, blobUrl) {
         const card = document.createElement('div');
         card.className = 'face-card';
-        card.dataset.id = face.id; // Use data-id for GridSelection compatibility
+        card.dataset.id = face.id;
 
         const thumb = document.createElement('div');
         thumb.className = 'face-card-thumb';
 
         const img = document.createElement('img');
-        img.src = `/api/faces/${face.id}/thumbnail`;
+        img.src = blobUrl;
         img.alt = 'Unknown face';
-        img.loading = 'lazy';
         thumb.appendChild(img);
 
         card.appendChild(thumb);
@@ -830,10 +1171,67 @@
 
         card.appendChild(input);
 
-        // Note: Double-click is handled by GridSelection's onItemActivated
+        return card;
+    }
+
+
+    /**
+     * Create a person card (for known faces - shows representative face).
+     * @param {Object} person - Person object with faces array
+     * @returns {HTMLElement}
+     */
+    function createPersonCard(person) {
+        const card = document.createElement('div');
+        card.className = 'face-card person-card';
+        card.dataset.personId = person.id;
+        card.dataset.id = `person-${person.id}`;  // For consistency
+
+        const thumb = document.createElement('div');
+        thumb.className = 'face-card-thumb';
+
+        const img = document.createElement('img');
+        img.src = `/api/people/${person.id}/thumbnail`;
+        img.alt = person.name;
+        img.loading = 'lazy';
+        thumb.appendChild(img);
+
+        // Add face count badge if multiple faces
+        if (person.faces.length > 1) {
+            const badge = document.createElement('div');
+            badge.className = 'face-card-preferred';
+            badge.innerHTML = `<span class="material-symbols-outlined">star</span>`;
+            badge.title = `${person.faces.length} faces`;
+            thumb.appendChild(badge);
+        }
+
+        card.appendChild(thumb);
+
+        const name = document.createElement('div');
+        name.className = 'face-card-name';
+        name.textContent = person.name;
+        card.appendChild(name);
+
+        // Single click to select/deselect for focus button
+        card.addEventListener('click', (e) => {
+            // Deselect all other person cards
+            const allPersonCards = facesGrid.querySelectorAll('.person-card.selected');
+            allPersonCards.forEach(c => {
+                if (c !== card) c.classList.remove('selected');
+            });
+            // Toggle selection on this card
+            card.classList.toggle('selected');
+            updateFocusButtonState();
+        });
+
+        // Double-click to enter pick-preferred mode
+        card.addEventListener('dblclick', (e) => {
+            e.preventDefault();
+            enterPickPreferredMode(person.id);
+        });
 
         return card;
     }
+
 
     /**
      * Show autocomplete for face card input.

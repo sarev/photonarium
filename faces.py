@@ -40,7 +40,10 @@ import logging
 import numpy as np
 import sqlite3
 import threading
+import time
 import uuid
+
+from duplicates import UnionFind
 
 # Configure module logger
 logger = logging.getLogger(__name__)
@@ -86,12 +89,18 @@ _SQL_CREATE_FACE_INDEXES = [
     "CREATE INDEX IF NOT EXISTS idx_people_name ON people(name COLLATE NOCASE)",
 ]
 
+# Migrations for schema updates
+_MIGRATIONS = [
+    # Add unknown_group_id column for grouping similar unknown faces
+    ("faces", "unknown_group_id", "ALTER TABLE faces ADD COLUMN unknown_group_id TEXT"),
+]
+
 
 def init_face_tables(conn: sqlite3.Connection) -> None:
     """Initialize the face recognition database tables.
 
     Creates the people and faces tables if they don't exist, along with
-    necessary indexes.
+    necessary indexes. Also runs any pending migrations.
 
     Args:
         conn: Database connection.
@@ -106,8 +115,29 @@ def init_face_tables(conn: sqlite3.Connection) -> None:
             # Index already exists
             pass
 
+    # Run migrations for schema updates
+    _run_migrations(conn)
+
     conn.commit()
     logger.info('Face recognition tables initialized')
+
+
+def _run_migrations(conn: sqlite3.Connection) -> None:
+    """Run pending schema migrations.
+
+    Args:
+        conn: Database connection.
+    """
+    for table, column, sql in _MIGRATIONS:
+        # Check if column exists
+        cursor = conn.execute(f"PRAGMA table_info({table})")
+        columns = [row[1] for row in cursor.fetchall()]
+        if column not in columns:
+            try:
+                conn.execute(sql)
+                logger.info(f"Migration: added {table}.{column}")
+            except sqlite3.OperationalError as e:
+                logger.warning(f"Migration failed for {table}.{column}: {e}")
 
 
 # =============================================================================
@@ -1012,12 +1042,17 @@ def get_faces_for_person(
         person_id: Person's UUID.
 
     Returns:
-        List of face dicts.
+        List of face dicts with is_preferred and image_timestamp.
     """
     cursor = conn.execute(
-        '''SELECT * FROM faces
-           WHERE person_id = ? AND suppressed = 0
-           ORDER BY created_at''',
+        '''SELECT f.*,
+                  i.timestamp as image_timestamp,
+                  CASE WHEN f.id = p.preferred_face_id THEN 1 ELSE 0 END as is_preferred
+           FROM faces f
+           JOIN images i ON f.image_id = i.id
+           JOIN people p ON f.person_id = p.id
+           WHERE f.person_id = ? AND f.suppressed = 0
+           ORDER BY i.timestamp''',
         (person_id,)
     )
 
@@ -1037,6 +1072,7 @@ def get_all_faces(
     """Get all non-suppressed faces with person info.
 
     Returns faces ordered by person name (known faces first), then unknown faces.
+    Unknown faces are sorted by group size (largest first), then by image timestamp.
     Does not include the embedding blob for efficiency.
 
     Args:
@@ -1044,31 +1080,51 @@ def get_all_faces(
         unknown_only: If True, only return faces without a person_id.
 
     Returns:
-        List of face dicts with person_name and is_preferred included.
+        List of face dicts with person_name, is_preferred, and group info included.
     """
     if unknown_only:
+        # Return unknown faces sorted by group size and timestamp
         cursor = conn.execute(
             '''SELECT f.id, f.image_id, f.box_x, f.box_y, f.box_w, f.box_h,
                       f.confidence, f.person_id, f.created_at,
+                      f.unknown_group_id,
                       NULL as person_name,
-                      0 as is_preferred
+                      0 as is_preferred,
+                      i.timestamp as image_timestamp,
+                      COUNT(*) OVER (PARTITION BY f.unknown_group_id) as group_size
                FROM faces f
+               JOIN images i ON f.image_id = i.id
                WHERE f.suppressed = 0 AND f.person_id IS NULL
-               ORDER BY f.created_at DESC'''
+               ORDER BY
+                   CASE WHEN f.unknown_group_id IS NULL THEN 0 ELSE
+                       COUNT(*) OVER (PARTITION BY f.unknown_group_id) END DESC,
+                   f.unknown_group_id,
+                   i.timestamp'''
         )
     else:
         cursor = conn.execute(
             '''SELECT f.id, f.image_id, f.box_x, f.box_y, f.box_w, f.box_h,
                       f.confidence, f.person_id, f.created_at,
+                      f.unknown_group_id,
                       p.name as person_name,
-                      CASE WHEN f.id = p.preferred_face_id THEN 1 ELSE 0 END as is_preferred
+                      CASE WHEN f.id = p.preferred_face_id THEN 1 ELSE 0 END as is_preferred,
+                      i.timestamp as image_timestamp,
+                      CASE WHEN f.person_id IS NULL
+                           THEN COUNT(*) OVER (PARTITION BY f.unknown_group_id)
+                           ELSE NULL END as group_size
                FROM faces f
                LEFT JOIN people p ON f.person_id = p.id
+               JOIN images i ON f.image_id = i.id
                WHERE f.suppressed = 0
                ORDER BY
                    CASE WHEN f.person_id IS NULL THEN 1 ELSE 0 END,
                    p.name COLLATE NOCASE,
-                   f.created_at DESC'''
+                   CASE WHEN f.unknown_group_id IS NULL THEN 0 ELSE
+                       CASE WHEN f.person_id IS NULL
+                            THEN COUNT(*) OVER (PARTITION BY f.unknown_group_id)
+                            ELSE 0 END END DESC,
+                   f.unknown_group_id,
+                   i.timestamp'''
         )
 
     return [dict(row) for row in cursor.fetchall()]
@@ -1668,6 +1724,236 @@ def reassess_unknown_faces(
 _reassess_thread: threading.Thread | None = None
 _reassess_lock = threading.Lock()
 _reassess_result: dict | None = None
+
+# Background thread for unknown face grouping
+_grouping_thread: threading.Thread | None = None
+_grouping_lock = threading.Lock()
+_grouping_status: dict | None = None  # {status: 'idle'|'computing'|'done', progress: 0-100}
+
+
+# =============================================================================
+# UNKNOWN FACE GROUPING
+# =============================================================================
+
+def compute_unknown_face_groups(
+    conn: sqlite3.Connection,
+    threshold: float = 0.65,
+) -> int:
+    """Compute similarity groups for unknown faces using UnionFind clustering.
+
+    Unknown faces that are similar to each other (above threshold) are grouped
+    together. This helps users identify the same unknown person across images.
+
+    The algorithm:
+    1. Load all unknown face embeddings (already L2-normalized)
+    2. Compute pairwise cosine similarity using chunked matrix multiplication
+    3. Use UnionFind to cluster faces above the similarity threshold
+    4. Assign group IDs and update the database
+
+    Args:
+        conn: Database connection.
+        threshold: Minimum cosine similarity to group faces together.
+
+    Returns:
+        Number of groups created.
+    """
+    # Load unknown faces with embeddings
+    cursor = conn.execute("""
+        SELECT f.id, f.embedding
+        FROM faces f
+        WHERE f.person_id IS NULL AND f.suppressed = 0
+        ORDER BY f.id
+    """)
+
+    face_ids = []
+    embeddings = []
+    for row in cursor:
+        face_ids.append(row[0])
+        embedding = np.frombuffer(row[1], dtype=np.float32)
+        embeddings.append(embedding)
+
+    if not face_ids:
+        logger.info('No unknown faces to group')
+        return 0
+
+    n_faces = len(face_ids)
+    logger.info(f'Computing groups for {n_faces} unknown faces')
+
+    # Stack embeddings into a matrix (already L2-normalized)
+    embedding_matrix = np.vstack(embeddings)
+
+    # Use UnionFind in ID mode
+    uf = UnionFind(ids=face_ids)
+
+    # Chunked similarity computation (similar to duplicates.py)
+    chunk_size = 1000
+    for i in range(0, n_faces, chunk_size):
+        chunk_end = min(i + chunk_size, n_faces)
+        chunk = embedding_matrix[i:chunk_end]
+
+        # Compute similarities: chunk @ all.T
+        similarities = chunk @ embedding_matrix.T
+
+        # Find pairs above threshold
+        for local_idx in range(chunk_end - i):
+            global_idx = i + local_idx
+            face_id_i = face_ids[global_idx]
+
+            # Only check j > global_idx to avoid duplicate pairs
+            for j in range(global_idx + 1, n_faces):
+                if similarities[local_idx, j] >= threshold:
+                    face_id_j = face_ids[j]
+                    uf.union_ids(face_id_i, face_id_j)
+
+    # Extract groups and assign group IDs
+    groups = uf.extract_groups_by_id()
+
+    # Clear all existing group IDs first
+    conn.execute("UPDATE faces SET unknown_group_id = NULL WHERE person_id IS NULL")
+
+    # Assign new group IDs
+    n_groups = 0
+    for root_id, members in groups.items():
+        if len(members) > 1:
+            # Generate a group ID
+            group_id = str(uuid.uuid4())[:8]
+            n_groups += 1
+
+            # Update all faces in this group
+            placeholders = ','.join('?' * len(members))
+            conn.execute(
+                f"UPDATE faces SET unknown_group_id = ? WHERE id IN ({placeholders})",
+                [group_id] + members
+            )
+
+    conn.commit()
+    logger.info(f'Created {n_groups} unknown face groups')
+    return n_groups
+
+
+def compute_unknown_face_groups_async(
+    db_path: str,
+    threshold: float = 0.65,
+    callback: callable = None,
+) -> None:
+    """Compute unknown face groups in a background thread.
+
+    Args:
+        db_path: Path to the SQLite database file.
+        threshold: Minimum cosine similarity for grouping.
+        callback: Optional callback(n_groups) when done.
+    """
+    global _grouping_thread, _grouping_status
+
+    def _worker():
+        global _grouping_thread, _grouping_status
+        try:
+            with _grouping_lock:
+                _grouping_status = {'status': 'computing', 'progress': 0}
+
+            # Open a new connection for this thread
+            conn = sqlite3.connect(db_path)
+            conn.row_factory = sqlite3.Row
+
+            n_groups = compute_unknown_face_groups(conn, threshold)
+            conn.close()
+
+            # Store result
+            with _grouping_lock:
+                _grouping_status = {
+                    'status': 'done',
+                    'n_groups': n_groups,
+                }
+
+            logger.info(f'Async face grouping complete: {n_groups} groups')
+
+            if callback:
+                callback(n_groups)
+        except Exception as e:
+            logger.error(f'Async face grouping failed: {e}')
+            with _grouping_lock:
+                _grouping_status = {'status': 'error', 'error': str(e)}
+        finally:
+            with _grouping_lock:
+                _grouping_thread = None
+
+    with _grouping_lock:
+        # Only start if not already running
+        if _grouping_thread is None or not _grouping_thread.is_alive():
+            _grouping_status = {'status': 'starting'}
+            _grouping_thread = threading.Thread(target=_worker, daemon=True)
+            _grouping_thread.start()
+            logger.info('Started async face grouping')
+        else:
+            logger.debug('Face grouping already in progress, skipping')
+
+
+def get_group_computation_status() -> dict:
+    """Get status of async face grouping.
+
+    Returns:
+        Dict with 'status' ('idle', 'computing', 'done', 'error') and related info.
+    """
+    with _grouping_lock:
+        if _grouping_status is None:
+            return {'status': 'idle'}
+        return _grouping_status.copy()
+
+
+def get_unknown_faces_grouped(conn: sqlite3.Connection) -> list[dict]:
+    """Get unknown faces sorted by group size and timestamp.
+
+    Returns faces with group information, sorted so that larger groups
+    appear first, and within groups, faces are sorted by image timestamp.
+
+    Args:
+        conn: Database connection.
+
+    Returns:
+        List of face dicts with group_size field.
+    """
+    cursor = conn.execute("""
+        SELECT
+            f.id,
+            f.image_id,
+            f.box_x,
+            f.box_y,
+            f.box_w,
+            f.box_h,
+            f.confidence,
+            f.unknown_group_id,
+            f.created_at,
+            i.timestamp as image_timestamp,
+            i.basename,
+            COUNT(*) OVER (PARTITION BY f.unknown_group_id) as group_size
+        FROM faces f
+        JOIN images i ON f.image_id = i.id
+        WHERE f.person_id IS NULL
+          AND f.suppressed = 0
+        ORDER BY
+            CASE WHEN f.unknown_group_id IS NULL THEN 0 ELSE group_size END DESC,
+            f.unknown_group_id,
+            i.timestamp
+    """)
+
+    faces = []
+    for row in cursor:
+        faces.append({
+            'id': row['id'],
+            'image_id': row['image_id'],
+            'box_x': row['box_x'],
+            'box_y': row['box_y'],
+            'box_w': row['box_w'],
+            'box_h': row['box_h'],
+            'confidence': row['confidence'],
+            'unknown_group_id': row['unknown_group_id'],
+            'created_at': row['created_at'],
+            'image_timestamp': row['image_timestamp'],
+            'basename': row['basename'],
+            'group_size': row['group_size'] if row['unknown_group_id'] else 1,
+        })
+
+    return faces
 
 
 def is_reassessment_in_progress() -> bool:

@@ -1476,6 +1476,22 @@ a:hover {
     gap: 1rem;
 }
 
+/* VirtualGrid container for unknown faces */
+.faces-unknown-container {
+    position: relative;
+    flex: 1;
+    min-height: 200px;
+    overflow-y: auto;
+}
+
+/* When unknown section is shown, make it expand */
+.faces-section.unknown {
+    display: flex;
+    flex-direction: column;
+    flex: 1;
+    min-height: 0;
+}
+
 /* Face card */
 .face-card {
     display: flex;
@@ -1532,6 +1548,68 @@ a:hover {
 .face-card-preferred .material-symbols-outlined {
     font-size: 14px;
     color: var(--color-text-amber);
+}
+
+/* Clickable star overlay for pick-preferred mode */
+.face-card-star {
+    position: absolute;
+    bottom: 2px;
+    right: 2px;
+    width: 24px;
+    height: 24px;
+    background: var(--color-bg-elevated);
+    border-radius: 50%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    box-shadow: var(--shadow-sm);
+    cursor: pointer;
+    transition: transform 0.15s, background-color 0.15s;
+    z-index: 5;
+}
+
+.face-card-star:hover {
+    transform: scale(1.1);
+    background-color: var(--color-bg-secondary);
+}
+
+.face-card-star .material-symbols-outlined {
+    font-size: 16px;
+    color: var(--color-text-muted);
+}
+
+.face-card-star.preferred .material-symbols-outlined {
+    color: var(--color-text-amber);
+}
+
+/* Pick-preferred mode header */
+.faces-pick-preferred-header {
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+    padding: 0.75rem 1rem;
+    background-color: var(--color-bg-secondary);
+    border-bottom: 1px solid var(--color-border);
+}
+
+.faces-pick-preferred-header h3 {
+    margin: 0;
+    font-size: 1rem;
+    font-weight: 600;
+    color: var(--color-text-primary);
+}
+
+.faces-pick-preferred-header .hint {
+    font-size: 0.85rem;
+    color: var(--color-text-muted);
+}
+
+/* VirtualGrid container for pick-preferred mode */
+.faces-pick-preferred-container {
+    position: relative;
+    flex: 1;
+    min-height: 200px;
+    overflow-y: auto;
 }
 
 /* Face card name label */
