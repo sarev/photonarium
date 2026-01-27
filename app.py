@@ -37,6 +37,24 @@ from thumbnails import (
     generate_missing_thumbnails,
     ThumbnailCache,
 )
+from faces import (
+    get_all_people,
+    get_person,
+    get_person_by_name,
+    create_person,
+    update_person,
+    delete_person,
+    search_people,
+    get_face,
+    get_faces_for_image,
+    get_faces_for_person,
+    update_face_person,
+    suppress_face,
+    delete_face,
+    get_face_thumbnail_path,
+    get_images_with_people,
+    delete_people_without_faces,
+)
 
 # Configure logging
 logging.basicConfig(
@@ -183,7 +201,7 @@ def serve_index():
 
 @app.route('/api/images', methods=['GET'])
 def get_images():
-    """List images with support for incremental updates.
+    """List images with support for incremental updates and people filtering.
 
     If 'since' query parameter is provided, returns only changes since that
     epoch (timestamp), allowing efficient incremental updates. Otherwise
@@ -192,6 +210,8 @@ def get_images():
     Query Parameters:
         since: Optional ISO timestamp. If provided, returns delta update with
                only images changed since that time.
+        people: Optional comma-separated list of person IDs. If provided,
+               only returns images containing ALL specified people (AND logic).
 
     Returns:
         Without 'since': JSON object with 'epoch' and 'images' array.
@@ -199,15 +219,41 @@ def get_images():
                       'deleted_ids' array for incremental sync.
     """
     since = request.args.get('since')
+    people_param = request.args.get('people', '').strip()
+
+    # Parse people filter
+    person_ids = []
+    if people_param:
+        person_ids = [p.strip() for p in people_param.split(',') if p.strip()]
 
     if since:
         # Delta update - return only changes since the given epoch
         delta = get_db().get_images_delta(since)
+
+        # Apply people filter to delta if specified
+        if person_ids:
+            db = get_db()
+            matching_image_ids = set(get_images_with_people(db.conn, person_ids))
+            if 'updated' in delta:
+                delta['updated'] = [
+                    img for img in delta['updated']
+                    if img['id'] in matching_image_ids
+                ]
+
         return jsonify(delta)
     else:
         # Full load - return all images with current epoch
-        images = get_db().get_all_images_lightweight()
-        epoch = get_db().get_current_epoch()
+        db = get_db()
+
+        if person_ids:
+            # Filter by people
+            matching_image_ids = set(get_images_with_people(db.conn, person_ids))
+            all_images = db.get_all_images_lightweight()
+            images = [img for img in all_images if img['id'] in matching_image_ids]
+        else:
+            images = db.get_all_images_lightweight()
+
+        epoch = db.get_current_epoch()
         return jsonify({
             'epoch': epoch,
             'images': images,
@@ -999,6 +1045,419 @@ def event_stream():
             'Connection': 'keep-alive',
             'X-Accel-Buffering': 'no',  # Disable nginx buffering
         }
+    )
+
+
+# =============================================================================
+# People Endpoints
+# =============================================================================
+
+@app.route('/api/people', methods=['GET'])
+def get_people():
+    """List all people with face counts.
+
+    Query Parameters:
+        q: Optional search query (case-insensitive substring match).
+
+    Returns:
+        JSON array of person objects with face_count.
+    """
+    query = request.args.get('q', '').strip()
+    db = get_db()
+
+    if query:
+        people = search_people(db.conn, query)
+    else:
+        people = get_all_people(db.conn)
+
+    return jsonify(people)
+
+
+@app.route('/api/people', methods=['POST'])
+def create_person_endpoint():
+    """Create a new person.
+
+    Request Body:
+        JSON object with:
+            - name: Person's name (required)
+
+    Returns:
+        JSON object with the created person.
+    """
+    data = request.get_json()
+    if not data:
+        return error_response('Request body is required')
+
+    name = data.get('name', '').strip()
+    if not name:
+        return error_response('Name is required')
+
+    db = get_db()
+
+    # Check if person with this name already exists
+    existing = get_person_by_name(db.conn, name)
+    if existing:
+        return error_response(f'Person with name "{name}" already exists', 409)
+
+    person_id = create_person(db.conn, name)
+    person = get_person(db.conn, person_id)
+
+    return success_response(person)
+
+
+@app.route('/api/people/<person_id>', methods=['GET'])
+def get_person_endpoint(person_id):
+    """Get a person by ID.
+
+    Args:
+        person_id: Person's UUID.
+
+    Returns:
+        JSON object with person details.
+    """
+    db = get_db()
+    person = get_person(db.conn, person_id)
+
+    if person is None:
+        return error_response('Person not found', 404)
+
+    return success_response(person)
+
+
+@app.route('/api/people/<person_id>', methods=['PATCH'])
+def update_person_endpoint(person_id):
+    """Update a person's details.
+
+    Args:
+        person_id: Person's UUID.
+
+    Request Body:
+        JSON object with optional fields:
+            - name: New name
+            - preferred_face_id: ID of face to use as headshot
+
+    Returns:
+        JSON object with updated person.
+    """
+    data = request.get_json()
+    if not data:
+        return error_response('Request body is required')
+
+    db = get_db()
+
+    person = get_person(db.conn, person_id)
+    if person is None:
+        return error_response('Person not found', 404)
+
+    name = data.get('name')
+    if name is not None:
+        name = name.strip()
+        if not name:
+            return error_response('Name cannot be empty')
+        # Check if another person has this name
+        existing = get_person_by_name(db.conn, name)
+        if existing and existing['id'] != person_id:
+            return error_response(f'Person with name "{name}" already exists', 409)
+
+    preferred_face_id = data.get('preferred_face_id')
+
+    update_person(db.conn, person_id, name=name, preferred_face_id=preferred_face_id)
+    updated_person = get_person(db.conn, person_id)
+
+    return success_response(updated_person)
+
+
+@app.route('/api/people/<person_id>', methods=['DELETE'])
+def delete_person_endpoint(person_id):
+    """Delete a person.
+
+    Faces associated with this person will become untagged (person_id = NULL).
+
+    Args:
+        person_id: Person's UUID.
+
+    Returns:
+        Success message.
+    """
+    db = get_db()
+
+    person = get_person(db.conn, person_id)
+    if person is None:
+        return error_response('Person not found', 404)
+
+    delete_person(db.conn, person_id)
+
+    return success_response(message=f'Person "{person["name"]}" deleted')
+
+
+@app.route('/api/people/<person_id>/faces', methods=['GET'])
+def get_person_faces(person_id):
+    """Get all faces for a person.
+
+    Args:
+        person_id: Person's UUID.
+
+    Returns:
+        JSON array of face objects.
+    """
+    db = get_db()
+
+    person = get_person(db.conn, person_id)
+    if person is None:
+        return error_response('Person not found', 404)
+
+    faces = get_faces_for_person(db.conn, person_id)
+
+    # Remove embedding from response (it's large and not needed in API)
+    for face in faces:
+        if 'embedding' in face:
+            del face['embedding']
+
+    return jsonify(faces)
+
+
+@app.route('/api/people/<person_id>/thumbnail', methods=['GET'])
+def get_person_thumbnail(person_id):
+    """Get the preferred face thumbnail for a person.
+
+    Returns the thumbnail for the person's preferred_face_id, or the first
+    face if no preference is set.
+
+    Args:
+        person_id: Person's UUID.
+
+    Returns:
+        JPEG image.
+    """
+    db = get_db()
+
+    person = get_person(db.conn, person_id)
+    if person is None:
+        return error_response('Person not found', 404)
+
+    # Get preferred face or first face
+    face_id = person.get('preferred_face_id')
+    if not face_id:
+        faces = get_faces_for_person(db.conn, person_id)
+        if not faces:
+            return error_response('Person has no faces', 404)
+        face_id = faces[0]['id']
+
+    # Get face thumbnail
+    thumb_path = get_face_thumbnail_path(face_id, db.thumbnail_dir)
+    if not thumb_path.exists():
+        return error_response('Face thumbnail not found', 404)
+
+    return send_file(
+        thumb_path,
+        mimetype='image/jpeg',
+        max_age=31536000,  # 1 year cache
+    )
+
+
+# =============================================================================
+# Face Endpoints
+# =============================================================================
+
+@app.route('/api/images/<image_id>/faces', methods=['GET'])
+def get_image_faces(image_id):
+    """Get all faces detected in an image.
+
+    Args:
+        image_id: Image's UUID.
+
+    Returns:
+        JSON array of face objects with person_name if identified.
+    """
+    db = get_db()
+
+    image = db.get_image(image_id)
+    if image is None:
+        return error_response('Image not found', 404)
+
+    faces = get_faces_for_image(db.conn, image_id, include_suppressed=False)
+
+    # Remove embedding from response
+    for face in faces:
+        if 'embedding' in face:
+            del face['embedding']
+
+    return jsonify(faces)
+
+
+@app.route('/api/faces/<face_id>/identify', methods=['POST'])
+def identify_face(face_id):
+    """Identify a face by assigning it to a person.
+
+    Request Body:
+        JSON object with ONE of:
+            - person_id: Existing person's UUID
+            - name: Name for new or existing person (case-insensitive match)
+
+    If name is provided and matches an existing person (case-insensitive),
+    the face is linked to that person. Otherwise, a new person is created.
+
+    Returns:
+        JSON object with the updated face and person details.
+    """
+    data = request.get_json()
+    if not data:
+        return error_response('Request body is required')
+
+    db = get_db()
+
+    face = get_face(db.conn, face_id)
+    if face is None:
+        return error_response('Face not found', 404)
+
+    person_id = data.get('person_id')
+    name = data.get('name', '').strip() if data.get('name') else None
+
+    if person_id:
+        # Link to existing person by ID
+        person = get_person(db.conn, person_id)
+        if person is None:
+            return error_response('Person not found', 404)
+    elif name:
+        # Find or create person by name
+        person = get_person_by_name(db.conn, name)
+        if person is None:
+            person_id = create_person(db.conn, name)
+            person = get_person(db.conn, person_id)
+        else:
+            person_id = person['id']
+    else:
+        return error_response('Either person_id or name is required')
+
+    # Update face with person_id
+    update_face_person(db.conn, face_id, person_id)
+
+    # Get updated face
+    face = get_face(db.conn, face_id)
+    if 'embedding' in face:
+        del face['embedding']
+
+    return success_response({
+        'face': face,
+        'person': person,
+    })
+
+
+@app.route('/api/faces/<face_id>/unidentify', methods=['POST'])
+def unidentify_face(face_id):
+    """Remove person identification from a face.
+
+    Sets the face's person_id to NULL. If the person has no other faces,
+    the person record is deleted.
+
+    Args:
+        face_id: Face's UUID.
+
+    Returns:
+        Success message.
+    """
+    db = get_db()
+
+    face = get_face(db.conn, face_id)
+    if face is None:
+        return error_response('Face not found', 404)
+
+    old_person_id = face.get('person_id')
+
+    # Unlink face from person
+    update_face_person(db.conn, face_id, None)
+
+    # Delete person if they have no more faces
+    if old_person_id:
+        delete_people_without_faces(db.conn)
+
+    return success_response(message='Face unidentified')
+
+
+@app.route('/api/faces/<face_id>/suppress', methods=['POST'])
+def suppress_face_endpoint(face_id):
+    """Mark a face as a false positive (suppressed).
+
+    Suppressed faces are excluded from all face-related queries and UI,
+    but the bounding box is kept to prevent re-detection on reindex.
+
+    Args:
+        face_id: Face's UUID.
+
+    Returns:
+        Success message.
+    """
+    db = get_db()
+
+    face = get_face(db.conn, face_id)
+    if face is None:
+        return error_response('Face not found', 404)
+
+    old_person_id = face.get('person_id')
+
+    suppress_face(db.conn, face_id)
+
+    # Delete person if they have no more faces
+    if old_person_id:
+        delete_people_without_faces(db.conn)
+
+    return success_response(message='Face suppressed')
+
+
+@app.route('/api/faces/<face_id>', methods=['DELETE'])
+def delete_face_endpoint(face_id):
+    """Delete a face detection entirely.
+
+    Unlike suppress, this removes the face record completely.
+    The face may be re-detected on reindex.
+
+    Args:
+        face_id: Face's UUID.
+
+    Returns:
+        Success message.
+    """
+    db = get_db()
+
+    face = get_face(db.conn, face_id)
+    if face is None:
+        return error_response('Face not found', 404)
+
+    old_person_id = face.get('person_id')
+
+    delete_face(db.conn, face_id)
+
+    # Delete person if they have no more faces
+    if old_person_id:
+        delete_people_without_faces(db.conn)
+
+    return success_response(message='Face deleted')
+
+
+@app.route('/api/faces/<face_id>/thumbnail', methods=['GET'])
+def get_face_thumbnail(face_id):
+    """Get the thumbnail for a face.
+
+    Args:
+        face_id: Face's UUID.
+
+    Returns:
+        JPEG image (200x200).
+    """
+    db = get_db()
+
+    face = get_face(db.conn, face_id)
+    if face is None:
+        return error_response('Face not found', 404)
+
+    thumb_path = get_face_thumbnail_path(face_id, db.thumbnail_dir)
+    if not thumb_path.exists():
+        return error_response('Face thumbnail not found', 404)
+
+    return send_file(
+        thumb_path,
+        mimetype='image/jpeg',
+        max_age=31536000,  # 1 year cache
     )
 
 
