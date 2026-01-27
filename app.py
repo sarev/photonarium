@@ -1523,11 +1523,6 @@ if __name__ == '__main__':
         action='store_true',
         help='Force full recomputation of all duplicate groups and exit'
     )
-    parser.add_argument(
-        '-f', '--detect-faces',
-        action='store_true',
-        help='Run face detection on images that haven\'t been processed and exit'
-    )
     args = parser.parse_args()
 
     # Handle thumbnail generation command
@@ -1550,45 +1545,6 @@ if __name__ == '__main__':
         logger.info(f'Duplicate recomputation completed in {elapsed:.1f}s')
         for level, count in sorted(group_counts.items()):
             logger.info(f'  Level {level}: {count} groups')
-        sys.exit(0)
-
-    # Handle face detection command
-    if args.detect_faces:
-        import time
-        _skip_scan = True
-        db = get_db()
-
-        if not db.config.face_detection_enabled:
-            logger.error('Face detection is disabled in config. Enable it first.')
-            sys.exit(1)
-
-        logger.info('Starting face detection for unprocessed images...')
-        start_time = time.time()
-
-        # Wait briefly for the automatic queueing to happen
-        # (EmbeddingThread's on_complete callback queues images for face detection)
-        time.sleep(0.5)
-
-        queue_size = db._face_queue.qsize()
-        if queue_size == 0:
-            logger.info('No images need face detection.')
-            sys.exit(0)
-
-        logger.info(f'Found {queue_size} images without face detection')
-        logger.info('Processing faces (this may take a while)...')
-        while True:
-            queue_size = db._face_queue.qsize()
-            if queue_size == 0:
-                # Give thread time to finish current item
-                time.sleep(0.5)
-                if db._face_queue.qsize() == 0:
-                    break
-            if queue_size % 10 == 0:
-                logger.info(f'  Remaining: {queue_size}')
-            time.sleep(0.5)
-
-        elapsed = time.time() - start_time
-        logger.info(f'Face detection completed in {elapsed:.1f}s')
         sys.exit(0)
 
     # Set module-level flag before initializing database

@@ -214,6 +214,7 @@ from faces import (
     get_face,
     get_faces_for_image,
     has_faces_detected,
+    mark_no_faces_detected,
     delete_faces_for_image,
     rotate_faces_for_image,
     get_all_known_face_embeddings,
@@ -2426,8 +2427,12 @@ class FaceDetectionThread(threading.Thread):
         """Number of images that failed processing."""
         return self._error_count
 
+    # Batch size for face detection (number of images to process together)
+    # With parallel MTCNN detection, larger batches improve throughput
+    BATCH_SIZE = 32
+
     def run(self) -> None:
-        """Main thread loop - process images from the queue."""
+        """Main thread loop - process images from the queue in batches."""
         logger.info('Face detection thread started')
 
         # Don't do anything if face detection is disabled
@@ -2445,24 +2450,28 @@ class FaceDetectionThread(threading.Thread):
         progress_interval = 5.0
 
         while not self.stop_event.is_set():
+            batch_ids = []
             try:
-                # Get next image from queue
+                # Get first image (blocking with timeout)
                 try:
                     image_id = self.face_queue.get(timeout=0.5)
+                    batch_ids.append(image_id)
                 except queue.Empty:
                     # Queue empty - check if we should trigger completion
                     self._check_completion()
                     continue
 
-                # Process the image
-                try:
-                    self._process_image(image_id)
-                    self._completion_triggered = False  # Reset completion flag
-                except Exception as e:
-                    logger.error(f'Error processing faces for {image_id}: {e}')
-                    self._error_count += 1
-                finally:
-                    self.face_queue.task_done()
+                # Try to get more images to fill the batch (non-blocking)
+                while len(batch_ids) < self.BATCH_SIZE:
+                    try:
+                        image_id = self.face_queue.get_nowait()
+                        batch_ids.append(image_id)
+                    except queue.Empty:
+                        break
+
+                # Process the batch
+                self._process_batch(batch_ids)
+                self._completion_triggered = False  # Reset completion flag
 
                 # Periodic progress logging
                 now = time.time()
@@ -2476,91 +2485,116 @@ class FaceDetectionThread(threading.Thread):
                     last_progress_time = now
 
             except Exception as e:
-                logger.error(f'Unexpected error in face detection thread: {e}')
+                logger.error(f'Error in face detection thread: {e}')
+                self._error_count += len(batch_ids)
+            finally:
+                # Always mark items as done, even on error or shutdown
+                for _ in batch_ids:
+                    self.face_queue.task_done()
 
         logger.info('Face detection thread stopped')
 
-    def _process_image(self, image_id: str) -> None:
-        """Process a single image for face detection.
+    def _process_batch(self, image_ids: list[str]) -> None:
+        """Process a batch of images for face detection.
+
+        Uses batched GPU processing for better utilization.
 
         Args:
-            image_id: ID of the image to process.
+            image_ids: List of image IDs to process.
         """
-        # Get image from database
-        image = get_image(self.conn, image_id)
-        if image is None:
-            logger.warning(f'Image not found for face detection: {image_id}')
+        # Build mapping of image_id -> path and filter out invalid images
+        id_to_path: dict[str, Path] = {}
+        path_to_id: dict[Path, str] = {}
+
+        for image_id in image_ids:
+            image = get_image(self.conn, image_id)
+            if image is None:
+                logger.warning(f'Image not found for face detection: {image_id}')
+                continue
+
+            path = Path(image['path'])
+            if not path.exists():
+                logger.warning(f'Image file not found for face detection: {path}')
+                continue
+
+            # Skip if already processed
+            with self._db_lock:
+                if has_faces_detected(self.conn, image_id):
+                    logger.debug(f'Skipping already-processed image: {path.name}')
+                    self._processed_count += 1
+                    continue
+
+            id_to_path[image_id] = path
+            path_to_id[path] = image_id
+
+        if not id_to_path:
             return
 
-        path = Path(image['path'])
-        if not path.exists():
-            logger.warning(f'Image file not found for face detection: {path}')
-            return
-
-        # Skip if already processed (has faces or suppressed faces)
-        with self._db_lock:
-            if has_faces_detected(self.conn, image_id):
-                logger.debug(f'Skipping already-processed image: {path.name}')
-                return
-
-        # Detect faces
-        detected_faces = self.face_detector.detect_faces(path)
-
-        if not detected_faces:
-            self._processed_count += 1
-            return
+        # Run batched face detection
+        paths = list(id_to_path.values())
+        results = self.face_detector.detect_faces_batch(paths)
 
         # Get known face embeddings for auto-recognition
         with self._db_lock:
             known_embeddings = get_all_known_face_embeddings(self.conn)
 
-        # Process each detected face
-        for face in detected_faces:
-            # Try to auto-match against known faces
-            person_id = None
-            match = find_best_match(
-                face.embedding,
-                known_embeddings,
-                threshold=self.config.face_recognition_threshold,
-            )
-            if match:
-                _, person_id, similarity = match
-                logger.debug(
-                    f'Auto-matched face in {path.name} to person {person_id} '
-                    f'(similarity: {similarity:.3f})'
-                )
+        # Process results for each image
+        for path, detected_faces in results.items():
+            image_id = path_to_id[path]
 
-            # Create face record
-            with self._db_lock:
-                face_id = create_face(
-                    self.conn,
-                    image_id=image_id,
+            if not detected_faces:
+                # Mark image as processed with no faces found
+                with self._db_lock:
+                    mark_no_faces_detected(self.conn, image_id)
+                self._processed_count += 1
+                continue
+
+            for face in detected_faces:
+                # Try to auto-match against known faces
+                person_id = None
+                match = find_best_match(
+                    face.embedding,
+                    known_embeddings,
+                    threshold=self.config.face_recognition_threshold,
+                )
+                if match:
+                    _, person_id, similarity = match
+                    logger.debug(
+                        f'Auto-matched face in {path.name} to person {person_id} '
+                        f'(similarity: {similarity:.3f})'
+                    )
+
+                # Create face record
+                with self._db_lock:
+                    face_id = create_face(
+                        self.conn,
+                        image_id=image_id,
+                        box_x=face.box_x,
+                        box_y=face.box_y,
+                        box_w=face.box_w,
+                        box_h=face.box_h,
+                        embedding=face.embedding,
+                        confidence=face.confidence,
+                        person_id=person_id,
+                    )
+
+                # Generate face thumbnail
+                thumb_path = get_face_thumbnail_path(face_id, self.thumbnail_dir)
+                generate_face_thumbnail(
+                    path,
+                    thumb_path,
                     box_x=face.box_x,
                     box_y=face.box_y,
                     box_w=face.box_w,
                     box_h=face.box_h,
-                    embedding=face.embedding,
-                    confidence=face.confidence,
-                    person_id=person_id,
+                    size=200,
+                    quality=self.config.thumbnail_quality,
                 )
 
-            # Generate face thumbnail
-            thumb_path = get_face_thumbnail_path(face_id, self.thumbnail_dir)
-            generate_face_thumbnail(
-                path,
-                thumb_path,
-                box_x=face.box_x,
-                box_y=face.box_y,
-                box_w=face.box_w,
-                box_h=face.box_h,
-                size=200,
-                quality=self.config.thumbnail_quality,
-            )
+                self._faces_detected_count += 1
 
-            self._faces_detected_count += 1
-
-        self._processed_count += 1
-        logger.debug(f'Detected {len(detected_faces)} faces in {path.name}')
+            self._processed_count += 1
+            logger.debug(f'Detected {len(detected_faces)} faces in {path.name}')
 
     def _check_completion(self) -> None:
         """Check if all processing is complete and trigger completion callback.

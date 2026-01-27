@@ -78,7 +78,6 @@ On first run, the AI model will download automatically (this only happens once).
 ```bash
 python app.py --port 8080              # Use a different port
 python app.py --generate-thumbnails    # Pre-generate thumbnails for all images
-python app.py --detect-faces           # Run face detection on unprocessed images
 ```
 
 ## Getting Started

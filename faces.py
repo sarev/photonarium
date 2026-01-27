@@ -283,9 +283,10 @@ class FaceDetector:
                     # Single face - add batch dimension
                     faces_tensor = faces_tensor.unsqueeze(0)
 
-                detected_faces = []
                 processed_width, processed_height = img.size
 
+                # First pass: collect valid faces and their metadata
+                valid_faces = []  # List of (tensor_idx, norm_box, confidence)
                 for i in valid_indices:
                     if i >= len(faces_tensor):
                         continue
@@ -328,26 +329,39 @@ class FaceDetector:
                         logger.debug(f'Skipping small face: {face_pixels:.0f}px')
                         continue
 
-                    # Get face tensor for this face
-                    face_tensor = faces_tensor[i].unsqueeze(0)
+                    valid_faces.append((
+                        i,  # tensor index
+                        (norm_x, norm_y, norm_w, norm_h),  # normalized box
+                        float(prob),  # confidence
+                    ))
 
-                    # Generate embedding
-                    with torch.no_grad():
-                        embedding = self.resnet(face_tensor.to(self.device))
-                        embedding = embedding.cpu().numpy().flatten()
+                if not valid_faces:
+                    return []
 
-                        # Normalize embedding (L2 normalization for cosine similarity)
-                        norm = np.linalg.norm(embedding)
-                        if norm > 0:
-                            embedding = embedding / norm
+                # Batch compute embeddings for all valid faces at once
+                tensor_indices = [vf[0] for vf in valid_faces]
+                batch_tensor = faces_tensor[tensor_indices].to(self.device)
 
+                with torch.no_grad():
+                    embeddings_batch = self.resnet(batch_tensor)
+                    embeddings_batch = embeddings_batch.cpu().numpy()
+
+                # Normalize all embeddings (L2 normalization for cosine similarity)
+                norms = np.linalg.norm(embeddings_batch, axis=1, keepdims=True)
+                norms[norms == 0] = 1  # Avoid division by zero
+                embeddings_batch = embeddings_batch / norms
+
+                # Build detected faces list
+                detected_faces = []
+                for idx, (_, norm_box, confidence) in enumerate(valid_faces):
+                    norm_x, norm_y, norm_w, norm_h = norm_box
                     detected_faces.append(DetectedFace(
                         box_x=float(norm_x),
                         box_y=float(norm_y),
                         box_w=float(norm_w),
                         box_h=float(norm_h),
-                        confidence=float(prob),
-                        embedding=embedding,
+                        confidence=confidence,
+                        embedding=embeddings_batch[idx],
                     ))
 
                 logger.debug(f'Detected {len(detected_faces)} faces in {image_path.name}')
@@ -356,6 +370,164 @@ class FaceDetector:
         except Exception as e:
             logger.error(f'Face detection failed for {image_path}: {e}')
             return []
+
+    def detect_faces_batch(
+        self,
+        image_paths: list[Path | str],
+        max_dimension: int = 4096,
+        num_workers: int = 4,
+    ) -> dict[Path, list[DetectedFace]]:
+        """Detect faces in multiple images using parallel processing.
+
+        This method processes multiple images in parallel using a thread pool
+        for image loading and MTCNN detection, then batches the face embedding
+        computation for all detected faces.
+
+        Args:
+            image_paths: List of paths to image files.
+            max_dimension: Maximum image dimension for processing.
+            num_workers: Number of parallel workers for detection.
+
+        Returns:
+            Dict mapping each image path to its list of DetectedFace objects.
+            Images that fail to process will have empty lists.
+        """
+        import torch
+        from concurrent.futures import ThreadPoolExecutor, as_completed
+
+        if not image_paths:
+            return {}
+
+        results: dict[Path, list[DetectedFace]] = {}
+
+        # Initialize results with empty lists
+        for p in image_paths:
+            results[Path(p)] = []
+
+        # Phase 1: Run MTCNN detection on all images in parallel
+        # Each worker returns: (image_path, list of (tensor, norm_box, confidence))
+        all_faces_data = []  # (image_path, tensor, norm_box, confidence)
+
+        def process_single_image(image_path: Path | str):
+            """Load image and run MTCNN detection. Returns face data."""
+            image_path = Path(image_path)
+            faces_data = []
+
+            try:
+                with Image.open(image_path) as img:
+                    img = ImageOps.exif_transpose(img)
+                    if img.mode != 'RGB':
+                        img = img.convert('RGB')
+
+                    original_width, original_height = img.size
+                    scale = 1.0
+                    if max(original_width, original_height) > max_dimension:
+                        scale = max_dimension / max(original_width, original_height)
+                        new_size = (int(original_width * scale), int(original_height * scale))
+                        img = img.resize(new_size, Image.Resampling.LANCZOS)
+
+                    # Detect faces
+                    boxes, probs = self.mtcnn.detect(img)
+
+                    if boxes is None or len(boxes) == 0:
+                        return image_path, []
+
+                    # Filter by confidence
+                    valid_indices = [
+                        i for i, prob in enumerate(probs)
+                        if prob is not None and prob >= self.min_confidence
+                    ]
+
+                    if not valid_indices:
+                        return image_path, []
+
+                    # Get face crops
+                    faces_tensor = self.mtcnn(img)
+                    if faces_tensor is None:
+                        return image_path, []
+
+                    if len(faces_tensor.shape) == 3:
+                        faces_tensor = faces_tensor.unsqueeze(0)
+
+                    processed_width, processed_height = img.size
+
+                    for i in valid_indices:
+                        if i >= len(faces_tensor):
+                            continue
+
+                        box = boxes[i]
+                        prob = probs[i]
+
+                        x1, y1, x2, y2 = box
+                        box_width = x2 - x1
+                        box_height = y2 - y1
+                        box_size = max(box_width, box_height)
+
+                        center_x = (x1 + x2) / 2
+                        center_y = (y1 + y2) / 2
+                        sq_x1 = center_x - box_size / 2
+                        sq_y1 = center_y - box_size / 2
+
+                        norm_x = max(0.0, min(1.0, sq_x1 / processed_width))
+                        norm_y = max(0.0, min(1.0, sq_y1 / processed_height))
+                        norm_w = max(0.0, min(1.0 - norm_x, box_size / processed_width))
+                        norm_h = max(0.0, min(1.0 - norm_y, box_size / processed_height))
+
+                        face_pixels = box_size / scale if scale != 1.0 else box_size
+                        if face_pixels < self.min_face_size:
+                            continue
+
+                        faces_data.append((
+                            faces_tensor[i],
+                            (norm_x, norm_y, norm_w, norm_h),
+                            float(prob),
+                        ))
+
+            except Exception as e:
+                logger.error(f'Face detection failed for {image_path}: {e}')
+                return image_path, []
+
+            return image_path, faces_data
+
+        # Run detection in parallel
+        with ThreadPoolExecutor(max_workers=num_workers) as executor:
+            futures = {executor.submit(process_single_image, p): p for p in image_paths}
+            for future in as_completed(futures):
+                try:
+                    image_path, faces_data = future.result()
+                    for tensor, norm_box, confidence in faces_data:
+                        all_faces_data.append((image_path, tensor, norm_box, confidence))
+                except Exception as e:
+                    logger.error(f'Face detection worker failed: {e}')
+
+        if not all_faces_data:
+            return results
+
+        # Phase 2: Batch compute embeddings for ALL faces across all images
+        all_tensors = torch.stack([fd[1] for fd in all_faces_data]).to(self.device)
+
+        with torch.no_grad():
+            embeddings_batch = self.resnet(all_tensors)
+            embeddings_batch = embeddings_batch.cpu().numpy()
+
+        # Normalize embeddings
+        norms = np.linalg.norm(embeddings_batch, axis=1, keepdims=True)
+        norms[norms == 0] = 1
+        embeddings_batch = embeddings_batch / norms
+
+        # Phase 3: Build results dict
+        for idx, (image_path, _, norm_box, confidence) in enumerate(all_faces_data):
+            norm_x, norm_y, norm_w, norm_h = norm_box
+            results[image_path].append(DetectedFace(
+                box_x=float(norm_x),
+                box_y=float(norm_y),
+                box_w=float(norm_w),
+                box_h=float(norm_h),
+                confidence=confidence,
+                embedding=embeddings_batch[idx],
+            ))
+
+        return results
 
     def compute_similarity(
         self,
@@ -927,6 +1099,37 @@ def suppress_face(
     )
     conn.commit()
     return cursor.rowcount > 0
+
+
+def mark_no_faces_detected(
+    conn: sqlite3.Connection,
+    image_id: str,
+) -> str:
+    """Mark an image as having been processed with no faces found.
+
+    Creates a sentinel face record that is pre-suppressed, with zero-size
+    bounding box and a zero-vector embedding. This prevents the image from
+    being re-queued for face detection on subsequent runs.
+
+    Args:
+        conn: Database connection.
+        image_id: ID of the image.
+
+    Returns:
+        The sentinel face record's UUID.
+    """
+    face_id = str(uuid.uuid4())
+    # Create a 512-dimensional zero vector as dummy embedding
+    dummy_embedding = np.zeros(512, dtype=np.float32).tobytes()
+    conn.execute(
+        '''INSERT INTO faces
+           (id, image_id, box_x, box_y, box_w, box_h, confidence, embedding,
+            person_id, suppressed)
+           VALUES (?, ?, 0, 0, 0, 0, 0, ?, NULL, 1)''',
+        (face_id, image_id, dummy_embedding)
+    )
+    conn.commit()
+    return face_id
 
 
 def delete_face(
