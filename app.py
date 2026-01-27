@@ -1523,6 +1523,11 @@ if __name__ == '__main__':
         action='store_true',
         help='Force full recomputation of all duplicate groups and exit'
     )
+    parser.add_argument(
+        '-f', '--detect-faces',
+        action='store_true',
+        help='Run face detection on images that haven\'t been processed and exit'
+    )
     args = parser.parse_args()
 
     # Handle thumbnail generation command
@@ -1545,6 +1550,59 @@ if __name__ == '__main__':
         logger.info(f'Duplicate recomputation completed in {elapsed:.1f}s')
         for level, count in sorted(group_counts.items()):
             logger.info(f'  Level {level}: {count} groups')
+        sys.exit(0)
+
+    # Handle face detection command
+    if args.detect_faces:
+        import time
+        from faces import has_faces_detected
+        _skip_scan = True
+        db = get_db()
+
+        if not db.config.face_detection_enabled:
+            logger.error('Face detection is disabled in config. Enable it first.')
+            sys.exit(1)
+
+        logger.info('Starting face detection for unprocessed images...')
+        start_time = time.time()
+
+        # Get all images that haven't been processed for faces
+        with db._db_lock:
+            cursor = db.conn.execute('SELECT id, path FROM images')
+            all_images = cursor.fetchall()
+
+        unprocessed = []
+        for image_id, path in all_images:
+            with db._db_lock:
+                if not has_faces_detected(db.conn, image_id):
+                    unprocessed.append(image_id)
+
+        total = len(unprocessed)
+        logger.info(f'Found {total} images without face detection')
+
+        if total == 0:
+            logger.info('No images need face detection.')
+            sys.exit(0)
+
+        # Queue all unprocessed images
+        for image_id in unprocessed:
+            db.queue_image_for_face_detection(image_id)
+
+        # Wait for face detection to complete
+        logger.info('Processing faces (this may take a while)...')
+        while True:
+            queue_size = db._face_queue.qsize()
+            if queue_size == 0:
+                # Give thread time to finish current item
+                time.sleep(0.5)
+                if db._face_queue.qsize() == 0:
+                    break
+            if queue_size % 10 == 0:
+                logger.info(f'  Remaining: {queue_size}')
+            time.sleep(0.5)
+
+        elapsed = time.time() - start_time
+        logger.info(f'Face detection completed in {elapsed:.1f}s')
         sys.exit(0)
 
     # Set module-level flag before initializing database

@@ -85,6 +85,14 @@ const Database = {
     _embeddingHistory: [],
 
     /**
+     * History of face detection queue samples for ETA calculation.
+     * Each entry is {count, timestamp}.
+     * @type {Array<{count: number, timestamp: number}>}
+     * @private
+     */
+    _faceHistory: [],
+
+    /**
      * Maximum number of samples to keep for ETA calculation.
      * @type {number}
      * @private
@@ -108,7 +116,10 @@ const Database = {
             indexingCount: App.$('indexing-count'),
             indexingEta: App.$('indexing-eta'),
             embeddingCount: App.$('embedding-count'),
-            embeddingEta: App.$('embedding-eta')
+            embeddingEta: App.$('embedding-eta'),
+            faceQueueRow: App.$('face-queue-row'),
+            faceCount: App.$('face-count'),
+            faceEta: App.$('face-eta')
         };
 
         this._bindEvents();
@@ -359,6 +370,7 @@ const Database = {
      * @param {string} status.status - 'up_to_date' or 'updating'
      * @param {number} status.indexing_queue - Items in ingestion queue
      * @param {number} status.embedding_queue - Items in embedding queue
+     * @param {number} status.face_queue - Items in face detection queue
      * @param {number} status.total_images - Total images in database
      * @private
      */
@@ -370,6 +382,7 @@ const Database = {
         const isUpdating = status.status === 'updating';
         const indexing = status.indexing_queue || 0;
         const embedding = status.embedding_queue || 0;
+        const faces = status.face_queue || 0;
 
         // Update indicator class
         this._els.statusIndicator.className = 'status-indicator ' + (isUpdating ? 'updating' : 'up-to-date');
@@ -383,7 +396,7 @@ const Database = {
         }
 
         // Show/hide queue counts
-        if (isUpdating && (indexing > 0 || embedding > 0)) {
+        if (isUpdating && (indexing > 0 || embedding > 0 || faces > 0)) {
             this._els.queueCounts.hidden = false;
             this._els.indexingCount.textContent = indexing;
             this._els.embeddingCount.textContent = embedding;
@@ -391,13 +404,27 @@ const Database = {
             // Update ETAs
             this._updateIndexingEta(indexing);
             this._updateEmbeddingEta(embedding);
+
+            // Update face detection queue
+            if (this._els.faceQueueRow && this._els.faceCount) {
+                if (faces > 0) {
+                    this._els.faceQueueRow.hidden = false;
+                    this._els.faceCount.textContent = faces;
+                    this._updateFaceEta(faces);
+                } else {
+                    this._els.faceQueueRow.hidden = true;
+                }
+            }
         } else {
             this._els.queueCounts.hidden = true;
             // Clear history when not updating
             this._indexingHistory = [];
             this._embeddingHistory = [];
+            this._faceHistory = [];
             this._els.indexingEta.textContent = '';
             this._els.embeddingEta.textContent = '';
+            if (this._els.faceEta) this._els.faceEta.textContent = '';
+            if (this._els.faceQueueRow) this._els.faceQueueRow.hidden = true;
         }
     },
 
@@ -505,6 +532,50 @@ const Database = {
 
         // Format ETA
         this._els.embeddingEta.textContent = ' (' + this._formatEta(etaSeconds) + ')';
+    },
+
+    /**
+     * Updates the face detection ETA based on processing rate.
+     * @param {number} currentCount - Current face detection queue size
+     * @private
+     */
+    _updateFaceEta(currentCount) {
+        if (!this._els.faceEta) return;
+
+        const now = Date.now();
+
+        // Add current sample to history
+        this._faceHistory.push({ count: currentCount, timestamp: now });
+
+        // Keep only recent samples
+        if (this._faceHistory.length > this._maxHistorySamples) {
+            this._faceHistory.shift();
+        }
+
+        // Need at least 2 samples to calculate rate
+        if (this._faceHistory.length < 2) {
+            this._els.faceEta.textContent = '';
+            return;
+        }
+
+        // Calculate processing rate from oldest to newest sample
+        const oldest = this._faceHistory[0];
+        const newest = this._faceHistory[this._faceHistory.length - 1];
+        const countDiff = oldest.count - newest.count;
+        const timeDiff = (newest.timestamp - oldest.timestamp) / 1000; // seconds
+
+        // If no progress or queue growing, can't estimate
+        if (countDiff <= 0 || timeDiff <= 0) {
+            this._els.faceEta.textContent = '';
+            return;
+        }
+
+        // Calculate rate (images per second) and ETA
+        const rate = countDiff / timeDiff;
+        const etaSeconds = currentCount / rate;
+
+        // Format ETA
+        this._els.faceEta.textContent = ' (' + this._formatEta(etaSeconds) + ')';
     }
 };
 
