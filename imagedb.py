@@ -206,6 +206,23 @@ from thumbnails import (
     delete_thumbnails_for_checksum,
     clear_thumbnail_cache,
 )
+from faces import (
+    init_face_tables,
+    FaceDetector,
+    DetectedFace,
+    create_face,
+    get_face,
+    get_faces_for_image,
+    has_faces_detected,
+    delete_faces_for_image,
+    get_all_known_face_embeddings,
+    find_best_match,
+    auto_recognize_face,
+    generate_face_thumbnail,
+    get_face_thumbnail_path,
+    delete_face_thumbnail,
+    delete_people_without_faces,
+)
 from timestamps import (
     derive_timestamp,
     derive_timestamp_with_confidence,
@@ -359,6 +376,9 @@ def init_database(db_path: Path | str) -> sqlite3.Connection:
     conn.execute(_SQL_CREATE_DUPLICATE_GROUPS)
     conn.execute(_SQL_CREATE_MIGRATIONS)
     conn.execute(_SQL_CREATE_METADATA)
+
+    # Create face recognition tables
+    init_face_tables(conn)
 
     # Run migrations for existing databases (must run BEFORE indexes)
     for migration_sql in _SQL_MIGRATIONS:
@@ -2322,6 +2342,252 @@ class EmbeddingThread(threading.Thread):
                     logger.error(f'Error in completion callback: {e}')
 
 
+class FaceDetectionThread(threading.Thread):
+    """Background thread for detecting faces in images.
+
+    Processes image IDs from the face detection queue, detects faces using
+    MTCNN, computes face embeddings, and stores them in the database.
+    Also performs auto-recognition against known faces.
+
+    Attributes:
+        conn: Database connection.
+        face_queue: Queue of image IDs to process.
+        embedding_thread: Reference to embedding thread (to check if idle).
+        stop_event: Event to signal thread shutdown.
+        config: Configuration object.
+        on_complete: Optional callback when all processing is done.
+    """
+
+    def __init__(
+        self,
+        conn: sqlite3.Connection,
+        face_queue: queue.Queue[str],
+        embedding_thread: EmbeddingThread,
+        ingestion_thread: IngestionThread,
+        stop_event: threading.Event,
+        db_lock: threading.RLock,
+        config: Config | None = None,
+        thumbnail_dir: Path | str = '.thumbnails',
+        on_complete: callable | None = None,
+    ):
+        """Initialise the face detection thread.
+
+        Args:
+            conn: Database connection (must be created with check_same_thread=False).
+            face_queue: Queue of image IDs to process.
+            embedding_thread: Reference to embedding thread (to check if idle).
+            ingestion_thread: Reference to ingestion thread (to check if idle).
+            stop_event: Event to signal thread should stop.
+            db_lock: Shared lock for database access (from ImageDatabase).
+            config: Configuration object. Uses defaults if None.
+            thumbnail_dir: Path to thumbnail cache directory.
+            on_complete: Optional callback function called when processing complete.
+        """
+        super().__init__(name='FaceDetectionThread', daemon=True)
+        self.conn = conn
+        self.face_queue = face_queue
+        self.embedding_thread = embedding_thread
+        self.ingestion_thread = ingestion_thread
+        self.stop_event = stop_event
+        self._db_lock = db_lock
+        self.config = config or get_default_config()
+        self.thumbnail_dir = Path(thumbnail_dir)
+        self.on_complete = on_complete
+
+        self._face_detector: FaceDetector | None = None
+        self._processed_count = 0
+        self._faces_detected_count = 0
+        self._error_count = 0
+        self._completion_triggered = False
+
+    @property
+    def face_detector(self) -> FaceDetector:
+        """Get the face detector (lazy loaded)."""
+        if self._face_detector is None:
+            self._face_detector = FaceDetector(
+                min_confidence=self.config.face_detection_min_confidence,
+                min_face_size=self.config.face_detection_min_size,
+            )
+        return self._face_detector
+
+    @property
+    def processed_count(self) -> int:
+        """Number of images successfully processed."""
+        return self._processed_count
+
+    @property
+    def faces_detected_count(self) -> int:
+        """Total number of faces detected."""
+        return self._faces_detected_count
+
+    @property
+    def error_count(self) -> int:
+        """Number of images that failed processing."""
+        return self._error_count
+
+    def run(self) -> None:
+        """Main thread loop - process images from the queue."""
+        logger.info('Face detection thread started')
+
+        # Don't do anything if face detection is disabled
+        if not self.config.face_detection_enabled:
+            logger.info('Face detection disabled in config - thread idle')
+            while not self.stop_event.is_set():
+                # Just check for completion
+                time.sleep(1.0)
+                self._check_completion()
+            logger.info('Face detection thread stopped (was disabled)')
+            return
+
+        # Progress logging state
+        last_progress_time = time.time()
+        progress_interval = 5.0
+
+        while not self.stop_event.is_set():
+            try:
+                # Get next image from queue
+                try:
+                    image_id = self.face_queue.get(timeout=0.5)
+                except queue.Empty:
+                    # Queue empty - check if we should trigger completion
+                    self._check_completion()
+                    continue
+
+                # Process the image
+                try:
+                    self._process_image(image_id)
+                    self._completion_triggered = False  # Reset completion flag
+                except Exception as e:
+                    logger.error(f'Error processing faces for {image_id}: {e}')
+                    self._error_count += 1
+                finally:
+                    self.face_queue.task_done()
+
+                # Periodic progress logging
+                now = time.time()
+                if now - last_progress_time >= progress_interval:
+                    remaining = self.face_queue.qsize()
+                    if remaining > 0 or self._processed_count > 0:
+                        logger.info(
+                            f'Face detection progress: {self._processed_count} images, '
+                            f'{self._faces_detected_count} faces, {remaining} remaining'
+                        )
+                    last_progress_time = now
+
+            except Exception as e:
+                logger.error(f'Unexpected error in face detection thread: {e}')
+
+        logger.info('Face detection thread stopped')
+
+    def _process_image(self, image_id: str) -> None:
+        """Process a single image for face detection.
+
+        Args:
+            image_id: ID of the image to process.
+        """
+        # Get image from database
+        image = get_image(self.conn, image_id)
+        if image is None:
+            logger.warning(f'Image not found for face detection: {image_id}')
+            return
+
+        path = Path(image['path'])
+        if not path.exists():
+            logger.warning(f'Image file not found for face detection: {path}')
+            return
+
+        # Skip if already processed (has faces or suppressed faces)
+        with self._db_lock:
+            if has_faces_detected(self.conn, image_id):
+                logger.debug(f'Skipping already-processed image: {path.name}')
+                return
+
+        # Detect faces
+        detected_faces = self.face_detector.detect_faces(path)
+
+        if not detected_faces:
+            self._processed_count += 1
+            return
+
+        # Get known face embeddings for auto-recognition
+        with self._db_lock:
+            known_embeddings = get_all_known_face_embeddings(self.conn)
+
+        # Process each detected face
+        for face in detected_faces:
+            # Try to auto-match against known faces
+            person_id = None
+            match = find_best_match(
+                face.embedding,
+                known_embeddings,
+                threshold=self.config.face_recognition_threshold,
+            )
+            if match:
+                _, person_id, similarity = match
+                logger.debug(
+                    f'Auto-matched face in {path.name} to person {person_id} '
+                    f'(similarity: {similarity:.3f})'
+                )
+
+            # Create face record
+            with self._db_lock:
+                face_id = create_face(
+                    self.conn,
+                    image_id=image_id,
+                    box_x=face.box_x,
+                    box_y=face.box_y,
+                    box_w=face.box_w,
+                    box_h=face.box_h,
+                    embedding=face.embedding,
+                    confidence=face.confidence,
+                    person_id=person_id,
+                )
+
+            # Generate face thumbnail
+            thumb_path = get_face_thumbnail_path(face_id, self.thumbnail_dir)
+            generate_face_thumbnail(
+                path,
+                thumb_path,
+                box_x=face.box_x,
+                box_y=face.box_y,
+                box_w=face.box_w,
+                box_h=face.box_h,
+                size=200,
+                quality=self.config.thumbnail_quality,
+            )
+
+            self._faces_detected_count += 1
+
+        self._processed_count += 1
+        logger.debug(f'Detected {len(detected_faces)} faces in {path.name}')
+
+    def _check_completion(self) -> None:
+        """Check if all processing is complete and trigger completion callback.
+
+        Completion requires:
+        - IngestionThread is idle
+        - EmbeddingThread's queue is empty
+        - FaceDetectionThread's queue is empty
+        """
+        if self._completion_triggered:
+            return
+
+        # Check all threads are idle
+        embedding_idle = self.embedding_thread.embedding_queue.empty()
+        ingestion_idle = self.ingestion_thread.is_idle
+        face_queue_empty = self.face_queue.empty()
+
+        if ingestion_idle and embedding_idle and face_queue_empty:
+            self._completion_triggered = True
+            logger.info('Face detection complete - triggering completion callback')
+
+            if self.on_complete:
+                try:
+                    self.on_complete()
+                except Exception as e:
+                    logger.error(f'Error in face detection completion callback: {e}')
+
+
 def get_metadata(conn: sqlite3.Connection, key: str) -> str | None:
     """Get a metadata value by key.
 
@@ -2937,10 +3203,12 @@ class ImageDatabase:
         # Create queues
         self._ingestion_queue: queue.Queue[Path] = queue.Queue()
         self._embedding_queue: queue.Queue[str] = queue.Queue()
+        self._face_queue: queue.Queue[str] = queue.Queue()
 
         # Thread references (created when started)
         self._ingestion_thread: IngestionThread | None = None
         self._embedding_thread: EmbeddingThread | None = None
+        self._face_thread: FaceDetectionThread | None = None
 
         # Track if we've been closed
         self._closed = False
@@ -3247,6 +3515,32 @@ class ImageDatabase:
 
         logger.info(f'        Found {len(found_paths)} images')
 
+    def _queue_images_for_face_detection(self) -> None:
+        """Queue all images that need face detection.
+
+        Finds images that don't have any face records (including suppressed)
+        and queues them for face detection processing.
+        """
+        if not self.config.face_detection_enabled:
+            return
+
+        # Find images without face detection
+        cursor = self.conn.execute('''
+            SELECT i.id
+            FROM images i
+            WHERE i.deleted = 0
+              AND i.embedding IS NOT NULL
+              AND NOT EXISTS (
+                  SELECT 1 FROM faces f WHERE f.image_id = i.id
+              )
+        ''')
+        rows = cursor.fetchall()
+
+        if rows:
+            logger.info(f'Queueing {len(rows)} images for face detection')
+            for row in rows:
+                self._face_queue.put(row['id'])
+
     def start_threads(self) -> None:
         """Start the background processing threads."""
         if self._ingestion_thread is not None and self._ingestion_thread.is_alive():
@@ -3255,10 +3549,19 @@ class ImageDatabase:
 
         self._stop_event.clear()
 
-        # Create completion callback
-        def on_complete():
+        # Final completion callback (after all processing including faces)
+        def on_final_complete():
+            # Clean up people with no faces
+            with self._db_lock:
+                delete_people_without_faces(self.conn)
             self._compute_duplicates_with_status()
             emit_processing_complete(self.event_queue)
+
+        # Callback when embedding completes - queue images for face detection
+        def on_embedding_complete():
+            if self.config.face_detection_enabled:
+                # Queue all images that don't have face detection run yet
+                self._queue_images_for_face_detection()
 
         # Start ingestion thread with configured number of worker threads
         self._ingestion_thread = IngestionThread(
@@ -3281,9 +3584,23 @@ class ImageDatabase:
             stop_event=self._stop_event,
             db_lock=self._db_lock,
             config=self.config,
-            on_complete=on_complete,
+            on_complete=on_embedding_complete,
         )
         self._embedding_thread.start()
+
+        # Start face detection thread
+        self._face_thread = FaceDetectionThread(
+            conn=self.conn,
+            face_queue=self._face_queue,
+            embedding_thread=self._embedding_thread,
+            ingestion_thread=self._ingestion_thread,
+            stop_event=self._stop_event,
+            db_lock=self._db_lock,
+            config=self.config,
+            thumbnail_dir=self.thumbnail_dir,
+            on_complete=on_final_complete,
+        )
+        self._face_thread.start()
 
         logger.info('Background threads started')
 
@@ -3305,6 +3622,11 @@ class ImageDatabase:
             self._embedding_thread.join(timeout=timeout)
             if self._embedding_thread.is_alive():
                 logger.warning('Embedding thread did not stop in time')
+
+        if self._face_thread is not None:
+            self._face_thread.join(timeout=timeout)
+            if self._face_thread.is_alive():
+                logger.warning('Face detection thread did not stop in time')
 
         logger.info('Background threads stopped')
 
@@ -3945,12 +4267,15 @@ class ImageDatabase:
         """Get current processing status.
 
         Returns:
-            Dict with status, indexing_queue, embedding_queue counts, and total_images.
+            Dict with status, indexing_queue, embedding_queue, face_queue counts,
+            and total_images.
         """
         indexing_count = self._ingestion_queue.qsize()
         embedding_count = self._embedding_queue.qsize()
+        face_count = self._face_queue.qsize()
 
-        status = 'up_to_date' if (indexing_count == 0 and embedding_count == 0) else 'updating'
+        all_queues_empty = (indexing_count == 0 and embedding_count == 0 and face_count == 0)
+        status = 'up_to_date' if all_queues_empty else 'updating'
 
         # Get total image count for live updates during indexing
         cursor = self.conn.execute(
@@ -3962,7 +4287,9 @@ class ImageDatabase:
             'status': status,
             'indexing_queue': indexing_count,
             'embedding_queue': embedding_count,
+            'face_queue': face_count,
             'total_images': total_images,
+            'face_detection_enabled': self.config.face_detection_enabled,
         }
 
     def get_duplicate_status(self) -> dict[int, str]:
@@ -4005,6 +4332,36 @@ class ImageDatabase:
             Generator yielding SSE-formatted strings.
         """
         return create_sse_generator(self.event_queue, timeout)
+
+    # -------------------------------------------------------------------------
+    # Face Recognition Methods
+    # -------------------------------------------------------------------------
+
+    def get_faces_for_image(
+        self,
+        image_id: str,
+        include_suppressed: bool = False,
+    ) -> list[dict[str, Any]]:
+        """Get all faces detected in an image.
+
+        Args:
+            image_id: Image's UUID.
+            include_suppressed: If True, include suppressed (false positive) faces.
+
+        Returns:
+            List of face dicts with person_name if identified.
+        """
+        with self._db_lock:
+            return get_faces_for_image(self.conn, image_id, include_suppressed)
+
+    def queue_image_for_face_detection(self, image_id: str) -> None:
+        """Queue an image for face detection.
+
+        Args:
+            image_id: Image's UUID.
+        """
+        if self.config.face_detection_enabled:
+            self._face_queue.put(image_id)
 
 
 # =============================================================================

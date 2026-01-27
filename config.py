@@ -145,6 +145,28 @@ thumbnail_scroll_throttle_ms: 250
 # Caches recently-accessed thumbnails in memory to avoid disk reads.
 # Set to 0 to disable caching. Range: 0-1000, recommended: 50-200
 thumbnail_cache_size_mb: 100
+
+# ------------------------------------------------------------------------------
+# Face Recognition
+# ------------------------------------------------------------------------------
+
+# Enable face detection during image indexing.
+# When disabled, face-related UI buttons are greyed out.
+face_detection_enabled: true
+
+# MTCNN confidence threshold for face detection.
+# Higher values = fewer false positives, may miss some faces.
+# Range: 0.0-1.0, recommended: 0.90-0.99
+face_detection_min_confidence: 0.95
+
+# Minimum face size in pixels (width/height of bounding box).
+# Faces smaller than this are ignored. Range: 20-200, recommended: 40-80
+face_detection_min_size: 40
+
+# Cosine similarity threshold for auto-matching faces to known people.
+# Higher values = stricter matching (fewer false matches, more unknowns).
+# Range: 0.0-1.0, recommended: 0.55-0.75
+face_recognition_threshold: 0.65
 """
 
 
@@ -172,6 +194,10 @@ class Config:
         thumbnail_timeout_ms: Timeout for thumbnail fetch requests in ms (1000-60000).
         thumbnail_scroll_throttle_ms: Scroll event throttle in ms (50-1000).
         thumbnail_cache_size_mb: RAM cache size for thumbnail bytes in MB (0-1000).
+        face_detection_enabled: Whether to detect faces during image indexing.
+        face_detection_min_confidence: MTCNN confidence threshold (0.0-1.0).
+        face_detection_min_size: Minimum face size in pixels (20-200).
+        face_recognition_threshold: Cosine similarity threshold for auto-matching (0.0-1.0).
     """
 
     image_extensions: set[str] = field(default_factory=lambda: {
@@ -193,6 +219,10 @@ class Config:
     thumbnail_timeout_ms: int = 10000
     thumbnail_scroll_throttle_ms: int = 250
     thumbnail_cache_size_mb: int = 100
+    face_detection_enabled: bool = True
+    face_detection_min_confidence: float = 0.95
+    face_detection_min_size: int = 40
+    face_recognition_threshold: float = 0.65
 
     def __post_init__(self) -> None:
         """Validate configuration values after initialisation."""
@@ -263,6 +293,16 @@ class Config:
             raise ValueError(f'thumbnail_scroll_throttle_ms must be 50-1000, got {self.thumbnail_scroll_throttle_ms}')
         if not 0 <= self.thumbnail_cache_size_mb <= 1000:
             raise ValueError(f'thumbnail_cache_size_mb must be 0-1000, got {self.thumbnail_cache_size_mb}')
+
+        # Validate face detection settings
+        if not isinstance(self.face_detection_enabled, bool):
+            raise ValueError('face_detection_enabled must be a boolean')
+        if not 0.0 <= self.face_detection_min_confidence <= 1.0:
+            raise ValueError(f'face_detection_min_confidence must be 0.0-1.0, got {self.face_detection_min_confidence}')
+        if not 20 <= self.face_detection_min_size <= 200:
+            raise ValueError(f'face_detection_min_size must be 20-200, got {self.face_detection_min_size}')
+        if not 0.0 <= self.face_recognition_threshold <= 1.0:
+            raise ValueError(f'face_recognition_threshold must be 0.0-1.0, got {self.face_recognition_threshold}')
 
 
 def load_config(config_path: Path | str | None = None) -> Config:
@@ -352,6 +392,18 @@ def load_config(config_path: Path | str | None = None) -> Config:
 
     if 'thumbnail_cache_size_mb' in config_data:
         kwargs['thumbnail_cache_size_mb'] = int(config_data['thumbnail_cache_size_mb'])
+
+    if 'face_detection_enabled' in config_data:
+        kwargs['face_detection_enabled'] = bool(config_data['face_detection_enabled'])
+
+    if 'face_detection_min_confidence' in config_data:
+        kwargs['face_detection_min_confidence'] = float(config_data['face_detection_min_confidence'])
+
+    if 'face_detection_min_size' in config_data:
+        kwargs['face_detection_min_size'] = int(config_data['face_detection_min_size'])
+
+    if 'face_recognition_threshold' in config_data:
+        kwargs['face_recognition_threshold'] = float(config_data['face_recognition_threshold'])
 
     return Config(**kwargs)
 
