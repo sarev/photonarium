@@ -1251,6 +1251,7 @@ a:hover {
 .face-box.focused {
     border-color: var(--color-face-focused);
     border-width: 4px;
+    z-index: 10;  /* Bring to top so it's not hidden behind nearby faces */
 }
 
 /* Face label container (positioned below or above the box) */
