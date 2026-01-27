@@ -83,6 +83,9 @@
                         <button id="btn-dup-sort-semantic" class="toolbar-btn" title="Sort by semantic similarity">
                             <span class="material-symbols-outlined">image_search</span>
                         </button>
+                        <button id="btn-dup-sort-people" class="toolbar-btn" title="Sort by people">
+                            <span class="material-symbols-outlined">group</span>
+                        </button>
                         <input type="text" id="dup-semantic-query" class="semantic-query-input" placeholder="Sort by similarity to..." disabled>
                     </div>
                 </div>
@@ -143,6 +146,9 @@
                         </button>
                         <button id="btn-sort-content" class="toolbar-btn" title="Sort by content similarity">
                             <span class="material-symbols-outlined">image_search</span>
+                        </button>
+                        <button id="btn-sort-people" class="toolbar-btn" title="Sort by people">
+                            <span class="material-symbols-outlined">group</span>
                         </button>
                         <button id="btn-sort-direction" class="toolbar-btn" title="Toggle sort direction">
                             <span class="material-symbols-outlined">arrow_downward</span>
@@ -351,6 +357,19 @@
                         </div>
                     </div>
 
+                    <!-- People filter -->
+                    <div class="filter-group" id="filter-people-group">
+                        <label>People</label>
+                        <div class="people-filter">
+                            <div id="filter-people-chips" class="people-chips">
+                                <span class="people-placeholder">Click to add people...</span>
+                            </div>
+                            <button id="btn-people-picker" class="toolbar-btn" title="Select people">
+                                <span class="material-symbols-outlined">person_add</span>
+                            </button>
+                        </div>
+                    </div>
+
                     <!-- Filter actions -->
                     <div class="filter-actions">
                         <button id="btn-apply-filter" class="action-btn primary">
@@ -434,6 +453,35 @@
                 </div>
                 <div class="dialog-actions">
                     <button id="dialog-emoji-close" class="action-btn">Close</button>
+                </div>
+            </div>
+        </dialog>
+
+        <!-- People picker dialog -->
+        <dialog id="dialog-people-picker">
+            <div class="dialog-content people-picker-content">
+                <h3>Select People</h3>
+                <div class="people-picker-panels">
+                    <!-- Left panel: Available people -->
+                    <div class="people-picker-panel">
+                        <div class="people-picker-search">
+                            <input type="text" id="people-picker-search" placeholder="Search people...">
+                        </div>
+                        <div id="people-picker-available" class="people-picker-grid">
+                            <!-- Available people thumbnails are inserted here -->
+                        </div>
+                    </div>
+                    <!-- Right panel: Selected people -->
+                    <div class="people-picker-panel">
+                        <div class="people-picker-label">Selected</div>
+                        <div id="people-picker-selected" class="people-picker-grid">
+                            <!-- Selected people thumbnails are inserted here -->
+                        </div>
+                    </div>
+                </div>
+                <div class="dialog-actions">
+                    <button id="dialog-people-cancel" class="action-btn">Cancel</button>
+                    <button id="dialog-people-done" class="action-btn primary">Done</button>
                 </div>
             </div>
         </dialog>

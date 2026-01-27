@@ -178,6 +178,7 @@ const Duplicates = {
             btnLarger: App.$('btn-dup-thumb-larger'),
             btnSortSize: App.$('btn-dup-sort-size'),
             btnSortSemantic: App.$('btn-dup-sort-semantic'),
+            btnSortPeople: App.$('btn-dup-sort-people'),
             semanticQuery: App.$('dup-semantic-query'),
             minGroupSize: App.$('dup-min-group-size')
         };
@@ -241,6 +242,9 @@ const Duplicates = {
         // Sync sort mode UI
         this._els.btnSortSize.classList.toggle('active', this.state.sortMode === 'size');
         this._els.btnSortSemantic.classList.toggle('active', this.state.sortMode === 'semantic');
+        if (this._els.btnSortPeople) {
+            this._els.btnSortPeople.classList.toggle('active', this.state.sortMode === 'people');
+        }
         this._els.semanticQuery.disabled = (this.state.sortMode !== 'semantic');
         this._els.semanticQuery.value = this.state.semanticQuery;
 
@@ -309,6 +313,9 @@ const Duplicates = {
         // Sort mode buttons
         this._els.btnSortSize.addEventListener('click', () => this._setSortMode('size'));
         this._els.btnSortSemantic.addEventListener('click', () => this._setSortMode('semantic'));
+        if (this._els.btnSortPeople) {
+            this._els.btnSortPeople.addEventListener('click', () => this._setSortMode('people'));
+        }
 
         // Semantic query input - recompute on blur or Enter
         this._els.semanticQuery.addEventListener('blur', () => this._onSemanticQueryChange());
@@ -543,7 +550,7 @@ Duplicates._scheduleStatusPoll = function(level) {
 
 /**
  * Sets the sort mode for duplicate groups.
- * @param {string} mode - 'size' or 'semantic'
+ * @param {string} mode - 'size', 'semantic', or 'people'
  * @private
  */
 Duplicates._setSortMode = function(mode) {
@@ -554,6 +561,9 @@ Duplicates._setSortMode = function(mode) {
     // Update button states
     this._els.btnSortSize.classList.toggle('active', mode === 'size');
     this._els.btnSortSemantic.classList.toggle('active', mode === 'semantic');
+    if (this._els.btnSortPeople) {
+        this._els.btnSortPeople.classList.toggle('active', mode === 'people');
+    }
 
     // Enable/disable semantic input
     this._els.semanticQuery.disabled = (mode !== 'semantic');
@@ -565,6 +575,9 @@ Duplicates._setSortMode = function(mode) {
         if (this.state.semanticQuery) {
             this._applySemanticSort();
         }
+    } else if (mode === 'people') {
+        // Sort by people names
+        this._sortGroupsByPeople();
     } else {
         // Sort by size (default)
         this._sortGroupsBySize();
@@ -626,12 +639,68 @@ Duplicates._sortGroupsBySize = function() {
 };
 
 /**
+ * Sorts groups by people names in alphabetical order.
+ * Groups with people come first, sorted by names string.
+ * Groups without people come last, sorted by size.
+ * @private
+ */
+Duplicates._sortGroupsByPeople = async function() {
+    if (this.state.allGroups.length === 0) {
+        this._renderGroups();
+        return;
+    }
+
+    // Load people names for each group's best image
+    const peopleNames = {};
+    for (const group of this.state.allGroups) {
+        if (!group.best_image?.id) {
+            peopleNames[group.group_hash] = '';
+            continue;
+        }
+        try {
+            const faces = await App.api(`/api/images/${group.best_image.id}/faces`);
+            const names = (faces || [])
+                .filter(f => f.person_name)
+                .map(f => f.person_name)
+                .sort((a, b) => a.localeCompare(b, undefined, { sensitivity: 'base' }));
+            const uniqueNames = [...new Set(names)];
+            peopleNames[group.group_hash] = uniqueNames.join(', ');
+        } catch (error) {
+            peopleNames[group.group_hash] = '';
+        }
+    }
+
+    // Sort groups: those with people first (alphabetically), then others by size
+    this.state.allGroups.sort((a, b) => {
+        const namesA = peopleNames[a.group_hash] || '';
+        const namesB = peopleNames[b.group_hash] || '';
+
+        // Groups with people come first
+        if (namesA && !namesB) return -1;
+        if (!namesA && namesB) return 1;
+
+        // Both have people - sort alphabetically
+        if (namesA && namesB) {
+            return namesA.localeCompare(namesB, undefined, { sensitivity: 'base' });
+        }
+
+        // Neither have people - sort by size
+        return b.count - a.count;
+    });
+
+    this._applyMinGroupSizeFilter();
+    this._renderGroups();
+};
+
+/**
  * Applies the current sort order and re-renders.
  * @private
  */
 Duplicates._applySortOrder = async function() {
     if (this.state.sortMode === 'semantic' && this.state.semanticQuery) {
         await this._applySemanticSort();
+    } else if (this.state.sortMode === 'people') {
+        await this._sortGroupsByPeople();
     } else {
         this._sortGroupsBySize();
         this._renderGroups();

@@ -74,6 +74,27 @@ const Search = {
     _els: {},
 
     /**
+     * Selected people for the filter.
+     * @type {Array<Object>}
+     * @private
+     */
+    _selectedPeople: [],
+
+    /**
+     * All available people (cached).
+     * @type {Array<Object>}
+     * @private
+     */
+    _allPeople: [],
+
+    /**
+     * Whether face detection is enabled.
+     * @type {boolean}
+     * @private
+     */
+    _faceDetectionEnabled: true,
+
+    /**
      * Initialises the search module.
      * Called once during app startup.
      */
@@ -88,8 +109,22 @@ const Search = {
             ratingInput: App.$('filter-rating'),
             emojiBtn: App.$('btn-emoji-picker'),
             applyBtn: App.$('btn-apply-filter'),
-            clearBtn: App.$('btn-clear-filter')
+            clearBtn: App.$('btn-clear-filter'),
+            // People filter elements
+            peopleGroup: App.$('filter-people-group'),
+            peopleChips: App.$('filter-people-chips'),
+            peoplePickerBtn: App.$('btn-people-picker'),
+            // People picker dialog elements
+            peopleDialog: App.$('dialog-people-picker'),
+            peopleSearch: App.$('people-picker-search'),
+            peopleAvailable: App.$('people-picker-available'),
+            peopleSelected: App.$('people-picker-selected'),
+            peopleDoneBtn: App.$('dialog-people-done'),
+            peopleCancelBtn: App.$('dialog-people-cancel')
         };
+
+        // Check face detection status
+        this._loadFaceDetectionStatus();
 
         // Bind button events
         this._bindEvents();
@@ -167,6 +202,267 @@ const Search = {
                 this._applyFilter();
             }
         });
+
+        // People filter events
+        if (this._els.peopleChips) {
+            this._els.peopleChips.addEventListener('click', () => this._openPeoplePicker());
+        }
+        if (this._els.peoplePickerBtn) {
+            this._els.peoplePickerBtn.addEventListener('click', () => this._openPeoplePicker());
+        }
+
+        // People picker dialog events
+        if (this._els.peopleDoneBtn) {
+            this._els.peopleDoneBtn.addEventListener('click', () => this._closePeoplePicker(true));
+        }
+        if (this._els.peopleCancelBtn) {
+            this._els.peopleCancelBtn.addEventListener('click', () => this._closePeoplePicker(false));
+        }
+        if (this._els.peopleSearch) {
+            this._els.peopleSearch.addEventListener('input', () => this._filterPeopleList());
+        }
+    },
+
+    /**
+     * Loads face detection enabled status from the backend.
+     * @private
+     */
+    async _loadFaceDetectionStatus() {
+        try {
+            const status = await App.api('/api/status');
+            this._faceDetectionEnabled = status?.face_detection_enabled !== false;
+        } catch (error) {
+            // Default to enabled if can't reach backend
+            this._faceDetectionEnabled = true;
+        }
+        this._updatePeopleFieldState();
+    },
+
+    /**
+     * Updates the people field state based on face detection status.
+     * @private
+     */
+    _updatePeopleFieldState() {
+        if (this._els.peopleGroup) {
+            if (this._faceDetectionEnabled) {
+                this._els.peopleGroup.classList.remove('disabled');
+                if (this._els.peoplePickerBtn) {
+                    this._els.peoplePickerBtn.disabled = false;
+                    this._els.peoplePickerBtn.title = 'Select people';
+                }
+            } else {
+                this._els.peopleGroup.classList.add('disabled');
+                if (this._els.peoplePickerBtn) {
+                    this._els.peoplePickerBtn.disabled = true;
+                    this._els.peoplePickerBtn.title = 'Face detection is disabled in settings';
+                }
+            }
+        }
+    },
+
+    /* ----------------------------------------------------------------------
+       PEOPLE PICKER DIALOG
+
+       Open, close, and manage the people picker dialog.
+       ---------------------------------------------------------------------- */
+
+    /**
+     * Opens the people picker dialog.
+     * @private
+     */
+    async _openPeoplePicker() {
+        if (!this._faceDetectionEnabled) return;
+        if (!this._els.peopleDialog) return;
+
+        // Load all people if not cached
+        if (this._allPeople.length === 0) {
+            await this._loadAllPeople();
+        }
+
+        // Clear search
+        if (this._els.peopleSearch) {
+            this._els.peopleSearch.value = '';
+        }
+
+        // Render panels
+        this._renderPeopleAvailable();
+        this._renderPeopleSelected();
+
+        // Show dialog
+        this._els.peopleDialog.showModal();
+    },
+
+    /**
+     * Closes the people picker dialog.
+     * @param {boolean} saveSelection - Whether to save the selection
+     * @private
+     */
+    _closePeoplePicker(saveSelection) {
+        if (!this._els.peopleDialog) return;
+
+        if (saveSelection) {
+            // Selection is already stored in _selectedPeople
+            this._renderPeopleChips();
+        }
+
+        this._els.peopleDialog.close();
+    },
+
+    /**
+     * Loads all people from the API.
+     * @private
+     */
+    async _loadAllPeople() {
+        try {
+            const people = await App.api('/api/people');
+            this._allPeople = (people || []).sort((a, b) =>
+                a.name.localeCompare(b.name, undefined, { sensitivity: 'base' })
+            );
+        } catch (error) {
+            console.error('Failed to load people:', error);
+            this._allPeople = [];
+        }
+    },
+
+    /**
+     * Filters the available people list by search query.
+     * @private
+     */
+    _filterPeopleList() {
+        this._renderPeopleAvailable();
+    },
+
+    /**
+     * Renders the available people panel in the picker.
+     * @private
+     */
+    _renderPeopleAvailable() {
+        if (!this._els.peopleAvailable) return;
+
+        const query = (this._els.peopleSearch?.value || '').toLowerCase().trim();
+        const selectedIds = new Set(this._selectedPeople.map(p => p.id));
+
+        // Filter people by search query, excluding already selected
+        let filtered = this._allPeople.filter(p => !selectedIds.has(p.id));
+        if (query) {
+            filtered = filtered.filter(p => p.name.toLowerCase().includes(query));
+        }
+
+        this._els.peopleAvailable.innerHTML = '';
+
+        if (filtered.length === 0) {
+            const empty = document.createElement('div');
+            empty.className = 'people-picker-empty';
+            empty.textContent = query ? 'No matching people' : 'No people available';
+            this._els.peopleAvailable.appendChild(empty);
+            return;
+        }
+
+        for (const person of filtered) {
+            const item = this._createPersonItem(person, 'available');
+            this._els.peopleAvailable.appendChild(item);
+        }
+    },
+
+    /**
+     * Renders the selected people panel in the picker.
+     * @private
+     */
+    _renderPeopleSelected() {
+        if (!this._els.peopleSelected) return;
+
+        this._els.peopleSelected.innerHTML = '';
+
+        if (this._selectedPeople.length === 0) {
+            const empty = document.createElement('div');
+            empty.className = 'people-picker-empty';
+            empty.textContent = 'Click people on the left to add them';
+            this._els.peopleSelected.appendChild(empty);
+            return;
+        }
+
+        for (const person of this._selectedPeople) {
+            const item = this._createPersonItem(person, 'selected');
+            this._els.peopleSelected.appendChild(item);
+        }
+    },
+
+    /**
+     * Creates a person item element for the picker.
+     * @param {Object} person - Person object
+     * @param {string} panel - 'available' or 'selected'
+     * @returns {HTMLElement}
+     * @private
+     */
+    _createPersonItem(person, panel) {
+        const item = document.createElement('div');
+        item.className = 'people-picker-item';
+        item.dataset.personId = person.id;
+
+        const img = document.createElement('img');
+        img.src = `/api/people/${person.id}/thumbnail`;
+        img.alt = person.name;
+        img.loading = 'lazy';
+        item.appendChild(img);
+
+        const name = document.createElement('span');
+        name.textContent = person.name;
+        item.appendChild(name);
+
+        // Click to move between panels
+        item.addEventListener('click', () => {
+            if (panel === 'available') {
+                // Add to selected
+                this._selectedPeople.push(person);
+            } else {
+                // Remove from selected
+                this._selectedPeople = this._selectedPeople.filter(p => p.id !== person.id);
+            }
+            this._renderPeopleAvailable();
+            this._renderPeopleSelected();
+        });
+
+        return item;
+    },
+
+    /**
+     * Renders the people chips in the filter field.
+     * @private
+     */
+    _renderPeopleChips() {
+        if (!this._els.peopleChips) return;
+
+        this._els.peopleChips.innerHTML = '';
+
+        if (this._selectedPeople.length === 0) {
+            const placeholder = document.createElement('span');
+            placeholder.className = 'people-placeholder';
+            placeholder.textContent = 'Click to add people...';
+            this._els.peopleChips.appendChild(placeholder);
+            return;
+        }
+
+        for (const person of this._selectedPeople) {
+            const chip = document.createElement('span');
+            chip.className = 'people-chip';
+
+            const nameSpan = document.createElement('span');
+            nameSpan.textContent = person.name;
+            chip.appendChild(nameSpan);
+
+            const removeBtn = document.createElement('button');
+            removeBtn.className = 'people-chip-remove';
+            removeBtn.textContent = '×';
+            removeBtn.title = 'Remove';
+            removeBtn.addEventListener('click', (e) => {
+                e.stopPropagation();
+                this._selectedPeople = this._selectedPeople.filter(p => p.id !== person.id);
+                this._renderPeopleChips();
+            });
+            chip.appendChild(removeBtn);
+
+            this._els.peopleChips.appendChild(chip);
+        }
     },
 
     /* ----------------------------------------------------------------------
@@ -194,6 +490,14 @@ const Search = {
                 this._els.similaritySlider.value = pct;
                 this._els.similarityValue.textContent = pct + '%';
             }
+
+            // Populate people filter
+            if (filter.people && filter.people.length > 0) {
+                this._selectedPeople = [...filter.people];
+            } else {
+                this._selectedPeople = [];
+            }
+            this._renderPeopleChips();
         } else {
             this._clearForm();
         }
@@ -210,6 +514,8 @@ const Search = {
         this._els.dateStart.value = '';
         this._els.dateEnd.value = '';
         this._els.ratingInput.value = '';
+        this._selectedPeople = [];
+        this._renderPeopleChips();
     },
 
     /**
@@ -223,9 +529,10 @@ const Search = {
         const dateStart = this._els.dateStart.value;
         const dateEnd = this._els.dateEnd.value;
         const rating = this._els.ratingInput.value.trim();
+        const people = this._selectedPeople.length > 0 ? [...this._selectedPeople] : null;
 
         // Return null if all fields are empty
-        if (!text && !dateStart && !dateEnd && !rating) {
+        if (!text && !dateStart && !dateEnd && !rating && !people) {
             return null;
         }
 
@@ -233,7 +540,8 @@ const Search = {
             text: text || null,
             dateStart: dateStart || null,
             dateEnd: dateEnd || null,
-            rating: rating || null
+            rating: rating || null,
+            people: people
         };
     },
 
@@ -247,7 +555,8 @@ const Search = {
             this._els.textInput.value.trim() ||
             this._els.dateStart.value ||
             this._els.dateEnd.value ||
-            this._els.ratingInput.value.trim()
+            this._els.ratingInput.value.trim() ||
+            this._selectedPeople.length > 0
         );
     },
 

@@ -397,6 +397,11 @@ const Gallery = {
                 const simA = this.state.contentSimilarities?.[a.id] ?? 0;
                 const simB = this.state.contentSimilarities?.[b.id] ?? 0;
                 cmp = simA - simB;
+            } else if (by === 'people') {
+                // Sort by people names string (pre-computed in state.peopleNames)
+                const namesA = this.state.peopleNames?.[a.id] ?? '';
+                const namesB = this.state.peopleNames?.[b.id] ?? '';
+                cmp = namesA.localeCompare(namesB, undefined, { sensitivity: 'base' });
             }
             return direction === 'asc' ? cmp : -cmp;
         });
@@ -508,6 +513,10 @@ const Gallery = {
                 const hasMatch = filterEmoji.some(e => img.rating && img.rating.includes(e));
                 if (!hasMatch) return false;
             }
+            // People filter (AND logic - image must contain ALL selected people)
+            if (filter.peopleImageIds && !filter.peopleImageIds.has(String(img.id))) {
+                return false;
+            }
             return true;
         });
     },
@@ -554,6 +563,14 @@ const Gallery = {
             } else {
                 this._loadContentSimilarities();
             }
+        } else if (by === 'people') {
+            // Load people names if not cached
+            if (!this.state.peopleNames) {
+                this._loadPeopleNames();
+            } else {
+                this.state.images = this._sortImages(this.state.images);
+                this._renderGrid();
+            }
         } else {
             this.state.contentSimilarities = null;
             this.state.contentReferenceId = null;
@@ -563,10 +580,46 @@ const Gallery = {
     },
 
     /**
+     * Loads people names for all images for sorting by people.
+     * @private
+     */
+    async _loadPeopleNames() {
+        try {
+            this.state.peopleNames = {};
+
+            // Get faces for each image and build the names string
+            // For efficiency, we batch this by getting all faces at once
+            // The names string is the alphabetically sorted, comma-joined list of people names
+            for (const img of this.state.images) {
+                try {
+                    const faces = await App.api(`/api/images/${img.id}/faces`);
+                    const names = (faces || [])
+                        .filter(f => f.person_name)
+                        .map(f => f.person_name)
+                        .sort((a, b) => a.localeCompare(b, undefined, { sensitivity: 'base' }));
+                    // Remove duplicates and join
+                    const uniqueNames = [...new Set(names)];
+                    this.state.peopleNames[img.id] = uniqueNames.join(', ');
+                } catch (error) {
+                    this.state.peopleNames[img.id] = '';
+                }
+            }
+
+            this.state.images = this._sortImages(this.state.images);
+            this._renderGrid();
+            this._scrollToTop();
+        } catch (error) {
+            console.error('Failed to load people names:', error);
+            App.showError('Could not load people data for sorting.');
+            App.setSortBy('date');
+        }
+    },
+
+    /**
      * Handles filter changes.
      * @private
      */
-    _onFilterChanged() {
+    async _onFilterChanged() {
         const filter = App.getFilter();
         const isSemanticFilter = filter && filter.type === 'semantic';
 
@@ -588,11 +641,40 @@ const Gallery = {
             App.setSortDirection('desc');
         }
 
+        // If filter has people, load the filtered image IDs from the API
+        if (filter && filter.people && filter.people.length > 0) {
+            await this._loadPeopleFilteredImages(filter);
+        }
+
         if (App.getScreen() === 'gallery') {
             this._loadImages();
             this._scrollToTop();
         } else {
             this.state.needsRefresh = true;
+        }
+    },
+
+    /**
+     * Loads image IDs filtered by people from the API.
+     * @param {Object} filter - The current filter object
+     * @private
+     */
+    async _loadPeopleFilteredImages(filter) {
+        try {
+            const peopleIds = filter.people.map(p => p.id).join(',');
+            const response = await App.api(`/api/images?people=${encodeURIComponent(peopleIds)}`);
+
+            // Store filtered image IDs in the filter object
+            if (response && Array.isArray(response.images)) {
+                filter.peopleImageIds = new Set(response.images.map(img => String(img.id)));
+            } else if (Array.isArray(response)) {
+                filter.peopleImageIds = new Set(response.map(img => String(img.id)));
+            } else {
+                filter.peopleImageIds = new Set();
+            }
+        } catch (error) {
+            console.error('Failed to load people-filtered images:', error);
+            filter.peopleImageIds = null;
         }
     },
 

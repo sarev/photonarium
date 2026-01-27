@@ -236,7 +236,7 @@ const App = {
      * @fires App#sortChanged
      */
     setSortBy(sortBy) {
-        if (!['date', 'rating', 'content'].includes(sortBy)) {
+        if (!['date', 'rating', 'content', 'people'].includes(sortBy)) {
             console.warn(`Invalid sortBy: ${sortBy}. Using 'date'.`);
             sortBy = 'date';
         }
@@ -1318,6 +1318,7 @@ const App = {
         this._bindBtn('btn-sort-date', () => this.setSortBy('date'));
         this._bindBtn('btn-sort-rating', () => this.setSortBy('rating'));
         this._bindBtn('btn-sort-content', () => this.setSortBy('content'));
+        this._bindBtn('btn-sort-people', () => this.setSortBy('people'));
         this._bindBtn('btn-sort-direction', () => this.toggleSortDirection());
 
         // Duplicates controls
@@ -1515,7 +1516,7 @@ const App = {
         const direction = this.state.sortDirection;
 
         // Update active states
-        ['date', 'rating', 'content'].forEach(type => {
+        ['date', 'rating', 'content', 'people'].forEach(type => {
             const btn = document.getElementById(`btn-sort-${type}`);
             if (btn) {
                 btn.classList.toggle('active', sortBy === type);
