@@ -502,7 +502,9 @@
         img.alt = pickPreferredPersonName || 'Face';
         thumb.appendChild(img);
 
-        // Add star overlay
+        card.appendChild(thumb);
+
+        // Add star overlay (outside thumb to avoid circular clip)
         const star = document.createElement('div');
         star.className = 'face-card-star' + (face.is_preferred ? ' preferred' : '');
         star.dataset.faceId = face.id;
@@ -511,9 +513,7 @@
             e.stopPropagation();
             handleStarClick(face.id);
         });
-        thumb.appendChild(star);
-
-        card.appendChild(thumb);
+        card.appendChild(star);
 
         // Name label (read-only in pick-preferred mode)
         const nameLabel = document.createElement('div');
@@ -586,15 +586,17 @@
         if (!confirmed) return;
 
         let successCount = 0;
-        for (const faceId of faceIds) {
-            try {
-                const result = await App.api(`/faces/${faceId}/unassign`, { method: 'POST' });
-                if (result && result.success) {
-                    successCount++;
-                }
-            } catch (error) {
-                console.error(`Failed to unassign face ${faceId}:`, error);
+        try {
+            const result = await App.api('/faces/unassign-batch', {
+                method: 'POST',
+                body: JSON.stringify({ face_ids: faceIds }),
+            });
+            if (result && result.success) {
+                successCount = result.unassigned_count || faceIds.length;
             }
+        } catch (error) {
+            console.error('Failed to unassign faces:', error);
+            App.showError('Failed to unassign faces');
         }
 
         if (successCount > 0) {
@@ -613,9 +615,9 @@
                 peopleCacheTime = 0;
                 loadAllFaces();
             } else {
-                // Re-render pick-preferred view
+                // Re-render pick-preferred view (render, not refresh, to remove deleted items)
                 displayedFaces = pickPreferredFaces;
-                pickPreferredGrid.refresh();
+                pickPreferredGrid.render();
             }
         }
     }

@@ -275,6 +275,12 @@ const Gallery = {
             console.timeEnd('_loadImages fetch');
             console.log(`_loadImages: fetched ${images.length} images`);
 
+            // Check if we're still on gallery screen after async fetch
+            if (App.getScreen() !== 'gallery') {
+                console.log('_loadImages: gallery no longer active, skipping render');
+                return;
+            }
+
             console.time('_loadImages sort');
             this.state.images = this._sortImages(images);
             console.timeEnd('_loadImages sort');

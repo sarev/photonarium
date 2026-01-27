@@ -1351,36 +1351,38 @@ def identify_face(face_id):
 
     db = get_db()
 
-    face = get_face(db.conn, face_id)
-    if face is None:
-        return error_response('Face not found', 404)
+    # Use lock to avoid conflicts with background threads
+    with db._db_lock:
+        face = get_face(db.conn, face_id)
+        if face is None:
+            return error_response('Face not found', 404)
 
-    person_id = data.get('person_id')
-    name = data.get('name', '').strip() if data.get('name') else None
+        person_id = data.get('person_id')
+        name = data.get('name', '').strip() if data.get('name') else None
 
-    if person_id:
-        # Link to existing person by ID
-        person = get_person(db.conn, person_id)
-        if person is None:
-            return error_response('Person not found', 404)
-    elif name:
-        # Find or create person by name
-        person = get_person_by_name(db.conn, name)
-        if person is None:
-            person_id = create_person(db.conn, name)
+        if person_id:
+            # Link to existing person by ID
             person = get_person(db.conn, person_id)
+            if person is None:
+                return error_response('Person not found', 404)
+        elif name:
+            # Find or create person by name
+            person = get_person_by_name(db.conn, name)
+            if person is None:
+                person_id = create_person(db.conn, name)
+                person = get_person(db.conn, person_id)
+            else:
+                person_id = person['id']
         else:
-            person_id = person['id']
-    else:
-        return error_response('Either person_id or name is required')
+            return error_response('Either person_id or name is required')
 
-    # Update face with person_id
-    update_face_person(db.conn, face_id, person_id)
+        # Update face with person_id
+        update_face_person(db.conn, face_id, person_id)
 
-    # Get updated face
-    face = get_face(db.conn, face_id)
-    if 'embedding' in face:
-        del face['embedding']
+        # Get updated face
+        face = get_face(db.conn, face_id)
+        if 'embedding' in face:
+            del face['embedding']
 
     return success_response({
         'face': face,
@@ -1420,13 +1422,14 @@ def identify_faces_batch():
 
     db = get_db()
 
-    # Batch identify all faces
-    result = batch_identify_faces(
-        db.conn,
-        face_ids,
-        name,
-        preferred_face_id
-    )
+    # Batch identify all faces (use lock to avoid conflicts with background threads)
+    with db._db_lock:
+        result = batch_identify_faces(
+            db.conn,
+            face_ids,
+            name,
+            preferred_face_id
+        )
 
     if result['person'] is None:
         return error_response('Failed to identify faces')
@@ -1435,7 +1438,7 @@ def identify_faces_batch():
     # This will match other unknown faces against the newly identified person
     reassess_unknown_faces_async(
         DATABASE_PATH,
-        threshold=0.65,
+        threshold=db.config.face_recognition_threshold,
         person_id=result['person']['id'],
     )
 
@@ -1473,18 +1476,20 @@ def unidentify_face(face_id):
     """
     db = get_db()
 
-    face = get_face(db.conn, face_id)
-    if face is None:
-        return error_response('Face not found', 404)
+    # Use lock to avoid conflicts with background threads
+    with db._db_lock:
+        face = get_face(db.conn, face_id)
+        if face is None:
+            return error_response('Face not found', 404)
 
-    old_person_id = face.get('person_id')
+        old_person_id = face.get('person_id')
 
-    # Unlink face from person
-    update_face_person(db.conn, face_id, None)
+        # Unlink face from person
+        update_face_person(db.conn, face_id, None)
 
-    # Delete person if they have no more faces
-    if old_person_id:
-        delete_people_without_faces(db.conn)
+        # Delete person if they have no more faces
+        if old_person_id:
+            delete_people_without_faces(db.conn)
 
     return success_response(message='Face unidentified')
 
@@ -1504,17 +1509,19 @@ def suppress_face_endpoint(face_id):
     """
     db = get_db()
 
-    face = get_face(db.conn, face_id)
-    if face is None:
-        return error_response('Face not found', 404)
+    # Use lock to avoid conflicts with background threads
+    with db._db_lock:
+        face = get_face(db.conn, face_id)
+        if face is None:
+            return error_response('Face not found', 404)
 
-    old_person_id = face.get('person_id')
+        old_person_id = face.get('person_id')
 
-    suppress_face(db.conn, face_id)
+        suppress_face(db.conn, face_id)
 
-    # Delete person if they have no more faces
-    if old_person_id:
-        delete_people_without_faces(db.conn)
+        # Delete person if they have no more faces
+        if old_person_id:
+            delete_people_without_faces(db.conn)
 
     return success_response(message='Face suppressed')
 
@@ -1534,17 +1541,19 @@ def delete_face_endpoint(face_id):
     """
     db = get_db()
 
-    face = get_face(db.conn, face_id)
-    if face is None:
-        return error_response('Face not found', 404)
+    # Use lock to avoid conflicts with background threads
+    with db._db_lock:
+        face = get_face(db.conn, face_id)
+        if face is None:
+            return error_response('Face not found', 404)
 
-    old_person_id = face.get('person_id')
+        old_person_id = face.get('person_id')
 
-    delete_face(db.conn, face_id)
+        delete_face(db.conn, face_id)
 
-    # Delete person if they have no more faces
-    if old_person_id:
-        delete_people_without_faces(db.conn)
+        # Delete person if they have no more faces
+        if old_person_id:
+            delete_people_without_faces(db.conn)
 
     return success_response(message='Face deleted')
 
@@ -1591,43 +1600,120 @@ def unassign_face(face_id):
     """
     db = get_db()
 
-    face = get_face(db.conn, face_id)
-    if face is None:
-        return error_response('Face not found', 404)
+    # Use lock to avoid conflicts with background threads
+    with db._db_lock:
+        face = get_face(db.conn, face_id)
+        if face is None:
+            return error_response('Face not found', 404)
 
-    old_person_id = face.get('person_id')
-    if not old_person_id:
-        return error_response('Face is not assigned to any person', 400)
+        old_person_id = face.get('person_id')
+        if not old_person_id:
+            return error_response('Face is not assigned to any person', 400)
 
-    # Get person details before unassigning
-    person = get_person(db.conn, old_person_id)
+        # Get person details before unassigning
+        person = get_person(db.conn, old_person_id)
 
-    # Unlink face from person
-    update_face_person(db.conn, face_id, None)
+        # Unlink face from person
+        update_face_person(db.conn, face_id, None)
 
-    # If this was the preferred face, auto-select a new one
-    if person and person.get('preferred_face_id') == face_id:
-        remaining_faces = get_faces_for_person(db.conn, old_person_id)
-        if remaining_faces:
-            # Select the first remaining face as preferred
-            new_preferred = remaining_faces[0]['id']
-            update_person(db.conn, old_person_id, preferred_face_id=new_preferred)
+        # If this was the preferred face, auto-select a new one
+        if person and person.get('preferred_face_id') == face_id:
+            remaining_faces = get_faces_for_person(db.conn, old_person_id)
+            if remaining_faces:
+                # Select newest face (last in list, sorted by timestamp ASC)
+                new_preferred = remaining_faces[-1]['id']
+                update_person(db.conn, old_person_id, preferred_face_id=new_preferred)
 
-    # Delete person if they have no more faces
-    delete_people_without_faces(db.conn)
+        # Delete person if they have no more faces
+        delete_people_without_faces(db.conn)
 
-    # Get updated person (or None if deleted)
-    updated_person = get_person(db.conn, old_person_id)
+        # Get updated person (or None if deleted)
+        updated_person = get_person(db.conn, old_person_id)
 
-    # Trigger group recalculation for the face returning to unknown pool
-    compute_unknown_face_groups_async(
-        DATABASE_PATH,
-        threshold=db.config.face_recognition_threshold
-    )
+    # Note: We don't trigger group recalculation here - it's too expensive
+    # for interactive use. Groups are computed during initial processing
+    # or via explicit "Rescan" request.
 
     return success_response({
         'message': 'Face unassigned',
         'person': updated_person,  # Will be None if person was deleted
+    })
+
+
+@app.route('/api/faces/unassign-batch', methods=['POST'])
+def unassign_faces_batch():
+    """Remove multiple faces from their person and return to unknown pool.
+
+    More efficient than calling /unassign for each face individually.
+    Only triggers one group recalculation at the end.
+
+    Request Body:
+        JSON object with:
+            - face_ids: List of face UUIDs to unassign
+
+    Returns:
+        JSON object with count of unassigned faces.
+    """
+    data = request.get_json()
+    if not data:
+        return error_response('Request body is required')
+
+    face_ids = data.get('face_ids', [])
+    if not face_ids:
+        return error_response('face_ids is required')
+
+    db = get_db()
+    unassigned_count = 0
+    affected_person_ids = set()
+
+    # Use lock to avoid conflicts with background threads
+    with db._db_lock:
+        # Phase 1: Unassign all faces and track affected persons
+        for face_id in face_ids:
+            face = get_face(db.conn, face_id)
+            if face is None:
+                continue
+
+            old_person_id = face.get('person_id')
+            if not old_person_id:
+                continue
+
+            affected_person_ids.add(old_person_id)
+
+            # Unlink face from person
+            update_face_person(db.conn, face_id, None)
+            unassigned_count += 1
+
+        # Phase 2: Fix preferred faces for affected persons
+        # Select newest remaining face (by image timestamp) as preferred
+        for person_id in affected_person_ids:
+            person = get_person(db.conn, person_id)
+            if not person:
+                continue
+
+            remaining_faces = get_faces_for_person(db.conn, person_id)
+            if not remaining_faces:
+                continue  # Person will be deleted below
+
+            # Check if current preferred face is still valid
+            current_preferred = person.get('preferred_face_id')
+            remaining_ids = {f['id'] for f in remaining_faces}
+
+            if current_preferred not in remaining_ids:
+                # Select newest face (last in list, sorted by timestamp ASC)
+                new_preferred = remaining_faces[-1]['id']
+                update_person(db.conn, person_id, preferred_face_id=new_preferred)
+
+        # Phase 3: Delete people with no more faces
+        delete_people_without_faces(db.conn)
+
+    # Note: We don't trigger group recalculation here - it's too expensive
+    # for interactive use (~minutes for 30k faces). Groups are computed
+    # during initial processing or via explicit "Rescan" request.
+
+    return success_response({
+        'message': f'{unassigned_count} faces unassigned',
+        'unassigned_count': unassigned_count,
     })
 
 
