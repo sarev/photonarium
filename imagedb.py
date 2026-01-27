@@ -215,6 +215,7 @@ from faces import (
     get_faces_for_image,
     has_faces_detected,
     delete_faces_for_image,
+    rotate_faces_for_image,
     get_all_known_face_embeddings,
     find_best_match,
     auto_recognize_face,
@@ -4061,6 +4062,46 @@ class ImageDatabase:
             except Exception as e:
                 logger.error(f'rotate_image: Failed to update database: {e}')
                 return False
+
+            # Rotate face bounding boxes and regenerate face thumbnails
+            try:
+                with self._db_lock:
+                    # Get faces before rotating their coordinates
+                    faces = get_faces_for_image(self.conn, image_id, include_suppressed=True)
+
+                    # Rotate the bounding box coordinates in the database
+                    rotated_count = rotate_faces_for_image(self.conn, image_id, direction)
+
+                    if rotated_count > 0:
+                        logger.debug(f'Rotated {rotated_count} face bounding boxes for {path.name}')
+
+                        # Delete old face thumbnails and regenerate them
+                        for face in faces:
+                            face_id = face['id']
+                            # Delete old thumbnail
+                            delete_face_thumbnail(face_id, self.thumbnail_dir)
+
+                            # Get updated face coordinates (after rotation)
+                            updated_face = get_face(self.conn, face_id)
+                            if updated_face:
+                                # Regenerate face thumbnail with new coordinates
+                                thumb_path = get_face_thumbnail_path(face_id, self.thumbnail_dir)
+                                try:
+                                    generate_face_thumbnail(
+                                        path,
+                                        thumb_path,
+                                        box_x=updated_face['box_x'],
+                                        box_y=updated_face['box_y'],
+                                        box_w=updated_face['box_w'],
+                                        box_h=updated_face['box_h'],
+                                        size=200,
+                                        quality=self.config.thumbnail_quality,
+                                    )
+                                except Exception as e:
+                                    logger.warning(f'Failed to regenerate face thumbnail for {face_id}: {e}')
+            except Exception as e:
+                logger.warning(f'rotate_image: Failed to rotate faces: {e}')
+                # Non-fatal - image was still rotated successfully
 
             logger.info(f'Rotated image {direction}: {path.name}')
             return True

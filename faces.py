@@ -971,6 +971,72 @@ def delete_faces_for_image(
     return cursor.rowcount
 
 
+def rotate_faces_for_image(
+    conn: sqlite3.Connection,
+    image_id: str,
+    direction: str,
+) -> int:
+    """Rotate all face bounding boxes for an image.
+
+    When an image is rotated, the face bounding boxes need to be transformed
+    to match the new orientation. This updates the box_x, box_y, box_w, box_h
+    values in the database.
+
+    For 90° clockwise rotation:
+        new_x = 1 - old_y - old_h
+        new_y = old_x
+        new_w = old_h
+        new_h = old_w
+
+    For 90° counter-clockwise rotation:
+        new_x = old_y
+        new_y = 1 - old_x - old_w
+        new_w = old_h
+        new_h = old_w
+
+    Args:
+        conn: Database connection.
+        image_id: Image's UUID.
+        direction: 'cw' for clockwise, 'ccw' for counter-clockwise.
+
+    Returns:
+        Number of faces updated.
+    """
+    # Get all faces for this image
+    cursor = conn.execute(
+        '''SELECT id, box_x, box_y, box_w, box_h FROM faces WHERE image_id = ?''',
+        (image_id,)
+    )
+    faces = cursor.fetchall()
+
+    if not faces:
+        return 0
+
+    updated_count = 0
+    for face_id, box_x, box_y, box_w, box_h in faces:
+        if direction == 'cw':
+            # 90° clockwise rotation
+            new_x = 1.0 - box_y - box_h
+            new_y = box_x
+            new_w = box_h
+            new_h = box_w
+        else:  # ccw
+            # 90° counter-clockwise rotation
+            new_x = box_y
+            new_y = 1.0 - box_x - box_w
+            new_w = box_h
+            new_h = box_w
+
+        conn.execute(
+            '''UPDATE faces SET box_x = ?, box_y = ?, box_w = ?, box_h = ? WHERE id = ?''',
+            (new_x, new_y, new_w, new_h, face_id)
+        )
+        updated_count += 1
+
+    conn.commit()
+    return updated_count
+
+
 def has_faces_detected(
     conn: sqlite3.Connection,
     image_id: str,
