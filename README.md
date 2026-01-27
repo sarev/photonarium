@@ -55,8 +55,9 @@ Imaginary is designed to run fast even with huge photo libraries. It uses a loca
    # PyTorch (with CUDA support for GPU acceleration)
    pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu124
 
-   # Other dependencies
-   pip install open_clip_torch facenet-pytorch pillow opencv-python imagehash numpy pyyaml flask flask-cors waitress
+   # Other dependencies (install facenet-pytorch with --no-deps to avoid replacing CUDA torch)
+   pip install pillow opencv-python imagehash numpy pyyaml flask waitress open_clip_torch
+   pip install --no-deps facenet-pytorch
    ```
 
 ## Running Imaginary
