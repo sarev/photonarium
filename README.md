@@ -61,6 +61,8 @@ Imaginary is designed to run fast even with huge photo libraries. It uses a loca
    pip install opencv-python imagehash flask waitress requests
    ```
 
+   > **Note:** You may see pip warnings about facenet-pytorch version conflicts with numpy, Pillow, and torch. These can be safely ignored—the package works correctly with newer versions despite its conservative dependency declarations.
+
 ## Running Imaginary
 
 ```bash
