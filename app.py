@@ -1616,7 +1616,10 @@ def unassign_face(face_id):
     updated_person = get_person(db.conn, old_person_id)
 
     # Trigger group recalculation for the face returning to unknown pool
-    compute_unknown_face_groups_async(DATABASE_PATH)
+    compute_unknown_face_groups_async(
+        DATABASE_PATH,
+        threshold=db.config.face_recognition_threshold
+    )
 
     return success_response({
         'message': 'Face unassigned',

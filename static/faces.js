@@ -779,6 +779,17 @@
             facesGrid.style.setProperty('--thumb-size', `${facesThumbnailSize}px`);
         }
         updateThumbnailSizeButtons();
+
+        // Refresh VirtualGrid to recalculate layout
+        if (typeof ThumbnailLoader !== 'undefined') {
+            ThumbnailLoader.clear();
+        }
+        if (unknownFacesGrid) {
+            unknownFacesGrid.refresh();
+        }
+        if (pickPreferredGrid) {
+            pickPreferredGrid.refresh();
+        }
     }
 
     /**
@@ -869,6 +880,19 @@
         // Unbind selection during reload
         if (facesSelection) {
             facesSelection.unbind();
+        }
+
+        // Unbind and destroy existing VirtualGrid BEFORE clearing DOM
+        // (otherwise scroll listeners are orphaned when container is removed)
+        if (unknownFacesGrid) {
+            unknownFacesGrid.unbind();
+            unknownFacesGrid.destroy();
+            unknownFacesGrid = null;
+        }
+        if (pickPreferredGrid) {
+            pickPreferredGrid.unbind();
+            pickPreferredGrid.destroy();
+            pickPreferredGrid = null;
         }
 
         // Show loading state
@@ -975,8 +999,11 @@
             }
         }
 
-        // Initialize selection after grid is set up
+        // Initialize and bind selection after grid is set up
         initFacesSelection();
+        if (facesSelection) {
+            facesSelection.bind();
+        }
     }
 
     /**

@@ -1084,6 +1084,7 @@ def get_all_faces(
     """
     if unknown_only:
         # Return unknown faces sorted by group size and timestamp
+        # Note: When unknown_group_id is NULL, treat as singleton (group_size=1)
         cursor = conn.execute(
             '''SELECT f.id, f.image_id, f.box_x, f.box_y, f.box_w, f.box_h,
                       f.confidence, f.person_id, f.created_at,
@@ -1091,7 +1092,8 @@ def get_all_faces(
                       NULL as person_name,
                       0 as is_preferred,
                       i.timestamp as image_timestamp,
-                      COUNT(*) OVER (PARTITION BY f.unknown_group_id) as group_size
+                      CASE WHEN f.unknown_group_id IS NULL THEN 1
+                           ELSE COUNT(*) OVER (PARTITION BY f.unknown_group_id) END as group_size
                FROM faces f
                JOIN images i ON f.image_id = i.id
                WHERE f.suppressed = 0 AND f.person_id IS NULL
@@ -1109,9 +1111,9 @@ def get_all_faces(
                       p.name as person_name,
                       CASE WHEN f.id = p.preferred_face_id THEN 1 ELSE 0 END as is_preferred,
                       i.timestamp as image_timestamp,
-                      CASE WHEN f.person_id IS NULL
-                           THEN COUNT(*) OVER (PARTITION BY f.unknown_group_id)
-                           ELSE NULL END as group_size
+                      CASE WHEN f.person_id IS NOT NULL THEN NULL
+                           WHEN f.unknown_group_id IS NULL THEN 1
+                           ELSE COUNT(*) OVER (PARTITION BY f.unknown_group_id) END as group_size
                FROM faces f
                LEFT JOIN people p ON f.person_id = p.id
                JOIN images i ON f.image_id = i.id

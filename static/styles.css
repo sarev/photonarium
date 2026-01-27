@@ -1424,13 +1424,19 @@ a:hover {
 
     position: relative;
     flex: 1;
-    overflow-y: auto;
+    overflow: hidden;  /* Don't scroll - let inner containers scroll */
     padding: 1rem;
+    display: flex;
+    flex-direction: column;
 }
 
 /* Face section headers */
 .faces-section {
     margin-bottom: 1.5rem;
+}
+
+.faces-section.known {
+    flex-shrink: 0;  /* Don't shrink known section */
 }
 
 .faces-section-header {

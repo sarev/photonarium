@@ -224,6 +224,7 @@ from faces import (
     get_face_thumbnail_path,
     delete_face_thumbnail,
     delete_people_without_faces,
+    compute_unknown_face_groups,
 )
 from timestamps import (
     derive_timestamp,
@@ -3590,6 +3591,13 @@ class ImageDatabase:
             with self._db_lock:
                 delete_people_without_faces(self.conn)
             self._compute_duplicates_with_status()
+            # Compute unknown face groups (similar to duplicate grouping)
+            if self.config.face_detection_enabled:
+                with self._db_lock:
+                    compute_unknown_face_groups(
+                        self.conn,
+                        threshold=self.config.face_recognition_threshold
+                    )
             emit_processing_complete(self.event_queue)
 
         # Callback when embedding completes - queue images for face detection

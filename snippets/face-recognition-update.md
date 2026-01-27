@@ -87,3 +87,166 @@ This surfaces frequently-photographed people at the top of the unknown list, wit
   );
   ```
 - Alternatively, add a `group_id` column to the `faces` table for unknown faces
+
+
+
+
+Face Recognition Update - Verification Checklist
+
+  Toolbar Changes
+
+  - "Only unknowns" is a toggle button (not checkbox) in left toolbar
+  - "Only unknowns" button uses help icon
+  - "Only unknowns" button shows .active class when enabled
+  - Focus button exists with center_focus_strong icon
+  - Focus button is disabled when no person card is selected
+  - Focus button is enabled when exactly one person card is selected
+  - Focus button shows .active class when in pick-preferred mode
+  - Focus button tooltip changes based on state ("Focus on one person" vs "Exit focus mode")
+
+  Known Faces Section
+
+  - Shows only ONE card per person (preferred face thumbnail)
+  - Uses /api/people/{id}/thumbnail endpoint (not face thumbnail)
+  - Sorted alphabetically by name (case-insensitive)
+  - Sort direction toggle reverses alphabetical order (Z-A)
+  - Person cards have .person-card class for identification
+  - Person cards show face count badge when person has multiple faces
+  - Single-click on person card toggles selection
+  - Only one person card can be selected at a time
+  - Double-click on person card enters pick-preferred mode
+
+  Edge cases:
+  - Person with only 1 face - no badge shown, pick-preferred still works
+  - Person with 0 faces (deleted all) - should not appear / person deleted
+  - Two people with same name (different case) - both appear, sorted correctly
+  - Very long person name - truncated with ellipsis
+
+  Pick-Preferred Mode
+
+  - Header shows person name and hint text
+  - Shows ALL faces for the selected person (not just preferred)
+  - Each face has star overlay in corner
+  - Preferred face has gold star (.preferred class)
+  - Non-preferred faces have grey star
+  - Clicking star sets that face as preferred (API call)
+  - After star click, only one gold star exists
+  - Previous preferred face's star becomes grey
+  - Faces sorted by image timestamp (oldest first by default)
+  - Sort direction toggle reverses timestamp order
+  - VirtualGrid used for performance with many faces
+  - Delete key unassigns selected faces (returns to unknown pool)
+  - Delete triggers confirmation dialog
+  - After unassign, faces removed from pick-preferred view
+  - Unassigned faces appear in unknown section on exit
+  - Focus button click exits pick-preferred mode
+  - Exiting mode returns to normal known/unknown view
+  - Unknown faces section hidden during pick-preferred mode
+
+  Edge cases:
+  - Unassign the preferred face - new preferred auto-selected from remaining
+  - Unassign ALL faces - person deleted, exit pick-preferred mode automatically
+  - Star click while face is selected - works (selection not required)
+  - Double-click face in pick-preferred - sets as preferred (same as star)
+  - Enter pick-preferred for person with 100+ faces - VirtualGrid handles it
+
+  Unknown Faces Section
+
+  - Uses VirtualGrid (not static DOM)
+  - Uses /api/faces/{id}/thumbnail for thumbnails
+  - unknown_group_id column exists in faces table
+  - Faces grouped by embedding similarity (threshold ~0.65)
+  - Groups sorted by size descending (largest first)
+  - Within groups, sorted by image timestamp
+  - Singletons (no group) appear after grouped faces
+  - Sort direction toggle reverses both orderings
+  - group_size field included in API response
+  - image_timestamp field included in API response
+  - Input field for naming (autocomplete works)
+  - Naming a face triggers group recalculation
+  - Selection works (click, Ctrl+click, Shift+click, drag-box)
+  - Delete key suppresses selected faces
+
+  Edge cases:
+  - 0 unknown faces - empty state shown, VirtualGrid handles gracefully
+  - 1 unknown face - shown as singleton (group_size = 1)
+  - 1000+ unknown faces - VirtualGrid virtualization works
+  - Name an unknown face - it leaves unknown section immediately
+  - Group recalc while viewing - UI updates appropriately
+  - Two faces with identical embedding - grouped together
+
+  API Endpoints
+
+  GET /api/faces
+  - Returns unknown_group_id for unknown faces
+  - Returns group_size for unknown faces
+  - Returns image_timestamp for all faces
+  - Returns is_preferred for known faces
+  - unknown_only=true parameter works
+
+  GET /api/people/{id}/faces
+  - Returns all faces for person
+  - Includes is_preferred field
+  - Includes image_timestamp field
+  - Sorted by timestamp
+
+  POST /api/people/{id}/set-preferred
+  - Requires face_id in body
+  - Returns error if face doesn't belong to person
+  - Returns error if person not found
+  - Returns error if face not found
+  - Updates preferred_face_id in people table
+  - Returns updated person object
+
+  POST /api/faces/{id}/unassign
+  - Sets person_id to NULL
+  - If was preferred face, auto-selects new preferred from remaining
+  - If no faces remain, deletes the person
+  - Triggers group recalculation
+  - Returns updated/deleted person info
+
+  GET /api/faces/group-status
+  - Returns status field ('idle', 'computing', 'done', 'error')
+  - Returns n_groups when done
+
+  Database Schema
+
+  - faces.unknown_group_id column exists (TEXT, nullable)
+  - Migration runs on startup for existing databases
+  - Group IDs are short UUIDs (8 chars)
+  - Group IDs cleared when face is identified
+
+  Group Computation
+
+  - Uses UnionFind algorithm (imported from duplicates.py)
+  - Chunked matrix multiplication for memory efficiency
+  - Runs asynchronously in background thread
+  - Only one computation runs at a time
+  - Triggered after: face identification, unassignment, suppression
+  - Clears existing group IDs before computing new ones
+  - Only groups faces with person_id IS NULL AND suppressed = 0
+
+  Performance considerations:
+  - Chunk size of 1000 for similarity computation
+  - Uses pre-normalized embeddings (no re-normalization)
+  - Index on unknown_group_id for query performance
+  - VirtualGrid only renders visible faces (~50 at a time)
+  - ThumbnailLoader limits concurrent requests
+  - Grouping computation doesn't block UI
+
+  Screen Transitions
+
+  - VirtualGrid bound on screen enter
+  - VirtualGrid unbound on screen leave
+  - Selection unbound on screen leave
+  - Scroll position restored on re-enter
+  - Pick-preferred mode exits when leaving faces screen
+  - needsRefresh flag triggers reload on next enter
+
+  Integration with Other Features
+
+  - "Only unknowns" toggle works correctly with pick-preferred mode (exits first)
+  - Database changes trigger needsRefresh
+  - Reassessment completion reloads faces
+  - Tagging mode in fullscreen still works for unknown faces
+  
