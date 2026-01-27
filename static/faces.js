@@ -106,6 +106,12 @@
     /** @type {HTMLButtonElement} */
     let btnFacesSortDirection;
 
+    /** @type {Object|null} GridSelection instance for faces screen */
+    let facesSelection = null;
+
+    /** @type {Array<Object>} Currently displayed faces (after filtering/sorting) */
+    let displayedFaces = [];
+
     // =========================================================================
     // INITIALIZATION
     // =========================================================================
@@ -153,6 +159,9 @@
         App.on('databaseChanged', () => {
             needsRefresh = true;
         });
+
+        // Initialize GridSelection for faces screen
+        initFacesSelection();
 
         // Register the faces screen module
         registerFacesModule();
@@ -255,17 +264,125 @@
     }
 
     /**
+     * Initialize GridSelection for faces screen.
+     * Creates a simple grid adapter since we don't use VirtualGrid.
+     */
+    function initFacesSelection() {
+        if (!facesGrid || typeof GridSelection === 'undefined') return;
+
+        // Create a simple adapter that provides the methods GridSelection needs
+        const gridAdapter = {
+            _config: {
+                container: facesGrid
+            },
+            _innerContainer: facesGrid,
+
+            /**
+             * Update visual class on an item.
+             */
+            setItemClass(id, className, value) {
+                const item = facesGrid.querySelector(`.face-card[data-id="${id}"]`);
+                if (item) {
+                    item.classList.toggle(className, value);
+                }
+            },
+
+            /**
+             * Scroll to an item by index.
+             */
+            scrollTo(index) {
+                if (index < 0 || index >= displayedFaces.length) return;
+                const id = displayedFaces[index].id;
+                const item = facesGrid.querySelector(`.face-card[data-id="${id}"]`);
+                if (item) {
+                    item.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+                }
+            },
+
+            /**
+             * Get approximate items per row (based on grid layout).
+             */
+            getItemsPerRow() {
+                const firstCard = facesGrid.querySelector('.face-card');
+                if (!firstCard) return 1;
+                const gridWidth = facesGrid.clientWidth;
+                const cardWidth = firstCard.offsetWidth + 8; // 8px gap
+                return Math.max(1, Math.floor(gridWidth / cardWidth));
+            },
+
+            /**
+             * Get approximate visible rows.
+             */
+            getVisibleRows() {
+                const firstCard = facesGrid.querySelector('.face-card');
+                if (!firstCard) return 1;
+                const gridHeight = facesGrid.clientHeight;
+                const cardHeight = firstCard.offsetHeight + 8; // 8px gap
+                return Math.max(1, Math.floor(gridHeight / cardHeight));
+            }
+        };
+
+        facesSelection = GridSelection.create({
+            grid: gridAdapter,
+            getItems: () => displayedFaces,
+            getItemId: (face) => face.id,
+            itemSelector: '.face-card',
+            selectedClass: 'selected',
+            onSelectionChanged: handleFacesSelectionChanged,
+            onItemActivated: handleFaceActivated,
+            onDeleteRequested: null, // Could add face suppression here
+            enableKeyboard: true,
+            enableDragBox: true,
+            enableLongPress: true
+        });
+    }
+
+    /**
+     * Handle selection change in faces grid.
+     * @param {Array<string>} selectedIds - Selected face IDs
+     */
+    function handleFacesSelectionChanged(selectedIds) {
+        // Could update UI to show selection count, enable/disable buttons, etc.
+        // For now, just let the selection state be managed by GridSelection
+    }
+
+    /**
+     * Handle face activation (Enter key or double-click).
+     * Navigate to fullscreen with tagging mode.
+     * @param {string} faceId - Activated face ID
+     */
+    function handleFaceActivated(faceId) {
+        // Don't activate if user is interacting with an input field
+        // (e.g., double-clicking to select text in the name input)
+        const activeEl = document.activeElement;
+        if (activeEl && (activeEl.classList.contains('face-card-input') ||
+            activeEl.closest('.face-card-input'))) {
+            return;
+        }
+
+        const face = displayedFaces.find(f => f.id === faceId);
+        if (face && face.image_id) {
+            App.showFullscreen(face.image_id);
+            setTaggingMode(true);
+        }
+    }
+
+    /**
      * Register the faces screen module with App.
      */
     function registerFacesModule() {
         App.registerModule('faces', {
             onEnter() {
                 if (needsRefresh) {
-                    loadAllFaces();
+                    loadAllFaces(); // Selection is bound after load completes
                 } else {
                     // Restore scroll position
                     if (facesGrid) {
                         facesGrid.scrollTop = savedScrollTop;
+                    }
+                    // Bind selection handlers (grid already has content)
+                    if (facesSelection) {
+                        facesSelection.bind();
                     }
                 }
             },
@@ -273,6 +390,10 @@
                 // Save scroll position
                 if (facesGrid) {
                     savedScrollTop = facesGrid.scrollTop;
+                }
+                // Unbind selection handlers
+                if (facesSelection) {
+                    facesSelection.unbind();
                 }
             },
             markNeedsRefresh() {
@@ -378,6 +499,11 @@
         if (isLoading) return;
         isLoading = true;
 
+        // Unbind selection during reload
+        if (facesSelection) {
+            facesSelection.unbind();
+        }
+
         // Show loading state
         if (facesGrid) facesGrid.innerHTML = '';
         if (facesEmpty) facesEmpty.hidden = true;
@@ -388,6 +514,11 @@
             allFaces = await App.api('/faces') || [];
             needsRefresh = false;
             renderFacesGrid();
+
+            // Bind selection after grid is rendered
+            if (facesSelection) {
+                facesSelection.bind();
+            }
         } catch (error) {
             console.error('Failed to load faces:', error);
             App.showError('Failed to load faces.');
@@ -411,6 +542,11 @@
      */
     function renderFacesGrid() {
         if (!facesGrid) return;
+
+        // Clear selection when re-rendering
+        if (facesSelection) {
+            facesSelection.clear();
+        }
 
         // Clear grid
         facesGrid.innerHTML = '';
@@ -438,8 +574,12 @@
             return sortAscending ? cmp : -cmp;
         });
 
+        // Update displayedFaces for GridSelection (unknown faces only for selection)
+        displayedFaces = faces.filter(f => !f.person_id);
+
         // Check for empty state
         if (faces.length === 0) {
+            displayedFaces = [];
             if (facesEmpty) facesEmpty.hidden = false;
             return;
         }
@@ -583,7 +723,7 @@
     function createFaceCard(face) {
         const card = document.createElement('div');
         card.className = 'face-card';
-        card.dataset.faceId = face.id;
+        card.dataset.id = face.id; // Use data-id for GridSelection compatibility
 
         const thumb = document.createElement('div');
         thumb.className = 'face-card-thumb';
@@ -609,7 +749,7 @@
             showCardAutocomplete(input, input.value, card);
         });
 
-        // Handle blur to commit
+        // Handle blur to commit (applies to all selected faces)
         input.addEventListener('blur', () => {
             // Delay to allow autocomplete click
             setTimeout(() => {
@@ -617,7 +757,7 @@
                 if (autocomplete) {
                     autocomplete.remove();
                 }
-                commitFaceCardName(face.id, input.value.trim(), card);
+                commitSelectedFacesName(face.id, input.value.trim(), card);
             }, 200);
         });
 
@@ -635,13 +775,7 @@
 
         card.appendChild(input);
 
-        // Double-click to view the source image in fullscreen with tagging mode
-        card.addEventListener('dblclick', () => {
-            if (face.image_id) {
-                App.showFullscreen(face.image_id);
-                setTaggingMode(true);
-            }
-        });
+        // Note: Double-click is handled by GridSelection's onItemActivated
 
         return card;
     }
@@ -704,7 +838,54 @@
     }
 
     /**
-     * Commit a name change for a face card.
+     * Commit a name change for selected faces.
+     * If multiple faces are selected, applies the name to all of them.
+     * The face where the user typed becomes the "preferred" face for that person.
+     *
+     * @param {string} typedFaceId - Face ID where user typed the name
+     * @param {string} name - Name to assign
+     * @param {HTMLElement} card - Card element where user typed
+     */
+    async function commitSelectedFacesName(typedFaceId, name, card) {
+        if (!name) return;
+
+        // Get selected faces, or just the typed face if none selected
+        let faceIds = facesSelection ? facesSelection.getSelected() : [];
+
+        // If the typed face isn't in the selection, or no selection, just use the typed face
+        if (faceIds.length === 0 || !faceIds.includes(typedFaceId)) {
+            faceIds = [typedFaceId];
+        }
+
+        try {
+            // Identify all selected faces with the same name
+            // The first one (typed face) should be marked as preferred
+            const results = await Promise.all(faceIds.map((faceId, index) =>
+                App.api(`/faces/${faceId}/identify`, {
+                    method: 'POST',
+                    body: JSON.stringify({
+                        name,
+                        // The face where user typed becomes preferred (unless one already exists)
+                        set_preferred: faceId === typedFaceId
+                    }),
+                })
+            ));
+
+            // Check if any succeeded
+            const anySuccess = results.some(r => r && r.success);
+            if (anySuccess) {
+                // Invalidate cache and reload
+                peopleCacheTime = 0;
+                loadAllFaces();
+            }
+        } catch (error) {
+            console.error('Failed to identify faces:', error);
+            App.showError(`Failed to identify ${faceIds.length > 1 ? 'faces' : 'face'}.`);
+        }
+    }
+
+    /**
+     * Commit a name change for a single face card (legacy/internal use).
      * @param {string} faceId - Face ID
      * @param {string} name - Name to assign
      * @param {HTMLElement} card - Card element

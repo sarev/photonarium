@@ -1020,7 +1020,7 @@ const GridSelection = {
      * @type {number}
      * @constant
      */
-    AUTO_SCROLL_SPEED: 15,
+    AUTO_SCROLL_SPEED: 40,
 
     /**
      * Creates a new GridSelection instance.
@@ -1125,6 +1125,11 @@ const GridSelection = {
                 if (this._longPressTriggered || this._dragState?.dragged || this._justDragged) {
                     this._longPressTriggered = false;
                     this._justDragged = false;
+                    return;
+                }
+
+                // Ignore clicks on input elements (user is focusing to type)
+                if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA') {
                     return;
                 }
 

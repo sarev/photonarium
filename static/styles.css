@@ -1421,6 +1421,7 @@ a:hover {
 .faces-grid {
     --thumb-size: 100px;
 
+    position: relative;
     flex: 1;
     overflow-y: auto;
     padding: 1rem;
