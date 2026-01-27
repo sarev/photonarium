@@ -841,6 +841,7 @@
      * Commit a name change for selected faces.
      * If multiple faces are selected, applies the name to all of them.
      * The face where the user typed becomes the "preferred" face for that person.
+     * Uses batch API for efficiency and triggers async re-assessment of unknown faces.
      *
      * @param {string} typedFaceId - Face ID where user typed the name
      * @param {string} name - Name to assign
@@ -858,22 +859,17 @@
         }
 
         try {
-            // Identify all selected faces with the same name
-            // The first one (typed face) should be marked as preferred
-            const results = await Promise.all(faceIds.map((faceId, index) =>
-                App.api(`/faces/${faceId}/identify`, {
-                    method: 'POST',
-                    body: JSON.stringify({
-                        name,
-                        // The face where user typed becomes preferred (unless one already exists)
-                        set_preferred: faceId === typedFaceId
-                    }),
-                })
-            ));
+            // Use batch endpoint for efficiency
+            const result = await App.api('/faces/identify-batch', {
+                method: 'POST',
+                body: JSON.stringify({
+                    face_ids: faceIds,
+                    name,
+                    preferred_face_id: typedFaceId
+                }),
+            });
 
-            // Check if any succeeded
-            const anySuccess = results.some(r => r && r.success);
-            if (anySuccess) {
+            if (result && result.success) {
                 // Invalidate cache and reload
                 peopleCacheTime = 0;
                 loadAllFaces();

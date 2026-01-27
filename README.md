@@ -87,6 +87,8 @@ python app.py --generate-thumbnails    # Pre-generate thumbnails for all images
 3. **Browse** — Return to the Gallery to see your collection
 4. **Search** — Click the Filter button to search by text, date, rating, or people
 
+Note: when you import a folder of images, the indexing process - face recognition in particular - can take a long time! For example, on the developers' machine, it takes about fifteen minutes to ingest 1000 images... With large image libraries, you'll need to be patient during importing before the functionality of the app becomes fully available.
+
 ## Using the Gallery
 
 The Gallery is where you'll spend most of your time. It shows your image collection as a grid of thumbnails, with an information panel on the right showing details about the selected image.
@@ -193,6 +195,14 @@ The Faces screen (Ctrl+P) shows all detected faces across your collection:
 - Adjust thumbnail size with the +/- buttons
 
 This screen is useful for bulk-tagging faces and reviewing who Imaginary has detected.
+
+## Using the Database Status Screen
+
+This screen allows folders to be added to and removed from the app's image library. Folders are scanned recursively for all compatible image types ('.jpg', '.jpeg', '.png', '.gif', '.bmp', '.tiff', '.tif', '.webp') to add them to the app's database. You may include subdirectories as distinct folders - the app will only catalogue the contents once. Removing the parent directory from those that the app is watching won't affect any registered subdirectories or their images.
+
+The database screen also shows the status of any ongoing indexing processes, along with an estimated time until completion, where possible.
+
+Clicking the "Rescan all folders" button will start a complete check of all registerd folders to see if any of the images within have been added, removed, or modified since the last time they were indexed. Indexing typically runs automatically every time the app (backend) is started.
 
 ## Controls
 

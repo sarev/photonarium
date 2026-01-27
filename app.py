@@ -55,6 +55,9 @@ from faces import (
     get_face_thumbnail_path,
     get_images_with_people,
     delete_people_without_faces,
+    batch_identify_faces,
+    reassess_unknown_faces_async,
+    get_reassessment_status,
 )
 
 # Configure logging
@@ -1359,6 +1362,76 @@ def identify_face(face_id):
         'face': face,
         'person': person,
     })
+
+
+@app.route('/api/faces/identify-batch', methods=['POST'])
+def identify_faces_batch():
+    """Identify multiple faces with the same name in a single operation.
+
+    This is more efficient than calling /identify for each face individually.
+    After identification, triggers async re-assessment of remaining unknown
+    faces to auto-match them against the newly identified person.
+
+    Request Body:
+        JSON object with:
+            - face_ids: List of face UUIDs to identify
+            - name: Name for the person
+            - preferred_face_id: Face to set as preferred (optional)
+
+    Returns:
+        JSON object with the person and list of updated face IDs.
+    """
+    data = request.get_json()
+    if not data:
+        return error_response('Request body is required')
+
+    face_ids = data.get('face_ids', [])
+    name = data.get('name', '').strip() if data.get('name') else None
+    preferred_face_id = data.get('preferred_face_id')
+
+    if not face_ids:
+        return error_response('face_ids is required')
+    if not name:
+        return error_response('name is required')
+
+    db = get_db()
+
+    # Batch identify all faces
+    result = batch_identify_faces(
+        db.conn,
+        face_ids,
+        name,
+        preferred_face_id
+    )
+
+    if result['person'] is None:
+        return error_response('Failed to identify faces')
+
+    # Trigger async re-assessment of unknown faces
+    # This will match other unknown faces against the newly identified person
+    reassess_unknown_faces_async(
+        DATABASE_PATH,
+        threshold=0.65,
+        person_id=result['person']['id'],
+    )
+
+    return success_response({
+        'person': result['person'],
+        'identified_count': len(result['faces']),
+        'face_ids': result['faces'],
+        'reassessment_triggered': True,
+    })
+
+
+@app.route('/api/faces/reassess-status', methods=['GET'])
+def get_faces_reassess_status():
+    """Get status of async face reassessment.
+
+    Returns:
+        JSON object with 'in_progress' bool and optionally 'last_result'.
+    """
+    status = get_reassessment_status()
+    return success_response(status)
 
 
 @app.route('/api/faces/<face_id>/unidentify', methods=['POST'])

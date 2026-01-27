@@ -1451,3 +1451,297 @@ def get_people_names_for_image(
         ORDER BY p.name COLLATE NOCASE
     ''', (image_id,))
     return [row['name'] for row in cursor.fetchall()]
+
+
+# =============================================================================
+# BATCH IDENTIFICATION AND AUTO-REASSESSMENT
+# =============================================================================
+
+# Global cache for embeddings (populated on demand)
+_embedding_cache = {
+    'known': None,      # List of (face_id, person_id, embedding)
+    'unknown': None,    # List of (face_id, embedding)
+    'lock': threading.Lock(),
+    'valid': False,
+}
+
+
+def invalidate_embedding_cache() -> None:
+    """Invalidate the embedding cache after changes."""
+    with _embedding_cache['lock']:
+        _embedding_cache['known'] = None
+        _embedding_cache['unknown'] = None
+        _embedding_cache['valid'] = False
+
+
+def get_cached_known_embeddings(
+    conn: sqlite3.Connection,
+) -> list[tuple[str, str, np.ndarray]]:
+    """Get known face embeddings with RAM caching.
+
+    Args:
+        conn: Database connection.
+
+    Returns:
+        List of (face_id, person_id, embedding) tuples.
+    """
+    with _embedding_cache['lock']:
+        if _embedding_cache['known'] is None:
+            _embedding_cache['known'] = get_all_known_face_embeddings(conn)
+        return _embedding_cache['known']
+
+
+def get_all_unknown_face_embeddings(
+    conn: sqlite3.Connection,
+) -> list[tuple[str, np.ndarray]]:
+    """Get all face embeddings for unknown (unidentified) faces.
+
+    Returns embeddings for faces that have NOT been identified (no person_id)
+    and are not suppressed.
+
+    Args:
+        conn: Database connection.
+
+    Returns:
+        List of (face_id, embedding) tuples.
+    """
+    cursor = conn.execute(
+        '''SELECT id, embedding
+           FROM faces
+           WHERE person_id IS NULL AND suppressed = 0 AND embedding IS NOT NULL'''
+    )
+
+    results = []
+    for row in cursor.fetchall():
+        embedding = np.frombuffer(row['embedding'], dtype=np.float32)
+        results.append((row['id'], embedding))
+    return results
+
+
+def get_cached_unknown_embeddings(
+    conn: sqlite3.Connection,
+) -> list[tuple[str, np.ndarray]]:
+    """Get unknown face embeddings with RAM caching.
+
+    Args:
+        conn: Database connection.
+
+    Returns:
+        List of (face_id, embedding) tuples.
+    """
+    with _embedding_cache['lock']:
+        if _embedding_cache['unknown'] is None:
+            _embedding_cache['unknown'] = get_all_unknown_face_embeddings(conn)
+        return _embedding_cache['unknown']
+
+
+def batch_identify_faces(
+    conn: sqlite3.Connection,
+    face_ids: list[str],
+    name: str,
+    preferred_face_id: str | None = None,
+) -> dict:
+    """Identify multiple faces with the same name in a single operation.
+
+    Creates or finds the person, links all faces, and sets preferred face.
+
+    Args:
+        conn: Database connection.
+        face_ids: List of face UUIDs to identify.
+        name: Name for the person.
+        preferred_face_id: Face ID to set as preferred (optional).
+
+    Returns:
+        Dict with 'person' and 'faces' (list of updated face IDs).
+    """
+    if not face_ids or not name:
+        return {'person': None, 'faces': []}
+
+    # Find or create person
+    person = get_person_by_name(conn, name)
+    if person is None:
+        person_id = create_person(conn, name)
+        person = get_person(conn, person_id)
+    else:
+        person_id = person['id']
+
+    # Update all faces with person_id
+    updated_faces = []
+    for face_id in face_ids:
+        face = get_face(conn, face_id)
+        if face is not None:
+            update_face_person(conn, face_id, person_id)
+            updated_faces.append(face_id)
+
+    # Set preferred face if specified and person doesn't have one
+    if preferred_face_id and preferred_face_id in updated_faces:
+        if not person.get('preferred_face_id'):
+            update_person(conn, person_id, preferred_face_id=preferred_face_id)
+            person = get_person(conn, person_id)
+
+    # Invalidate cache since we modified faces
+    invalidate_embedding_cache()
+
+    return {
+        'person': person,
+        'faces': updated_faces,
+    }
+
+
+def reassess_unknown_faces(
+    conn: sqlite3.Connection,
+    threshold: float = 0.65,
+    person_id: str | None = None,
+) -> list[tuple[str, str, float]]:
+    """Re-assess all unknown faces against known embeddings.
+
+    Uses vectorized numpy operations for fast comparison.
+
+    Args:
+        conn: Database connection.
+        threshold: Minimum cosine similarity for auto-match.
+        person_id: If specified, only compare against this person's faces.
+
+    Returns:
+        List of (face_id, person_id, similarity) for matched faces.
+    """
+    # Get embeddings (from cache if available)
+    if person_id:
+        # Only get embeddings for the specified person
+        cursor = conn.execute(
+            '''SELECT id, person_id, embedding
+               FROM faces
+               WHERE person_id = ? AND suppressed = 0''',
+            (person_id,)
+        )
+        known_embeddings = []
+        for row in cursor.fetchall():
+            embedding = np.frombuffer(row['embedding'], dtype=np.float32)
+            known_embeddings.append((row['id'], row['person_id'], embedding))
+    else:
+        known_embeddings = get_cached_known_embeddings(conn)
+
+    unknown_embeddings = get_all_unknown_face_embeddings(conn)
+
+    if not known_embeddings or not unknown_embeddings:
+        return []
+
+    # Build matrices for vectorized comparison
+    # known_matrix: (num_known, 512)
+    # unknown_matrix: (num_unknown, 512)
+    known_ids = [(fid, pid) for fid, pid, _ in known_embeddings]
+    known_matrix = np.vstack([emb for _, _, emb in known_embeddings])
+
+    unknown_ids = [fid for fid, _ in unknown_embeddings]
+    unknown_matrix = np.vstack([emb for _, emb in unknown_embeddings])
+
+    # Compute all similarities at once: (num_unknown, num_known)
+    # Embeddings are L2-normalized, so dot product = cosine similarity
+    similarities = unknown_matrix @ known_matrix.T
+
+    # Find best match for each unknown face
+    matched = []
+    for i, unknown_face_id in enumerate(unknown_ids):
+        best_idx = np.argmax(similarities[i])
+        best_similarity = similarities[i, best_idx]
+
+        if best_similarity >= threshold:
+            _, matched_person_id = known_ids[best_idx]
+            matched.append((unknown_face_id, matched_person_id, float(best_similarity)))
+
+    # Apply matches
+    for face_id, matched_person_id, similarity in matched:
+        logger.debug(
+            f'Auto-matched face {face_id} to person {matched_person_id} '
+            f'(similarity: {similarity:.3f})'
+        )
+        update_face_person(conn, face_id, matched_person_id)
+
+    # Invalidate cache if we made matches
+    if matched:
+        invalidate_embedding_cache()
+
+    return matched
+
+
+# Background thread for async reassessment
+_reassess_thread: threading.Thread | None = None
+_reassess_lock = threading.Lock()
+_reassess_result: dict | None = None
+
+
+def is_reassessment_in_progress() -> bool:
+    """Check if async reassessment is currently running."""
+    with _reassess_lock:
+        return _reassess_thread is not None and _reassess_thread.is_alive()
+
+
+def get_reassessment_status() -> dict:
+    """Get status of async reassessment.
+
+    Returns:
+        Dict with 'in_progress' and optionally 'last_result'.
+    """
+    with _reassess_lock:
+        in_progress = _reassess_thread is not None and _reassess_thread.is_alive()
+        return {
+            'in_progress': in_progress,
+            'last_result': _reassess_result,
+        }
+
+
+def reassess_unknown_faces_async(
+    db_path: str,
+    threshold: float = 0.65,
+    person_id: str | None = None,
+    callback: callable = None,
+) -> None:
+    """Re-assess unknown faces in a background thread.
+
+    Args:
+        db_path: Path to the SQLite database file.
+        threshold: Minimum cosine similarity for auto-match.
+        person_id: If specified, only compare against this person's faces.
+        callback: Optional callback(matched_count) when done.
+    """
+    global _reassess_thread, _reassess_result
+
+    def _worker():
+        global _reassess_thread, _reassess_result
+        try:
+            # Open a new connection for this thread
+            conn = sqlite3.connect(db_path)
+            conn.row_factory = sqlite3.Row
+
+            matched = reassess_unknown_faces(conn, threshold, person_id)
+            conn.commit()
+            conn.close()
+
+            # Store result
+            with _reassess_lock:
+                _reassess_result = {
+                    'matched_count': len(matched),
+                    'person_id': person_id,
+                }
+
+            logger.info(f'Async reassessment complete: {len(matched)} faces matched')
+
+            if callback:
+                callback(len(matched))
+        except Exception as e:
+            logger.error(f'Async reassessment failed: {e}')
+            with _reassess_lock:
+                _reassess_result = {'error': str(e)}
+        finally:
+            with _reassess_lock:
+                _reassess_thread = None
+
+    with _reassess_lock:
+        # Only start if not already running
+        if _reassess_thread is None or not _reassess_thread.is_alive():
+            _reassess_result = None  # Clear previous result
+            _reassess_thread = threading.Thread(target=_worker, daemon=True)
+            _reassess_thread.start()
+            logger.info('Started async face reassessment')
+        else:
+            logger.debug('Reassessment already in progress, skipping')
