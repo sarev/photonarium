@@ -1030,6 +1030,50 @@ def get_faces_for_person(
     return faces
 
 
+def get_all_faces(
+    conn: sqlite3.Connection,
+    unknown_only: bool = False,
+) -> list[dict]:
+    """Get all non-suppressed faces with person info.
+
+    Returns faces ordered by person name (known faces first), then unknown faces.
+    Does not include the embedding blob for efficiency.
+
+    Args:
+        conn: Database connection.
+        unknown_only: If True, only return faces without a person_id.
+
+    Returns:
+        List of face dicts with person_name and is_preferred included.
+    """
+    if unknown_only:
+        cursor = conn.execute(
+            '''SELECT f.id, f.image_id, f.box_x, f.box_y, f.box_w, f.box_h,
+                      f.confidence, f.person_id, f.created_at,
+                      NULL as person_name,
+                      0 as is_preferred
+               FROM faces f
+               WHERE f.suppressed = 0 AND f.person_id IS NULL
+               ORDER BY f.created_at DESC'''
+        )
+    else:
+        cursor = conn.execute(
+            '''SELECT f.id, f.image_id, f.box_x, f.box_y, f.box_w, f.box_h,
+                      f.confidence, f.person_id, f.created_at,
+                      p.name as person_name,
+                      CASE WHEN f.id = p.preferred_face_id THEN 1 ELSE 0 END as is_preferred
+               FROM faces f
+               LEFT JOIN people p ON f.person_id = p.id
+               WHERE f.suppressed = 0
+               ORDER BY
+                   CASE WHEN f.person_id IS NULL THEN 1 ELSE 0 END,
+                   p.name COLLATE NOCASE,
+                   f.created_at DESC'''
+        )
+
+    return [dict(row) for row in cursor.fetchall()]
+
+
 def get_all_known_face_embeddings(
     conn: sqlite3.Connection,
 ) -> list[tuple[str, str, np.ndarray]]:

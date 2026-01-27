@@ -7,6 +7,33 @@
 
 
 /* ==========================================================================
+   COLOUR SCHEME SEMANTICS
+
+   Each major screen/feature has a signature pastel colour used for toolbar
+   button hovers, headings, and accent elements:
+
+     Pink    → Database/Management screen
+     Purple  → Duplicates screen, folder image counts
+     Teal    → Search/Filter screen
+     Green   → Faces screen, known faces, success states
+     Red     → Unknown faces, danger/delete actions
+     Orange  → Image rotation, focused/editing face
+     Amber   → Ratings, preferred/starred items
+     Blue    → Thumbnail size controls, dimensions in info panel
+     Yellow  → Sort controls
+     Indigo  → Selection controls
+     Brown   → Theme toggle
+
+   Info panel labels use distinct colours for quick scanning:
+     Blue=Dimensions, Green=FileSize, Orange=Date, Teal=Description,
+     Amber=Rating, Purple=Histogram
+
+   Face detection boxes:
+     Green=Known, Red=Unknown, Orange=Focused/Editing
+   ========================================================================== */
+
+
+/* ==========================================================================
    CSS VARIABLES & BASE
 
    Theme definitions, typography, and reset styles.
@@ -289,7 +316,8 @@ a:hover {
 #app[data-screen="fullscreen"] #screen-fullscreen,
 #app[data-screen="database"] #screen-database,
 #app[data-screen="search"] #screen-search,
-#app[data-screen="duplicates"] #screen-duplicates {
+#app[data-screen="duplicates"] #screen-duplicates,
+#app[data-screen="faces"] #screen-faces {
     display: flex;
 }
 
@@ -387,6 +415,32 @@ a:hover {
     font-size: 22px;
 }
 
+/* Toolbar checkbox (e.g., "Only unknowns" on Faces screen) */
+.toolbar-checkbox {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.4rem;
+    padding: 0.4rem 0.6rem;
+    font-size: 0.85rem;
+    color: var(--color-text-secondary);
+    cursor: pointer;
+    border-radius: 4px;
+    transition: background-color 0.15s, color 0.15s;
+}
+
+.toolbar-checkbox:hover {
+    background-color: var(--color-accent-light);
+}
+
+.toolbar-checkbox:has(input:checked) {
+    color: var(--color-face-unknown);
+    background-color: rgba(239, 83, 80, 0.1);
+}
+
+.toolbar-checkbox input {
+    accent-color: var(--color-face-unknown);
+}
+
 /* Pastel color hints for toolbar buttons */
 #btn-thumb-smaller:hover,
 #btn-thumb-larger:hover,
@@ -423,12 +477,26 @@ a:hover {
     color: var(--color-pastel-teal-fg);
 }
 
+#btn-faces:hover {
+    background-color: var(--color-pastel-green-bg);
+    color: var(--color-pastel-green-fg);
+}
+
+#btn-faces-thumb-smaller:hover,
+#btn-faces-thumb-larger:hover {
+    background-color: var(--color-pastel-blue-bg);
+    color: var(--color-pastel-blue-fg);
+}
+
 #btn-sort-date:hover,
 #btn-sort-rating:hover,
 #btn-sort-content:hover,
+#btn-sort-people:hover,
 #btn-sort-direction:hover,
 #btn-dup-sort-size:hover,
-#btn-dup-sort-semantic:hover {
+#btn-dup-sort-semantic:hover,
+#btn-dup-sort-people:hover,
+#btn-faces-sort-direction:hover {
     background-color: var(--color-pastel-yellow-bg);
     color: var(--color-pastel-yellow-fg);
 }
@@ -614,14 +682,45 @@ a:hover {
     background-color: var(--color-bg-primary);
 }
 
+/* Wrapper for grid and loading overlay */
+.gallery-grid-wrapper {
+    flex: 1;
+    position: relative;
+    overflow: hidden;
+}
+
 /* Thumbnail grid - scroll container for absolutely positioned items */
 .gallery-grid {
     --thumb-size: 200px;
 
-    flex: 1;
+    height: 100%;
     overflow-y: auto;
     position: relative;
     background-color: var(--color-bg-primary);
+}
+
+/* Gallery loading state - overlays the grid */
+#gallery-loading {
+    position: absolute;
+    inset: 0;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    padding: 3rem;
+    color: var(--color-text-muted);
+    background: var(--color-bg-primary);
+    z-index: 10;
+}
+
+#gallery-loading[hidden] {
+    display: none;
+}
+
+#gallery-loading .material-symbols-outlined {
+    font-size: 64px;
+    margin-bottom: 1rem;
+    animation: spin 1s linear infinite;
 }
 
 /* Inner container for absolute positioning */
@@ -1293,8 +1392,8 @@ a:hover {
 
 /* Face tagging mode toggle button active state */
 #btn-face-tagging.active {
-    background: var(--color-face-focused);
-    color: white;
+    background: var(--color-pastel-green-bg);
+    color: var(--color-pastel-green-fg);
 }
 
 
@@ -1356,7 +1455,15 @@ a:hover {
 
 .faces-section-count {
     font-size: 0.85rem;
-    color: var(--color-text-muted);
+    font-weight: 500;
+}
+
+.faces-section.known .faces-section-count {
+    color: var(--color-text-green);
+}
+
+.faces-section.unknown .faces-section-count {
+    color: var(--color-face-unknown);
 }
 
 .faces-section-grid {
@@ -1468,12 +1575,16 @@ a:hover {
 /* Faces empty state */
 #faces-empty,
 #faces-loading {
+    position: absolute;
+    inset: 0;
     display: flex;
     flex-direction: column;
     align-items: center;
     justify-content: center;
     padding: 3rem;
     color: var(--color-text-muted);
+    background: var(--color-bg-primary);
+    z-index: 10;
 }
 
 #faces-empty[hidden],
@@ -2089,12 +2200,43 @@ a:hover {
     overflow: hidden;
 }
 
+/* Wrapper for grid and loading/empty overlays */
+.duplicates-grid-wrapper {
+    flex: 1;
+    position: relative;
+    overflow: hidden;
+}
+
 .duplicates-grid {
     --thumb-size: 200px;
 
-    flex: 1;
+    height: 100%;
     overflow-y: auto;
     position: relative;
+}
+
+/* Duplicates loading state - overlays the grid */
+#duplicates-loading {
+    position: absolute;
+    inset: 0;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    padding: 3rem;
+    color: var(--color-text-muted);
+    background: var(--color-bg-primary);
+    z-index: 10;
+}
+
+#duplicates-loading[hidden] {
+    display: none;
+}
+
+#duplicates-loading .material-symbols-outlined {
+    font-size: 64px;
+    margin-bottom: 1rem;
+    animation: spin 1s linear infinite;
 }
 
 /* Duplicate stack */
@@ -2159,13 +2301,18 @@ a:hover {
 }
 
 /* Duplicates empty state */
+/* Duplicates empty state - overlays the grid */
 #duplicates-empty {
+    position: absolute;
+    inset: 0;
     display: flex;
     flex-direction: column;
     align-items: center;
     justify-content: center;
     padding: 3rem;
     color: var(--color-text-muted);
+    background: var(--color-bg-primary);
+    z-index: 10;
 }
 
 #duplicates-empty[hidden] {
@@ -2206,13 +2353,10 @@ a:hover {
     visibility: visible;
 }
 
-.loading-spinner {
-    width: 40px;
-    height: 40px;
-    border: 3px solid var(--color-border);
-    border-top-color: var(--color-accent);
-    border-radius: 50%;
-    animation: spin 0.8s linear infinite;
+.loading-icon {
+    font-size: 64px;
+    color: var(--color-overlay-text);
+    animation: spin 1s linear infinite;
 }
 
 @keyframes spin {
@@ -2221,11 +2365,7 @@ a:hover {
 
 .loading-message {
     color: var(--color-overlay-text);
-    font-size: 1.25rem;
-    font-weight: 600;
-    background-color: var(--color-overlay-toast-bg);
-    padding: 0.75rem 1.5rem;
-    border-radius: 8px;
+    font-size: 1rem;
 }
 
 /* Error toast */

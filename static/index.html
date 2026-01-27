@@ -56,7 +56,7 @@
                     </button>
                     <div class="toolbar-separator face-tagging-separator"></div>
                     <button id="btn-face-tagging" class="toolbar-btn" title="Toggle face tagging mode">
-                        <span class="material-symbols-outlined">face</span>
+                        <span class="material-symbols-outlined">person_add</span>
                     </button>
                     <div class="toolbar-separator dup-group-nav-separator" hidden></div>
                     <button id="btn-prev-group" class="toolbar-btn" title="Previous duplicate group (Alt+Left)" hidden disabled>
@@ -225,9 +225,17 @@
              ============================================================ -->
         <main id="screen-gallery" class="screen">
             <div class="gallery-container">
-                <!-- Thumbnail grid -->
-                <div id="gallery-grid" class="gallery-grid">
-                    <!-- Thumbnails are dynamically inserted here -->
+                <!-- Thumbnail grid wrapper (for positioning loading overlay) -->
+                <div class="gallery-grid-wrapper">
+                    <div id="gallery-grid" class="gallery-grid">
+                        <!-- Thumbnails are dynamically inserted here -->
+                    </div>
+
+                    <!-- Loading state (positioned absolutely over grid) -->
+                    <div id="gallery-loading" hidden>
+                        <span class="material-symbols-outlined">hourglass_empty</span>
+                        <p>Loading images…</p>
+                    </div>
                 </div>
 
                 <!-- Info panel (right side) -->
@@ -406,7 +414,7 @@
                 <!-- Loading state -->
                 <div id="faces-loading" class="loading-state" hidden>
                     <span class="material-symbols-outlined">hourglass_empty</span>
-                    <p>Loading faces...</p>
+                    <p>Loading faces…</p>
                 </div>
             </div>
         </main>
@@ -417,14 +425,23 @@
              ============================================================ -->
         <main id="screen-duplicates" class="screen">
             <div class="duplicates-container">
-                <div id="duplicates-grid" class="duplicates-grid">
-                    <!-- Duplicate stacks are dynamically inserted here -->
-                </div>
+                <!-- Grid wrapper (for positioning loading/empty overlays) -->
+                <div class="duplicates-grid-wrapper">
+                    <div id="duplicates-grid" class="duplicates-grid">
+                        <!-- Duplicate stacks are dynamically inserted here -->
+                    </div>
 
-                <!-- Empty state message -->
-                <div id="duplicates-empty" class="empty-state" hidden>
-                    <span class="material-symbols-outlined">check_circle</span>
-                    <p>No duplicates found at the current similarity level.</p>
+                    <!-- Loading state (positioned absolutely over grid) -->
+                    <div id="duplicates-loading" hidden>
+                        <span class="material-symbols-outlined">hourglass_empty</span>
+                        <p>Loading duplicates…</p>
+                    </div>
+
+                    <!-- Empty state message -->
+                    <div id="duplicates-empty" hidden>
+                        <span class="material-symbols-outlined">check_circle</span>
+                        <p>No duplicates found at the current similarity level.</p>
+                    </div>
                 </div>
             </div>
         </main>

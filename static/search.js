@@ -229,7 +229,7 @@ const Search = {
      */
     async _loadFaceDetectionStatus() {
         try {
-            const status = await App.api('/api/status');
+            const status = await App.api('/status');
             this._faceDetectionEnabled = status?.face_detection_enabled !== false;
         } catch (error) {
             // Default to enabled if can't reach backend
@@ -314,7 +314,7 @@ const Search = {
      */
     async _loadAllPeople() {
         try {
-            const people = await App.api('/api/people');
+            const people = await App.api('/people');
             this._allPeople = (people || []).sort((a, b) =>
                 a.name.localeCompare(b.name, undefined, { sensitivity: 'base' })
             );
@@ -620,9 +620,11 @@ const Search = {
         // Navigate to gallery immediately for responsive UX
         App.showGallery();
 
-        // If there's a text query, perform semantic search with loading overlay
+        // If there's a text query, perform semantic search with inline loading
         if (filter && filter.text) {
-            App.showLoading('Searching...');
+            if (typeof Gallery !== 'undefined' && Gallery._showLoading) {
+                Gallery._showLoading('Searching…');
+            }
             try {
                 const response = await App.apiPost('/search', {
                     query: filter.text,
@@ -644,7 +646,9 @@ const Search = {
                 console.error('Semantic search failed:', error);
                 App.showError('Search failed. Please try again.');
             } finally {
-                App.hideLoading();
+                if (typeof Gallery !== 'undefined' && Gallery._hideLoading) {
+                    Gallery._hideLoading();
+                }
             }
         }
 

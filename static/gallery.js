@@ -134,6 +134,7 @@ const Gallery = {
             grid: App.$('gallery-grid'),
             infoPanel: App.$('info-panel'),
             infoContent: App.$('info-content'),
+            loading: App.$('gallery-loading'),
             similarityControl: App.$('gallery-similarity-control'),
             similaritySlider: App.$('gallery-similarity-slider'),
             similarityValue: App.$('gallery-similarity-value'),
@@ -213,6 +214,8 @@ const Gallery = {
         } else {
             // Re-bind grid and selection
             this._grid.bind();
+            // Refresh layout in case container size changed while away
+            this._grid.refresh();
         }
         // Bind selection handlers
         this._selection.bind();
@@ -260,10 +263,10 @@ const Gallery = {
     async _loadImages() {
         console.time('_loadImages total');
 
-        // Show loading overlay on first load
+        // Show inline loading on first load
         const isFirstLoad = App.getCachedImageCount() === 0;
         if (isFirstLoad) {
-            App.showLoading('Loading images…');
+            this._showLoading('Loading images…');
         }
 
         try {
@@ -288,7 +291,7 @@ const Gallery = {
             App.showError('Failed to load images');
         } finally {
             if (isFirstLoad) {
-                App.hideLoading();
+                this._hideLoading();
             }
         }
 
@@ -592,7 +595,7 @@ const Gallery = {
             // The names string is the alphabetically sorted, comma-joined list of people names
             for (const img of this.state.images) {
                 try {
-                    const faces = await App.api(`/api/images/${img.id}/faces`);
+                    const faces = await App.api(`/images/${img.id}/faces`);
                     const names = (faces || [])
                         .filter(f => f.person_name)
                         .map(f => f.person_name)
@@ -662,7 +665,7 @@ const Gallery = {
     async _loadPeopleFilteredImages(filter) {
         try {
             const peopleIds = filter.people.map(p => p.id).join(',');
-            const response = await App.api(`/api/images?people=${encodeURIComponent(peopleIds)}`);
+            const response = await App.api(`/images?people=${encodeURIComponent(peopleIds)}`);
 
             // Store filtered image IDs in the filter object
             if (response && Array.isArray(response.images)) {
@@ -1024,7 +1027,7 @@ const Gallery = {
             debounceTimer = setTimeout(async () => {
                 const threshold = parseInt(this._els.similaritySlider.value, 10) / 100;
 
-                App.showLoading('Searching...');
+                this._showLoading('Searching…');
                 try {
                     const response = await App.apiPost('/search', {
                         query: filter.text,
@@ -1047,7 +1050,7 @@ const Gallery = {
                     console.error('Failed to update search:', error);
                     App.showError('Failed to update search results.');
                 } finally {
-                    App.hideLoading();
+                    this._hideLoading();
                 }
             }, 100);
         });
@@ -1102,7 +1105,7 @@ const Gallery = {
      */
     async _renderInfoPanel(imageId) {
         const content = this._els.infoContent;
-        content.innerHTML = '<p class="info-placeholder info-loading">Loading...</p>';
+        content.innerHTML = '<p class="info-placeholder info-loading">Loading…</p>';
 
         let img;
         try {
@@ -1161,7 +1164,7 @@ const Gallery = {
                     <img id="histogram-r" class="histogram-channel" alt="Red">
                     <img id="histogram-g" class="histogram-channel" alt="Green">
                     <img id="histogram-b" class="histogram-channel" alt="Blue">
-                    <div class="histogram-loading">Loading...</div>
+                    <div class="histogram-loading">Loading…</div>
                 </div>
                 <div class="histogram-toggles">
                     <button type="button" id="histogram-toggle-r" class="histogram-toggle histogram-toggle-r active" title="Toggle red channel">R</button>
@@ -1236,6 +1239,7 @@ const Gallery = {
             await App.apiPost(`/images/${imageId}`, { [field]: value });
         } catch (error) {
             console.error(`Failed to save ${field}:`, error);
+            App.showError(`Failed to save ${field}.`);
         }
     },
 
@@ -1325,13 +1329,19 @@ const Gallery = {
         const confirmed = await App.confirm('Delete Images', message);
         if (!confirmed) return;
 
+        let failedCount = 0;
         for (const id of ids) {
             try {
                 await App.apiDelete(`/images/${id}`);
                 this.state.images = this.state.images.filter(img => img.id !== id);
             } catch (error) {
                 console.error(`Failed to delete image ${id}:`, error);
+                failedCount++;
             }
+        }
+
+        if (failedCount > 0) {
+            App.showError(`Failed to delete ${failedCount} image${failedCount > 1 ? 's' : ''}.`);
         }
 
         App.clearSelection();
@@ -1411,6 +1421,32 @@ const Gallery = {
         const newGroup = groups[newIndex];
         if (newGroup && typeof Duplicates !== 'undefined') {
             Duplicates.navigateToGroup(newGroup.group_hash);
+        }
+    },
+
+    /* ----------------------------------------------------------------------
+       LOADING STATE
+       ---------------------------------------------------------------------- */
+
+    /**
+     * Shows the inline loading indicator with a message.
+     * @param {string} message - The loading message to display
+     * @private
+     */
+    _showLoading(message) {
+        if (!this._els.loading) return;
+        const p = this._els.loading.querySelector('p');
+        if (p) p.textContent = message;
+        this._els.loading.hidden = false;
+    },
+
+    /**
+     * Hides the inline loading indicator.
+     * @private
+     */
+    _hideLoading() {
+        if (this._els.loading) {
+            this._els.loading.hidden = true;
         }
     }
 };

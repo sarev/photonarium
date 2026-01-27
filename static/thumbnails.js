@@ -296,8 +296,10 @@ const ThumbnailLoader = {
 
             if (error.name !== 'AbortError') {
                 console.error(`Failed to load thumbnail for ${imageId}:`, error);
+                // Notify callback of failure so it can clean up pending state
+                onReady(null);
             }
-            // AbortError is expected (timeout or scroll-away)
+            // AbortError is expected (timeout or scroll-away) - don't notify
         } finally {
             this._inFlight.delete(imageId);
             this._activeCount--;
@@ -472,7 +474,11 @@ const VirtualGrid = {
              */
             _onResize() {
                 const oldItemsPerRow = this._state.itemsPerRow;
-                this._calculateDimensions();
+
+                // Skip if container has no dimensions
+                if (!this._calculateDimensions()) {
+                    return;
+                }
 
                 // Update container height and grid pattern
                 this._innerContainer.style.height = this._state.totalHeight + 'px';
@@ -534,6 +540,7 @@ const VirtualGrid = {
 
             /**
              * Calculates dimensions for the grid layout.
+             * @returns {boolean} True if dimensions are valid, false if container has no size
              * @private
              */
             _calculateDimensions() {
@@ -541,6 +548,12 @@ const VirtualGrid = {
                 const thumbSize = App.getThumbnailSize();
                 const gap = this._config.gap;
                 const padding = this._config.padding;
+
+                // Check for zero-size container (can happen during screen transitions)
+                if (container.clientWidth === 0 || container.clientHeight === 0) {
+                    console.warn('VirtualGrid: container has zero dimensions, deferring render');
+                    return false;
+                }
 
                 // Calculate available width (account for scrollbar)
                 const scrollbarWidth = container.offsetWidth - container.clientWidth;
@@ -551,14 +564,14 @@ const VirtualGrid = {
 
                 // Actual item width (rounded to avoid floating point accumulation)
                 const actualItemWidth = Math.floor((availableWidth - gap * (this._state.itemsPerRow - 1)) / this._state.itemsPerRow);
-                this._state.itemWidth = actualItemWidth;
+                this._state.itemWidth = Math.max(thumbSize, actualItemWidth); // Ensure minimum size
 
                 // Item height - use custom calculator if provided (also rounded)
                 if (this._config.getItemHeight) {
-                    this._state.itemHeight = Math.floor(this._config.getItemHeight(thumbSize, actualItemWidth)) + gap;
+                    this._state.itemHeight = Math.floor(this._config.getItemHeight(thumbSize, this._state.itemWidth)) + gap;
                 } else {
                     // Default: square thumbnail + label area
-                    const thumbnailHeight = actualItemWidth - 16;
+                    const thumbnailHeight = this._state.itemWidth - 16;
                     const labelHeight = 24;
                     this._state.itemHeight = thumbnailHeight + labelHeight + 16 + gap;
                 }
@@ -571,6 +584,8 @@ const VirtualGrid = {
                 const items = this._config.getItems();
                 const totalRows = Math.ceil(items.length / this._state.itemsPerRow);
                 this._state.totalHeight = totalRows * this._state.itemHeight + padding;
+
+                return true;
             },
 
             /**
@@ -706,6 +721,11 @@ const VirtualGrid = {
                         // Remove from pending
                         state.pendingItems.delete(id);
 
+                        // Handle failed thumbnail (null blobUrl)
+                        if (!blobUrl) {
+                            return;
+                        }
+
                         // Check if still in buffer zone
                         const currentItems = config.getItems();
                         const currentIndex = currentItems.findIndex(it => config.getItemId(it) === id);
@@ -786,8 +806,12 @@ const VirtualGrid = {
                     return;
                 }
 
-                // Calculate dimensions
-                this._calculateDimensions();
+                // Calculate dimensions - may fail if container not yet laid out
+                if (!this._calculateDimensions()) {
+                    // Defer render until container has dimensions
+                    requestAnimationFrame(() => this.render());
+                    return;
+                }
 
                 // Set up inner container with total height and grid pattern
                 this._innerContainer.innerHTML = '';

@@ -46,6 +46,7 @@ from faces import (
     delete_person,
     search_people,
     get_face,
+    get_all_faces,
     get_faces_for_image,
     get_faces_for_person,
     update_face_person,
@@ -1282,6 +1283,23 @@ def get_image_faces(image_id):
         if 'embedding' in face:
             del face['embedding']
 
+    return jsonify(faces)
+
+
+@app.route('/api/faces', methods=['GET'])
+def get_faces_list():
+    """Get all non-suppressed faces.
+
+    Query Parameters:
+        unknown: If 'true', only return faces without a person_id.
+
+    Returns:
+        JSON array of face objects with person_name if identified.
+        Ordered by: known faces (alphabetically by person name), then unknown faces.
+    """
+    unknown_only = request.args.get('unknown', '').lower() == 'true'
+    db = get_db()
+    faces = get_all_faces(db.conn, unknown_only=unknown_only)
     return jsonify(faces)
 
 

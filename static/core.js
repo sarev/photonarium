@@ -46,12 +46,6 @@
  *   - Ensures proper initialization order
  *   - Provides App.ready() callback for post-initialization logic
  *
- * MOCK MODE:
- *   When App.mockMode is true, API calls return simulated data instead of
- *   contacting the Flask backend. This allows frontend development and testing
- *   without running the Python server. Mock data includes sample images,
- *   folders, and duplicate groups.
- *
  * @module core
  */
 
@@ -68,13 +62,6 @@
  * @namespace
  */
 const App = {
-    /**
-     * Enable mock mode for frontend development without backend.
-     * Set to true to use simulated API responses.
-     * @type {boolean}
-     */
-    mockMode: false,
-
     /**
      * Application state object.
      * @type {Object}
@@ -101,6 +88,8 @@ const App = {
         // Image cache for efficient incremental updates
         imageCache: null,       // Map of id -> image object
         imageCacheEpoch: null,  // Last sync timestamp
+        // Track where fullscreen was entered from
+        fullscreenSourceScreen: 'gallery',
     },
 
     /**
@@ -479,7 +468,7 @@ const App = {
      * @type {Array<string>}
      * @constant
      */
-    SCREENS: ['gallery', 'fullscreen', 'database', 'search', 'duplicates'],
+    SCREENS: ['gallery', 'fullscreen', 'database', 'search', 'duplicates', 'faces'],
 
     /**
      * Navigation history stack for back-button functionality.
@@ -643,7 +632,8 @@ const App = {
         const screenButtons = {
             'database': 'btn-database',
             'duplicates': 'btn-duplicates',
-            'search': 'btn-filter'
+            'search': 'btn-filter',
+            'faces': 'btn-faces'
         };
 
         for (const [screen, btnId] of Object.entries(screenButtons)) {
@@ -704,16 +694,21 @@ const App = {
      * @param {string} imageId - The ID of the image to view
      */
     showFullscreen(imageId) {
+        // Remember where we came from (default to gallery if already in fullscreen)
+        if (this.state.screen !== 'fullscreen') {
+            this.state.fullscreenSourceScreen = this.state.screen || 'gallery';
+        }
         this.state.currentImageId = imageId;
         this.navigateTo('fullscreen', { data: imageId, pushHistory: false });
     },
 
     /**
-     * Exits fullscreen view and returns to gallery.
+     * Exits fullscreen view and returns to the source screen.
      * Convenience method.
      */
     hideFullscreen() {
-        this.navigateTo('gallery');
+        const returnTo = this.state.fullscreenSourceScreen || 'gallery';
+        this.navigateTo(returnTo);
     },
 
     /**
@@ -749,20 +744,20 @@ const App = {
     },
 
     /**
-     * Exits fullscreen view and returns to gallery.
+     * Exits fullscreen view and returns to the source screen.
      * Ensures the viewed image remains visible in gallery.
      */
     exitFullscreen() {
         if (this.state.screen === 'fullscreen') {
-            this.navigateTo('gallery', { pushHistory: false });
+            const returnTo = this.state.fullscreenSourceScreen || 'gallery';
+            this.navigateTo(returnTo, { pushHistory: false });
         }
     },
 
     /* ----------------------------------------------------------------------
        API COMMUNICATION
 
-       Simple fetch wrappers for backend calls. Uses mock data when
-       App.mockMode is true.
+       Simple fetch wrappers for backend calls.
        ---------------------------------------------------------------------- */
 
     /**
@@ -779,10 +774,6 @@ const App = {
      * @throws {Error} On network or API error
      */
     async api(endpoint, options = {}) {
-        if (this.mockMode) {
-            return this._mockApi(endpoint, options);
-        }
-
         const url = this.apiBase + endpoint;
         const response = await fetch(url, {
             headers: { 'Content-Type': 'application/json' },
@@ -941,354 +932,6 @@ const App = {
      */
     getCachedImageCount() {
         return this.state.imageCache ? this.state.imageCache.size : 0;
-    },
-
-    /* ----------------------------------------------------------------------
-       Mock API (for frontend development)
-       ---------------------------------------------------------------------- */
-
-    /**
-     * Mock API handler for development without backend.
-     * @param {string} endpoint - API endpoint
-     * @param {Object} options - Fetch options
-     * @returns {Promise<*>} Mock response data
-     * @private
-     */
-    async _mockApi(endpoint, options) {
-        // Simulate network delay
-        await new Promise(r => setTimeout(r, 100));
-
-        const method = options.method || 'GET';
-
-        // Route to mock handlers
-        if (endpoint === '/images' && method === 'GET') {
-            return this._mockImages;
-        }
-        if (endpoint === '/folders' && method === 'GET') {
-            return this._mockFolders;
-        }
-        if (endpoint === '/folders' && method === 'POST') {
-            const data = JSON.parse(options.body);
-            this._mockFolders.push({ path: data.path, count: 0 });
-            return { success: true };
-        }
-        if (endpoint.startsWith('/folders/') && method === 'DELETE') {
-            const path = decodeURIComponent(endpoint.slice(9));
-            this._mockFolders = this._mockFolders.filter(f => f.path !== path);
-            return { success: true };
-        }
-        if (endpoint === '/status' && method === 'GET') {
-            // Mock status: simulate occasional updating state
-            const isUpdating = Math.random() < 0.3; // 30% chance of updating
-            return {
-                status: isUpdating ? 'updating' : 'up_to_date',
-                indexing_queue: isUpdating ? Math.floor(Math.random() * 50) : 0,
-                embedding_queue: isUpdating ? Math.floor(Math.random() * 100) : 0,
-                face_detection_enabled: true
-            };
-        }
-        if (endpoint === '/rescan' && method === 'POST') {
-            return { success: true };
-        }
-        if (endpoint.startsWith('/duplicates') && method === 'GET') {
-            // Parse level from query string
-            const levelMatch = endpoint.match(/level=(\d)/);
-            const level = levelMatch ? parseInt(levelMatch[1], 10) : 0;
-            return this._getMockDuplicates(level);
-        }
-        if (endpoint.startsWith('/images/') && method === 'GET') {
-            const id = endpoint.split('/')[2];
-            return this._mockImages.find(img => img.id === id) || null;
-        }
-        if (endpoint.startsWith('/images/') && method === 'POST') {
-            // Update image (description, rating)
-            return { success: true };
-        }
-        if (endpoint.startsWith('/images/') && method === 'DELETE') {
-            const id = endpoint.split('/')[2];
-            this._mockImages = this._mockImages.filter(img => img.id !== id);
-            return { success: true };
-        }
-        if (endpoint === '/stats' && method === 'GET') {
-            return { totalImages: this._mockImages.length, totalFolders: this._mockFolders.length };
-        }
-        if (endpoint.match(/\/images\/[^/]+\/histogram$/) && method === 'GET') {
-            // Return mock histogram data URLs (1x1 transparent PNGs)
-            const transparentPng = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==';
-            return { r: transparentPng, g: transparentPng, b: transparentPng };
-        }
-
-        // People and Faces API endpoints
-        if (endpoint === '/api/people' && method === 'GET') {
-            return this._mockPeople;
-        }
-        if (endpoint.match(/\/api\/people\/[^/]+$/) && method === 'GET') {
-            const id = endpoint.split('/').pop();
-            return this._mockPeople.find(p => p.id === id) || null;
-        }
-        if (endpoint.match(/\/api\/people\/[^/]+\/faces$/) && method === 'GET') {
-            const personId = endpoint.split('/')[3];
-            return this._mockFaces.filter(f => f.person_id === personId);
-        }
-        if (endpoint.match(/\/api\/images\/[^/]+\/faces$/) && method === 'GET') {
-            const imageId = endpoint.split('/')[3];
-            return this._mockFaces.filter(f => f.image_id === imageId);
-        }
-        if (endpoint.match(/\/api\/faces\/[^/]+\/identify$/) && method === 'POST') {
-            const faceId = endpoint.split('/')[3];
-            const data = JSON.parse(options.body || '{}');
-            const face = this._mockFaces.find(f => f.id === faceId);
-            if (face && data.name) {
-                // Find or create person
-                let person = this._mockPeople.find(p => p.name === data.name);
-                if (!person) {
-                    person = { id: `person_${Date.now()}`, name: data.name, face_count: 0 };
-                    this._mockPeople.push(person);
-                }
-                face.person_id = person.id;
-                face.person_name = person.name;
-                person.face_count++;
-                return { success: true, data: { person } };
-            }
-            return { success: false };
-        }
-        if (endpoint.match(/\/api\/faces\/[^/]+\/unidentify$/) && method === 'POST') {
-            const faceId = endpoint.split('/')[3];
-            const face = this._mockFaces.find(f => f.id === faceId);
-            if (face) {
-                face.person_id = null;
-                face.person_name = null;
-                return { success: true };
-            }
-            return { success: false };
-        }
-        if (endpoint.match(/\/api\/faces\/[^/]+\/suppress$/) && method === 'POST') {
-            const faceId = endpoint.split('/')[3];
-            this._mockFaces = this._mockFaces.filter(f => f.id !== faceId);
-            return { success: true };
-        }
-
-        console.warn(`Mock API: unhandled ${method} ${endpoint}`);
-        return null;
-    },
-
-    /**
-     * Mock image data for development.
-     * @type {Array<Object>}
-     * @private
-     */
-    _mockImages: [
-        { id: '1', basename: 'sunset.jpg', path: 'photos/sunset.jpg', width: 1920, height: 1080, size: 245000, timestamp: '2024-06-15T18:30:00', description: '', rating: '' },
-        { id: '2', basename: 'mountain.jpg', path: 'photos/mountain.jpg', width: 2560, height: 1440, size: 380000, timestamp: '2024-06-14T10:15:00', description: '', rating: '' },
-        { id: '3', basename: 'beach.jpg', path: 'photos/beach.jpg', width: 1920, height: 1080, size: 220000, timestamp: '2024-06-13T14:45:00', description: '', rating: '' },
-        { id: '4', basename: 'forest.jpg', path: 'photos/forest.jpg', width: 1920, height: 1280, size: 310000, timestamp: '2024-06-12T09:20:00', description: '', rating: '' },
-        { id: '5', basename: 'cityscape.jpg', path: 'photos/cityscape.jpg', width: 2048, height: 1365, size: 420000, timestamp: '2024-06-11T21:00:00', description: '', rating: '' },
-        { id: '6', basename: 'waterfall.jpg', path: 'photos/waterfall.jpg', width: 1600, height: 1200, size: 195000, timestamp: '2024-06-10T14:30:00', description: '', rating: '' },
-        { id: '7', basename: 'desert.jpg', path: 'photos/desert.jpg', width: 1920, height: 1080, size: 175000, timestamp: '2024-06-09T16:45:00', description: '', rating: '' },
-        { id: '8', basename: 'lake.jpg', path: 'photos/lake.jpg', width: 2560, height: 1600, size: 445000, timestamp: '2024-06-08T07:15:00', description: '', rating: '' },
-        { id: '9', basename: 'aurora.jpg', path: 'photos/aurora.jpg', width: 1920, height: 1080, size: 285000, timestamp: '2024-06-07T23:30:00', description: '', rating: '' },
-        { id: '10', basename: 'flower.jpg', path: 'photos/flower.jpg', width: 1200, height: 1200, size: 125000, timestamp: '2024-06-06T11:00:00', description: '', rating: '' },
-        { id: '11', basename: 'canyon.jpg', path: 'photos/canyon.jpg', width: 1920, height: 1280, size: 335000, timestamp: '2024-06-05T15:20:00', description: '', rating: '' },
-        { id: '12', basename: 'snow.jpg', path: 'photos/snow.jpg', width: 1800, height: 1200, size: 210000, timestamp: '2024-06-04T08:45:00', description: '', rating: '' },
-        { id: '13', basename: 'river.jpg', path: 'photos/river.jpg', width: 2048, height: 1152, size: 295000, timestamp: '2024-06-03T17:00:00', description: '', rating: '' },
-        { id: '14', basename: 'clouds.jpg', path: 'photos/clouds.jpg', width: 1920, height: 1080, size: 165000, timestamp: '2024-06-02T12:30:00', description: '', rating: '' },
-        { id: '15', basename: 'garden.jpg', path: 'photos/garden.jpg', width: 1600, height: 1067, size: 230000, timestamp: '2024-06-01T10:15:00', description: '', rating: '' },
-        { id: '16', basename: 'lighthouse.jpg', path: 'photos/lighthouse.jpg', width: 1920, height: 1440, size: 275000, timestamp: '2024-05-31T19:45:00', description: '', rating: '' },
-        { id: '17', basename: 'meadow.jpg', path: 'photos/meadow.jpg', width: 2560, height: 1440, size: 390000, timestamp: '2024-05-30T14:00:00', description: '', rating: '' },
-        { id: '18', basename: 'ruins.jpg', path: 'photos/ruins.jpg', width: 1920, height: 1280, size: 320000, timestamp: '2024-05-29T16:30:00', description: '', rating: '' },
-        { id: '19', basename: 'stars.jpg', path: 'photos/stars.jpg', width: 2048, height: 1365, size: 255000, timestamp: '2024-05-28T22:00:00', description: '', rating: '' },
-        { id: '20', basename: 'village.jpg', path: 'photos/village.jpg', width: 1800, height: 1200, size: 285000, timestamp: '2024-05-27T09:30:00', description: '', rating: '' },
-    ],
-
-    /**
-     * Mock folder data for development.
-     * @type {Array<Object>}
-     * @private
-     */
-    _mockFolders: [
-        { path: 'photos', count: 59 }
-    ],
-
-    /**
-     * Mock people data for development.
-     * @type {Array<Object>}
-     * @private
-     */
-    _mockPeople: [
-        { id: 'person_1', name: 'Alice', face_count: 3 },
-        { id: 'person_2', name: 'Bob', face_count: 2 },
-        { id: 'person_3', name: 'Charlie', face_count: 1 },
-    ],
-
-    /**
-     * Mock faces data for development.
-     * @type {Array<Object>}
-     * @private
-     */
-    _mockFaces: [
-        // Known faces (Alice)
-        { id: 'face_1', image_id: '1', person_id: 'person_1', person_name: 'Alice', box_x: 0.3, box_y: 0.2, box_w: 0.2, box_h: 0.3, is_preferred: true },
-        { id: 'face_2', image_id: '3', person_id: 'person_1', person_name: 'Alice', box_x: 0.4, box_y: 0.1, box_w: 0.15, box_h: 0.25, is_preferred: false },
-        { id: 'face_3', image_id: '5', person_id: 'person_1', person_name: 'Alice', box_x: 0.2, box_y: 0.3, box_w: 0.18, box_h: 0.28, is_preferred: false },
-        // Known faces (Bob)
-        { id: 'face_4', image_id: '2', person_id: 'person_2', person_name: 'Bob', box_x: 0.5, box_y: 0.2, box_w: 0.2, box_h: 0.3, is_preferred: true },
-        { id: 'face_5', image_id: '4', person_id: 'person_2', person_name: 'Bob', box_x: 0.35, box_y: 0.15, box_w: 0.2, box_h: 0.3, is_preferred: false },
-        // Known faces (Charlie)
-        { id: 'face_6', image_id: '6', person_id: 'person_3', person_name: 'Charlie', box_x: 0.25, box_y: 0.25, box_w: 0.22, box_h: 0.32, is_preferred: true },
-        // Unknown faces
-        { id: 'face_7', image_id: '7', person_id: null, person_name: null, box_x: 0.4, box_y: 0.2, box_w: 0.18, box_h: 0.28 },
-        { id: 'face_8', image_id: '8', person_id: null, person_name: null, box_x: 0.3, box_y: 0.15, box_w: 0.2, box_h: 0.3 },
-        { id: 'face_9', image_id: '9', person_id: null, person_name: null, box_x: 0.55, box_y: 0.2, box_w: 0.15, box_h: 0.25 },
-        { id: 'face_10', image_id: '10', person_id: null, person_name: null, box_x: 0.45, box_y: 0.3, box_w: 0.2, box_h: 0.3 },
-    ],
-
-    /**
-     * Returns mock duplicate groups for a given similarity level.
-     * @param {number} level - Similarity level (0=identical, 1=perceptual, 2=similar, 3=related)
-     * @returns {Object} Mock response with groups array
-     * @private
-     */
-    _getMockDuplicates(level) {
-        // Helper to create image objects with duplicate-relevant fields
-        const img = (id, basename, path, width, height, size, laplacian, lossless = false) => ({
-            id, basename, path, width, height, size,
-            laplacian_variance: laplacian,
-            lossless,
-            timestamp: '2024-06-15T12:00:00'
-        });
-
-        // Level 0: Identical (same checksum) - exact copies
-        const identical = [
-            {
-                images: [
-                    img('101', 'sunset.jpg', 'photos/sunset.jpg', 1920, 1080, 245000, 850, false),
-                    img('102', 'sunset_copy.jpg', 'backup/sunset_copy.jpg', 1920, 1080, 245000, 850, false),
-                ]
-            },
-            {
-                images: [
-                    img('103', 'beach.jpg', 'photos/beach.jpg', 1920, 1080, 220000, 720, false),
-                    img('104', 'beach (1).jpg', 'downloads/beach (1).jpg', 1920, 1080, 220000, 720, false),
-                    img('105', 'beach_backup.jpg', 'backup/beach_backup.jpg', 1920, 1080, 220000, 720, false),
-                ]
-            }
-        ];
-
-        // Level 1: Perceptual (same image, different encoding/size)
-        const perceptual = [
-            ...identical,
-            {
-                images: [
-                    img('201', 'mountain_4k.png', 'photos/mountain_4k.png', 3840, 2160, 8500000, 920, true),
-                    img('202', 'mountain_hd.jpg', 'photos/mountain_hd.jpg', 1920, 1080, 380000, 890, false),
-                    img('203', 'mountain_thumb.jpg', 'thumbs/mountain_thumb.jpg', 640, 360, 45000, 650, false),
-                ]
-            },
-            {
-                images: [
-                    img('204', 'flower_raw.png', 'raw/flower_raw.png', 4000, 4000, 12000000, 980, true),
-                    img('205', 'flower.jpg', 'photos/flower.jpg', 1200, 1200, 125000, 870, false),
-                ]
-            },
-            {
-                images: [
-                    img('206', 'cityscape_original.tiff', 'archive/cityscape_original.tiff', 4096, 2730, 15000000, 950, true),
-                    img('207', 'cityscape.jpg', 'photos/cityscape.jpg', 2048, 1365, 420000, 920, false),
-                    img('208', 'cityscape_web.jpg', 'web/cityscape_web.jpg', 1024, 683, 95000, 780, false),
-                    img('209', 'cityscape_social.jpg', 'social/cityscape_social.jpg', 800, 533, 65000, 720, false),
-                ]
-            }
-        ];
-
-        // Level 2: Similar (shot sequences, minor variations)
-        const similar = [
-            ...perceptual,
-            {
-                images: [
-                    img('301', 'portrait_001.jpg', 'session/portrait_001.jpg', 2560, 1707, 520000, 890, false),
-                    img('302', 'portrait_002.jpg', 'session/portrait_002.jpg', 2560, 1707, 515000, 920, false),
-                    img('303', 'portrait_003.jpg', 'session/portrait_003.jpg', 2560, 1707, 518000, 850, false),
-                    img('304', 'portrait_004.jpg', 'session/portrait_004.jpg', 2560, 1707, 522000, 880, false),
-                    img('305', 'portrait_005.jpg', 'session/portrait_005.jpg', 2560, 1707, 510000, 910, false),
-                ]
-            },
-            {
-                images: [
-                    img('306', 'sunset_wide.jpg', 'photos/sunset_wide.jpg', 2560, 1080, 380000, 870, false),
-                    img('307', 'sunset_cropped.jpg', 'photos/sunset_cropped.jpg', 1920, 1080, 290000, 860, false),
-                ]
-            },
-            {
-                images: [
-                    img('308', 'product_angle1.jpg', 'products/product_angle1.jpg', 2000, 2000, 450000, 950, false),
-                    img('309', 'product_angle2.jpg', 'products/product_angle2.jpg', 2000, 2000, 460000, 940, false),
-                    img('310', 'product_angle3.jpg', 'products/product_angle3.jpg', 2000, 2000, 455000, 960, false),
-                ]
-            }
-        ];
-
-        // Level 3: Related (thematically similar)
-        const related = [
-            ...similar,
-            {
-                images: [
-                    img('401', 'beach_hawaii.jpg', 'vacation/beach_hawaii.jpg', 1920, 1080, 245000, 850, false),
-                    img('402', 'beach_florida.jpg', 'vacation/beach_florida.jpg', 2048, 1152, 280000, 870, false),
-                    img('403', 'beach_caribbean.jpg', 'vacation/beach_caribbean.jpg', 1800, 1200, 260000, 830, false),
-                    img('404', 'beach_california.jpg', 'vacation/beach_california.jpg', 1920, 1280, 290000, 880, false),
-                ]
-            },
-            {
-                images: [
-                    img('405', 'cat_sleeping.jpg', 'pets/cat_sleeping.jpg', 1600, 1200, 185000, 780, false),
-                    img('406', 'cat_yawning.jpg', 'pets/cat_yawning.jpg', 1600, 1200, 195000, 820, false),
-                    img('407', 'cat_playing.jpg', 'pets/cat_playing.jpg', 1920, 1080, 210000, 750, false),
-                ]
-            },
-            {
-                images: [
-                    img('408', 'coffee_latte.jpg', 'food/coffee_latte.jpg', 1200, 1200, 145000, 890, false),
-                    img('409', 'coffee_cappuccino.jpg', 'food/coffee_cappuccino.jpg', 1200, 1200, 150000, 910, false),
-                ]
-            },
-            {
-                images: [
-                    img('410', 'autumn_park.jpg', 'seasons/autumn_park.jpg', 2560, 1440, 420000, 920, false),
-                    img('411', 'autumn_forest.jpg', 'seasons/autumn_forest.jpg', 2560, 1440, 450000, 940, false),
-                    img('412', 'autumn_road.jpg', 'seasons/autumn_road.jpg', 1920, 1080, 310000, 880, false),
-                    img('413', 'autumn_leaves.jpg', 'seasons/autumn_leaves.jpg', 1800, 1200, 280000, 850, false),
-                    img('414', 'autumn_bench.jpg', 'seasons/autumn_bench.jpg', 2048, 1365, 360000, 900, false),
-                    img('415', 'autumn_lake.jpg', 'seasons/autumn_lake.jpg', 2560, 1600, 480000, 930, false),
-                ]
-            }
-        ];
-
-        const levelGroups = [identical, perceptual, similar, related];
-        const groups = levelGroups[level] || [];
-
-        // Ensure any mock duplicates returned are also present in the /images list,
-        // otherwise the Gallery screen cannot display them when filtering by IDs.
-        for (const group of groups) {
-            for (const imgObj of (group.images || [])) {
-                if (!imgObj || !imgObj.id) continue;
-                const exists = this._mockImages.some(i => String(i.id) === String(imgObj.id));
-                if (!exists) {
-                    this._mockImages.push({
-                        id: imgObj.id,
-                        basename: imgObj.basename,
-                        path: imgObj.path,
-                        width: imgObj.width,
-                        height: imgObj.height,
-                        size: imgObj.size,
-                        timestamp: imgObj.timestamp,
-                        description: '',
-                        rating: ''
-                    });
-                }
-            }
-        }
-
-        return { groups, status: 'done' };
     },
 
     /* ----------------------------------------------------------------------
@@ -1588,7 +1231,7 @@ const App = {
             overlay.id = 'loading-overlay';
             overlay.className = 'loading-overlay';
             overlay.innerHTML = `
-                <div class="loading-spinner"></div>
+                <span class="material-symbols-outlined loading-icon">hourglass_empty</span>
                 <div class="loading-message"></div>
             `;
             document.body.appendChild(overlay);
@@ -1899,10 +1542,6 @@ const App = {
      */
     thumbnailUrl(imageId, size) {
         size = size || this.state.thumbnailSize;
-        if (this.mockMode) {
-            // Return placeholder for mock mode
-            return `https://picsum.photos/seed/${imageId}/${size}/${size}`;
-        }
         return `${this.apiBase}/images/${imageId}/thumbnail?size=${size}`;
     },
 
@@ -1912,9 +1551,6 @@ const App = {
      * @returns {string} Full image URL
      */
     imageUrl(imageId) {
-        if (this.mockMode) {
-            return `https://picsum.photos/seed/${imageId}/1920/1080`;
-        }
         return `${this.apiBase}/images/${imageId}/full`;
     },
 
@@ -2039,15 +1675,7 @@ const App = {
         this._loadPersistedState();
 
         // Load thumbnail config from backend (async, uses defaults until loaded)
-        if (!this.mockMode) {
-            this.loadThumbnailConfig();
-        }
-
-        // Prime mock data so Gallery has a stable dataset from the outset.
-        // Level 3 includes all lower levels in the current mock generator.
-        if (this.mockMode) {
-            this._getMockDuplicates(3);
-        }
+        this.loadThumbnailConfig();
 
         // Apply initial theme
         document.getElementById('app').dataset.theme = this.state.theme;
@@ -2089,7 +1717,7 @@ const App = {
         }
         this._readyCallbacks = [];
 
-        console.log('Imaginary initialised', this.mockMode ? '(mock mode)' : '');
+        console.log('Imaginary initialised');
     },
 
     /**

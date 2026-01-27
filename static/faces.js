@@ -78,6 +78,12 @@
     /** @type {boolean} Whether faces screen is currently loading */
     let isLoading = false;
 
+    /** @type {boolean} Whether faces need to be reloaded on next enter */
+    let needsRefresh = true;
+
+    /** @type {number} Saved scroll position for restoration */
+    let savedScrollTop = 0;
+
     // Faces screen DOM references
     /** @type {HTMLElement} */
     let facesGrid;
@@ -140,6 +146,11 @@
         // Listen for image changes in fullscreen
         App.on('fullscreenImageChanged', handleFullscreenImageChange);
 
+        // Listen for database changes (e.g., after scan completes)
+        App.on('databaseChanged', () => {
+            needsRefresh = true;
+        });
+
         // Register the faces screen module
         registerFacesModule();
     }
@@ -149,7 +160,7 @@
      */
     async function loadFaceDetectionConfig() {
         try {
-            const response = await App.api('/api/status');
+            const response = await App.api('/status');
             if (response && response.face_detection_enabled !== undefined) {
                 faceDetectionEnabled = response.face_detection_enabled;
                 updateButtonStates();
@@ -171,7 +182,7 @@
         // Faces screen button
         if (btnFaces) {
             btnFaces.addEventListener('click', () => {
-                App.setScreen('faces');
+                App.navigateTo('faces');
             });
         }
 
@@ -246,10 +257,23 @@
     function registerFacesModule() {
         App.registerModule('faces', {
             onEnter() {
-                loadAllFaces();
+                if (needsRefresh) {
+                    loadAllFaces();
+                } else {
+                    // Restore scroll position
+                    if (facesGrid) {
+                        facesGrid.scrollTop = savedScrollTop;
+                    }
+                }
             },
             onLeave() {
-                // Clean up if needed
+                // Save scroll position
+                if (facesGrid) {
+                    savedScrollTop = facesGrid.scrollTop;
+                }
+            },
+            markNeedsRefresh() {
+                needsRefresh = true;
             }
         });
     }
@@ -298,9 +322,17 @@
      * Toggle face tagging mode on/off.
      */
     function toggleTaggingMode() {
+        setTaggingMode(!taggingMode);
+    }
+
+    /**
+     * Set face tagging mode to a specific state.
+     * @param {boolean} enabled - Whether to enable tagging mode
+     */
+    function setTaggingMode(enabled) {
         if (!faceDetectionEnabled) return;
 
-        taggingMode = !taggingMode;
+        taggingMode = enabled;
 
         // Update button state
         if (btnFaceTagging) {
@@ -318,7 +350,7 @@
             if (imageId) {
                 loadFacesForImage(imageId);
             }
-        } else {
+        } else if (!taggingMode) {
             // Clear overlay when disabling
             clearFaceOverlay();
         }
@@ -349,54 +381,26 @@
         if (facesLoading) facesLoading.hidden = false;
 
         try {
-            // Load all people (known faces grouped by person)
-            const people = await App.api('/api/people');
-
-            // Build allFaces array from people data
-            allFaces = [];
-
-            for (const person of (people || [])) {
-                // Get faces for this person
-                const faces = await App.api(`/api/people/${person.id}/faces`);
-                for (const face of (faces || [])) {
-                    allFaces.push({
-                        ...face,
-                        person_id: person.id,
-                        person_name: person.name,
-                        is_preferred: face.is_preferred || false,
-                    });
-                }
-            }
-
-            // Also load unknown faces (faces without a person)
-            // We need to get all images and their faces, then filter unknown ones
-            const images = await App.api('/api/images');
-            for (const image of (images || [])) {
-                const imageFaces = await App.api(`/api/images/${image.id}/faces`);
-                for (const face of (imageFaces || [])) {
-                    if (!face.person_id && !face.suppressed) {
-                        // Check if we already have this face
-                        const exists = allFaces.some(f => f.id === face.id);
-                        if (!exists) {
-                            allFaces.push({
-                                ...face,
-                                person_id: null,
-                                person_name: null,
-                                is_preferred: false,
-                            });
-                        }
-                    }
-                }
-            }
-
+            // Load all faces in a single API call
+            allFaces = await App.api('/faces') || [];
+            needsRefresh = false;
             renderFacesGrid();
         } catch (error) {
             console.error('Failed to load faces:', error);
-            if (facesGrid) facesGrid.innerHTML = '<p class="error">Failed to load faces</p>';
+            App.showError('Failed to load faces.');
+            if (facesEmpty) facesEmpty.hidden = false;
         } finally {
             isLoading = false;
             if (facesLoading) facesLoading.hidden = true;
         }
+    }
+
+    /**
+     * Mark faces as needing refresh on next screen enter.
+     * Called when database changes or faces are modified externally.
+     */
+    function markFacesNeedsRefresh() {
+        needsRefresh = true;
     }
 
     /**
@@ -500,7 +504,7 @@
      */
     function createFacesSection(title, count, type) {
         const section = document.createElement('div');
-        section.className = 'faces-section';
+        section.className = `faces-section ${type}`;
 
         const header = document.createElement('div');
         header.className = 'faces-section-header';
@@ -559,12 +563,10 @@
         name.textContent = person.name;
         card.appendChild(name);
 
-        // Click to view person's faces or navigate to filtered gallery
-        card.addEventListener('click', () => {
-            // Filter gallery by this person
-            // For now, just log - the API filter is already implemented
-            console.log('View images for person:', person.name);
-            // Could implement: App.setFilter({ people: person.id }) and navigate to gallery
+        // Double-click to navigate to gallery filtered by this person
+        card.addEventListener('dblclick', () => {
+            App.setFilter({ people: [{ id: person.id, name: person.name }] });
+            App.navigateTo('gallery');
         });
 
         return card;
@@ -629,6 +631,14 @@
         });
 
         card.appendChild(input);
+
+        // Double-click to view the source image in fullscreen with tagging mode
+        card.addEventListener('dblclick', () => {
+            if (face.image_id) {
+                App.showFullscreen(face.image_id);
+                setTaggingMode(true);
+            }
+        });
 
         return card;
     }
@@ -700,7 +710,7 @@
         if (!name) return;
 
         try {
-            const result = await App.api(`/api/faces/${faceId}/identify`, {
+            const result = await App.api(`/faces/${faceId}/identify`, {
                 method: 'POST',
                 body: JSON.stringify({ name }),
             });
@@ -712,6 +722,7 @@
             }
         } catch (error) {
             console.error('Failed to identify face:', error);
+            App.showError('Failed to identify face.');
         }
     }
 
@@ -756,7 +767,7 @@
         if (!faceOverlay) return;
 
         try {
-            const faces = await App.api(`/api/images/${imageId}/faces`);
+            const faces = await App.api(`/images/${imageId}/faces`);
             renderFaces(faces || []);
         } catch (error) {
             console.error('Failed to load faces:', error);
@@ -1054,7 +1065,7 @@
      */
     async function refreshPeopleCache() {
         try {
-            const people = await App.api('/api/people');
+            const people = await App.api('/people');
             peopleCache = people || [];
             peopleCacheTime = Date.now();
         } catch (error) {
@@ -1180,7 +1191,7 @@
         try {
             if (name) {
                 // Identify face with name
-                const result = await App.api(`/api/faces/${faceId}/identify`, {
+                const result = await App.api(`/faces/${faceId}/identify`, {
                     method: 'POST',
                     body: JSON.stringify({ name }),
                 });
@@ -1212,7 +1223,7 @@
                 }
             } else if (face.person_id) {
                 // Unidentify face
-                await App.api(`/api/faces/${faceId}/unidentify`, {
+                await App.api(`/faces/${faceId}/unidentify`, {
                     method: 'POST',
                 });
 
@@ -1231,6 +1242,7 @@
             }
         } catch (error) {
             console.error('Failed to update face:', error);
+            App.showError('Failed to update face.');
             // Revert input to original value
             const input = label.querySelector('.face-input');
             if (input) {
@@ -1246,7 +1258,7 @@
      */
     async function suppressFace(faceId, faceBox) {
         try {
-            await App.api(`/api/faces/${faceId}/suppress`, {
+            await App.api(`/faces/${faceId}/suppress`, {
                 method: 'POST',
             });
 
@@ -1257,6 +1269,7 @@
             peopleCacheTime = 0;
         } catch (error) {
             console.error('Failed to suppress face:', error);
+            App.showError('Failed to remove face.');
         }
     }
 
@@ -1274,12 +1287,14 @@
     // Export public API
     window.Faces = {
         isTaggingModeActive,
+        setTaggingMode,
         toggleTaggingMode,
         loadFacesForImage,
         clearFaceOverlay,
         refreshPeopleCache,
         loadAllFaces,
         renderFacesGrid,
+        markNeedsRefresh: markFacesNeedsRefresh,
     };
 
 })();

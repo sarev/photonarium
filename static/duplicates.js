@@ -172,6 +172,7 @@ const Duplicates = {
             container: document.querySelector('.duplicates-container'),
             grid: App.$('duplicates-grid'),
             empty: App.$('duplicates-empty'),
+            loading: App.$('duplicates-loading'),
             slider: App.$('similarity-slider'),
             sliderLabel: App.$('similarity-label'),
             btnSmaller: App.$('btn-dup-thumb-smaller'),
@@ -409,7 +410,7 @@ const Duplicates = {
  * @private
  */
 Duplicates._loadGroups = async function() {
-    App.showLoading('Loading duplicates…');
+    this._showLoading('Loading duplicates…');
 
     try {
         const { groups, status } = await this._getGroupsForLevel(this.state.currentLevel);
@@ -427,7 +428,7 @@ Duplicates._loadGroups = async function() {
     } catch (err) {
         App.showError('Failed to load duplicates: ' + err.message);
     } finally {
-        App.hideLoading();
+        this._hideLoading();
     }
 };
 
@@ -453,11 +454,12 @@ Duplicates._getGroupsForLevel = async function(level) {
     // Fetch from backend
     const response = await App.apiGet(url);
 
-    // If unchanged, return cached data
+    // If unchanged, return cached data with unchanged flag
     if (response.unchanged && cachedGroups) {
         return {
             groups: cachedGroups,
-            status: response.status || 'done'
+            status: response.status || 'done',
+            unchanged: true
         };
     }
 
@@ -475,7 +477,7 @@ Duplicates._getGroupsForLevel = async function(level) {
     }
     this.state.statusCache[level] = status;
 
-    return { groups, status };
+    return { groups, status, unchanged: false };
 };
 
 /**
@@ -493,7 +495,7 @@ Duplicates._setLevel = async function(level) {
     // Clear selection when changing level
     this._selection.clear();
 
-    App.showLoading('Loading duplicates…');
+    this._showLoading('Loading duplicates…');
 
     try {
         const { groups, status } = await this._getGroupsForLevel(level);
@@ -510,7 +512,7 @@ Duplicates._setLevel = async function(level) {
     } catch (err) {
         App.showError('Failed to load duplicates: ' + err.message);
     } finally {
-        App.hideLoading();
+        this._hideLoading();
     }
 };
 
@@ -532,11 +534,28 @@ Duplicates._scheduleStatusPoll = function(level) {
         if (!this._els.grid.offsetParent) return;
 
         try {
-            const { groups, status } = await this._getGroupsForLevel(level);
-            this.state.allGroups = groups;
+            const { groups, status, unchanged } = await this._getGroupsForLevel(level);
+
+            // Check if groups actually changed (compare count and first few hashes)
+            const oldGroups = this.state.allGroups;
+            const groupsChanged = !unchanged && (
+                groups.length !== oldGroups.length ||
+                groups.slice(0, 10).some((g, i) => !oldGroups[i] || g.group_hash !== oldGroups[i].group_hash)
+            );
+
+            // Update status
+            const statusChanged = status !== this.state.currentStatus;
             this.state.currentStatus = status;
-            this._applyMinGroupSizeFilter();
-            this._renderGroups();
+
+            // Only update and re-render if groups actually changed
+            if (groupsChanged) {
+                this.state.allGroups = groups;
+                this._applyMinGroupSizeFilter();
+                this._renderGroups();
+            } else if (statusChanged && this.state.groups.length === 0) {
+                // Status changed but no groups - update empty state message
+                this._renderGroups();
+            }
 
             // Continue polling if still not done
             if (status === 'computing' || status === 'pending') {
@@ -658,7 +677,7 @@ Duplicates._sortGroupsByPeople = async function() {
             continue;
         }
         try {
-            const faces = await App.api(`/api/images/${group.best_image.id}/faces`);
+            const faces = await App.api(`/images/${group.best_image.id}/faces`);
             const names = (faces || [])
                 .filter(f => f.person_name)
                 .map(f => f.person_name)
@@ -726,7 +745,7 @@ Duplicates._applySemanticSort = async function() {
     if (groupImageIds.length === 0) return;
 
     try {
-        App.showLoading('Sorting by similarity...');
+        this._showLoading('Sorting by similarity…');
 
         // Call backend to get similarity scores
         const response = await App.apiPost('/duplicates/sort-semantic', {
@@ -754,7 +773,7 @@ Duplicates._applySemanticSort = async function() {
     } catch (err) {
         App.showError('Failed to sort by similarity: ' + err.message);
     } finally {
-        App.hideLoading();
+        this._hideLoading();
     }
 };
 
@@ -898,6 +917,32 @@ Duplicates.navigateToGroup = function(hash) {
     });
 
     return true;
+};
+
+/* ==========================================================================
+   LOADING STATE
+   ========================================================================== */
+
+/**
+ * Shows the inline loading indicator with a message.
+ * @param {string} message - The loading message to display
+ * @private
+ */
+Duplicates._showLoading = function(message) {
+    if (!this._els.loading) return;
+    const p = this._els.loading.querySelector('p');
+    if (p) p.textContent = message;
+    this._els.loading.hidden = false;
+};
+
+/**
+ * Hides the inline loading indicator.
+ * @private
+ */
+Duplicates._hideLoading = function() {
+    if (this._els.loading) {
+        this._els.loading.hidden = true;
+    }
 };
 
 // Register module with App

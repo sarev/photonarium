@@ -4570,14 +4570,3 @@ def wait_for_completion(
                 return False
 
         time.sleep(poll_interval)
-
-
-# =============================================================================
-# STANDALONE TEST MODE
-# =============================================================================
-# Tests have been moved to tests.py
-# Run tests with: python tests.py
-
-if __name__ == '__main__':
-    from tests import run_tests
-    run_tests()
