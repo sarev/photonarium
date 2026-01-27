@@ -975,7 +975,8 @@ const App = {
             return {
                 status: isUpdating ? 'updating' : 'up_to_date',
                 indexing_queue: isUpdating ? Math.floor(Math.random() * 50) : 0,
-                embedding_queue: isUpdating ? Math.floor(Math.random() * 100) : 0
+                embedding_queue: isUpdating ? Math.floor(Math.random() * 100) : 0,
+                face_detection_enabled: true
             };
         }
         if (endpoint === '/rescan' && method === 'POST') {
@@ -1007,6 +1008,56 @@ const App = {
             // Return mock histogram data URLs (1x1 transparent PNGs)
             const transparentPng = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==';
             return { r: transparentPng, g: transparentPng, b: transparentPng };
+        }
+
+        // People and Faces API endpoints
+        if (endpoint === '/api/people' && method === 'GET') {
+            return this._mockPeople;
+        }
+        if (endpoint.match(/\/api\/people\/[^/]+$/) && method === 'GET') {
+            const id = endpoint.split('/').pop();
+            return this._mockPeople.find(p => p.id === id) || null;
+        }
+        if (endpoint.match(/\/api\/people\/[^/]+\/faces$/) && method === 'GET') {
+            const personId = endpoint.split('/')[3];
+            return this._mockFaces.filter(f => f.person_id === personId);
+        }
+        if (endpoint.match(/\/api\/images\/[^/]+\/faces$/) && method === 'GET') {
+            const imageId = endpoint.split('/')[3];
+            return this._mockFaces.filter(f => f.image_id === imageId);
+        }
+        if (endpoint.match(/\/api\/faces\/[^/]+\/identify$/) && method === 'POST') {
+            const faceId = endpoint.split('/')[3];
+            const data = JSON.parse(options.body || '{}');
+            const face = this._mockFaces.find(f => f.id === faceId);
+            if (face && data.name) {
+                // Find or create person
+                let person = this._mockPeople.find(p => p.name === data.name);
+                if (!person) {
+                    person = { id: `person_${Date.now()}`, name: data.name, face_count: 0 };
+                    this._mockPeople.push(person);
+                }
+                face.person_id = person.id;
+                face.person_name = person.name;
+                person.face_count++;
+                return { success: true, data: { person } };
+            }
+            return { success: false };
+        }
+        if (endpoint.match(/\/api\/faces\/[^/]+\/unidentify$/) && method === 'POST') {
+            const faceId = endpoint.split('/')[3];
+            const face = this._mockFaces.find(f => f.id === faceId);
+            if (face) {
+                face.person_id = null;
+                face.person_name = null;
+                return { success: true };
+            }
+            return { success: false };
+        }
+        if (endpoint.match(/\/api\/faces\/[^/]+\/suppress$/) && method === 'POST') {
+            const faceId = endpoint.split('/')[3];
+            this._mockFaces = this._mockFaces.filter(f => f.id !== faceId);
+            return { success: true };
         }
 
         console.warn(`Mock API: unhandled ${method} ${endpoint}`);
@@ -1048,6 +1099,39 @@ const App = {
      */
     _mockFolders: [
         { path: 'photos', count: 59 }
+    ],
+
+    /**
+     * Mock people data for development.
+     * @type {Array<Object>}
+     * @private
+     */
+    _mockPeople: [
+        { id: 'person_1', name: 'Alice', face_count: 3 },
+        { id: 'person_2', name: 'Bob', face_count: 2 },
+        { id: 'person_3', name: 'Charlie', face_count: 1 },
+    ],
+
+    /**
+     * Mock faces data for development.
+     * @type {Array<Object>}
+     * @private
+     */
+    _mockFaces: [
+        // Known faces (Alice)
+        { id: 'face_1', image_id: '1', person_id: 'person_1', person_name: 'Alice', box_x: 0.3, box_y: 0.2, box_w: 0.2, box_h: 0.3, is_preferred: true },
+        { id: 'face_2', image_id: '3', person_id: 'person_1', person_name: 'Alice', box_x: 0.4, box_y: 0.1, box_w: 0.15, box_h: 0.25, is_preferred: false },
+        { id: 'face_3', image_id: '5', person_id: 'person_1', person_name: 'Alice', box_x: 0.2, box_y: 0.3, box_w: 0.18, box_h: 0.28, is_preferred: false },
+        // Known faces (Bob)
+        { id: 'face_4', image_id: '2', person_id: 'person_2', person_name: 'Bob', box_x: 0.5, box_y: 0.2, box_w: 0.2, box_h: 0.3, is_preferred: true },
+        { id: 'face_5', image_id: '4', person_id: 'person_2', person_name: 'Bob', box_x: 0.35, box_y: 0.15, box_w: 0.2, box_h: 0.3, is_preferred: false },
+        // Known faces (Charlie)
+        { id: 'face_6', image_id: '6', person_id: 'person_3', person_name: 'Charlie', box_x: 0.25, box_y: 0.25, box_w: 0.22, box_h: 0.32, is_preferred: true },
+        // Unknown faces
+        { id: 'face_7', image_id: '7', person_id: null, person_name: null, box_x: 0.4, box_y: 0.2, box_w: 0.18, box_h: 0.28 },
+        { id: 'face_8', image_id: '8', person_id: null, person_name: null, box_x: 0.3, box_y: 0.15, box_w: 0.2, box_h: 0.3 },
+        { id: 'face_9', image_id: '9', person_id: null, person_name: null, box_x: 0.55, box_y: 0.2, box_w: 0.15, box_h: 0.25 },
+        { id: 'face_10', image_id: '10', person_id: null, person_name: null, box_x: 0.45, box_y: 0.3, box_w: 0.2, box_h: 0.3 },
     ],
 
     /**

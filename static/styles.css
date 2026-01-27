@@ -1299,6 +1299,245 @@ a:hover {
 
 
 /* ==========================================================================
+   FACES SCREEN
+
+   Browse and manage detected faces.
+   ========================================================================== */
+
+#screen-faces {
+    flex-direction: column;
+    background-color: var(--color-bg-primary);
+}
+
+.faces-container {
+    display: flex;
+    flex: 1;
+    flex-direction: column;
+    overflow: hidden;
+    position: relative;
+}
+
+.faces-grid {
+    --thumb-size: 100px;
+
+    flex: 1;
+    overflow-y: auto;
+    padding: 1rem;
+}
+
+/* Face section headers */
+.faces-section {
+    margin-bottom: 1.5rem;
+}
+
+.faces-section-header {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    margin-bottom: 0.75rem;
+    padding-bottom: 0.5rem;
+    border-bottom: 1px solid var(--color-border);
+}
+
+.faces-section-title {
+    font-size: 1rem;
+    font-weight: 600;
+    color: var(--color-text-primary);
+    margin: 0;
+}
+
+.faces-section-title.known {
+    color: var(--color-face-known);
+}
+
+.faces-section-title.unknown {
+    color: var(--color-face-unknown);
+}
+
+.faces-section-count {
+    font-size: 0.85rem;
+    color: var(--color-text-muted);
+}
+
+.faces-section-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(var(--thumb-size), 1fr));
+    gap: 1rem;
+}
+
+/* Face card */
+.face-card {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    padding: 0.5rem;
+    background-color: var(--color-bg-elevated);
+    border: 2px solid transparent;
+    border-radius: 8px;
+    cursor: pointer;
+    transition: border-color 0.15s, box-shadow 0.15s;
+}
+
+.face-card:hover {
+    border-color: var(--color-border);
+    box-shadow: var(--shadow-md);
+}
+
+.face-card.selected {
+    border-color: var(--color-selection-border);
+    background-color: var(--color-selection);
+}
+
+.face-card-thumb {
+    position: relative;
+    width: 100%;
+    aspect-ratio: 1;
+    border-radius: 50%;
+    overflow: hidden;
+    background-color: var(--color-bg-tertiary);
+}
+
+.face-card-thumb img {
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+}
+
+/* Preferred face indicator */
+.face-card-preferred {
+    position: absolute;
+    bottom: 2px;
+    right: 2px;
+    width: 20px;
+    height: 20px;
+    background: var(--color-bg-elevated);
+    border-radius: 50%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    box-shadow: var(--shadow-sm);
+}
+
+.face-card-preferred .material-symbols-outlined {
+    font-size: 14px;
+    color: var(--color-text-amber);
+}
+
+/* Face card name label */
+.face-card-name {
+    margin-top: 0.5rem;
+    font-size: 0.85rem;
+    color: var(--color-text-primary);
+    text-align: center;
+    max-width: 100%;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.face-card-name.unknown {
+    color: var(--color-text-muted);
+    font-style: italic;
+}
+
+/* Face card inline input */
+.face-card-input {
+    margin-top: 0.5rem;
+    width: 100%;
+    padding: 0.25rem 0.5rem;
+    font-family: inherit;
+    font-size: 0.8rem;
+    background-color: var(--color-bg-primary);
+    border: 1px solid var(--color-border);
+    border-radius: 4px;
+    color: var(--color-text-primary);
+    text-align: center;
+}
+
+.face-card-input:focus {
+    outline: none;
+    border-color: var(--color-accent);
+    box-shadow: 0 0 0 2px var(--color-accent-light);
+}
+
+.face-card-input::placeholder {
+    color: var(--color-text-muted);
+    font-style: italic;
+}
+
+/* Faces empty state */
+#faces-empty,
+#faces-loading {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    padding: 3rem;
+    color: var(--color-text-muted);
+}
+
+#faces-empty[hidden],
+#faces-loading[hidden] {
+    display: none;
+}
+
+#faces-empty .material-symbols-outlined,
+#faces-loading .material-symbols-outlined {
+    font-size: 64px;
+    margin-bottom: 1rem;
+}
+
+#faces-empty .material-symbols-outlined {
+    color: var(--color-face-unknown);
+}
+
+#faces-loading .material-symbols-outlined {
+    animation: spin 1s linear infinite;
+}
+
+.empty-state-hint {
+    font-size: 0.9rem;
+    margin-top: 0.5rem;
+}
+
+/* Faces autocomplete for face cards */
+.face-card-autocomplete {
+    position: absolute;
+    top: 100%;
+    left: 0;
+    right: 0;
+    background: var(--color-bg-elevated);
+    border: 1px solid var(--color-border);
+    border-radius: 4px;
+    box-shadow: var(--shadow-lg);
+    z-index: 100;
+    max-height: 200px;
+    overflow-y: auto;
+}
+
+.face-card-autocomplete-item {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 8px 12px;
+    cursor: pointer;
+    transition: background-color 0.1s;
+}
+
+.face-card-autocomplete-item:hover,
+.face-card-autocomplete-item.selected {
+    background-color: var(--color-bg-tertiary);
+}
+
+.face-card-autocomplete-item img {
+    width: 24px;
+    height: 24px;
+    border-radius: 50%;
+    object-fit: cover;
+}
+
+
+/* ==========================================================================
    DATABASE SCREEN
 
    Folder management and scan progress.

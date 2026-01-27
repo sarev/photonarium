@@ -96,12 +96,22 @@
                 <div class="toolbar-group" data-for-screen="search">
                     <!-- Search screen has no left toolbar controls -->
                 </div>
+
+                <!-- Faces controls (visible when data-screen="faces") -->
+                <div class="toolbar-group" data-for-screen="faces">
+                    <button id="btn-faces-thumb-smaller" class="toolbar-btn" title="Smaller thumbnails">
+                        <span class="material-symbols-outlined">remove</span>
+                    </button>
+                    <button id="btn-faces-thumb-larger" class="toolbar-btn" title="Larger thumbnails">
+                        <span class="material-symbols-outlined">add</span>
+                    </button>
+                </div>
             </div>
 
             <!-- Center section: navigation and mode buttons -->
             <div class="toolbar-center">
-                <!-- Back to gallery button (visible on database, search, duplicates screens) -->
-                <div class="toolbar-group" data-for-screen="database search duplicates">
+                <!-- Back to gallery button (visible on database, search, duplicates, faces screens) -->
+                <div class="toolbar-group" data-for-screen="database search duplicates faces">
                     <button id="btn-back-gallery" class="toolbar-btn" title="Back to gallery">
                         <span class="material-symbols-outlined">photo_library</span>
                     </button>
@@ -181,6 +191,18 @@
                             <option value="100">100+</option>
                         </select>
                     </div>
+                </div>
+
+                <!-- Faces right controls (visible when data-screen="faces") -->
+                <div class="toolbar-group" data-for-screen="faces">
+                    <label class="toolbar-checkbox">
+                        <input type="checkbox" id="faces-only-unknowns">
+                        <span>Only unknowns</span>
+                    </label>
+                    <div class="toolbar-separator"></div>
+                    <button id="btn-faces-sort-direction" class="toolbar-btn" title="Toggle sort direction">
+                        <span class="material-symbols-outlined">arrow_downward</span>
+                    </button>
                 </div>
 
                 <!-- Theme toggle (always visible in toolbar) -->
@@ -341,6 +363,31 @@
                         </button>
                     </div>
                 </section>
+            </div>
+        </main>
+
+        <!-- ============================================================
+             FACES SCREEN
+             Browse and manage detected faces.
+             ============================================================ -->
+        <main id="screen-faces" class="screen">
+            <div class="faces-container">
+                <div id="faces-grid" class="faces-grid">
+                    <!-- Face thumbnails are dynamically inserted here -->
+                </div>
+
+                <!-- Empty state message -->
+                <div id="faces-empty" class="empty-state" hidden>
+                    <span class="material-symbols-outlined">face</span>
+                    <p>No faces detected yet.</p>
+                    <p class="empty-state-hint">Faces are detected automatically when images are indexed.</p>
+                </div>
+
+                <!-- Loading state -->
+                <div id="faces-loading" class="loading-state" hidden>
+                    <span class="material-symbols-outlined">hourglass_empty</span>
+                    <p>Loading faces...</p>
+                </div>
             </div>
         </main>
 

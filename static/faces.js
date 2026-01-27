@@ -60,6 +60,47 @@
     let btnFaces;
 
     // =========================================================================
+    // FACES SCREEN STATE
+    // =========================================================================
+
+    /** @type {number} Thumbnail size for faces screen (pixels) */
+    let facesThumbnailSize = 100;
+
+    /** @type {boolean} Show only unknown faces */
+    let showOnlyUnknowns = false;
+
+    /** @type {boolean} Sort direction (true = ascending) */
+    let sortAscending = true;
+
+    /** @type {Array<Object>} All faces loaded from API */
+    let allFaces = [];
+
+    /** @type {boolean} Whether faces screen is currently loading */
+    let isLoading = false;
+
+    // Faces screen DOM references
+    /** @type {HTMLElement} */
+    let facesGrid;
+
+    /** @type {HTMLElement} */
+    let facesEmpty;
+
+    /** @type {HTMLElement} */
+    let facesLoading;
+
+    /** @type {HTMLButtonElement} */
+    let btnFacesThumbSmaller;
+
+    /** @type {HTMLButtonElement} */
+    let btnFacesThumbLarger;
+
+    /** @type {HTMLInputElement} */
+    let facesOnlyUnknowns;
+
+    /** @type {HTMLButtonElement} */
+    let btnFacesSortDirection;
+
+    // =========================================================================
     // INITIALIZATION
     // =========================================================================
 
@@ -68,12 +109,21 @@
      * Called when DOM is ready.
      */
     function init() {
-        // Get DOM references
+        // Get DOM references - Tagging overlay
         faceOverlay = document.getElementById('face-overlay');
         fullscreenContainer = document.getElementById('fullscreen-container');
         fullscreenImage = document.getElementById('fullscreen-image');
         btnFaceTagging = document.getElementById('btn-face-tagging');
         btnFaces = document.getElementById('btn-faces');
+
+        // Get DOM references - Faces screen
+        facesGrid = document.getElementById('faces-grid');
+        facesEmpty = document.getElementById('faces-empty');
+        facesLoading = document.getElementById('faces-loading');
+        btnFacesThumbSmaller = document.getElementById('btn-faces-thumb-smaller');
+        btnFacesThumbLarger = document.getElementById('btn-faces-thumb-larger');
+        facesOnlyUnknowns = document.getElementById('faces-only-unknowns');
+        btnFacesSortDirection = document.getElementById('btn-faces-sort-direction');
 
         // Check if face detection is enabled
         loadFaceDetectionConfig();
@@ -81,11 +131,17 @@
         // Set up event listeners
         setupEventListeners();
 
+        // Set up faces screen event listeners
+        setupFacesScreenListeners();
+
         // Listen for screen changes
         App.on('screenChanged', handleScreenChange);
 
         // Listen for image changes in fullscreen
         App.on('fullscreenImageChanged', handleFullscreenImageChange);
+
+        // Register the faces screen module
+        registerFacesModule();
     }
 
     /**
@@ -115,8 +171,7 @@
         // Faces screen button
         if (btnFaces) {
             btnFaces.addEventListener('click', () => {
-                // TODO: Navigate to faces screen (Phase 4)
-                console.log('Faces screen not implemented yet');
+                App.setScreen('faces');
             });
         }
 
@@ -147,6 +202,91 @@
             btnFaces.title = faceDetectionEnabled
                 ? 'Browse faces'
                 : 'Face detection is disabled in settings';
+        }
+    }
+
+    /**
+     * Set up event listeners for faces screen controls.
+     */
+    function setupFacesScreenListeners() {
+        // Thumbnail size buttons
+        if (btnFacesThumbSmaller) {
+            btnFacesThumbSmaller.addEventListener('click', () => {
+                setFacesThumbnailSize(facesThumbnailSize - 20);
+            });
+        }
+
+        if (btnFacesThumbLarger) {
+            btnFacesThumbLarger.addEventListener('click', () => {
+                setFacesThumbnailSize(facesThumbnailSize + 20);
+            });
+        }
+
+        // Only unknowns checkbox
+        if (facesOnlyUnknowns) {
+            facesOnlyUnknowns.addEventListener('change', () => {
+                showOnlyUnknowns = facesOnlyUnknowns.checked;
+                renderFacesGrid();
+            });
+        }
+
+        // Sort direction button
+        if (btnFacesSortDirection) {
+            btnFacesSortDirection.addEventListener('click', () => {
+                sortAscending = !sortAscending;
+                updateSortDirectionIcon();
+                renderFacesGrid();
+            });
+        }
+    }
+
+    /**
+     * Register the faces screen module with App.
+     */
+    function registerFacesModule() {
+        App.registerModule('faces', {
+            onEnter() {
+                loadAllFaces();
+            },
+            onLeave() {
+                // Clean up if needed
+            }
+        });
+    }
+
+    /**
+     * Set the thumbnail size for faces screen.
+     * @param {number} size - Size in pixels
+     */
+    function setFacesThumbnailSize(size) {
+        facesThumbnailSize = Math.max(60, Math.min(200, size));
+        if (facesGrid) {
+            facesGrid.style.setProperty('--thumb-size', `${facesThumbnailSize}px`);
+        }
+        updateThumbnailSizeButtons();
+    }
+
+    /**
+     * Update thumbnail size button states.
+     */
+    function updateThumbnailSizeButtons() {
+        if (btnFacesThumbSmaller) {
+            btnFacesThumbSmaller.disabled = facesThumbnailSize <= 60;
+        }
+        if (btnFacesThumbLarger) {
+            btnFacesThumbLarger.disabled = facesThumbnailSize >= 200;
+        }
+    }
+
+    /**
+     * Update sort direction icon.
+     */
+    function updateSortDirectionIcon() {
+        if (btnFacesSortDirection) {
+            const icon = btnFacesSortDirection.querySelector('.material-symbols-outlined');
+            if (icon) {
+                icon.textContent = sortAscending ? 'arrow_downward' : 'arrow_upward';
+            }
         }
     }
 
@@ -190,6 +330,389 @@
      */
     function isTaggingModeActive() {
         return taggingMode && faceDetectionEnabled;
+    }
+
+    // =========================================================================
+    // FACES SCREEN - LOADING AND RENDERING
+    // =========================================================================
+
+    /**
+     * Load all faces from the API.
+     */
+    async function loadAllFaces() {
+        if (isLoading) return;
+        isLoading = true;
+
+        // Show loading state
+        if (facesGrid) facesGrid.innerHTML = '';
+        if (facesEmpty) facesEmpty.hidden = true;
+        if (facesLoading) facesLoading.hidden = false;
+
+        try {
+            // Load all people (known faces grouped by person)
+            const people = await App.api('/api/people');
+
+            // Build allFaces array from people data
+            allFaces = [];
+
+            for (const person of (people || [])) {
+                // Get faces for this person
+                const faces = await App.api(`/api/people/${person.id}/faces`);
+                for (const face of (faces || [])) {
+                    allFaces.push({
+                        ...face,
+                        person_id: person.id,
+                        person_name: person.name,
+                        is_preferred: face.is_preferred || false,
+                    });
+                }
+            }
+
+            // Also load unknown faces (faces without a person)
+            // We need to get all images and their faces, then filter unknown ones
+            const images = await App.api('/api/images');
+            for (const image of (images || [])) {
+                const imageFaces = await App.api(`/api/images/${image.id}/faces`);
+                for (const face of (imageFaces || [])) {
+                    if (!face.person_id && !face.suppressed) {
+                        // Check if we already have this face
+                        const exists = allFaces.some(f => f.id === face.id);
+                        if (!exists) {
+                            allFaces.push({
+                                ...face,
+                                person_id: null,
+                                person_name: null,
+                                is_preferred: false,
+                            });
+                        }
+                    }
+                }
+            }
+
+            renderFacesGrid();
+        } catch (error) {
+            console.error('Failed to load faces:', error);
+            if (facesGrid) facesGrid.innerHTML = '<p class="error">Failed to load faces</p>';
+        } finally {
+            isLoading = false;
+            if (facesLoading) facesLoading.hidden = true;
+        }
+    }
+
+    /**
+     * Render the faces grid with sections.
+     */
+    function renderFacesGrid() {
+        if (!facesGrid) return;
+
+        // Clear grid
+        facesGrid.innerHTML = '';
+
+        // Filter faces
+        let faces = [...allFaces];
+        if (showOnlyUnknowns) {
+            faces = faces.filter(f => !f.person_id);
+        }
+
+        // Sort faces - known faces by name, unknown faces by image timestamp
+        faces.sort((a, b) => {
+            // Known faces first
+            if (a.person_name && !b.person_name) return -1;
+            if (!a.person_name && b.person_name) return 1;
+
+            // Both known - sort by name
+            if (a.person_name && b.person_name) {
+                const cmp = a.person_name.localeCompare(b.person_name);
+                return sortAscending ? cmp : -cmp;
+            }
+
+            // Both unknown - sort by face ID (proxy for creation time)
+            const cmp = (a.id || '').localeCompare(b.id || '');
+            return sortAscending ? cmp : -cmp;
+        });
+
+        // Check for empty state
+        if (faces.length === 0) {
+            if (facesEmpty) facesEmpty.hidden = false;
+            return;
+        }
+        if (facesEmpty) facesEmpty.hidden = true;
+
+        // Group faces by known/unknown
+        const knownFaces = faces.filter(f => f.person_id);
+        const unknownFaces = faces.filter(f => !f.person_id);
+
+        // Render known faces section
+        if (knownFaces.length > 0 && !showOnlyUnknowns) {
+            const section = createFacesSection('Known', knownFaces.length, 'known');
+            const grid = section.querySelector('.faces-section-grid');
+
+            // Group by person for known faces
+            const byPerson = new Map();
+            for (const face of knownFaces) {
+                if (!byPerson.has(face.person_id)) {
+                    byPerson.set(face.person_id, []);
+                }
+                byPerson.get(face.person_id).push(face);
+            }
+
+            // Get unique people and sort by name
+            const people = Array.from(byPerson.entries()).map(([personId, personFaces]) => ({
+                id: personId,
+                name: personFaces[0].person_name,
+                faces: personFaces,
+                preferredFace: personFaces.find(f => f.is_preferred) || personFaces[0],
+            }));
+
+            people.sort((a, b) => {
+                const cmp = a.name.localeCompare(b.name);
+                return sortAscending ? cmp : -cmp;
+            });
+
+            for (const person of people) {
+                const card = createPersonCard(person);
+                grid.appendChild(card);
+            }
+
+            facesGrid.appendChild(section);
+        }
+
+        // Render unknown faces section
+        if (unknownFaces.length > 0) {
+            const section = createFacesSection('Unknown', unknownFaces.length, 'unknown');
+            const grid = section.querySelector('.faces-section-grid');
+
+            for (const face of unknownFaces) {
+                const card = createFaceCard(face);
+                grid.appendChild(card);
+            }
+
+            facesGrid.appendChild(section);
+        }
+    }
+
+    /**
+     * Create a faces section element.
+     * @param {string} title - Section title
+     * @param {number} count - Number of faces
+     * @param {string} type - 'known' or 'unknown'
+     * @returns {HTMLElement}
+     */
+    function createFacesSection(title, count, type) {
+        const section = document.createElement('div');
+        section.className = 'faces-section';
+
+        const header = document.createElement('div');
+        header.className = 'faces-section-header';
+
+        const titleEl = document.createElement('h3');
+        titleEl.className = `faces-section-title ${type}`;
+        titleEl.textContent = title;
+        header.appendChild(titleEl);
+
+        const countEl = document.createElement('span');
+        countEl.className = 'faces-section-count';
+        countEl.textContent = `(${count})`;
+        header.appendChild(countEl);
+
+        section.appendChild(header);
+
+        const grid = document.createElement('div');
+        grid.className = 'faces-section-grid';
+        section.appendChild(grid);
+
+        return section;
+    }
+
+    /**
+     * Create a person card (for known faces - shows representative face).
+     * @param {Object} person - Person object with faces array
+     * @returns {HTMLElement}
+     */
+    function createPersonCard(person) {
+        const card = document.createElement('div');
+        card.className = 'face-card';
+        card.dataset.personId = person.id;
+
+        const thumb = document.createElement('div');
+        thumb.className = 'face-card-thumb';
+
+        const img = document.createElement('img');
+        img.src = `/api/people/${person.id}/thumbnail`;
+        img.alt = person.name;
+        img.loading = 'lazy';
+        thumb.appendChild(img);
+
+        // Add preferred indicator if multiple faces
+        if (person.faces.length > 1) {
+            const preferred = document.createElement('div');
+            preferred.className = 'face-card-preferred';
+            preferred.innerHTML = '<span class="material-symbols-outlined">star</span>';
+            preferred.title = `${person.faces.length} faces`;
+            thumb.appendChild(preferred);
+        }
+
+        card.appendChild(thumb);
+
+        const name = document.createElement('div');
+        name.className = 'face-card-name';
+        name.textContent = person.name;
+        card.appendChild(name);
+
+        // Click to view person's faces or navigate to filtered gallery
+        card.addEventListener('click', () => {
+            // Filter gallery by this person
+            // For now, just log - the API filter is already implemented
+            console.log('View images for person:', person.name);
+            // Could implement: App.setFilter({ people: person.id }) and navigate to gallery
+        });
+
+        return card;
+    }
+
+    /**
+     * Create a face card (for unknown faces - editable name).
+     * @param {Object} face - Face object
+     * @returns {HTMLElement}
+     */
+    function createFaceCard(face) {
+        const card = document.createElement('div');
+        card.className = 'face-card';
+        card.dataset.faceId = face.id;
+
+        const thumb = document.createElement('div');
+        thumb.className = 'face-card-thumb';
+
+        const img = document.createElement('img');
+        img.src = `/api/faces/${face.id}/thumbnail`;
+        img.alt = 'Unknown face';
+        img.loading = 'lazy';
+        thumb.appendChild(img);
+
+        card.appendChild(thumb);
+
+        // Create editable name input
+        const input = document.createElement('input');
+        input.type = 'text';
+        input.className = 'face-card-input';
+        input.placeholder = 'Enter name...';
+        input.value = '';
+        input.dataset.faceId = face.id;
+
+        // Handle input for autocomplete
+        input.addEventListener('input', () => {
+            showCardAutocomplete(input, input.value, card);
+        });
+
+        // Handle blur to commit
+        input.addEventListener('blur', () => {
+            // Delay to allow autocomplete click
+            setTimeout(() => {
+                const autocomplete = card.querySelector('.face-card-autocomplete');
+                if (autocomplete) {
+                    autocomplete.remove();
+                }
+                commitFaceCardName(face.id, input.value.trim(), card);
+            }, 200);
+        });
+
+        // Handle keyboard
+        input.addEventListener('keydown', (e) => {
+            if (e.key === 'Enter') {
+                e.preventDefault();
+                input.blur();
+            } else if (e.key === 'Escape') {
+                e.preventDefault();
+                input.value = '';
+                input.blur();
+            }
+        });
+
+        card.appendChild(input);
+
+        return card;
+    }
+
+    /**
+     * Show autocomplete for face card input.
+     * @param {HTMLInputElement} input - Input element
+     * @param {string} query - Search query
+     * @param {HTMLElement} card - Parent card element
+     */
+    async function showCardAutocomplete(input, query, card) {
+        // Refresh people cache if stale
+        if (Date.now() - peopleCacheTime > PEOPLE_CACHE_TTL) {
+            await refreshPeopleCache();
+        }
+
+        // Remove existing autocomplete
+        const existing = card.querySelector('.face-card-autocomplete');
+        if (existing) existing.remove();
+
+        // Filter people by query
+        const q = query.toLowerCase().trim();
+        if (!q) return;
+
+        const matches = peopleCache.filter(p => p.name.toLowerCase().includes(q));
+        if (matches.length === 0) return;
+
+        // Create autocomplete dropdown
+        const autocomplete = document.createElement('div');
+        autocomplete.className = 'face-card-autocomplete';
+
+        const maxResults = 5;
+        for (let i = 0; i < Math.min(matches.length, maxResults); i++) {
+            const person = matches[i];
+            const item = document.createElement('div');
+            item.className = 'face-card-autocomplete-item';
+
+            const img = document.createElement('img');
+            img.src = `/api/people/${person.id}/thumbnail`;
+            img.alt = '';
+            item.appendChild(img);
+
+            const nameSpan = document.createElement('span');
+            nameSpan.textContent = person.name;
+            item.appendChild(nameSpan);
+
+            item.addEventListener('mousedown', (e) => {
+                e.preventDefault();
+                input.value = person.name;
+                autocomplete.remove();
+                input.blur();
+            });
+
+            autocomplete.appendChild(item);
+        }
+
+        // Position relative to card
+        card.style.position = 'relative';
+        card.appendChild(autocomplete);
+    }
+
+    /**
+     * Commit a name change for a face card.
+     * @param {string} faceId - Face ID
+     * @param {string} name - Name to assign
+     * @param {HTMLElement} card - Card element
+     */
+    async function commitFaceCardName(faceId, name, card) {
+        if (!name) return;
+
+        try {
+            const result = await App.api(`/api/faces/${faceId}/identify`, {
+                method: 'POST',
+                body: JSON.stringify({ name }),
+            });
+
+            if (result && result.success) {
+                // Invalidate cache and reload
+                peopleCacheTime = 0;
+                loadAllFaces();
+            }
+        } catch (error) {
+            console.error('Failed to identify face:', error);
+        }
     }
 
     // =========================================================================
@@ -755,6 +1278,8 @@
         loadFacesForImage,
         clearFaceOverlay,
         refreshPeopleCache,
+        loadAllFaces,
+        renderFacesGrid,
     };
 
 })();
