@@ -13,6 +13,7 @@ Imaginary is designed to run fast even with huge photo libraries. It uses a loca
 ## Features
 
 - **Smart Search** — Find images by describing their content, not just filenames
+- **Face Recognition** — Automatically detect faces and tag people in your photos
 - **Duplicate Detection** — Find identical, near-identical, similar, and related images across your collection
 - **Fast Browsing** — Virtual scrolling handles collections of any size smoothly
 - **Image Information** — View metadata, dimensions, histograms, and add your own descriptions and ratings
@@ -73,6 +74,7 @@ On first run, the AI model will download automatically (this only happens once).
 ```bash
 python app.py --port 8080              # Use a different port
 python app.py --generate-thumbnails    # Pre-generate thumbnails for all images
+python app.py --detect-faces           # Run face detection on unprocessed images
 ```
 
 ## Getting Started
@@ -95,14 +97,16 @@ The toolbar across the top gives you quick access to common actions:
 - **Fullscreen** — Open the selected image in fullscreen view (or double-click a thumbnail)
 - **Open folder** — Reveal the selected image in your file manager
 - **Rotate** — Rotate images left or right (changes are saved to disk)
+- **Face tagging** — Toggle face tagging mode for the fullscreen viewer
 
 **Centre (navigation):**
 - **Database** — Add or remove folders, see scanning progress
 - **Duplicates** — Find duplicate and similar images
+- **Faces** — Browse and manage detected faces
 - **Filter** — Search and filter your collection
 
 **Right side (sorting and selection):**
-- **Sort buttons** — Sort by date, rating, or content similarity
+- **Sort buttons** — Sort by date, rating, content similarity, or people
 - **Sort direction** — Toggle between ascending and descending
 - **Select all / Clear** — Bulk selection controls
 - **Theme** — Switch between light and dark modes
@@ -161,6 +165,45 @@ The Duplicates screen helps you find and manage duplicate or similar images in y
 **Sorting Stacks** — By default, stacks are sorted by size (largest groups first). Click the semantic sort button to sort by a text query instead—enter a description and stacks will be ordered by how well their best image matches your query. This is useful for finding specific duplicates in a large list.
 
 **Minimum Group Size** — Use the dropdown to hide smaller groups and focus on stacks with more duplicates.
+
+## Using Face Recognition
+
+Imaginary can automatically detect faces in your photos and help you tag people. Once you've identified a few faces, the system learns to recognise those people in other photos.
+
+### Tagging Faces
+
+1. **Enable face tagging mode** — Click the face tagging button in the Gallery toolbar (or press the Faces button)
+2. **Open an image** — Double-click to view it in fullscreen
+3. **Tag faces** — Each detected face shows a coloured box:
+   - **Red** = Unknown face (not yet identified)
+   - **Green** = Known face (already tagged)
+   - **Orange** = Currently editing
+4. **Enter a name** — Click on an unknown face and type the person's name. As you type, matching names will appear for quick selection
+5. **Auto-recognition** — Once you've tagged someone a few times, Imaginary will automatically recognise them in other photos
+
+### The Faces Screen
+
+Click the **Faces** button in the toolbar to browse all detected faces:
+
+- **Known faces** appear first, grouped by person and sorted alphabetically
+- **Unknown faces** appear below, ready to be identified
+- Click any face to edit its name
+- Use the "Only unknowns" toggle to focus on faces that need tagging
+- Adjust thumbnail size with the +/- buttons
+
+### Filtering by People
+
+In the Filter screen, you can now filter your gallery by people:
+
+1. Click the **person add** button next to the People field
+2. Select one or more people from the picker
+3. Click **Done** and apply the filter
+
+The gallery will show only images containing all the selected people.
+
+### Removing False Detections
+
+Sometimes Imaginary detects something that isn't a face. In face tagging mode, click the **X** button on any bounding box to mark it as "not a face". It won't appear again.
 
 ## Controls
 
@@ -224,6 +267,9 @@ Settings are stored in `.imaginary.yml` (created automatically on first run). Ke
 | `thumbnail_quality` | 85 | JPEG quality for thumbnails (1-100) |
 | `thumbnail_cache_size_mb` | 100 | RAM cache size for thumbnails |
 | `indexing_threads` | 4 | Parallel threads for scanning |
+| `face_detection_enabled` | true | Enable automatic face detection |
+| `face_detection_min_confidence` | 0.95 | Detection confidence threshold |
+| `face_recognition_threshold` | 0.65 | Similarity threshold for auto-recognition |
 
 ## Tips
 
@@ -231,6 +277,7 @@ Settings are stored in `.imaginary.yml` (created automatically on first run). Ke
 - **Duplicate detection** — Start with "Similar" or "Related" to see what's there, then move to stricter levels to find exact copies.
 - **Descriptions & ratings** — Add personal notes and emoji ratings to help you find favourites later.
 - **Semantic sorting** — In Duplicates view, use semantic sort with queries like "blurry" or "dark" to find low-quality duplicates to delete.
+- **Face tagging** — Tag a person in 3-5 clear photos and Imaginary will start recognising them automatically in other images.
 
 ## License
 
