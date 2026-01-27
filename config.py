@@ -167,6 +167,11 @@ face_detection_min_size: 40
 # Higher values = stricter matching (fewer false matches, more unknowns).
 # Range: 0.0-1.0, recommended: 0.55-0.75
 face_recognition_threshold: 0.65
+
+# Batch size for face detection (number of images processed together).
+# Higher values improve GPU utilization but use more VRAM.
+# Reduce if you get out-of-memory errors. Range: 1-64, recommended: 16-32
+face_detection_batch_size: 32
 """
 
 
@@ -198,6 +203,7 @@ class Config:
         face_detection_min_confidence: MTCNN confidence threshold (0.0-1.0).
         face_detection_min_size: Minimum face size in pixels (20-200).
         face_recognition_threshold: Cosine similarity threshold for auto-matching (0.0-1.0).
+        face_detection_batch_size: Batch size for face detection (1-64).
     """
 
     image_extensions: set[str] = field(default_factory=lambda: {
@@ -223,6 +229,7 @@ class Config:
     face_detection_min_confidence: float = 0.95
     face_detection_min_size: int = 40
     face_recognition_threshold: float = 0.65
+    face_detection_batch_size: int = 32
 
     def __post_init__(self) -> None:
         """Validate configuration values after initialisation."""
@@ -303,6 +310,8 @@ class Config:
             raise ValueError(f'face_detection_min_size must be 20-200, got {self.face_detection_min_size}')
         if not 0.0 <= self.face_recognition_threshold <= 1.0:
             raise ValueError(f'face_recognition_threshold must be 0.0-1.0, got {self.face_recognition_threshold}')
+        if not 1 <= self.face_detection_batch_size <= 64:
+            raise ValueError(f'face_detection_batch_size must be 1-64, got {self.face_detection_batch_size}')
 
 
 def load_config(config_path: Path | str | None = None) -> Config:
@@ -404,6 +413,9 @@ def load_config(config_path: Path | str | None = None) -> Config:
 
     if 'face_recognition_threshold' in config_data:
         kwargs['face_recognition_threshold'] = float(config_data['face_recognition_threshold'])
+
+    if 'face_detection_batch_size' in config_data:
+        kwargs['face_detection_batch_size'] = int(config_data['face_detection_batch_size'])
 
     return Config(**kwargs)
 

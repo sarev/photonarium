@@ -2428,9 +2428,7 @@ class FaceDetectionThread(threading.Thread):
         """Number of images that failed processing."""
         return self._error_count
 
-    # Batch size for face detection (number of images to process together)
-    # With parallel MTCNN detection, larger batches improve throughput
-    BATCH_SIZE = 32
+    # Batch size for face detection - now configured via config.face_detection_batch_size
 
     def run(self) -> None:
         """Main thread loop - process images from the queue in batches."""
@@ -2449,6 +2447,7 @@ class FaceDetectionThread(threading.Thread):
         # Progress logging state
         last_progress_time = time.time()
         progress_interval = 5.0
+        first_batch = True
 
         while not self.stop_event.is_set():
             batch_ids = []
@@ -2463,14 +2462,19 @@ class FaceDetectionThread(threading.Thread):
                     continue
 
                 # Try to get more images to fill the batch (non-blocking)
-                while len(batch_ids) < self.BATCH_SIZE:
+                while len(batch_ids) < self.config.face_detection_batch_size:
                     try:
                         image_id = self.face_queue.get_nowait()
                         batch_ids.append(image_id)
                     except queue.Empty:
                         break
 
-                # Process the batch
+                # Log before first batch (model loading happens here)
+                if first_batch:
+                    logger.info('Loading face detection models (MTCNN + InceptionResnetV1)...')
+                    first_batch = False
+
+                # Process the batch (pass stop_event for interruptibility)
                 self._process_batch(batch_ids)
                 self._completion_triggered = False  # Reset completion flag
 
@@ -2531,9 +2535,9 @@ class FaceDetectionThread(threading.Thread):
         if not id_to_path:
             return
 
-        # Run batched face detection
+        # Run batched face detection (pass stop_event for graceful interruption)
         paths = list(id_to_path.values())
-        results = self.face_detector.detect_faces_batch(paths)
+        results = self.face_detector.detect_faces_batch(paths, stop_event=self.stop_event)
 
         # Get known face embeddings for auto-recognition
         with self._db_lock:
@@ -3188,7 +3192,9 @@ class ImageDatabase:
         config_path: Path | str | None = None,
         auto_start: bool = True,
         preload_model: bool = True,
-        skip_scan: bool = False,
+        run_scan: bool = False,
+        run_face_detection: bool = False,
+        run_face_grouping: bool = False,
     ):
         """Initialise the image database.
 
@@ -3200,11 +3206,19 @@ class ImageDatabase:
             preload_model: If True, load the OpenCLIP model during startup
                 instead of lazily on first use. This provides better console
                 feedback during first-time setup.
-            skip_scan: If True, skip the folder scanning step on startup.
-                Useful for faster startup when you know nothing has changed.
+            run_scan: If True, scan folders and queue embeddings on startup.
+                If False (default), just start the server without processing.
+            run_face_detection: If True, run face detection after embeddings.
+                Requires run_scan=True to have any effect.
+            run_face_grouping: If True, compute face/duplicate groups after
+                face detection. Requires run_face_detection=True.
+
+            Use the GUI "Rescan" button to trigger all processing phases.
         """
         self._preload_model = preload_model
-        self._skip_scan = skip_scan
+        self._run_scan = run_scan
+        self._run_face_detection = run_face_detection
+        self._run_face_grouping = run_face_grouping
         self.db_path = Path(db_path)
         self.thumbnail_dir = Path(thumbnail_dir)
 
@@ -3261,17 +3275,16 @@ class ImageDatabase:
         self.thumbnail_dir.mkdir(parents=True, exist_ok=True)
 
         if auto_start:
-            self.startup(skip_scan=self._skip_scan)
+            self.startup()
 
-    def startup(self, skip_scan: bool = False) -> None:
+    def startup(self) -> None:
         """Run the startup sequence.
 
         Steps 3-7 of the startup sequence. Call this if auto_start=False
         was passed to __init__.
 
-        Args:
-            skip_scan: If True, skip the folder scanning step. Useful for
-                faster startup when you know nothing has changed.
+        Uses self._run_scan, self._run_face_detection, and self._run_face_grouping
+        to determine which processing phases to run.
         """
         # Step 3: Verify registered folders exist
         logger.info('[3/5] Verifying registered folders...')
@@ -3279,20 +3292,22 @@ class ImageDatabase:
         for folder in missing_folders:
             logger.warning(f'        Folder missing: {folder}')
 
-        # Step 4: Rescan all registered directories
-        if skip_scan:
-            logger.info('[4/5] Skipping folder scan (--no-scan)')
-        else:
+        # Step 4: Optionally scan folders and queue processing
+        if self._run_scan:
             logger.info('[4/5] Scanning registered folders...')
             self._rescan_all_folders()
 
-        # Step 5: Queue images with missing embeddings
+            # Queue images with missing embeddings
+            missing_embeddings = get_images_without_embedding(self.conn)
+            for image in missing_embeddings:
+                self._embedding_queue.put(image['id'])
+            if missing_embeddings:
+                logger.info(f'        {len(missing_embeddings)} images queued for embedding')
+        else:
+            logger.info('[4/5] Skipping scan (use --scan or GUI Rescan button to process)')
+
+        # Step 5: Start background threads (idle until work is queued)
         logger.info('[5/5] Starting background threads...')
-        missing_embeddings = get_images_without_embedding(self.conn)
-        for image in missing_embeddings:
-            self._embedding_queue.put(image['id'])
-        if missing_embeddings:
-            logger.info(f'        {len(missing_embeddings)} images queued for embedding')
 
         # Run one-time migrations BEFORE starting threads
         # (duplicate epoch migration must complete before completion callback fires)
@@ -3587,6 +3602,9 @@ class ImageDatabase:
 
         # Final completion callback (after all processing including faces)
         def on_final_complete():
+            if not self._run_face_grouping:
+                logger.info('Skipping grouping phase (use --group-faces or GUI Rescan)')
+                return
             # Clean up people with no faces
             with self._db_lock:
                 delete_people_without_faces(self.conn)
@@ -3602,6 +3620,9 @@ class ImageDatabase:
 
         # Callback when embedding completes - queue images for face detection
         def on_embedding_complete():
+            if not self._run_face_detection:
+                logger.info('Skipping face detection (use --detect-faces or GUI Rescan)')
+                return
             if self.config.face_detection_enabled:
                 # Queue all images that don't have face detection run yet
                 self._queue_images_for_face_detection()
@@ -4405,9 +4426,36 @@ class ImageDatabase:
         self._duplicate_manager.compute_all(self.conn)
 
     def queue_rescan_all(self) -> None:
-        """Queue all registered folders for rescanning."""
-        logger.info('Queueing rescan of all folders')
+        """Queue all registered folders for rescanning and full processing.
+
+        This triggers the full processing chain:
+        1. Rescan folders for new/changed/deleted files
+        2. Queue images with missing embeddings
+        3. (Automatic) Face detection after embeddings complete
+        4. (Automatic) Duplicate grouping and face grouping after face detection
+
+        Called from GUI "Rescan" button - enables all processing phases.
+        """
+        logger.info('Queueing full rescan of all folders')
+
+        # Enable all processing phases (GUI rescan runs everything)
+        self._run_face_detection = True
+        self._run_face_grouping = True
+
         self._rescan_all_folders()
+
+        # Queue images that need embedding (new images or images without embeddings)
+        missing_embeddings = get_images_without_embedding(self.conn)
+        for image in missing_embeddings:
+            self._embedding_queue.put(image['id'])
+        if missing_embeddings:
+            logger.info(f'{len(missing_embeddings)} images queued for embedding')
+
+        # Reset completion flags so callbacks fire again
+        if self._embedding_thread:
+            self._embedding_thread._completion_triggered = False
+        if self._face_thread:
+            self._face_thread._completion_triggered = False
 
     # =========================================================================
     # Public API - Events (SSE)

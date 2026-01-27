@@ -406,17 +406,20 @@ class FaceDetector:
         image_paths: list[Path | str],
         max_dimension: int = 4096,
         num_workers: int = 4,
+        stop_event: threading.Event | None = None,
     ) -> dict[Path, list[DetectedFace]]:
-        """Detect faces in multiple images using parallel processing.
+        """Detect faces in multiple images using GPU batch processing.
 
-        This method processes multiple images in parallel using a thread pool
-        for image loading and MTCNN detection, then batches the face embedding
-        computation for all detected faces.
+        This method loads images in parallel on CPU, groups them by dimension
+        (MTCNN requires equal-sized images for batching), then processes each
+        group through MTCNN on GPU. Images from the same camera typically share
+        dimensions, so this provides good batching in practice.
 
         Args:
             image_paths: List of paths to image files.
             max_dimension: Maximum image dimension for processing.
-            num_workers: Number of parallel workers for detection.
+            num_workers: Number of parallel workers for image loading.
+            stop_event: Optional threading.Event to signal early termination.
 
         Returns:
             Dict mapping each image path to its list of DetectedFace objects.
@@ -424,9 +427,13 @@ class FaceDetector:
         """
         import torch
         from concurrent.futures import ThreadPoolExecutor, as_completed
+        from collections import defaultdict
 
         if not image_paths:
             return {}
+
+        def should_stop():
+            return stop_event is not None and stop_event.is_set()
 
         results: dict[Path, list[DetectedFace]] = {}
 
@@ -434,15 +441,12 @@ class FaceDetector:
         for p in image_paths:
             results[Path(p)] = []
 
-        # Phase 1: Run MTCNN detection on all images in parallel
-        # Each worker returns: (image_path, list of (tensor, norm_box, confidence))
-        all_faces_data = []  # (image_path, tensor, norm_box, confidence)
+        # Phase 1: Load and preprocess all images in parallel on CPU
+        loaded_images = []  # List of (path, img, scale)
 
-        def process_single_image(image_path: Path | str):
-            """Load image and run MTCNN detection. Returns face data."""
+        def load_single_image(image_path: Path | str):
+            """Load and preprocess image on CPU."""
             image_path = Path(image_path)
-            faces_data = []
-
             try:
                 with Image.open(image_path) as img:
                     img = ImageOps.exif_transpose(img)
@@ -456,84 +460,127 @@ class FaceDetector:
                         new_size = (int(original_width * scale), int(original_height * scale))
                         img = img.resize(new_size, Image.Resampling.LANCZOS)
 
-                    # Detect faces
-                    boxes, probs = self.mtcnn.detect(img)
-
-                    if boxes is None or len(boxes) == 0:
-                        return image_path, []
-
-                    # Filter by confidence
-                    valid_indices = [
-                        i for i, prob in enumerate(probs)
-                        if prob is not None and prob >= self.min_confidence
-                    ]
-
-                    if not valid_indices:
-                        return image_path, []
-
-                    # Get face crops
-                    faces_tensor = self.mtcnn(img)
-                    if faces_tensor is None:
-                        return image_path, []
-
-                    if len(faces_tensor.shape) == 3:
-                        faces_tensor = faces_tensor.unsqueeze(0)
-
-                    processed_width, processed_height = img.size
-
-                    for i in valid_indices:
-                        if i >= len(faces_tensor):
-                            continue
-
-                        box = boxes[i]
-                        prob = probs[i]
-
-                        x1, y1, x2, y2 = box
-                        box_width = x2 - x1
-                        box_height = y2 - y1
-                        box_size = max(box_width, box_height)
-
-                        center_x = (x1 + x2) / 2
-                        center_y = (y1 + y2) / 2
-                        sq_x1 = center_x - box_size / 2
-                        sq_y1 = center_y - box_size / 2
-
-                        norm_x = max(0.0, min(1.0, sq_x1 / processed_width))
-                        norm_y = max(0.0, min(1.0, sq_y1 / processed_height))
-                        norm_w = max(0.0, min(1.0 - norm_x, box_size / processed_width))
-                        norm_h = max(0.0, min(1.0 - norm_y, box_size / processed_height))
-
-                        face_pixels = box_size / scale if scale != 1.0 else box_size
-                        if face_pixels < self.min_face_size:
-                            continue
-
-                        faces_data.append((
-                            faces_tensor[i],
-                            (norm_x, norm_y, norm_w, norm_h),
-                            float(prob),
-                        ))
-
+                    # Return a copy since we're inside a context manager
+                    return image_path, img.copy(), scale
             except Exception as e:
-                logger.error(f'Face detection failed for {image_path}: {e}')
-                return image_path, []
+                logger.error(f'Failed to load image {image_path}: {e}')
+                return image_path, None, None
 
-            return image_path, faces_data
-
-        # Run detection in parallel
+        # Load images in parallel
         with ThreadPoolExecutor(max_workers=num_workers) as executor:
-            futures = {executor.submit(process_single_image, p): p for p in image_paths}
+            futures = {executor.submit(load_single_image, p): p for p in image_paths}
             for future in as_completed(futures):
                 try:
-                    image_path, faces_data = future.result()
-                    for tensor, norm_box, confidence in faces_data:
-                        all_faces_data.append((image_path, tensor, norm_box, confidence))
+                    image_path, img, scale = future.result()
+                    if img is not None:
+                        loaded_images.append((image_path, img, scale))
                 except Exception as e:
-                    logger.error(f'Face detection worker failed: {e}')
+                    logger.error(f'Image loading worker failed: {e}')
 
-        if not all_faces_data:
+        if not loaded_images or should_stop():
             return results
 
-        # Phase 2: Batch compute embeddings for ALL faces across all images
+        # Phase 2: Group images by dimension for MTCNN batching
+        # MTCNN requires equal-dimension images for batch processing
+        dimension_groups = defaultdict(list)
+        for image_path, img, scale in loaded_images:
+            dim_key = img.size  # (width, height)
+            dimension_groups[dim_key].append((image_path, img, scale))
+
+        # Phase 3: Process each dimension group through MTCNN
+        all_faces_data = []  # (image_path, tensor, norm_box, confidence)
+
+        for dim_key, group in dimension_groups.items():
+            # Check for early termination between groups
+            if should_stop():
+                logger.debug('Face detection interrupted by stop event')
+                break
+
+            images_for_detection = [img for _, img, _ in group]
+
+            try:
+                if len(group) == 1:
+                    # Single image - no batching needed
+                    boxes_batch, probs_batch = self.mtcnn.detect(images_for_detection[0])
+                    faces_batch = self.mtcnn(images_for_detection[0])
+                    # Wrap in lists for consistent processing
+                    if boxes_batch is not None:
+                        boxes_batch = [boxes_batch]
+                        probs_batch = [probs_batch]
+                    if faces_batch is not None:
+                        faces_batch = [faces_batch]
+                else:
+                    # Batch detection for multiple same-dimension images
+                    boxes_batch, probs_batch = self.mtcnn.detect(images_for_detection)
+                    faces_batch = self.mtcnn(images_for_detection)
+            except Exception as e:
+                logger.error(f'MTCNN detection failed for dimension {dim_key}: {e}')
+                continue
+
+            # Process results for this group
+            for img_idx, (image_path, img, scale) in enumerate(group):
+                boxes = boxes_batch[img_idx] if boxes_batch is not None else None
+                probs = probs_batch[img_idx] if probs_batch is not None else None
+                faces_tensor = faces_batch[img_idx] if faces_batch is not None else None
+
+                if boxes is None or len(boxes) == 0:
+                    continue
+
+                # Filter by confidence
+                valid_indices = [
+                    i for i, prob in enumerate(probs)
+                    if prob is not None and prob >= self.min_confidence
+                ]
+
+                if not valid_indices:
+                    continue
+
+                if faces_tensor is None:
+                    continue
+
+                # Handle single face case (no batch dimension)
+                if len(faces_tensor.shape) == 3:
+                    faces_tensor = faces_tensor.unsqueeze(0)
+
+                processed_width, processed_height = img.size
+
+                for i in valid_indices:
+                    if i >= len(faces_tensor):
+                        continue
+
+                    box = boxes[i]
+                    prob = probs[i]
+
+                    x1, y1, x2, y2 = box
+                    box_width = x2 - x1
+                    box_height = y2 - y1
+                    box_size = max(box_width, box_height)
+
+                    center_x = (x1 + x2) / 2
+                    center_y = (y1 + y2) / 2
+                    sq_x1 = center_x - box_size / 2
+                    sq_y1 = center_y - box_size / 2
+
+                    norm_x = max(0.0, min(1.0, sq_x1 / processed_width))
+                    norm_y = max(0.0, min(1.0, sq_y1 / processed_height))
+                    norm_w = max(0.0, min(1.0 - norm_x, box_size / processed_width))
+                    norm_h = max(0.0, min(1.0 - norm_y, box_size / processed_height))
+
+                    face_pixels = box_size / scale if scale != 1.0 else box_size
+                    if face_pixels < self.min_face_size:
+                        continue
+
+                    all_faces_data.append((
+                        image_path,
+                        faces_tensor[i],
+                        (norm_x, norm_y, norm_w, norm_h),
+                        float(prob),
+                    ))
+
+        if not all_faces_data or should_stop():
+            return results
+
+        # Phase 4: Batch compute embeddings for ALL faces across all images
         all_tensors = torch.stack([fd[1] for fd in all_faces_data]).to(self.device)
 
         with torch.no_grad():
@@ -545,7 +592,7 @@ class FaceDetector:
         norms[norms == 0] = 1
         embeddings_batch = embeddings_batch / norms
 
-        # Phase 3: Build results dict
+        # Phase 5: Build results dict
         for idx, (image_path, _, norm_box, confidence) in enumerate(all_faces_data):
             norm_x, norm_y, norm_w, norm_h = norm_box
             results[image_path].append(DetectedFace(
@@ -1789,9 +1836,16 @@ def compute_unknown_face_groups(
 
     # Chunked similarity computation (similar to duplicates.py)
     chunk_size = 1000
-    for i in range(0, n_faces, chunk_size):
+    n_chunks = (n_faces + chunk_size - 1) // chunk_size
+    logger.info(f'Computing pairwise similarities in {n_chunks} chunks...')
+
+    for chunk_idx, i in enumerate(range(0, n_faces, chunk_size)):
         chunk_end = min(i + chunk_size, n_faces)
         chunk = embedding_matrix[i:chunk_end]
+
+        # Progress logging every few chunks
+        if chunk_idx % 5 == 0 or chunk_idx == n_chunks - 1:
+            logger.info(f'  Processing chunk {chunk_idx + 1}/{n_chunks}...')
 
         # Compute similarities: chunk @ all.T
         similarities = chunk @ embedding_matrix.T
@@ -1808,7 +1862,9 @@ def compute_unknown_face_groups(
                     uf.union_ids(face_id_i, face_id_j)
 
     # Extract groups and assign group IDs
+    logger.info('Extracting groups from UnionFind structure...')
     groups = uf.extract_groups_by_id()
+    logger.info(f'Found {len(groups)} distinct clusters, assigning group IDs...')
 
     # Clear all existing group IDs first
     conn.execute("UPDATE faces SET unknown_group_id = NULL WHERE person_id IS NULL")

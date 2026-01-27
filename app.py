@@ -92,7 +92,9 @@ CONFIG_PATH = os.environ.get('IMAGINARY_CONFIG', None)
 # =============================================================================
 
 db: ImageDatabase | None = None
-_skip_scan: bool = False  # Set via command-line args in __main__
+_run_scan = False  # Set via command-line args in __main__
+_run_face_detection = False  # Set via command-line args in __main__
+_run_face_grouping = False  # Set via command-line args in __main__
 
 
 def get_db() -> ImageDatabase:
@@ -105,7 +107,9 @@ def get_db() -> ImageDatabase:
             thumbnail_dir=THUMBNAIL_CACHE_DIR,
             config_path=CONFIG_PATH,
             auto_start=True,
-            skip_scan=_skip_scan,
+            run_scan=_run_scan,
+            run_face_detection=_run_face_detection,
+            run_face_grouping=_run_face_grouping,
         )
         register_signal_handlers(db)
         logger.info('ImageDatabase initialised')
@@ -1727,9 +1731,19 @@ if __name__ == '__main__':
 
     parser = argparse.ArgumentParser(description='Imaginary - Image Catalogue Server')
     parser.add_argument(
-        '-n', '--no-scan',
+        '-s', '--scan',
         action='store_true',
-        help='Skip the startup folder scan (faster startup when nothing changed)'
+        help='Scan folders and compute embeddings on startup'
+    )
+    parser.add_argument(
+        '-f', '--detect-faces',
+        action='store_true',
+        help='Run face detection after embeddings complete (requires --scan)'
+    )
+    parser.add_argument(
+        '-F', '--group-faces',
+        action='store_true',
+        help='Compute face/duplicate grouping after face detection (requires --detect-faces)'
     )
     parser.add_argument(
         '-p', '--port',
@@ -1751,8 +1765,7 @@ if __name__ == '__main__':
 
     # Handle thumbnail generation command
     if args.generate_thumbnails:
-        # Skip scanning, just open database
-        _skip_scan = True
+        # Don't scan, just open database
         get_db()
         run_generate_thumbnails_cli()
         sys.exit(0)
@@ -1760,7 +1773,6 @@ if __name__ == '__main__':
     # Handle duplicate rebuild command
     if args.rebuild_duplicates:
         import time
-        _skip_scan = True
         db = get_db()
         logger.info('Starting full duplicate group recomputation...')
         start_time = time.time()
@@ -1771,8 +1783,10 @@ if __name__ == '__main__':
             logger.info(f'  Level {level}: {count} groups')
         sys.exit(0)
 
-    # Set module-level flag before initializing database
-    _skip_scan = args.no_scan
+    # Set module-level flags before initializing database
+    _run_scan = args.scan
+    _run_face_detection = args.detect_faces
+    _run_face_grouping = args.group_faces
 
     # Initialise database before starting server
     get_db()
