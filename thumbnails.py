@@ -476,6 +476,32 @@ class ThumbnailCache:
             self._access_order.append(key)
             self._current_size += data_size
 
+    def remove(self, checksum: str) -> int:
+        """Remove all cached thumbnails for a checksum.
+
+        Called when an image is deleted or rotated (checksum changes).
+
+        Args:
+            checksum: Image checksum to remove.
+
+        Returns:
+            Number of entries removed.
+        """
+        if self._max_size == 0:
+            return 0
+
+        removed = 0
+        with self._lock:
+            # Remove all sizes for this checksum
+            keys_to_remove = [k for k in self._cache if k[0] == checksum]
+            for key in keys_to_remove:
+                data = self._cache.pop(key, None)
+                if data:
+                    self._current_size -= len(data)
+                    self._access_order.remove(key)
+                    removed += 1
+        return removed
+
     def stats(self) -> dict:
         """Get cache statistics.
 

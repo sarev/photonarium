@@ -340,9 +340,19 @@ def delete_image(image_id):
         Success response, or 404 if image not found.
     """
     delete_file = request.args.get('delete_file', 'false').lower() == 'true'
-    success = get_db().delete_image(image_id, from_disk=delete_file)
+
+    # Get checksum before deletion for cache invalidation
+    db = get_db()
+    checksum = db.get_checksum(image_id)
+
+    success = db.delete_image(image_id, from_disk=delete_file)
     if not success:
         return error_response('Image not found', 404)
+
+    # Invalidate thumbnail RAM cache
+    if checksum:
+        get_thumbnail_cache().remove(checksum)
+
     return success_response(message='Image deleted')
 
 
@@ -612,6 +622,14 @@ def rotate_images():
         return error_response('image_ids must be an array')
 
     results = get_db().rotate_images(image_ids, direction)
+
+    # Invalidate thumbnail RAM cache for old checksums
+    old_checksums = results.pop('old_checksums', [])
+    if old_checksums:
+        cache = get_thumbnail_cache()
+        for checksum in old_checksums:
+            cache.remove(checksum)
+
     return jsonify(results)
 
 

@@ -3977,26 +3977,29 @@ class ImageDatabase:
         try:
             results = {}
             rotated = []
+            old_checksums = []  # For thumbnail RAM cache invalidation
 
             # Use thread pool for parallel rotation
             max_workers = self.config.indexing_threads
 
-            def rotate_one(image_id: str) -> tuple[str, bool]:
-                success = self._rotate_single_image(image_id, direction)
-                return (image_id, success)
+            def rotate_one(image_id: str) -> tuple[str, bool, str | None]:
+                success, old_checksum = self._rotate_single_image(image_id, direction)
+                return (image_id, success, old_checksum)
 
             with ThreadPoolExecutor(max_workers=max_workers) as executor:
                 futures = [executor.submit(rotate_one, img_id) for img_id in image_ids]
                 for future in futures:
                     try:
-                        image_id, success = future.result()
+                        image_id, success, old_checksum = future.result()
                         results[image_id] = success
                         if success:
                             rotated.append(image_id)
+                            if old_checksum:
+                                old_checksums.append(old_checksum)
                     except Exception as e:
                         logger.error(f'rotate_images: Thread error: {e}')
 
-            return {'results': results, 'rotated': rotated}
+            return {'results': results, 'rotated': rotated, 'old_checksums': old_checksums}
 
         finally:
             # Signal that this rotation operation is complete
@@ -4020,7 +4023,7 @@ class ImageDatabase:
                 self._image_locks[image_id] = threading.Lock()
             return self._image_locks[image_id]
 
-    def _rotate_single_image(self, image_id: str, direction: str) -> bool:
+    def _rotate_single_image(self, image_id: str, direction: str) -> tuple[bool, str | None]:
         """Rotate a single image file and update its metadata.
 
         Performs lossless rotation for JPEG files when possible.
@@ -4034,7 +4037,8 @@ class ImageDatabase:
             direction: 'cw' for clockwise, 'ccw' for counter-clockwise.
 
         Returns:
-            True if rotation succeeded, False otherwise.
+            Tuple of (success, old_checksum). old_checksum is returned on success
+            so the caller can invalidate thumbnail RAM cache.
         """
         # Get per-image lock to prevent concurrent rotations of the same image
         image_lock = self._get_image_lock(image_id)
@@ -4044,19 +4048,19 @@ class ImageDatabase:
             image = get_image(self.conn, image_id)
             if image is None:
                 logger.warning(f'rotate_image: Image not found: {image_id}')
-                return False
+                return (False, None)
 
             path = Path(image['path'])
             if not path.exists():
                 logger.error(f'rotate_image: File not found: {path}')
-                return False
+                return (False, None)
 
             old_checksum = image.get('checksum')
 
             # Rotate the image file
             if not rotate_image_file(path, direction):
                 logger.error(f'rotate_image: Rotation failed for: {path}')
-                return False
+                return (False, None)
 
             # Delete old thumbnails (based on old checksum)
             if old_checksum:
@@ -4093,9 +4097,13 @@ class ImageDatabase:
                          datetime.now().isoformat(), image_id)
                     )
                     self.conn.commit()
+
+                # Update checksum cache with new checksum
+                with self._checksum_cache_lock:
+                    self._checksum_cache[image_id] = new_checksum
             except Exception as e:
                 logger.error(f'rotate_image: Failed to update database: {e}')
-                return False
+                return (False, None)
 
             # Rotate face bounding boxes and regenerate face thumbnails
             try:
@@ -4138,7 +4146,7 @@ class ImageDatabase:
                 # Non-fatal - image was still rotated successfully
 
             logger.info(f'Rotated image {direction}: {path.name}')
-            return True
+            return (True, old_checksum)
 
     def search_images(
         self,
