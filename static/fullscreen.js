@@ -190,6 +190,9 @@ const Fullscreen = {
     _applyTransform() {
         const { zoom, panX, panY } = this.state;
         this._els.image.style.transform = `translate(${panX}px, ${panY}px) scale(${zoom})`;
+
+        // Notify face overlay to update its transform
+        App.emit('fullscreenTransformChanged', zoom, panX, panY);
     },
 
     /**
@@ -448,6 +451,9 @@ const Fullscreen = {
      * @private
      */
     _handleDoubleClick(e) {
+        // Don't toggle zoom if clicking on face tagging elements
+        if (e.target.closest('.face-box, .face-label, .face-input, .face-delete-btn')) return;
+
         // If zoomed in, reset to fit
         if (this.state.zoom > 1.01) {
             this._resetTransform();
@@ -500,6 +506,10 @@ const Fullscreen = {
 
         // Only pan with left button when zoomed in
         if (e.button !== 0 || this.state.zoom <= 1) return;
+
+        // Don't start panning if clicking on face tagging elements
+        // (allow default behavior so inputs can receive focus, buttons can be clicked)
+        if (e.target.closest('.face-box, .face-label, .face-input, .face-delete-btn')) return;
 
         e.preventDefault();
         this.state.isPanning = true;

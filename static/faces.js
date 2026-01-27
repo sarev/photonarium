@@ -146,6 +146,9 @@
         // Listen for image changes in fullscreen
         App.on('fullscreenImageChanged', handleFullscreenImageChange);
 
+        // Listen for transform changes (zoom/pan) in fullscreen
+        App.on('fullscreenTransformChanged', handleFullscreenTransformChange);
+
         // Listen for database changes (e.g., after scan completes)
         App.on('databaseChanged', () => {
             needsRefresh = true;
@@ -755,6 +758,20 @@
         }
     }
 
+    /**
+     * Handle fullscreen transform change (zoom/pan).
+     * Updates face overlay to match image transform.
+     * @param {number} zoom - Zoom level
+     * @param {number} panX - Horizontal pan
+     * @param {number} panY - Vertical pan
+     */
+    function handleFullscreenTransformChange(zoom, panX, panY) {
+        if (!faceOverlay || !isTaggingModeActive()) return;
+
+        // Apply same transform as image
+        faceOverlay.style.transform = `translate(${panX}px, ${panY}px) scale(${zoom})`;
+    }
+
     // =========================================================================
     // FACE LOADING AND RENDERING
     // =========================================================================
@@ -791,7 +808,7 @@
      * @param {Array<Object>} faces - Array of face objects
      */
     function renderFaces(faces) {
-        if (!faceOverlay || !fullscreenImage) {
+        if (!faceOverlay || !fullscreenImage || !fullscreenContainer) {
             return;
         }
 
@@ -803,16 +820,45 @@
             return;
         }
 
-        // Get image dimensions and position
-        const imgRect = fullscreenImage.getBoundingClientRect();
+        // Calculate the base (untransformed) image dimensions and position
+        // This mirrors the logic in fullscreen.js _constrainPan()
         const containerRect = fullscreenContainer.getBoundingClientRect();
+        const imgNaturalWidth = fullscreenImage.naturalWidth || containerRect.width;
+        const imgNaturalHeight = fullscreenImage.naturalHeight || containerRect.height;
 
-        // Calculate image offset within container
-        const offsetX = imgRect.left - containerRect.left;
-        const offsetY = imgRect.top - containerRect.top;
+        const containerAspect = containerRect.width / containerRect.height;
+        const imgAspect = imgNaturalWidth / imgNaturalHeight;
 
+        let baseWidth, baseHeight;
+        if (imgAspect > containerAspect) {
+            // Image is wider - fits to width
+            baseWidth = containerRect.width;
+            baseHeight = containerRect.width / imgAspect;
+        } else {
+            // Image is taller - fits to height
+            baseHeight = containerRect.height;
+            baseWidth = containerRect.height * imgAspect;
+        }
+
+        // Position the overlay centered in the container (same as image)
+        const offsetX = (containerRect.width - baseWidth) / 2;
+        const offsetY = (containerRect.height - baseHeight) / 2;
+
+        // Size and position the overlay to match the untransformed image
+        faceOverlay.style.position = 'absolute';
+        faceOverlay.style.left = `${offsetX}px`;
+        faceOverlay.style.top = `${offsetY}px`;
+        faceOverlay.style.width = `${baseWidth}px`;
+        faceOverlay.style.height = `${baseHeight}px`;
+        faceOverlay.style.transformOrigin = 'center';
+
+        // Apply the current transform (get from Fullscreen state)
+        const { zoom = 1, panX = 0, panY = 0 } = (typeof Fullscreen !== 'undefined' && Fullscreen.state) || {};
+        faceOverlay.style.transform = `translate(${panX}px, ${panY}px) scale(${zoom})`;
+
+        // Render face boxes - positions relative to overlay (which matches image)
         for (const face of faces) {
-            const faceBox = createFaceBox(face, imgRect, offsetX, offsetY);
+            const faceBox = createFaceBox(face, baseWidth, baseHeight);
             faceOverlay.appendChild(faceBox);
         }
     }
@@ -820,12 +866,11 @@
     /**
      * Create a face bounding box element.
      * @param {Object} face - Face object from API
-     * @param {DOMRect} imgRect - Image bounding rectangle
-     * @param {number} offsetX - X offset of image in container
-     * @param {number} offsetY - Y offset of image in container
+     * @param {number} imgWidth - Base image display width
+     * @param {number} imgHeight - Base image display height
      * @returns {HTMLElement}
      */
-    function createFaceBox(face, imgRect, offsetX, offsetY) {
+    function createFaceBox(face, imgWidth, imgHeight) {
         const box = document.createElement('div');
         box.className = 'face-box';
         box.dataset.faceId = face.id;
@@ -838,10 +883,11 @@
         }
 
         // Calculate pixel positions from normalized coordinates
-        const left = offsetX + (face.box_x * imgRect.width);
-        const top = offsetY + (face.box_y * imgRect.height);
-        const width = face.box_w * imgRect.width;
-        const height = face.box_h * imgRect.height;
+        // Positions are relative to the overlay (which matches the image)
+        const left = face.box_x * imgWidth;
+        const top = face.box_y * imgHeight;
+        const width = face.box_w * imgWidth;
+        const height = face.box_h * imgHeight;
 
         box.style.left = `${left}px`;
         box.style.top = `${top}px`;
@@ -860,7 +906,7 @@
         box.appendChild(deleteBtn);
 
         // Create label
-        const label = createFaceLabel(face, top, imgRect.height);
+        const label = createFaceLabel(face, top, imgHeight);
         box.appendChild(label);
 
         return box;
