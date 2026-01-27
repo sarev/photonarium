@@ -112,6 +112,12 @@
     /** @type {Array<Object>} Currently displayed faces (after filtering/sorting) */
     let displayedFaces = [];
 
+    /** @type {number|null} Reassessment polling timer */
+    let reassessmentPollTimer = null;
+
+    /** @type {boolean} Whether a reload is pending (skipped due to active selection) */
+    let reloadPending = false;
+
     // =========================================================================
     // INITIALIZATION
     // =========================================================================
@@ -342,8 +348,12 @@
      * @param {Array<string>} selectedIds - Selected face IDs
      */
     function handleFacesSelectionChanged(selectedIds) {
-        // Could update UI to show selection count, enable/disable buttons, etc.
-        // For now, just let the selection state be managed by GridSelection
+        // If selection is cleared and we have a pending reload, do it now
+        if (selectedIds.length === 0 && reloadPending) {
+            reloadPending = false;
+            peopleCacheTime = 0;
+            loadAllFaces();
+        }
     }
 
     /**
@@ -395,6 +405,13 @@
                 if (facesSelection) {
                     facesSelection.unbind();
                 }
+                // Stop reassessment polling
+                if (reassessmentPollTimer) {
+                    clearTimeout(reassessmentPollTimer);
+                    reassessmentPollTimer = null;
+                }
+                // Clear pending reload flag
+                reloadPending = false;
             },
             markNeedsRefresh() {
                 needsRefresh = true;
@@ -870,13 +887,58 @@
             });
 
             if (result && result.success) {
+                // Clear selection - identified faces will move to "known" section
+                if (facesSelection) {
+                    facesSelection.clear();
+                }
+
                 // Invalidate cache and reload
                 peopleCacheTime = 0;
                 loadAllFaces();
+
+                // Poll for reassessment completion and reload when done
+                if (result.data && result.data.reassessment_triggered) {
+                    pollReassessmentStatus();
+                }
             }
         } catch (error) {
             console.error('Failed to identify faces:', error);
             App.showError(`Failed to identify ${faceIds.length > 1 ? 'faces' : 'face'}.`);
+        }
+    }
+
+    /**
+     * Poll reassessment status and reload faces when complete.
+     * Auto-matched faces will appear after reassessment finishes.
+     */
+    async function pollReassessmentStatus() {
+        // Clear any existing poll
+        if (reassessmentPollTimer) {
+            clearTimeout(reassessmentPollTimer);
+            reassessmentPollTimer = null;
+        }
+
+        try {
+            const result = await App.api('/faces/reassess-status');
+            if (result && result.success && result.data) {
+                if (result.data.in_progress) {
+                    // Still running, poll again in 500ms
+                    reassessmentPollTimer = setTimeout(pollReassessmentStatus, 500);
+                } else if (result.data.last_result && result.data.last_result.matched_count > 0) {
+                    // Reassessment complete with matches - reload faces
+                    // But only if user doesn't have an active selection (don't interrupt their work)
+                    const hasSelection = facesSelection && facesSelection.getSelected().length > 0;
+                    if (!hasSelection) {
+                        peopleCacheTime = 0;
+                        loadAllFaces();
+                    } else {
+                        // User has selection - defer reload until they clear it
+                        reloadPending = true;
+                    }
+                }
+            }
+        } catch (error) {
+            console.error('Failed to poll reassessment status:', error);
         }
     }
 
