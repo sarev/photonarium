@@ -741,6 +741,14 @@ const App = {
     },
 
     /**
+     * Navigates to faces screen.
+     * Convenience method.
+     */
+    showFaces() {
+        this.navigateTo('faces');
+    },
+
+    /**
      * Exits fullscreen view and returns to gallery.
      * Ensures the viewed image remains visible in gallery.
      */
@@ -1366,6 +1374,10 @@ const App = {
                 case 'f':
                     e.preventDefault();
                     this.showSearch();
+                    break;
+                case 'p':
+                    e.preventDefault();
+                    this.showFaces();
                     break;
             }
         });

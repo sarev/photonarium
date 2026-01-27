@@ -179,7 +179,8 @@ Imaginary can automatically detect faces in your photos and help you tag people.
    - **Green** = Known face (already tagged)
    - **Orange** = Currently editing
 4. **Enter a name** — Click on an unknown face and type the person's name. As you type, matching names will appear for quick selection
-5. **Auto-recognition** — Once you've tagged someone a few times, Imaginary will automatically recognise them in other photos
+5. **Press Tab** — Cycle through unknown faces to quickly tag multiple people in an image
+6. **Auto-recognition** — Once you've tagged someone a few times, Imaginary will automatically recognise them in other photos
 
 ### The Faces Screen
 
@@ -257,6 +258,7 @@ Sometimes Imaginary detects something that isn't a face. In face tagging mode, c
 | Ctrl+M | Go to Database Management |
 | Ctrl+D | Go to Duplicates |
 | Ctrl+F | Go to Search/Filter |
+| Ctrl+P | Go to Faces (People) |
 
 ## Configuration
 
