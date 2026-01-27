@@ -533,6 +533,9 @@ const Gallery = {
      * @private
      */
     _onThumbnailSizeChanged() {
+        // Only refresh if gallery is active screen
+        if (App.getScreen() !== 'gallery') return;
+
         this._updateGridStyle();
         // Clear ThumbnailLoader and refresh grid
         ThumbnailLoader.clear();
@@ -546,6 +549,9 @@ const Gallery = {
      * @private
      */
     _onSortChanged() {
+        // Only handle if gallery is active screen
+        if (App.getScreen() !== 'gallery') return;
+
         const { by } = App.getSort();
         const filter = App.getFilter();
         const isSemanticFilter = filter && filter.type === 'semantic';

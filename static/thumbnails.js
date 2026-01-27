@@ -418,6 +418,7 @@ const VirtualGrid = {
             _scrollHandler: null,
             _resizeHandler: null,
             _trailingScrollTimeout: null,
+            _pendingRenderFrame: null,  // Track pending RAF for render retry
             _bound: false,
 
             /**
@@ -813,8 +814,13 @@ const VirtualGrid = {
 
                 // Calculate dimensions - may fail if container not yet laid out
                 if (!this._calculateDimensions()) {
-                    // Defer render until container has dimensions
-                    requestAnimationFrame(() => this.render());
+                    // Defer render until container has dimensions (but only once)
+                    if (!this._pendingRenderFrame) {
+                        this._pendingRenderFrame = requestAnimationFrame(() => {
+                            this._pendingRenderFrame = null;
+                            this.render();
+                        });
+                    }
                     return;
                 }
 
@@ -934,6 +940,10 @@ const VirtualGrid = {
                     clearTimeout(this._trailingScrollTimeout);
                     this._trailingScrollTimeout = null;
                 }
+                if (this._pendingRenderFrame) {
+                    cancelAnimationFrame(this._pendingRenderFrame);
+                    this._pendingRenderFrame = null;
+                }
                 this._bound = false;
             },
 
@@ -954,6 +964,10 @@ const VirtualGrid = {
                 if (this._trailingScrollTimeout) {
                     clearTimeout(this._trailingScrollTimeout);
                     this._trailingScrollTimeout = null;
+                }
+                if (this._pendingRenderFrame) {
+                    cancelAnimationFrame(this._pendingRenderFrame);
+                    this._pendingRenderFrame = null;
                 }
                 // Revoke all blob URLs before clearing
                 for (const [, {blobUrl}] of this._state.renderedItems) {
