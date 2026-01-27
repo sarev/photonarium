@@ -429,8 +429,10 @@
         // Create header
         const header = document.createElement('div');
         header.className = 'faces-pick-preferred-header';
+        const faceCount = pickPreferredFaces.length;
+        const countText = faceCount === 1 ? '1 image' : `${faceCount} images`;
         header.innerHTML = `
-            <h3>${App.escapeHtml(pickPreferredPersonName)}</h3>
+            <h3>${App.escapeHtml(pickPreferredPersonName)} <span class="face-count">(${countText})</span></h3>
             <span class="hint">Click a star to set as preferred face. Press Delete to unassign faces.</span>
         `;
         facesGrid.appendChild(header);

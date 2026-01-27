@@ -2545,6 +2545,9 @@ class FaceDetectionThread(threading.Thread):
 
         # Process results for each image
         for path, detected_faces in results.items():
+            if path not in path_to_id:
+                logger.error(f'Path {path} not found in path_to_id mapping - skipping')
+                continue
             image_id = path_to_id[path]
 
             if not detected_faces:

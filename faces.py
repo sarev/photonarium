@@ -34,7 +34,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from pathlib import Path
 from PIL import Image, ImageOps, ImageFilter
-from typing import Any
+from typing import Any, TYPE_CHECKING
 
 import logging
 import numpy as np
@@ -44,6 +44,9 @@ import time
 import uuid
 
 from duplicates import UnionFind
+
+if TYPE_CHECKING:
+    from imagedb import ImageDatabase
 
 # Configure module logger
 logger = logging.getLogger(__name__)
@@ -224,7 +227,7 @@ class FaceDetector:
                         device=self.device,
                         min_face_size=self.min_face_size,
                         thresholds=[0.6, 0.7, 0.7],  # Default MTCNN thresholds
-                        post_process=False,  # Return raw tensors
+                        post_process=True,  # Apply standardization for ResNet input
                     )
                     logger.info('MTCNN loaded')
         return self._mtcnn
@@ -292,18 +295,21 @@ class FaceDetector:
                 if boxes is None or len(boxes) == 0:
                     return []
 
-                # Filter by confidence
-                valid_indices = [
-                    i for i, prob in enumerate(probs)
-                    if prob is not None and prob >= self.min_confidence
+                # Filter by confidence FIRST, then extract only valid faces
+                # This ensures index correspondence between boxes and face tensors
+                valid_mask = [
+                    prob is not None and prob >= self.min_confidence
+                    for prob in probs
                 ]
+                valid_boxes = boxes[valid_mask]
+                valid_probs = probs[valid_mask]
 
-                if not valid_indices:
+                if len(valid_boxes) == 0:
                     return []
 
-                # Get aligned face crops for embedding
-                # MTCNN extract returns faces cropped and aligned, size 160x160
-                faces_tensor = self.mtcnn(img)
+                # Extract aligned face crops ONLY for valid boxes
+                # Using mtcnn.extract() with specific boxes guarantees correspondence
+                faces_tensor = self.mtcnn.extract(img, valid_boxes, save_path=None)
 
                 if faces_tensor is None:
                     return []
@@ -313,16 +319,20 @@ class FaceDetector:
                     # Single face - add batch dimension
                     faces_tensor = faces_tensor.unsqueeze(0)
 
+                # Sanity check: boxes and faces should now match
+                if len(valid_boxes) != len(faces_tensor):
+                    logger.error(
+                        f'INDEX MISMATCH after extract! boxes={len(valid_boxes)}, '
+                        f'faces_tensor={len(faces_tensor)} for {image_path.name}'
+                    )
+
                 processed_width, processed_height = img.size
 
-                # First pass: collect valid faces and their metadata
+                # Process each valid face - indices now guaranteed to match
                 valid_faces = []  # List of (tensor_idx, norm_box, confidence)
-                for i in valid_indices:
-                    if i >= len(faces_tensor):
-                        continue
-
-                    box = boxes[i]
-                    prob = probs[i]
+                for i in range(len(faces_tensor)):
+                    box = valid_boxes[i]
+                    prob = valid_probs[i]
 
                     # Convert box from pixels to normalized coordinates (0-1)
                     # MTCNN returns [x1, y1, x2, y2] format
@@ -371,6 +381,7 @@ class FaceDetector:
                 # Batch compute embeddings for all valid faces at once
                 tensor_indices = [vf[0] for vf in valid_faces]
                 batch_tensor = faces_tensor[tensor_indices].to(self.device)
+                # Note: MTCNN with post_process=True already standardizes to [-1, 1] for ResNet
 
                 with torch.no_grad():
                     embeddings_batch = self.resnet(batch_tensor)
@@ -502,17 +513,13 @@ class FaceDetector:
                 if len(group) == 1:
                     # Single image - no batching needed
                     boxes_batch, probs_batch = self.mtcnn.detect(images_for_detection[0])
-                    faces_batch = self.mtcnn(images_for_detection[0])
                     # Wrap in lists for consistent processing
                     if boxes_batch is not None:
                         boxes_batch = [boxes_batch]
                         probs_batch = [probs_batch]
-                    if faces_batch is not None:
-                        faces_batch = [faces_batch]
                 else:
                     # Batch detection for multiple same-dimension images
                     boxes_batch, probs_batch = self.mtcnn.detect(images_for_detection)
-                    faces_batch = self.mtcnn(images_for_detection)
             except Exception as e:
                 logger.error(f'MTCNN detection failed for dimension {dim_key}: {e}')
                 continue
@@ -521,19 +528,23 @@ class FaceDetector:
             for img_idx, (image_path, img, scale) in enumerate(group):
                 boxes = boxes_batch[img_idx] if boxes_batch is not None else None
                 probs = probs_batch[img_idx] if probs_batch is not None else None
-                faces_tensor = faces_batch[img_idx] if faces_batch is not None else None
 
                 if boxes is None or len(boxes) == 0:
                     continue
 
-                # Filter by confidence
-                valid_indices = [
-                    i for i, prob in enumerate(probs)
-                    if prob is not None and prob >= self.min_confidence
+                # Filter by confidence FIRST
+                valid_mask = [
+                    prob is not None and prob >= self.min_confidence
+                    for prob in probs
                 ]
+                valid_boxes = boxes[valid_mask]
+                valid_probs = probs[valid_mask]
 
-                if not valid_indices:
+                if len(valid_boxes) == 0:
                     continue
+
+                # Extract aligned faces ONLY for valid boxes - guarantees correspondence
+                faces_tensor = self.mtcnn.extract(img, valid_boxes, save_path=None)
 
                 if faces_tensor is None:
                     continue
@@ -542,14 +553,18 @@ class FaceDetector:
                 if len(faces_tensor.shape) == 3:
                     faces_tensor = faces_tensor.unsqueeze(0)
 
+                # Sanity check
+                if len(valid_boxes) != len(faces_tensor):
+                    logger.error(
+                        f'INDEX MISMATCH after extract! boxes={len(valid_boxes)}, '
+                        f'faces_tensor={len(faces_tensor)} for {image_path.name}'
+                    )
+
                 processed_width, processed_height = img.size
 
-                for i in valid_indices:
-                    if i >= len(faces_tensor):
-                        continue
-
-                    box = boxes[i]
-                    prob = probs[i]
+                for i in range(len(faces_tensor)):
+                    box = valid_boxes[i]
+                    prob = valid_probs[i]
 
                     x1, y1, x2, y2 = box
                     box_width = x2 - x1
@@ -582,6 +597,7 @@ class FaceDetector:
 
         # Phase 4: Batch compute embeddings for ALL faces across all images
         all_tensors = torch.stack([fd[1] for fd in all_faces_data]).to(self.device)
+        # Note: MTCNN with post_process=True already standardizes to [-1, 1] for ResNet
 
         with torch.no_grad():
             embeddings_batch = self.resnet(all_tensors)
@@ -1438,10 +1454,20 @@ def find_best_match(
     if not known_embeddings:
         return None
 
+    # Ensure input embedding is normalized
+    emb_norm = np.linalg.norm(embedding)
+    if not np.isclose(emb_norm, 1.0, atol=0.01):
+        embedding = embedding / emb_norm
+
     best_match = None
     best_similarity = threshold
 
     for face_id, person_id, known_embedding in known_embeddings:
+        # Ensure known embedding is normalized
+        known_norm = np.linalg.norm(known_embedding)
+        if not np.isclose(known_norm, 1.0, atol=0.01):
+            known_embedding = known_embedding / known_norm
+
         # Cosine similarity (embeddings are L2-normalized)
         similarity = float(np.dot(embedding, known_embedding))
 
@@ -1710,6 +1736,42 @@ def reassess_unknown_faces(
     Returns:
         List of (face_id, person_id, similarity) for matched faces.
     """
+    logger.info(f'Reassessing unknown faces with threshold={threshold:.3f}, person_id={person_id}')
+
+    # Diagnostic: check embedding health
+    def diagnose_embeddings(name, embeddings_list):
+        """Check if embeddings are valid and diverse."""
+        if not embeddings_list:
+            logger.warning(f'{name}: no embeddings')
+            return
+
+        # Get just the embedding arrays
+        if len(embeddings_list[0]) == 3:  # (face_id, person_id, embedding)
+            embs = [e[2] for e in embeddings_list]
+        else:  # (face_id, embedding)
+            embs = [e[1] for e in embeddings_list]
+
+        emb_matrix = np.vstack(embs)
+
+        # Check shape
+        logger.info(f'{name}: {len(embs)} embeddings, shape {emb_matrix.shape}')
+
+        # Check for zeros/constants
+        mean_vals = np.mean(emb_matrix, axis=0)
+        std_vals = np.std(emb_matrix, axis=0)
+        overall_std = np.std(emb_matrix)
+
+        logger.info(f'{name}: overall std={overall_std:.6f}, per-dim std range=[{std_vals.min():.6f}, {std_vals.max():.6f}]')
+
+        # Check pairwise similarity of first few
+        if len(embs) >= 2:
+            sample_size = min(5, len(embs))
+            sample = emb_matrix[:sample_size]
+            pairwise = sample @ sample.T
+            # Get off-diagonal similarities
+            off_diag = pairwise[np.triu_indices(sample_size, k=1)]
+            logger.info(f'{name}: sample pairwise similarities (should vary): {off_diag}')
+
     # Get embeddings (from cache if available)
     if person_id:
         # Only get embeddings for the specified person
@@ -1731,6 +1793,10 @@ def reassess_unknown_faces(
     if not known_embeddings or not unknown_embeddings:
         return []
 
+    # Diagnostic: check embedding health
+    diagnose_embeddings('Known', known_embeddings)
+    diagnose_embeddings('Unknown (sample)', unknown_embeddings[:100])  # Sample to avoid log spam
+
     # Build matrices for vectorized comparison
     # known_matrix: (num_known, 512)
     # unknown_matrix: (num_unknown, 512)
@@ -1739,6 +1805,18 @@ def reassess_unknown_faces(
 
     unknown_ids = [fid for fid, _ in unknown_embeddings]
     unknown_matrix = np.vstack([emb for _, emb in unknown_embeddings])
+
+    # Verify embeddings are L2-normalized (norms should be ~1.0)
+    known_norms = np.linalg.norm(known_matrix, axis=1)
+    unknown_norms = np.linalg.norm(unknown_matrix, axis=1)
+    if not np.allclose(known_norms, 1.0, atol=0.01):
+        logger.warning(f'Known embeddings not normalized! norms: min={known_norms.min():.3f}, max={known_norms.max():.3f}')
+        # Re-normalize
+        known_matrix = known_matrix / known_norms[:, np.newaxis]
+    if not np.allclose(unknown_norms, 1.0, atol=0.01):
+        logger.warning(f'Unknown embeddings not normalized! norms: min={unknown_norms.min():.3f}, max={unknown_norms.max():.3f}')
+        # Re-normalize
+        unknown_matrix = unknown_matrix / unknown_norms[:, np.newaxis]
 
     # Compute all similarities at once: (num_unknown, num_known)
     # Embeddings are L2-normalized, so dot product = cosine similarity
@@ -1753,6 +1831,16 @@ def reassess_unknown_faces(
         if best_similarity >= threshold:
             _, matched_person_id = known_ids[best_idx]
             matched.append((unknown_face_id, matched_person_id, float(best_similarity)))
+
+    # Log summary with similarity distribution
+    if matched:
+        sims = [m[2] for m in matched]
+        logger.info(
+            f'Reassessment found {len(matched)} matches out of {len(unknown_ids)} unknown faces '
+            f'(min={min(sims):.3f}, max={max(sims):.3f}, threshold={threshold:.3f})'
+        )
+    else:
+        logger.info(f'Reassessment found 0 matches out of {len(unknown_ids)} unknown faces')
 
     # Apply matches
     for face_id, matched_person_id, similarity in matched:
@@ -1869,7 +1957,8 @@ def compute_unknown_face_groups(
     # Clear all existing group IDs first
     conn.execute("UPDATE faces SET unknown_group_id = NULL WHERE person_id IS NULL")
 
-    # Assign new group IDs
+    # Assign new group IDs (batch to avoid SQLite variable limit of ~999)
+    BATCH_SIZE = 500  # Leave room for the group_id parameter
     n_groups = 0
     for root_id, members in groups.items():
         if len(members) > 1:
@@ -1877,12 +1966,14 @@ def compute_unknown_face_groups(
             group_id = str(uuid.uuid4())[:8]
             n_groups += 1
 
-            # Update all faces in this group
-            placeholders = ','.join('?' * len(members))
-            conn.execute(
-                f"UPDATE faces SET unknown_group_id = ? WHERE id IN ({placeholders})",
-                [group_id] + members
-            )
+            # Update faces in batches to avoid "too many SQL variables" error
+            for i in range(0, len(members), BATCH_SIZE):
+                batch = members[i:i + BATCH_SIZE]
+                placeholders = ','.join('?' * len(batch))
+                conn.execute(
+                    f"UPDATE faces SET unknown_group_id = ? WHERE id IN ({placeholders})",
+                    [group_id] + batch
+                )
 
     conn.commit()
     logger.info(f'Created {n_groups} unknown face groups')
@@ -1890,14 +1981,17 @@ def compute_unknown_face_groups(
 
 
 def compute_unknown_face_groups_async(
-    db_path: str,
+    db: 'ImageDatabase',
     threshold: float = 0.65,
     callback: callable = None,
 ) -> None:
     """Compute unknown face groups in a background thread.
 
+    Uses the shared database connection and lock from ImageDatabase to avoid
+    "database is locked" errors when other threads are accessing the database.
+
     Args:
-        db_path: Path to the SQLite database file.
+        db: ImageDatabase instance (provides conn and _db_lock).
         threshold: Minimum cosine similarity for grouping.
         callback: Optional callback(n_groups) when done.
     """
@@ -1909,12 +2003,9 @@ def compute_unknown_face_groups_async(
             with _grouping_lock:
                 _grouping_status = {'status': 'computing', 'progress': 0}
 
-            # Open a new connection for this thread
-            conn = sqlite3.connect(db_path)
-            conn.row_factory = sqlite3.Row
-
-            n_groups = compute_unknown_face_groups(conn, threshold)
-            conn.close()
+            # Use shared connection with lock from ImageDatabase
+            with db._db_lock:
+                n_groups = compute_unknown_face_groups(db.conn, threshold)
 
             # Store result
             with _grouping_lock:
@@ -2035,15 +2126,18 @@ def get_reassessment_status() -> dict:
 
 
 def reassess_unknown_faces_async(
-    db_path: str,
+    db: 'ImageDatabase',
     threshold: float = 0.65,
     person_id: str | None = None,
     callback: callable = None,
 ) -> None:
     """Re-assess unknown faces in a background thread.
 
+    Uses the shared database connection and lock from ImageDatabase to avoid
+    "database is locked" errors when other threads are accessing the database.
+
     Args:
-        db_path: Path to the SQLite database file.
+        db: ImageDatabase instance (provides conn and _db_lock).
         threshold: Minimum cosine similarity for auto-match.
         person_id: If specified, only compare against this person's faces.
         callback: Optional callback(matched_count) when done.
@@ -2053,13 +2147,9 @@ def reassess_unknown_faces_async(
     def _worker():
         global _reassess_thread, _reassess_result
         try:
-            # Open a new connection for this thread
-            conn = sqlite3.connect(db_path)
-            conn.row_factory = sqlite3.Row
-
-            matched = reassess_unknown_faces(conn, threshold, person_id)
-            conn.commit()
-            conn.close()
+            # Use shared connection with lock from ImageDatabase
+            with db._db_lock:
+                matched = reassess_unknown_faces(db.conn, threshold, person_id)
 
             # Store result
             with _reassess_lock:

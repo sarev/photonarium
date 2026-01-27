@@ -1611,6 +1611,11 @@ a:hover {
     color: var(--color-text-primary);
 }
 
+.faces-pick-preferred-header h3 .face-count {
+    font-weight: 400;
+    color: var(--color-text-muted);
+}
+
 .faces-pick-preferred-header .hint {
     font-size: 0.85rem;
     color: var(--color-text-muted);

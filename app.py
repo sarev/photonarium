@@ -1437,7 +1437,7 @@ def identify_faces_batch():
     # Trigger async re-assessment of unknown faces
     # This will match other unknown faces against the newly identified person
     reassess_unknown_faces_async(
-        DATABASE_PATH,
+        db,
         threshold=db.config.face_recognition_threshold,
         person_id=result['person']['id'],
     )
