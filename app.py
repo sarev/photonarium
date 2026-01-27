@@ -1555,7 +1555,6 @@ if __name__ == '__main__':
     # Handle face detection command
     if args.detect_faces:
         import time
-        from faces import has_faces_detected
         _skip_scan = True
         db = get_db()
 
@@ -1566,29 +1565,16 @@ if __name__ == '__main__':
         logger.info('Starting face detection for unprocessed images...')
         start_time = time.time()
 
-        # Get all images that haven't been processed for faces
-        with db._db_lock:
-            cursor = db.conn.execute('SELECT id, path FROM images')
-            all_images = cursor.fetchall()
+        # Wait briefly for the automatic queueing to happen
+        # (EmbeddingThread's on_complete callback queues images for face detection)
+        time.sleep(0.5)
 
-        unprocessed = []
-        for image_id, path in all_images:
-            with db._db_lock:
-                if not has_faces_detected(db.conn, image_id):
-                    unprocessed.append(image_id)
-
-        total = len(unprocessed)
-        logger.info(f'Found {total} images without face detection')
-
-        if total == 0:
+        queue_size = db._face_queue.qsize()
+        if queue_size == 0:
             logger.info('No images need face detection.')
             sys.exit(0)
 
-        # Queue all unprocessed images
-        for image_id in unprocessed:
-            db.queue_image_for_face_detection(image_id)
-
-        # Wait for face detection to complete
+        logger.info(f'Found {queue_size} images without face detection')
         logger.info('Processing faces (this may take a while)...')
         while True:
             queue_size = db._face_queue.qsize()
