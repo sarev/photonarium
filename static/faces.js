@@ -336,7 +336,7 @@
             selectedClass: 'selected',
             onSelectionChanged: handleFacesSelectionChanged,
             onItemActivated: handleFaceActivated,
-            onDeleteRequested: null, // Could add face suppression here
+            onDeleteRequested: handleFacesDeleteRequested
             enableKeyboard: true,
             enableDragBox: true,
             enableLongPress: true
@@ -374,6 +374,44 @@
         if (face && face.image_id) {
             App.showFullscreen(face.image_id);
             setTaggingMode(true);
+        }
+    }
+
+    /**
+     * Handle delete request for selected faces.
+     * Suppresses faces (marks as false positives) rather than deleting images.
+     * @param {Array<string>} faceIds - Selected face IDs
+     */
+    async function handleFacesDeleteRequested(faceIds) {
+        if (!faceIds || faceIds.length === 0) return;
+
+        const count = faceIds.length;
+        const message = count === 1
+            ? 'Mark this face as a false positive? It will be hidden but the image will not be deleted.'
+            : `Mark ${count} faces as false positives? They will be hidden but the images will not be deleted.`;
+
+        const confirmed = await App.confirm('Suppress Faces', message);
+        if (!confirmed) return;
+
+        let successCount = 0;
+        for (const faceId of faceIds) {
+            try {
+                const result = await App.api(`/faces/${faceId}/suppress`, { method: 'POST' });
+                if (result && result.success) {
+                    successCount++;
+                }
+            } catch (error) {
+                console.error(`Failed to suppress face ${faceId}:`, error);
+            }
+        }
+
+        if (successCount > 0) {
+            // Clear selection and reload
+            if (facesSelection) {
+                facesSelection.clear();
+            }
+            peopleCacheTime = 0;
+            loadAllFaces();
         }
     }
 
