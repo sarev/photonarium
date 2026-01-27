@@ -76,17 +76,27 @@
                         <span class="material-symbols-outlined">add</span>
                     </button>
                     <div class="toolbar-separator"></div>
-                    <div class="dup-sort-controls">
-                        <button id="btn-dup-sort-size" class="toolbar-btn active" title="Sort by group size">
-                            <span class="material-symbols-outlined">sort</span>
-                        </button>
-                        <button id="btn-dup-sort-semantic" class="toolbar-btn" title="Sort by semantic similarity">
-                            <span class="material-symbols-outlined">image_search</span>
-                        </button>
-                        <button id="btn-dup-sort-people" class="toolbar-btn" title="Sort by people">
-                            <span class="material-symbols-outlined">group</span>
-                        </button>
-                        <input type="text" id="dup-semantic-query" class="semantic-query-input" placeholder="Sort by similarity to..." disabled>
+                    <div class="similarity-control">
+                        <label for="similarity-slider">Group:</label>
+                        <input type="range" id="similarity-slider" min="0" max="3" value="0" step="1">
+                        <span id="similarity-label">Identical</span>
+                    </div>
+                    <div class="toolbar-separator"></div>
+                    <div class="min-group-size-control">
+                        <label for="dup-min-group-size">Min size:</label>
+                        <select id="dup-min-group-size">
+                            <option value="2">2 (all)</option>
+                            <option value="3">3+</option>
+                            <option value="5">5+</option>
+                            <option value="8">8+</option>
+                            <option value="10">10+</option>
+                            <option value="15">15+</option>
+                            <option value="20">20+</option>
+                            <option value="30">30+</option>
+                            <option value="50">50+</option>
+                            <option value="75">75+</option>
+                            <option value="100">100+</option>
+                        </select>
                     </div>
                 </div>
 
@@ -144,11 +154,11 @@
                         <button id="btn-sort-rating" class="toolbar-btn" title="Sort by rating">
                             <span class="material-symbols-outlined">star</span>
                         </button>
-                        <button id="btn-sort-content" class="toolbar-btn" title="Sort by content similarity">
-                            <span class="material-symbols-outlined">image_search</span>
-                        </button>
                         <button id="btn-sort-people" class="toolbar-btn" title="Sort by people">
                             <span class="material-symbols-outlined">group</span>
+                        </button>
+                        <button id="btn-sort-content" class="toolbar-btn" title="Sort by content similarity">
+                            <span class="material-symbols-outlined">image_search</span>
                         </button>
                         <button id="btn-sort-direction" class="toolbar-btn" title="Toggle sort direction">
                             <span class="material-symbols-outlined">arrow_downward</span>
@@ -175,27 +185,17 @@
 
                 <!-- Duplicates right controls (visible when data-screen="duplicates") -->
                 <div class="toolbar-group" data-for-screen="duplicates">
-                    <div class="similarity-control">
-                        <label for="similarity-slider">Group:</label>
-                        <input type="range" id="similarity-slider" min="0" max="3" value="0" step="1">
-                        <span id="similarity-label">Identical</span>
-                    </div>
-                    <div class="toolbar-separator"></div>
-                    <div class="min-group-size-control">
-                        <label for="dup-min-group-size">Min size:</label>
-                        <select id="dup-min-group-size">
-                            <option value="2">2 (all)</option>
-                            <option value="3">3+</option>
-                            <option value="5">5+</option>
-                            <option value="8">8+</option>
-                            <option value="10">10+</option>
-                            <option value="15">15+</option>
-                            <option value="20">20+</option>
-                            <option value="30">30+</option>
-                            <option value="50">50+</option>
-                            <option value="75">75+</option>
-                            <option value="100">100+</option>
-                        </select>
+                    <div class="dup-sort-controls">
+                        <button id="btn-dup-sort-size" class="toolbar-btn active" title="Sort by group size">
+                            <span class="material-symbols-outlined">sort</span>
+                        </button>
+                        <button id="btn-dup-sort-people" class="toolbar-btn" title="Sort by people">
+                            <span class="material-symbols-outlined">group</span>
+                        </button>
+                        <button id="btn-dup-sort-semantic" class="toolbar-btn" title="Sort by semantic similarity">
+                            <span class="material-symbols-outlined">image_search</span>
+                        </button>
+                        <input type="text" id="dup-semantic-query" class="semantic-query-input" placeholder="Sort by similarity to..." disabled>
                     </div>
                 </div>
 
