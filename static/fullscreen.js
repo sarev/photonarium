@@ -269,6 +269,9 @@ const Fullscreen = {
 
         // Preload adjacent images
         this._preloadAdjacent();
+
+        // Emit event for face tagging
+        App.emit('fullscreenImageChanged', imageId);
     },
 
     /**

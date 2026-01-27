@@ -54,6 +54,10 @@
                     <button id="btn-rotate-cw" class="toolbar-btn" title="Rotate right" disabled>
                         <span class="material-symbols-outlined">rotate_right</span>
                     </button>
+                    <div class="toolbar-separator face-tagging-separator"></div>
+                    <button id="btn-face-tagging" class="toolbar-btn" title="Toggle face tagging mode">
+                        <span class="material-symbols-outlined">face</span>
+                    </button>
                     <div class="toolbar-separator dup-group-nav-separator" hidden></div>
                     <button id="btn-prev-group" class="toolbar-btn" title="Previous duplicate group (Alt+Left)" hidden disabled>
                         <span class="material-symbols-outlined">chevron_left</span>
@@ -107,6 +111,9 @@
                 </button>
                 <button id="btn-duplicates" class="toolbar-btn" title="Find duplicates">
                     <span class="material-symbols-outlined">filter_none</span>
+                </button>
+                <button id="btn-faces" class="toolbar-btn" title="Browse faces">
+                    <span class="material-symbols-outlined">face</span>
                 </button>
                 <button id="btn-filter" class="toolbar-btn" title="Search/Filter">
                     <span class="material-symbols-outlined">filter_alt</span>
@@ -213,6 +220,10 @@
         <div id="screen-fullscreen" class="screen">
             <div id="fullscreen-container">
                 <img id="fullscreen-image" src="" alt="">
+                <!-- Face overlay container for tagging mode -->
+                <div id="face-overlay" class="face-overlay" hidden>
+                    <!-- Face boxes are dynamically inserted here -->
+                </div>
             </div>
             <!-- Close button overlay (shown temporarily, reappears on interaction) -->
             <button id="fullscreen-close" class="fullscreen-overlay fullscreen-close" title="Close (Escape)">
@@ -393,5 +404,6 @@
     <script src="database.js"></script>
     <script src="search.js"></script>
     <script src="duplicates.js"></script>
+    <script src="faces.js"></script>
 </body>
 </html>

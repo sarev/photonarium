@@ -103,6 +103,11 @@
     --color-danger-light: rgba(168, 84, 84, 0.1);
     --color-divider-light: rgba(0, 0, 0, 0.15);
     --color-shadow-light: rgba(0, 0, 0, 0.2);
+
+    /* Face tagging colors (pastel tones) */
+    --color-face-known: #66bb6a;
+    --color-face-unknown: #ef5350;
+    --color-face-focused: #ffa726;
 }
 
 /* Dark theme (warm grey) */
@@ -183,6 +188,11 @@
     --color-danger-light: rgba(168, 84, 84, 0.15);
     --color-divider-light: rgba(255, 255, 255, 0.1);
     --color-shadow-light: rgba(0, 0, 0, 0.3);
+
+    /* Face tagging colors (pastel tones for dark theme) */
+    --color-face-known: #81c784;
+    --color-face-unknown: #e57373;
+    --color-face-focused: #ffb74d;
 }
 
 /* Base reset */
@@ -1097,6 +1107,194 @@ a:hover {
 
 #fullscreen-next {
     right: 1rem;
+}
+
+
+/* ==========================================================================
+   FACE TAGGING OVERLAY
+
+   Bounding boxes and name labels for face tagging in fullscreen view.
+   ========================================================================== */
+
+/* Container that positions face boxes relative to the image */
+.face-overlay {
+    position: absolute;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 100%;
+    pointer-events: none;
+    z-index: 5;
+}
+
+/* Individual face bounding box */
+.face-box {
+    position: absolute;
+    border: 3px solid var(--color-face-unknown);
+    border-radius: 4px;
+    box-sizing: border-box;
+    pointer-events: auto;
+}
+
+/* Known face (identified) */
+.face-box.known {
+    border-color: var(--color-face-known);
+}
+
+/* Unknown face (unidentified) */
+.face-box.unknown {
+    border-color: var(--color-face-unknown);
+}
+
+/* Focused face (input field has focus) */
+.face-box.focused {
+    border-color: var(--color-face-focused);
+    border-width: 4px;
+}
+
+/* Face label container (positioned below or above the box) */
+.face-label {
+    position: absolute;
+    left: -3px;
+    right: -3px;
+    padding: 4px 6px;
+    background: var(--color-overlay-button-bg);
+    backdrop-filter: blur(4px);
+    border-radius: 4px;
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    font-size: 0.85rem;
+    white-space: nowrap;
+    pointer-events: auto;
+}
+
+/* Label below the face box (default) */
+.face-label.below {
+    top: calc(100% + 4px);
+}
+
+/* Label above the face box (when near bottom) */
+.face-label.above {
+    bottom: calc(100% + 4px);
+}
+
+/* Name display for known faces */
+.face-name {
+    color: var(--color-overlay-text);
+    flex: 1;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    cursor: pointer;
+}
+
+.face-name:hover {
+    text-decoration: underline;
+}
+
+/* Name input field for editing */
+.face-input {
+    flex: 1;
+    min-width: 80px;
+    padding: 2px 6px;
+    border: 1px solid var(--color-border);
+    border-radius: 3px;
+    background: var(--color-bg-primary);
+    color: var(--color-text-primary);
+    font-size: inherit;
+    font-family: inherit;
+}
+
+.face-input:focus {
+    outline: none;
+    border-color: var(--color-face-focused);
+    box-shadow: 0 0 0 2px color-mix(in srgb, var(--color-face-focused) 30%, transparent);
+}
+
+/* Delete (suppress) button */
+.face-delete-btn {
+    position: absolute;
+    top: -10px;
+    right: -10px;
+    width: 20px;
+    height: 20px;
+    border: none;
+    border-radius: 50%;
+    background: var(--color-danger);
+    color: white;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    opacity: 0;
+    transition: opacity 0.2s;
+    z-index: 1;
+}
+
+.face-box:hover .face-delete-btn,
+.face-delete-btn:focus {
+    opacity: 1;
+}
+
+.face-delete-btn .material-symbols-outlined {
+    font-size: 14px;
+}
+
+/* Autocomplete dropdown */
+.face-autocomplete {
+    position: absolute;
+    top: 100%;
+    left: 0;
+    right: 0;
+    max-height: 200px;
+    overflow-y: auto;
+    background: var(--color-bg-elevated);
+    border: 1px solid var(--color-border);
+    border-radius: 4px;
+    box-shadow: var(--shadow-lg);
+    z-index: 100;
+    margin-top: 2px;
+}
+
+.face-autocomplete-item {
+    padding: 8px 12px;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+
+.face-autocomplete-item:hover,
+.face-autocomplete-item.selected {
+    background: var(--color-bg-hover);
+}
+
+.face-autocomplete-item img {
+    width: 32px;
+    height: 32px;
+    border-radius: 50%;
+    object-fit: cover;
+}
+
+.face-autocomplete-item .name {
+    flex: 1;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.face-autocomplete-more {
+    padding: 8px 12px;
+    color: var(--color-text-secondary);
+    font-style: italic;
+    text-align: center;
+}
+
+/* Face tagging mode toggle button active state */
+#btn-face-tagging.active {
+    background: var(--color-face-focused);
+    color: white;
 }
 
 

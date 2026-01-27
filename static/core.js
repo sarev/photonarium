@@ -157,6 +157,14 @@ const App = {
     },
 
     /**
+     * Gets the current image ID being viewed in fullscreen.
+     * @returns {string|null} The current image ID or null if not in fullscreen
+     */
+    getCurrentImageId() {
+        return this.state.currentImageId;
+    },
+
+    /**
      * Gets the current theme.
      * @returns {string} The current theme ('light' or 'dark')
      */
