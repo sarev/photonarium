@@ -8,16 +8,16 @@ A local image catalogue for people who want to organise their photo collection w
 
 Your photos are personal. They live on your hard drive, and that's where they should stay. Imaginary helps you browse, search, and manage your image collection entirely on your own computer—no subscriptions, no cloud uploads, no privacy concerns.
 
-Imaginary is designed to run fast even with huge photo libraries. It uses a locally-running, AI-powered semantic search, so you can find photos by describing what's in them ("sunset over mountains", "birthday cake", "dog playing in snow") rather than relying on filenames or folders.
+Imaginary is designed to run fast even with huge photo libraries. It uses locally-running AI models for semantic search and face recognition, so you can find photos by describing what's in them ("sunset over mountains", "birthday cake") or by who's in them ("photos of Alice and Bob together")—all without sending your images anywhere.
 
 ## Features
 
 - **Smart Search** — Find images by describing their content, not just filenames
-- **Face Recognition** — Automatically detect faces and tag people in your photos
-- **Duplicate Detection** — Find identical, near-identical, similar, and related images across your collection
+- **Face Recognition** — Automatically detect and recognise people in your photos
+- **Duplicate Detection** — Find identical, near-identical, similar, and related images
 - **Fast Browsing** — Virtual scrolling handles collections of any size smoothly
 - **Image Information** — View metadata, dimensions, histograms, and add your own descriptions and ratings
-- **Fullscreen Viewer** — Zoom, pan, and navigate through your photos
+- **Fullscreen Viewer** — Zoom, pan, navigate, and tag faces in your photos
 - **Light & Dark Themes** — Easy on the eyes, day or night
 - **Fully Offline** — Everything runs locally (AI models download once on first use)
 
@@ -71,7 +71,7 @@ python app.py
 
 Then open your browser to **http://localhost:5000**
 
-On first run, the AI model will download automatically (this only happens once).
+On first run, the AI models will download automatically (this only happens once).
 
 ### Command Line Options
 
@@ -83,9 +83,9 @@ python app.py --generate-thumbnails    # Pre-generate thumbnails for all images
 ## Getting Started
 
 1. **Add folders** — Click the Database button and add folders containing your images
-2. **Wait for scanning** — Imaginary will index your images and generate AI embeddings
+2. **Wait for scanning** — Imaginary will index your images, generate AI embeddings, and detect faces
 3. **Browse** — Return to the Gallery to see your collection
-4. **Search** — Click the Filter button to search by text, date, or rating
+4. **Search** — Click the Filter button to search by text, date, rating, or people
 
 ## Using the Gallery
 
@@ -96,7 +96,7 @@ The Gallery is where you'll spend most of your time. It shows your image collect
 The toolbar across the top gives you quick access to common actions:
 
 **Left side (image actions):**
-- **Thumbnail size** — Make thumbnails smaller or larger to see more images or more detail
+- **Thumbnail size** — Make thumbnails smaller or larger
 - **Fullscreen** — Open the selected image in fullscreen view (or double-click a thumbnail)
 - **Open folder** — Reveal the selected image in your file manager
 - **Rotate** — Rotate images left or right (changes are saved to disk)
@@ -114,18 +114,9 @@ The toolbar across the top gives you quick access to common actions:
 - **Select all / Clear** — Bulk selection controls
 - **Theme** — Switch between light and dark modes
 
-### Sorting by Visual Similarity
+### Sorting Options
 
-A particularly useful feature: select any image, then click the "Sort by content" button. The entire gallery will reorder to show the most visually similar images first. This is great for finding related photos, or discovering images you'd forgotten about.
-
-### Viewing Images
-
-Double-click any thumbnail (or press Enter) to open it in fullscreen view. In fullscreen you can:
-- Navigate between images with arrow keys or swipe gestures
-- Zoom with scroll wheel or pinch, pan by dragging
-- Double-click to toggle between fit-to-screen and actual size
-
-Press Escape or click the X button to return to the Gallery. Your selection and scroll position are preserved.
+Select any image, then click "Sort by content" to reorder the gallery by visual similarity—great for finding related photos. "Sort by people" groups images by who appears in them.
 
 ### Image Information Panel
 
@@ -137,23 +128,47 @@ When you select an image, the panel on the right shows:
 
 Add descriptions to help with searching later—the AI search understands natural language, so detailed descriptions make images easier to find.
 
-See the [Controls](#controls) section for full details on mouse, touch, and keyboard navigation.
+## Fullscreen Viewer
+
+Double-click any thumbnail (or press Enter) to open it in fullscreen view:
+
+- **Navigate** — Arrow keys, swipe gestures, or click the on-screen arrows
+- **Zoom** — Scroll wheel or pinch; double-click toggles between fit-to-screen and actual size
+- **Pan** — Click and drag when zoomed in
+
+Press Escape or click the X button to return to the Gallery.
+
+### Tagging Faces
+
+When face tagging mode is enabled (via the toolbar button), detected faces appear as coloured boxes:
+
+- **Red** — Unknown face, not yet identified
+- **Green** — Known face, already tagged
+- **Orange** — Currently editing
+
+Click any face to enter a name. As you type, matching names appear for quick selection. Press **Tab** to cycle through unknown faces and tag multiple people quickly.
+
+Once you've tagged someone in a few photos, Imaginary learns to recognise them automatically in other images.
+
+To remove a false detection (something that isn't actually a face), click the **X** button on its bounding box.
 
 ## Using the Filter Screen
 
-The Filter screen lets you narrow down which images appear in the Gallery. You can combine multiple criteria:
+The Filter screen lets you narrow down which images appear in the Gallery. Combine multiple criteria:
 
-**Text Search** — Enter a description of what you're looking for. This uses AI semantic search, so "people at a beach" will find beach photos even if you never described them that way. Results are ranked by relevance. When a text search is active, a similarity slider appears in the Gallery toolbar letting you adjust how strict the matching is—lower values return more results.
+**Text Search** — Enter a description of what you're looking for. This uses AI semantic search, so "people at a beach" will find beach photos even if you never described them that way. When a text search is active, a similarity slider appears in the Gallery toolbar letting you adjust how strict the matching is.
 
-**Date Range** — Set a start date, end date, or both to filter by when photos were taken. Setting both dates to the same day shows only photos from that specific date.
+**People** — Click the add button to select one or more people from those you've tagged. The gallery will show images containing all the selected people.
 
-**Rating Filter** — Enter emoji to find images you've rated. You can type emoji directly or use the picker. If you enter multiple emoji, images matching any of them will be shown.
+**Date Range** — Set a start date, end date, or both to filter by when photos were taken.
 
-Click **Apply Filter** to return to the Gallery with your filter active. The filter button in the toolbar will highlight to show a filter is active. Click it again to clear the filter.
+**Rating Filter** — Enter emoji to find images you've rated. If you enter multiple emoji, images matching any of them will be shown.
+
+Click **Apply Filter** to return to the Gallery with your filter active. The filter button highlights when a filter is active; click it again to clear.
 
 ## Using the Duplicates Screen
 
-The Duplicates screen helps you find and manage duplicate or similar images in your collection.
+The Duplicates screen helps you find and manage duplicate or similar images.
 
 **Similarity Levels** — Use the slider to control how strict the matching is:
 - **Identical** (rightmost) — Exact file matches with the same checksum
@@ -161,53 +176,23 @@ The Duplicates screen helps you find and manage duplicate or similar images in y
 - **Similar** — Photos from the same sequence or with similar composition
 - **Related** (leftmost) — Thematically related images
 
-**Stacks** — Each stack represents a group of similar images. The count shows how many images are in the group. The image shown on top is automatically chosen as the "best" one based on resolution, focus quality, and whether it's losslessly compressed.
+**Stacks** — Each stack represents a group of similar images. The image shown on top is automatically chosen as the "best" one based on resolution, focus quality, and whether it's losslessly compressed.
 
-**Opening a Stack** — Double-click (or press Enter) to open a stack. This takes you to the Gallery filtered to show only that group, with the best image pre-selected. Use the toolbar buttons or Alt+Left/Right to move between groups without returning to the Duplicates screen.
+**Opening a Stack** — Double-click to open a stack in the Gallery, filtered to show only that group. Use Alt+Left/Right to move between groups.
 
-**Sorting Stacks** — By default, stacks are sorted by size (largest groups first). Click the semantic sort button to sort by a text query instead—enter a description and stacks will be ordered by how well their best image matches your query. This is useful for finding specific duplicates in a large list.
+**Sorting Stacks** — By default, stacks are sorted by size (largest groups first). Use semantic sort to order by a text query—useful for finding specific duplicates like "blurry" or "dark".
 
-**Minimum Group Size** — Use the dropdown to hide smaller groups and focus on stacks with more duplicates.
+## Using the Faces Screen
 
-## Using Face Recognition
-
-Imaginary can automatically detect faces in your photos and help you tag people. Once you've identified a few faces, the system learns to recognise those people in other photos.
-
-### Tagging Faces
-
-1. **Enable face tagging mode** — Click the face tagging button in the Gallery toolbar (or press the Faces button)
-2. **Open an image** — Double-click to view it in fullscreen
-3. **Tag faces** — Each detected face shows a coloured box:
-   - **Red** = Unknown face (not yet identified)
-   - **Green** = Known face (already tagged)
-   - **Orange** = Currently editing
-4. **Enter a name** — Click on an unknown face and type the person's name. As you type, matching names will appear for quick selection
-5. **Press Tab** — Cycle through unknown faces to quickly tag multiple people in an image
-6. **Auto-recognition** — Once you've tagged someone a few times, Imaginary will automatically recognise them in other photos
-
-### The Faces Screen
-
-Click the **Faces** button in the toolbar to browse all detected faces:
+The Faces screen (Ctrl+P) shows all detected faces across your collection:
 
 - **Known faces** appear first, grouped by person and sorted alphabetically
 - **Unknown faces** appear below, ready to be identified
-- Click any face to edit its name
-- Use the "Only unknowns" toggle to focus on faces that need tagging
+- Click any face to edit its name or correct a mistaken identification
+- Use "Only unknowns" to focus on faces that need tagging
 - Adjust thumbnail size with the +/- buttons
 
-### Filtering by People
-
-In the Filter screen, you can now filter your gallery by people:
-
-1. Click the **person add** button next to the People field
-2. Select one or more people from the picker
-3. Click **Done** and apply the filter
-
-The gallery will show only images containing all the selected people.
-
-### Removing False Detections
-
-Sometimes Imaginary detects something that isn't a face. In face tagging mode, click the **X** button on any bounding box to mark it as "not a face". It won't appear again.
+This screen is useful for bulk-tagging faces and reviewing who Imaginary has detected.
 
 ## Controls
 
@@ -224,7 +209,7 @@ Sometimes Imaginary detects something that isn't a face. In face tagging mode, c
 | Select multiple | Drag box | — | — |
 | Open fullscreen | Double-click | Double-tap | Enter |
 | Delete selected | — | — | Delete |
-| Previous/Next duplicate group | Toolbar buttons | Toolbar buttons | Alt+Left / Alt+Right |
+| Previous/Next group | Toolbar buttons | Toolbar buttons | Alt+Left / Alt+Right |
 | Jump to start/end | — | — | Ctrl+Up / Ctrl+Down |
 | Page up/down | — | — | Page Up / Page Down |
 
@@ -238,6 +223,7 @@ Sometimes Imaginary detects something that isn't a face. In face tagging mode, c
 | Zoom in/out | Scroll wheel | Pinch | — |
 | Toggle zoom (fit ↔ 100%) | Double-click | Double-tap | — |
 | Pan (when zoomed) | Click and drag | Drag | — |
+| Next unknown face | — | — | Tab |
 
 ### Duplicates View
 
@@ -265,7 +251,7 @@ Sometimes Imaginary detects something that isn't a face. In face tagging mode, c
 
 ## Configuration
 
-Settings are stored in `.imaginary.yml` (created automatically on first run). Key options:
+Settings are stored in `.imaginary.yml` (created automatically on first run):
 
 | Setting | Default | Description |
 |---------|---------|-------------|
@@ -279,10 +265,11 @@ Settings are stored in `.imaginary.yml` (created automatically on first run). Ke
 ## Tips
 
 - **Large collections** — Imaginary handles tens of thousands of images, but initial scanning takes time. Let it run in the background.
+- **Face tagging** — Tag a person in 3-5 clear photos and Imaginary will start recognising them automatically.
+- **Finding people** — Use the People filter or "Sort by people" to quickly find photos of specific individuals.
 - **Duplicate detection** — Start with "Similar" or "Related" to see what's there, then move to stricter levels to find exact copies.
+- **Semantic sorting** — In Duplicates view, use semantic sort with queries like "blurry" to find low-quality duplicates to delete.
 - **Descriptions & ratings** — Add personal notes and emoji ratings to help you find favourites later.
-- **Semantic sorting** — In Duplicates view, use semantic sort with queries like "blurry" or "dark" to find low-quality duplicates to delete.
-- **Face tagging** — Tag a person in 3-5 clear photos and Imaginary will start recognising them automatically in other images.
 
 ## License
 
