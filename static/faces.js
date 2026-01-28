@@ -1724,10 +1724,12 @@
         thumb.className = 'face-card-thumb';
 
         const img = document.createElement('img');
-        // Use cache bust timestamp if available (after preferred face changed)
+        // Use cache bust timestamp if available (after preferred face changed in this session),
+        // or fall back to preferredFace.id from the faces data (handles page reload)
         const bustTime = thumbnailCacheBust.get(person.id);
-        img.src = bustTime
-            ? `/api/people/${person.id}/thumbnail?t=${bustTime}`
+        const cacheKey = bustTime || (person.preferredFace && person.preferredFace.id) || '';
+        img.src = cacheKey
+            ? `/api/people/${person.id}/thumbnail?t=${cacheKey}`
             : `/api/people/${person.id}/thumbnail`;
         img.alt = person.name;
         img.loading = 'lazy';

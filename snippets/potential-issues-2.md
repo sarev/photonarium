@@ -30,4 +30,36 @@ Here’s what I’d flag so far (definite issues + “likely to bite later”) a
 ## API / contract / edge-case risks
 
 13. **`App.api()` always sends `Content-Type: application/json` even for GET**. Usually harmless, but it can trigger CORS preflights in some deployments or confuse certain servers/middleware.
-14. **Search assumes `/status` is reachable and defaults face detection to enabled on failure**. That’s a reasonable fallback, but it can lead to UI offering people filtering when the backend can’t support it.
+14. **Search assumes `/status` is reachable and defaults face detection to enabled on failure**. That's a reasonable fallback, but it can lead to UI offering people filtering when the backend can't support it.
+
+---
+
+## Verification Results
+
+After investigating each issue in the actual codebase:
+
+| # | Verdict | Notes |
+|---|---------|-------|
+| 1 | **FALSE** | Hallucinated. No such syntax error exists in gallery.js. |
+| 2 | **FALSE** | Hallucinated. Line 616 correctly uses `[...new Set(names)]`. |
+| 3 | **By design** | `pendingSelection` is for scrolling to a single image after operations, not multi-select. |
+| 4 | **UX note** | Internally consistent; slider maps 5-50 → 0.05-0.5 in both places. |
+| 5 | **Doc note** | AND logic is correct; backend `/search` with `people` param returns intersection. |
+| 6 | **TRUE** | search.js line 678 uses `alert()` instead of `App.showError()`. |
+| 7 | **TRUE** | `duplicates.js` `onLeave()` does NOT clear `_pollTimeout`. |
+| 8 | **FALSE** | `faces.js` `onLeave()` DOES clear `reassessmentPollTimer` (lines 1121-1123). |
+| 9 | N/A | Observation, not an issue. |
+| 10 | **TRUE** | `_loadPeopleNames()` does sequential await in for loop—slow for large libraries. |
+| 11 | **Minor** | Fixed 2s cadence is fine for now; exponential backoff is a nice-to-have. |
+| 12 | **TRUE** | API error throws only status/statusText, not response body. |
+| 13 | **Harmless** | Same-origin, no CORS preflight triggered. |
+| 14 | **Acceptable** | Reasonable fallback; people filter just won't return results if backend is down. |
+
+---
+
+## Actionable Checklist
+
+- [ ] **Fix: Clear duplicates polling on leave** — Add `if (this._pollTimeout) { clearTimeout(this._pollTimeout); this._pollTimeout = null; }` to `duplicates.js` `onLeave()`.
+- [ ] **Fix: Replace alert() with App.showError()** — In `search.js` `_showError()`, change `alert(message)` to `App.showError(message)`.
+- [ ] **Improve: Batch people-name loading** — add a backend endpoint like `GET /api/images/people-names` returning `{imageId: "names, ..."}` in bulk.
+- [ ] **Consider: Only set Content-Type for POST/PATCH** — Minor cleanup; not causing issues currently.
