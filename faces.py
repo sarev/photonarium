@@ -242,7 +242,7 @@ class FaceDetector:
         if self._resnet is None:
             with self._lock:
                 if self._resnet is None:
-                    logger.info('Loading InceptionResnetV1 for face embeddings...')
+                    logger.info('Loading InceptionResnetV1 for face recognition embeddings...')
                     from facenet_pytorch import InceptionResnetV1
                     self._resnet = InceptionResnetV1(
                         pretrained='vggface2',

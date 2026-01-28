@@ -818,13 +818,13 @@ def get_status():
     """Get the current processing status of the database.
 
     Returns the status of background processing threads, including
-    the number of items remaining in the indexing and embedding queues.
+    the number of items remaining in the indexing and image embedding queues.
 
     Returns:
         JSON object with:
             - status: 'up_to_date' or 'updating'
             - indexing_queue: Number of images awaiting indexing
-            - embedding_queue: Number of images awaiting embedding
+            - embedding_queue: Number of images awaiting image embedding
     """
     status = get_db().get_processing_status()
     return jsonify(status)
@@ -1317,10 +1317,10 @@ def get_person_faces(person_id):
 
     faces = get_faces_for_person(db.conn, person_id)
 
-    # Remove embedding from response (it's large and not needed in API)
+    # Remove embeddings from response (they're large and not needed in API)
     for face in faces:
-        if 'embedding' in face:
-            del face['embedding']
+        face.pop('embedding', None)
+        face.pop('semantic_embedding', None)
 
     return jsonify(faces)
 
@@ -1386,10 +1386,10 @@ def get_image_faces(image_id):
 
     faces = get_faces_for_image(db.conn, image_id, include_suppressed=False)
 
-    # Remove embedding from response
+    # Remove embeddings from response
     for face in faces:
-        if 'embedding' in face:
-            del face['embedding']
+        face.pop('embedding', None)
+        face.pop('semantic_embedding', None)
 
     return jsonify(faces)
 
@@ -1992,12 +1992,12 @@ if __name__ == '__main__':
     parser.add_argument(
         '-s', '--scan',
         action='store_true',
-        help='Scan folders and compute embeddings on startup'
+        help='Scan folders and compute image CLIP embeddings on startup'
     )
     parser.add_argument(
         '-f', '--detect-faces',
         action='store_true',
-        help='Run face detection after embeddings complete (requires --scan)'
+        help='Run face detection after image CLIP embeddings complete (requires --scan)'
     )
     parser.add_argument(
         '-F', '--group-faces',
@@ -2023,7 +2023,7 @@ if __name__ == '__main__':
     parser.add_argument(
         '-e', '--generate-face-embeddings',
         action='store_true',
-        help='Generate semantic embeddings for faces (for text search) and exit'
+        help='Generate CLIP embeddings for faces (for text search) and exit'
     )
     parser.add_argument(
         '-t', '--regenerate-face-thumbnails',
@@ -2056,11 +2056,11 @@ if __name__ == '__main__':
     if args.generate_face_embeddings:
         import time
         db = get_db()
-        logger.info('Starting face semantic embedding generation...')
+        logger.info('Starting face CLIP embedding generation (for text search)...')
         start_time = time.time()
         count = db.backfill_face_semantic_embeddings()
         elapsed = time.time() - start_time
-        logger.info(f'Generated {count} face embeddings in {elapsed:.1f}s')
+        logger.info(f'Generated {count} face CLIP embeddings in {elapsed:.1f}s')
         sys.exit(0)
 
     # Handle face thumbnail regeneration command

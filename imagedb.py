@@ -193,6 +193,7 @@ import time
 import torch
 import traceback
 import uuid
+import warnings
 import yaml
 
 # Local imports
@@ -2013,10 +2014,13 @@ class OpenCLIPModel:
 
         start_time = time.time()
 
-        self._model, _, self._preprocess = open_clip.create_model_and_transforms(
-            self.model_name,
-            pretrained=self.pretrained,
-        )
+        # Suppress QuickGELU mismatch warning from open_clip
+        with warnings.catch_warnings():
+            warnings.filterwarnings('ignore', message='QuickGELU mismatch')
+            self._model, _, self._preprocess = open_clip.create_model_and_transforms(
+                self.model_name,
+                pretrained=self.pretrained,
+            )
         self._model.eval().to(self.device)
         self._tokenizer = open_clip.get_tokenizer(self.model_name)
 
@@ -2062,7 +2066,7 @@ class OpenCLIPModel:
             # Encode with inference mode
             with torch.inference_mode():
                 if self.device == 'cuda':
-                    with torch.cuda.amp.autocast():
+                    with torch.amp.autocast('cuda'):
                         v = self.model.encode_image(x)
                 else:
                     v = self.model.encode_image(x)
@@ -2116,7 +2120,7 @@ class OpenCLIPModel:
         try:
             with torch.inference_mode():
                 if self.device == 'cuda':
-                    with torch.cuda.amp.autocast():
+                    with torch.amp.autocast('cuda'):
                         embeddings = self.model.encode_image(batch)
                 else:
                     embeddings = self.model.encode_image(batch)
@@ -2152,7 +2156,7 @@ class OpenCLIPModel:
 
         with torch.inference_mode():
             if self.device == 'cuda':
-                with torch.cuda.amp.autocast():
+                with torch.amp.autocast('cuda'):
                     v = self.model.encode_text(tokens)
             else:
                 v = self.model.encode_text(tokens)
@@ -2238,7 +2242,7 @@ class EmbeddingThread(threading.Thread):
 
     def run(self) -> None:
         """Main thread loop - process images in batches from the queue."""
-        logger.info('Embedding thread started')
+        logger.info('Image embedding thread started')
 
         # Progress logging state
         last_progress_time = time.time()
@@ -2261,13 +2265,13 @@ class EmbeddingThread(threading.Thread):
                     # Get image path from database
                     image = get_image(self.conn, image_id)
                     if image is None:
-                        logger.warning(f'Image not found for embedding: {image_id}')
+                        logger.warning(f'Image not found for image embedding: {image_id}')
                         self.embedding_queue.task_done()
                         continue
 
                     path = Path(image['path'])
                     if not path.exists():
-                        logger.warning(f'Image file not found for embedding: {path}')
+                        logger.warning(f'Image file not found for image embedding: {path}')
                         self.embedding_queue.task_done()
                         continue
 
@@ -2285,7 +2289,7 @@ class EmbeddingThread(threading.Thread):
                         remaining = self.embedding_queue.qsize()
                         if remaining > 0 or self._processed_count > 0:
                             logger.info(
-                                f'Embedding progress: {self._processed_count} done, '
+                                f'Image embedding progress: {self._processed_count} done, '
                                 f'{remaining} remaining'
                             )
                         last_progress_time = now
@@ -2294,9 +2298,9 @@ class EmbeddingThread(threading.Thread):
                     self._check_completion()
 
             except Exception as e:
-                logger.error(f'Unexpected error in embedding thread: {e}')
+                logger.error(f'Unexpected error in image embedding thread: {e}')
 
-        logger.info('Embedding thread stopped')
+        logger.info('Image embedding thread stopped')
 
     def _process_batch(self, image_ids: list[str], paths: list[Path]) -> None:
         """Process a batch of images.
@@ -2322,7 +2326,7 @@ class EmbeddingThread(threading.Thread):
                 else:
                     self._error_count += 1
             except Exception as e:
-                logger.error(f'Failed to store embedding for {image_id}: {e}')
+                logger.error(f'Failed to store image embedding for {image_id}: {e}')
                 self._error_count += 1
             finally:
                 self.embedding_queue.task_done()
@@ -3319,7 +3323,7 @@ class ImageDatabase:
             for image in missing_embeddings:
                 self._embedding_queue.put(image['id'])
             if missing_embeddings:
-                logger.info(f'        {len(missing_embeddings)} images queued for embedding')
+                logger.info(f'        {len(missing_embeddings)} images queued for image embedding')
         else:
             logger.info('[4/5] Skipping scan (use --scan or GUI Rescan button to process)')
 
@@ -3407,7 +3411,7 @@ class ImageDatabase:
             return 0
 
         total = len(face_ids)
-        logger.info(f'Backfilling semantic embeddings for {total} faces...')
+        logger.info(f'Backfilling CLIP embeddings for {total} faces (for text search)...')
 
         clip_model = self._get_clip_model()
         count = 0
@@ -3415,7 +3419,7 @@ class ImageDatabase:
         for i, face_id in enumerate(face_ids):
             # Check for shutdown
             if self._stop_event.is_set():
-                logger.info('Face embedding backfill interrupted')
+                logger.info('Face CLIP embedding backfill interrupted')
                 break
 
             thumb_path = get_face_thumbnail_path(face_id, self.thumbnail_dir)
@@ -3430,13 +3434,13 @@ class ImageDatabase:
                     update_face_semantic_embedding(self.conn, face_id, embedding)
                     count += 1
             except Exception as e:
-                logger.warning(f'Failed to compute semantic embedding for face {face_id}: {e}')
+                logger.warning(f'Failed to compute CLIP embedding for face {face_id}: {e}')
 
             # Progress logging every 100 faces
             if (i + 1) % 100 == 0:
-                logger.info(f'  Progress: {i + 1}/{total} faces, {count} embeddings generated')
+                logger.info(f'  Progress: {i + 1}/{total} faces, {count} CLIP embeddings generated')
 
-        logger.info(f'Backfilled {count} face semantic embeddings')
+        logger.info(f'Backfilled {count} face CLIP embeddings')
         return count
 
     def regenerate_face_thumbnails(self) -> int:
@@ -3826,7 +3830,7 @@ class ImageDatabase:
         if self._embedding_thread is not None:
             self._embedding_thread.join(timeout=timeout)
             if self._embedding_thread.is_alive():
-                logger.warning('Embedding thread did not stop in time')
+                logger.warning('Image embedding thread did not stop in time')
 
         if self._face_thread is not None:
             self._face_thread.join(timeout=timeout)
@@ -4590,7 +4594,7 @@ class ImageDatabase:
         for image in missing_embeddings:
             self._embedding_queue.put(image['id'])
         if missing_embeddings:
-            logger.info(f'{len(missing_embeddings)} images queued for embedding')
+            logger.info(f'{len(missing_embeddings)} images queued for image embedding')
 
         # Reset completion flags so callbacks fire again
         if self._embedding_thread:
