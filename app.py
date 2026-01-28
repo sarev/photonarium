@@ -53,6 +53,7 @@ from faces import (
     suppress_face,
     delete_face,
     get_face_thumbnail_path,
+    generate_face_thumbnail,
     get_images_with_people,
     delete_people_without_faces,
     batch_identify_faces,
@@ -96,6 +97,10 @@ db: ImageDatabase | None = None
 _run_scan = False  # Set via command-line args in __main__
 _run_face_detection = False  # Set via command-line args in __main__
 _run_face_grouping = False  # Set via command-line args in __main__
+
+# Track face thumbnails currently being regenerated to avoid concurrent attempts
+_face_thumb_regenerating: set[str] = set()
+_face_thumb_regen_lock = threading.Lock()
 
 
 def get_db() -> ImageDatabase:
@@ -1617,6 +1622,10 @@ def delete_face_endpoint(face_id):
 def get_face_thumbnail(face_id):
     """Get the thumbnail for a face.
 
+    If the thumbnail file is missing but the face and source image exist,
+    regenerates the thumbnail on-demand. Concurrent requests for the same
+    missing thumbnail will wait for the first to complete.
+
     Args:
         face_id: Face's UUID.
 
@@ -1631,7 +1640,43 @@ def get_face_thumbnail(face_id):
 
     thumb_path = get_face_thumbnail_path(face_id, db.thumbnail_dir)
     if not thumb_path.exists():
-        return error_response('Face thumbnail not found', 404)
+        # Check if another request is already regenerating this thumbnail
+        should_regenerate = False
+        with _face_thumb_regen_lock:
+            if face_id not in _face_thumb_regenerating:
+                _face_thumb_regenerating.add(face_id)
+                should_regenerate = True
+
+        if should_regenerate:
+            # We're responsible for regenerating
+            try:
+                image = db.get_image(face['image_id'])
+                if image and Path(image['path']).exists():
+                    logger.info(f'Regenerating missing face thumbnail: {face_id}')
+                    success = generate_face_thumbnail(
+                        source_path=image['path'],
+                        dest_path=thumb_path,
+                        box_x=face['box_x'],
+                        box_y=face['box_y'],
+                        box_w=face['box_w'],
+                        box_h=face['box_h'],
+                    )
+                    if not success:
+                        return error_response('Failed to regenerate face thumbnail', 500)
+                else:
+                    return error_response('Face thumbnail not found', 404)
+            finally:
+                with _face_thumb_regen_lock:
+                    _face_thumb_regenerating.discard(face_id)
+        else:
+            # Another request is handling it - wait for file to appear
+            import time
+            for _ in range(20):  # Wait up to 2 seconds
+                time.sleep(0.1)
+                if thumb_path.exists():
+                    break
+            if not thumb_path.exists():
+                return error_response('Face thumbnail not found', 404)
 
     return send_file(
         thumb_path,

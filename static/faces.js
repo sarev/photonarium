@@ -2065,12 +2065,16 @@
         input.dataset.faceId = face.id;
         input.dataset.originalName = face.person_name || '';
 
-        // Handle focus
+        // Handle focus - pre-fetch people cache for fast autocomplete
         input.addEventListener('focus', () => {
             focusedInput = input;
             const faceBox = label.closest('.face-box');
             if (faceBox) {
                 faceBox.classList.add('focused');
+            }
+            // Pre-fetch cache if stale (don't await - let it load in background)
+            if (Date.now() - peopleCacheTime > PEOPLE_CACHE_TTL) {
+                refreshPeopleCache();
             }
         });
 
@@ -2081,15 +2085,19 @@
                 faceBox.classList.remove('focused');
             }
             focusedInput = null;
-            closeAutocomplete();
 
-            // Commit the change
-            const newName = input.value.trim();
-            const originalName = input.dataset.originalName;
+            // Delay to allow autocomplete click to update input value first
+            setTimeout(() => {
+                closeAutocomplete();
 
-            if (newName !== originalName) {
-                commitNameChange(face.id, newName, label, face);
-            }
+                // Commit the change
+                const newName = input.value.trim();
+                const originalName = input.dataset.originalName;
+
+                if (newName !== originalName) {
+                    commitNameChange(face.id, newName, label, face);
+                }
+            }, 200);
         });
 
         // Handle input for autocomplete
@@ -2117,15 +2125,11 @@
 
     /**
      * Show autocomplete dropdown for name input.
+     * Uses cached people list for instant response - cache is pre-fetched on focus.
      * @param {HTMLInputElement} input - Input element
      * @param {string} query - Search query
      */
-    async function showAutocomplete(input, query) {
-        // Refresh people cache if stale
-        if (Date.now() - peopleCacheTime > PEOPLE_CACHE_TTL) {
-            await refreshPeopleCache();
-        }
-
+    function showAutocomplete(input, query) {
         // Filter people by query (subsequence match - "sro" matches "Steve Rose")
         const q = query.toLowerCase().trim();
         const matches = q
@@ -2173,13 +2177,13 @@
             nameSpan.textContent = person.name;
             item.appendChild(nameSpan);
 
-            // Handle click
+            // Handle click - set name and blur to commit
             item.addEventListener('click', (e) => {
                 e.preventDefault();
                 e.stopPropagation();
                 input.value = person.name;
                 closeAutocomplete();
-                input.focus();
+                input.blur();
             });
 
             activeAutocomplete.appendChild(item);
@@ -2335,10 +2339,14 @@
     async function commitNameChange(faceId, name, label, face) {
         try {
             if (name) {
-                // Identify face with name
-                const result = await App.api(`/faces/${faceId}/identify`, {
+                // Use batch endpoint - same as faces screen - handles preferred_face_id correctly
+                const result = await App.api('/faces/identify-batch', {
                     method: 'POST',
-                    body: JSON.stringify({ name }),
+                    body: JSON.stringify({
+                        face_ids: [faceId],
+                        name,
+                        preferred_face_id: faceId,
+                    }),
                 });
 
                 if (result && result.success) {
@@ -2363,8 +2371,9 @@
                     });
                     label.appendChild(nameSpan);
 
-                    // Invalidate people cache
+                    // Invalidate people cache and mark faces screen for refresh
                     peopleCacheTime = 0;
+                    needsRefresh = true;
                 }
             } else if (face.person_id) {
                 // Unidentify face
@@ -2382,8 +2391,9 @@
                     faceBox.classList.add('unknown');
                 }
 
-                // Invalidate people cache
+                // Invalidate people cache and mark faces screen for refresh
                 peopleCacheTime = 0;
+                needsRefresh = true;
             }
         } catch (error) {
             console.error('Failed to update face:', error);
