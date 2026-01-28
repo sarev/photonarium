@@ -674,8 +674,7 @@ const Search = {
      * @private
      */
     _showError(message) {
-        // For now, use a simple alert. Could be replaced with inline error display.
-        alert(message);
+        App.showError(message);
     },
 
     /**

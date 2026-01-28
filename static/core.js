@@ -775,8 +775,10 @@ const App = {
      */
     async api(endpoint, options = {}) {
         const url = this.apiBase + endpoint;
+        const method = options.method || 'GET';
+        const headers = method === 'GET' ? {} : { 'Content-Type': 'application/json' };
         const response = await fetch(url, {
-            headers: { 'Content-Type': 'application/json' },
+            headers,
             ...options
         });
 

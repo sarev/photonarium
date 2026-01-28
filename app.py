@@ -55,6 +55,7 @@ from faces import (
     get_face_thumbnail_path,
     generate_face_thumbnail,
     get_images_with_people,
+    get_people_names_bulk,
     delete_people_without_faces,
     batch_identify_faces,
     reassess_unknown_faces_async,
@@ -643,6 +644,21 @@ def rotate_images():
             cache.remove(checksum)
 
     return jsonify(results)
+
+
+@app.route('/api/images/people-names', methods=['GET'])
+def get_images_people_names():
+    """Get people names for all images in a single bulk query.
+
+    Used for "sort by people" functionality in the gallery.
+    Returns a mapping of image_id to comma-separated people names.
+
+    Returns:
+        JSON object mapping image_id to names string (sorted alphabetically).
+    """
+    db = get_db()
+    names = get_people_names_bulk(db.conn)
+    return jsonify(names)
 
 
 # =============================================================================

@@ -291,6 +291,12 @@ const Duplicates = {
         this._grid.unbind();
         this._selection.unbind();
 
+        // Clear any pending status poll
+        if (this._pollTimeout) {
+            clearTimeout(this._pollTimeout);
+            this._pollTimeout = null;
+        }
+
         // Remove Escape key handler
         if (this._escapeHandler) {
             document.removeEventListener('keydown', this._escapeHandler);

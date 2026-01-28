@@ -596,29 +596,13 @@ const Gallery = {
 
     /**
      * Loads people names for all images for sorting by people.
+     * Uses bulk endpoint for efficiency.
      * @private
      */
     async _loadPeopleNames() {
         try {
-            this.state.peopleNames = {};
-
-            // Get faces for each image and build the names string
-            // For efficiency, we batch this by getting all faces at once
-            // The names string is the alphabetically sorted, comma-joined list of people names
-            for (const img of this.state.images) {
-                try {
-                    const faces = await App.api(`/images/${img.id}/faces`);
-                    const names = (faces || [])
-                        .filter(f => f.person_name)
-                        .map(f => f.person_name)
-                        .sort((a, b) => a.localeCompare(b, undefined, { sensitivity: 'base' }));
-                    // Remove duplicates and join
-                    const uniqueNames = [...new Set(names)];
-                    this.state.peopleNames[img.id] = uniqueNames.join(', ');
-                } catch (error) {
-                    this.state.peopleNames[img.id] = '';
-                }
-            }
+            // Fetch all people names in a single bulk request
+            this.state.peopleNames = await App.api('/images/people-names');
 
             this.state.images = this._sortImages(this.state.images);
             this._renderGrid();

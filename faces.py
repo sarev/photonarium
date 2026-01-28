@@ -1713,6 +1713,36 @@ def get_people_names_for_image(
     return [row['name'] for row in cursor.fetchall()]
 
 
+def get_people_names_bulk(
+    conn: sqlite3.Connection,
+) -> dict[str, str]:
+    """Get people names for all images in a single query.
+
+    Used for "sort by people" functionality - returns a mapping of
+    image_id to comma-separated names string.
+
+    Args:
+        conn: Database connection.
+
+    Returns:
+        Dict mapping image_id to comma-separated people names (sorted alphabetically).
+    """
+    cursor = conn.execute('''
+        SELECT f.image_id, GROUP_CONCAT(DISTINCT p.name) as names
+        FROM faces f
+        JOIN people p ON f.person_id = p.id
+        WHERE f.suppressed = 0
+        GROUP BY f.image_id
+    ''')
+    result = {}
+    for row in cursor.fetchall():
+        # Sort the names alphabetically (GROUP_CONCAT doesn't guarantee order)
+        names = row['names'].split(',') if row['names'] else []
+        names.sort(key=lambda n: n.lower())
+        result[row['image_id']] = ', '.join(names)
+    return result
+
+
 # =============================================================================
 # BATCH IDENTIFICATION AND AUTO-REASSESSMENT
 # =============================================================================
