@@ -63,6 +63,7 @@ from faces import (
     compute_unknown_face_groups_async,
     get_group_computation_status,
     revalidate_person_faces,
+    search_unknown_faces_semantic,
 )
 
 # Configure logging
@@ -1395,13 +1396,31 @@ def get_faces_list():
 
     Query Parameters:
         unknown: If 'true', only return faces without a person_id.
+        search: Text query for semantic search (unknown faces only).
+                When provided, returns unknown faces sorted by similarity.
 
     Returns:
         JSON array of face objects with person_name if identified.
         Ordered by: known faces (alphabetically by person name), then unknown faces.
+        When search is provided: unknown faces sorted by similarity descending.
     """
     unknown_only = request.args.get('unknown', '').lower() == 'true'
+    search_query = request.args.get('search', '').strip()
+
     db = get_db()
+
+    # If search query provided, do semantic search on unknown faces
+    if search_query:
+        try:
+            # Encode query with CLIP
+            query_embedding = db._get_clip_model().encode_text(search_query)
+            # Search unknown faces by semantic similarity
+            faces = search_unknown_faces_semantic(db.conn, query_embedding)
+            return jsonify(faces)
+        except Exception as e:
+            logger.error(f'Failed to encode search query: {e}')
+            return error_response('Failed to encode search query', 500)
+
     faces = get_all_faces(db.conn, unknown_only=unknown_only)
     return jsonify(faces)
 
@@ -1997,6 +2016,11 @@ if __name__ == '__main__':
         action='store_true',
         help='Force full recomputation of all duplicate groups and exit'
     )
+    parser.add_argument(
+        '-e', '--generate-face-embeddings',
+        action='store_true',
+        help='Generate semantic embeddings for faces (for text search) and exit'
+    )
     args = parser.parse_args()
 
     # Handle thumbnail generation command
@@ -2017,6 +2041,17 @@ if __name__ == '__main__':
         logger.info(f'Duplicate recomputation completed in {elapsed:.1f}s')
         for level, count in sorted(group_counts.items()):
             logger.info(f'  Level {level}: {count} groups')
+        sys.exit(0)
+
+    # Handle face embedding generation command
+    if args.generate_face_embeddings:
+        import time
+        db = get_db()
+        logger.info('Starting face semantic embedding generation...')
+        start_time = time.time()
+        count = db.backfill_face_semantic_embeddings()
+        elapsed = time.time() - start_time
+        logger.info(f'Generated {count} face embeddings in {elapsed:.1f}s')
         sys.exit(0)
 
     # Set module-level flags before initializing database

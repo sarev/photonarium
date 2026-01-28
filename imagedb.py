@@ -225,6 +225,8 @@ from faces import (
     delete_face_thumbnail,
     delete_people_without_faces,
     compute_unknown_face_groups,
+    update_face_semantic_embedding,
+    get_faces_without_semantic_embedding,
 )
 from timestamps import (
     derive_timestamp,
@@ -2572,21 +2574,8 @@ class FaceDetectionThread(threading.Thread):
                         f'(similarity: {similarity:.3f})'
                     )
 
-                # Create face record
-                with self._db_lock:
-                    face_id = create_face(
-                        self.conn,
-                        image_id=image_id,
-                        box_x=face.box_x,
-                        box_y=face.box_y,
-                        box_w=face.box_w,
-                        box_h=face.box_h,
-                        embedding=face.embedding,
-                        confidence=face.confidence,
-                        person_id=person_id,
-                    )
-
-                # Generate face thumbnail
+                # Generate face thumbnail first (needed for semantic embedding)
+                face_id = str(uuid.uuid4())
                 thumb_path = get_face_thumbnail_path(face_id, self.thumbnail_dir)
                 generate_face_thumbnail(
                     path,
@@ -2598,6 +2587,29 @@ class FaceDetectionThread(threading.Thread):
                     size=200,
                     quality=self.config.thumbnail_quality,
                 )
+
+                # Generate semantic embedding from face thumbnail using CLIP
+                semantic_embedding = None
+                if thumb_path.exists():
+                    semantic_embedding = self.embedding_thread.clip_model.encode_image(
+                        thumb_path
+                    )
+
+                # Create face record with semantic embedding
+                with self._db_lock:
+                    create_face(
+                        self.conn,
+                        image_id=image_id,
+                        box_x=face.box_x,
+                        box_y=face.box_y,
+                        box_w=face.box_w,
+                        box_h=face.box_h,
+                        embedding=face.embedding,
+                        confidence=face.confidence,
+                        person_id=person_id,
+                        face_id=face_id,
+                        semantic_embedding=semantic_embedding,
+                    )
 
                 self._faces_detected_count += 1
 
@@ -3378,6 +3390,44 @@ class ImageDatabase:
         self.conn.commit()
         logger.info(f'        Backfilled {count} description embeddings')
 
+    def backfill_face_semantic_embeddings(self) -> int:
+        """Generate semantic embeddings for faces that don't have them.
+
+        Loads each face thumbnail and encodes it with OpenCLIP for text search.
+        This runs on startup for faces added before the feature, or can be
+        called via CLI --generate-face-embeddings.
+
+        Returns:
+            Number of faces updated.
+        """
+        face_ids = get_faces_without_semantic_embedding(self.conn)
+
+        if not face_ids:
+            return 0
+
+        logger.info(f'Backfilling semantic embeddings for {len(face_ids)} faces...')
+
+        clip_model = self._get_clip_model()
+        count = 0
+
+        for face_id in face_ids:
+            thumb_path = get_face_thumbnail_path(face_id, self.thumbnail_dir)
+
+            if not thumb_path.exists():
+                logger.debug(f'Face thumbnail not found for {face_id}, skipping')
+                continue
+
+            try:
+                embedding = clip_model.encode_image(thumb_path)
+                if embedding is not None:
+                    update_face_semantic_embedding(self.conn, face_id, embedding)
+                    count += 1
+            except Exception as e:
+                logger.warning(f'Failed to compute semantic embedding for face {face_id}: {e}')
+
+        logger.info(f'Backfilled {count} face semantic embeddings')
+        return count
+
     def _migrate_recalculate_timestamps(self) -> None:
         """One-time migration to recalculate timestamps using improved logic.
 
@@ -3619,6 +3669,9 @@ class ImageDatabase:
                         self.conn,
                         threshold=self.config.face_recognition_threshold
                     )
+                # Backfill semantic embeddings for faces that don't have them
+                # (e.g., faces added before this feature existed)
+                self.backfill_face_semantic_embeddings()
             emit_processing_complete(self.event_queue)
 
         # Callback when embedding completes - queue images for face detection

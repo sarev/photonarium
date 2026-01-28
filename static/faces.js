@@ -148,6 +148,12 @@
     /** @type {Map<string, number>} Person IDs whose thumbnails need cache busting */
     let thumbnailCacheBust = new Map();
 
+    /** @type {string} Current semantic search query for unknown faces */
+    let unknownFacesSearchQuery = '';
+
+    /** @type {number|null} Debounce timer for search input */
+    let searchDebounceTimer = null;
+
     /** @type {number|null} Timer for pick-preferred reassessment polling */
     let pickPreferredPollTimer = null;
 
@@ -1274,6 +1280,12 @@
                     clearTimeout(reassessmentPollTimer);
                     reassessmentPollTimer = null;
                 }
+                // Clear search state
+                if (searchDebounceTimer) {
+                    clearTimeout(searchDebounceTimer);
+                    searchDebounceTimer = null;
+                }
+                unknownFacesSearchQuery = '';
                 // Clear pending reload flag
                 reloadPending = false;
             },
@@ -1383,6 +1395,67 @@
     // =========================================================================
     // FACES SCREEN - LOADING AND RENDERING
     // =========================================================================
+
+    /**
+     * Handle search input with debounce.
+     * @param {string} query - Search query
+     */
+    function handleSearchInput(query) {
+        // Clear existing timer
+        if (searchDebounceTimer) {
+            clearTimeout(searchDebounceTimer);
+        }
+
+        // Debounce: wait 300ms after last keystroke
+        searchDebounceTimer = setTimeout(() => {
+            searchDebounceTimer = null;
+            unknownFacesSearchQuery = query.trim();
+            searchUnknownFaces(unknownFacesSearchQuery);
+        }, 300);
+    }
+
+    /**
+     * Search unknown faces by semantic similarity.
+     * @param {string} query - Search query (empty to reset to default sort)
+     */
+    async function searchUnknownFaces(query) {
+        // Build API URL
+        const url = query ? `/faces?search=${encodeURIComponent(query)}` : '/faces';
+
+        try {
+            showFacesLoading(query ? 'Searching faces…' : 'Loading faces…');
+
+            const faces = await App.api(url) || [];
+
+            if (query) {
+                // Search mode: API returns only matching unknown faces sorted by similarity
+                // Keep known faces, replace unknown faces with search results
+                const knownFaces = allFaces.filter(f => f.person_id);
+                allFaces = [...knownFaces, ...faces];
+                displayedFaces = faces;
+            } else {
+                // Default mode: API returns all faces with group-based sorting
+                allFaces = faces;
+                displayedFaces = faces.filter(f => !f.person_id);
+            }
+
+            // Re-render just the unknown faces grid
+            if (unknownFacesGrid) {
+                unknownFacesGrid.render();
+            }
+
+            // Update count in header
+            const countEl = facesGrid?.querySelector('.faces-section-count');
+            if (countEl) {
+                countEl.textContent = `(${displayedFaces.length})`;
+            }
+        } catch (error) {
+            console.error('Failed to search faces:', error);
+            App.showError('Failed to search faces.');
+        } finally {
+            hideFacesLoading();
+        }
+    }
 
     /**
      * Load all faces from the API.
@@ -1620,6 +1693,25 @@
         countEl.className = 'faces-section-count';
         countEl.textContent = `(${count})`;
         header.appendChild(countEl);
+
+        // Semantic search input
+        const searchInput = document.createElement('input');
+        searchInput.type = 'text';
+        searchInput.className = 'faces-search-input';
+        searchInput.placeholder = 'Search faces...';
+        searchInput.value = unknownFacesSearchQuery;
+        searchInput.addEventListener('input', (e) => {
+            handleSearchInput(e.target.value);
+        });
+        // Clear search on Escape
+        searchInput.addEventListener('keydown', (e) => {
+            if (e.key === 'Escape') {
+                e.target.value = '';
+                handleSearchInput('');
+                e.target.blur();
+            }
+        });
+        header.appendChild(searchInput);
 
         section.appendChild(header);
 

@@ -98,6 +98,8 @@ _MIGRATIONS = [
     ("faces", "unknown_group_id", "ALTER TABLE faces ADD COLUMN unknown_group_id TEXT"),
     # Add per-person recognition threshold (NULL = use global default)
     ("people", "recognition_threshold", "ALTER TABLE people ADD COLUMN recognition_threshold REAL"),
+    # Add semantic embedding for text-based face search (OpenCLIP, distinct from face recognition embedding)
+    ("faces", "semantic_embedding", "ALTER TABLE faces ADD COLUMN semantic_embedding BLOB"),
 ]
 
 
@@ -1118,6 +1120,7 @@ def create_face(
     confidence: float | None = None,
     person_id: str | None = None,
     face_id: str | None = None,
+    semantic_embedding: np.ndarray | None = None,
 ) -> str:
     """Create a new face record.
 
@@ -1128,10 +1131,11 @@ def create_face(
         box_y: Normalized y coordinate of bounding box.
         box_w: Normalized width of bounding box.
         box_h: Normalized height of bounding box.
-        embedding: 512D face embedding.
+        embedding: 512D face embedding for recognition.
         confidence: Detection confidence (optional).
         person_id: Associated person ID (optional).
         face_id: Optional UUID. If None, generates a new one.
+        semantic_embedding: OpenCLIP embedding for text search (optional).
 
     Returns:
         The face's UUID.
@@ -1139,18 +1143,63 @@ def create_face(
     if face_id is None:
         face_id = str(uuid.uuid4())
 
-    # Convert embedding to bytes
+    # Convert embeddings to bytes
     embedding_bytes = embedding.astype(np.float32).tobytes()
+    semantic_bytes = None
+    if semantic_embedding is not None:
+        semantic_bytes = semantic_embedding.astype(np.float32).tobytes()
 
     conn.execute(
         '''INSERT INTO faces
-           (id, image_id, box_x, box_y, box_w, box_h, confidence, embedding, person_id)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)''',
+           (id, image_id, box_x, box_y, box_w, box_h, confidence, embedding,
+            person_id, semantic_embedding)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)''',
         (face_id, image_id, box_x, box_y, box_w, box_h, confidence,
-         embedding_bytes, person_id)
+         embedding_bytes, person_id, semantic_bytes)
     )
     conn.commit()
     return face_id
+
+
+def update_face_semantic_embedding(
+    conn: sqlite3.Connection,
+    face_id: str,
+    semantic_embedding: np.ndarray,
+) -> bool:
+    """Update a face's semantic embedding.
+
+    Args:
+        conn: Database connection.
+        face_id: Face's UUID.
+        semantic_embedding: OpenCLIP embedding for text search.
+
+    Returns:
+        True if updated, False if face not found.
+    """
+    semantic_bytes = semantic_embedding.astype(np.float32).tobytes()
+    cursor = conn.execute(
+        'UPDATE faces SET semantic_embedding = ? WHERE id = ?',
+        (semantic_bytes, face_id)
+    )
+    conn.commit()
+    return cursor.rowcount > 0
+
+
+def get_faces_without_semantic_embedding(
+    conn: sqlite3.Connection,
+) -> list[str]:
+    """Get IDs of faces that don't have semantic embeddings.
+
+    Args:
+        conn: Database connection.
+
+    Returns:
+        List of face IDs.
+    """
+    cursor = conn.execute(
+        'SELECT id FROM faces WHERE semantic_embedding IS NULL AND suppressed = 0'
+    )
+    return [row['id'] for row in cursor.fetchall()]
 
 
 def get_face(
@@ -2273,6 +2322,74 @@ def get_unknown_faces_grouped(conn: sqlite3.Connection) -> list[dict]:
             'group_size': row['group_size'] if row['unknown_group_id'] else 1,
         })
 
+    return faces
+
+
+def search_unknown_faces_semantic(
+    conn: sqlite3.Connection,
+    query_embedding: np.ndarray,
+) -> list[dict]:
+    """Search unknown faces by semantic similarity to a query embedding.
+
+    Returns all unknown faces sorted by cosine similarity to the query
+    (most similar first). Ignores group-based sorting.
+
+    Args:
+        conn: Database connection.
+        query_embedding: Normalized query embedding from OpenCLIP.
+
+    Returns:
+        List of face dicts with 'similarity' field added.
+    """
+    cursor = conn.execute("""
+        SELECT
+            f.id,
+            f.image_id,
+            f.box_x,
+            f.box_y,
+            f.box_w,
+            f.box_h,
+            f.confidence,
+            f.unknown_group_id,
+            f.created_at,
+            f.semantic_embedding,
+            i.timestamp as image_timestamp,
+            i.basename
+        FROM faces f
+        JOIN images i ON f.image_id = i.id
+        WHERE f.person_id IS NULL
+          AND f.suppressed = 0
+          AND f.semantic_embedding IS NOT NULL
+    """)
+
+    faces = []
+    query_norm = query_embedding / np.linalg.norm(query_embedding)
+
+    for row in cursor:
+        # Decode semantic embedding
+        emb_bytes = row['semantic_embedding']
+        emb = np.frombuffer(emb_bytes, dtype=np.float32)
+
+        # Compute cosine similarity (embeddings are normalized)
+        similarity = float(np.dot(query_norm, emb))
+
+        faces.append({
+            'id': row['id'],
+            'image_id': row['image_id'],
+            'box_x': row['box_x'],
+            'box_y': row['box_y'],
+            'box_w': row['box_w'],
+            'box_h': row['box_h'],
+            'confidence': row['confidence'],
+            'unknown_group_id': row['unknown_group_id'],
+            'created_at': row['created_at'],
+            'image_timestamp': row['image_timestamp'],
+            'basename': row['basename'],
+            'similarity': similarity,
+        })
+
+    # Sort by similarity descending
+    faces.sort(key=lambda f: f['similarity'], reverse=True)
     return faces
 
 
