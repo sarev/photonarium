@@ -2,40 +2,197 @@
 
 ![Imaginary Logo](logo.png)
 
-A local image catalogue for people who want to organise their photo collection without uploading everything to the cloud.
+Imaginary is a photo catalogue that stays on your computer.
 
-## Why Imaginary?
+It is for people who want the convenience of modern search and face grouping, without uploading their life to someone else’s servers.
 
-Your photos are personal. They live on your hard drive, and that's where they should stay. Imaginary helps you browse, search, and manage your image collection entirely on your own computer. No subscriptions, no cloud uploads, no privacy concerns.
+## Why Imaginary exists
 
-Imaginary is designed to run fast even with huge photo libraries. It uses locally-running AI models for semantic search and face recognition, so you can find photos by describing what's in them ("sunset over mountains", "birthday cake") or by who's in them ("photos of Alice and Bob together"), all without sending your images anywhere.
+Most photo apps push you towards the cloud. That is great until you care about privacy, subscriptions, slow uploads, or working offline.
 
-## Features
+Imaginary keeps your library local and helps you do the three things people actually want:
 
-- **Smart Search**: Find images by describing their content, not just filenames
-- **Face Recognition**: Automatically detect and recognise people in your photos
-- **Duplicate Detection**: Find identical, near-identical, similar, and related images
-- **Fast Browsing**: Virtual scrolling handles collections of any size smoothly
-- **Image Information**: View metadata, dimensions, histograms, and add your own descriptions and ratings
-- **Fullscreen Viewer**: Zoom, pan, navigate, and tag faces in your photos
-- **Light & Dark Themes**: Easy on the eyes, day or night
-- **Fully Offline**: Everything runs locally (AI models download once on first use)
+- **Find** photos quickly, even when you cannot remember filenames
+- **Tidy** a messy collection, especially duplicates and near-duplicates
+- **Organise** around people, favourites, and your own notes
+
+## What it can do
+
+- **Fast browsing** with a thumbnail grid that stays smooth on large libraries
+- **AI search** that understands what you type (for example: “sunset over mountains”, “birthday cake”)
+- **Face workflows**: detect faces, group unknowns, name people, and use those names later
+- **Duplicate finding** at multiple strictness levels (identical, near-identical, similar, related)
+- **Ratings and descriptions** so you can build your own “favourites” system
+
+Everything runs locally. On first run, models may download once, then stay on your machine.
+
+## A quick start (how most people use it)
+
+1. **Start Imaginary**, then open the web page in your browser.
+2. Go to **Database** and **add one or more folders** that contain photos.
+3. Let it scan. Big libraries take time, especially face work.
+4. Go back to **Gallery** and start browsing.
+5. Use **Filter** when you want to find something specific.
+6. Use **Duplicates** when you want to clean up.
+7. Use **Faces** when you want to name people and improve recognition.
+
+## Getting around
+
+You can use the toolbar buttons, or these shortcuts:
+
+- **Ctrl or Cmd + G**: Gallery  
+- **Ctrl or Cmd + M**: Database  
+- **Ctrl or Cmd + D**: Duplicates  
+- **Ctrl or Cmd + F**: Filter  
+- **Ctrl or Cmd + P**: Faces (people)
+
+(These shortcuts are ignored while you are typing in a text box.)
+
+## Gallery
+
+The Gallery is the main view: a grid of thumbnails with an info panel on the right for the selected image.
+
+### Selecting photos
+
+Selection is designed to work quickly with mouse, keyboard, and touch.
+
+Mouse and trackpad:
+- **Click** a thumbnail to select it.
+- **Ctrl or Cmd + click** toggles a thumbnail in the selection.
+- **Shift + click** selects a range (from the last “anchor” selection).
+- **Right click** toggles a thumbnail in the selection.
+- **Drag on empty space** to draw a selection box:
+  - Left button: replaces the selection with what is inside the box
+  - Right button: toggles everything inside the box
+
+Touch:
+- **Tap** to select.
+- **Long press** on a thumbnail to add it to the selection without clearing.
+
+Keyboard (in any grid view):
+- **Arrow keys** move the active selection.
+- **Shift + arrows** extends the selection.
+- **Page Up / Page Down** moves by a page.
+- **Ctrl or Cmd + Up / Down** jumps to first or last item.
+- **Ctrl or Cmd + A** selects all.
+- **Escape** clears the selection.
+- **Enter** opens the selected item in fullscreen view (when a single item is selected).
+- **Delete / Backspace** deletes selected items (when the screen supports deletion).
+
+### Sorting
+
+The sort buttons change the order of the gallery. Two are especially useful:
+
+- **Sort by content**: select an image and this button then groups visually similar images, handy for finding “related shots”
+- **Sort by people**: groups images based on who appears in them (after face detection has run)
+
+### Gallery Info panel
+
+When you select a photo, the info panel shows basic details and lets you edit fields like:
+- **Description** (free text)
+- **Rating** (emoji works well for favourites)
+
+Descriptions and ratings also help when you search later.
+
+## Fullscreen viewer
+
+Open fullscreen with:
+- **Double click** a thumbnail, or
+- Select one thumbnail and press **Enter**, or
+- Use the toolbar button (with one thumbnail selected)
+
+Controls:
+- **Escape** closes fullscreen.
+- **Left / Right arrows** go to previous or next image.
+- **Home / End** go to first or last image in the current order.
+- **Mouse wheel** zooms in and out.
+- **Double click** toggles zoom level.
+- When zoomed in, **click and drag** to pan.
+
+Note: touch gestures for zoom and pan are still evolving. The app works best with mouse or trackpad in fullscreen today.
+
+## Face tagging (in fullscreen)
+
+If face detection is enabled and has run, you can turn on face tagging from the toolbar in the Gallery.
+
+What you can do:
+- **See face boxes** over the photo
+- **Click a face** and type a name
+- Use **autocomplete** to avoid re-typing names
+- **Enter** commits a name, **Escape** cancels editing
+- **Tab** cycles through unknown face inputs (use **Shift + Tab** to go backwards)
+- If something is not a real face, click the **X** on the box to suppress it
+
+As more photos are tagged, Imaginary can recognise that person in other images.
+
+## Filter (search and narrow down)
+
+Filter lets you decide what the Gallery shows. You can combine multiple filters.
+
+- **Text search**: type what you are looking for. This is semantic, so it matches meaning, not filenames.
+- **People**: pick one or more known people (only available when face detection is enabled).
+- **Date range**: start, end, or both.
+- **Rating**: use emoji ratings to find favourites.
+
+When a text search is active, a similarity control appears in the Gallery toolbar so you can make the match stricter or looser.
+
+## Duplicates
+
+Duplicates shows “stacks” of images that look the same or related, depending on the strictness level you choose.
+
+- Use the **similarity level slider** to switch between identical, near-identical, similar, and related.
+- **Double click** a stack (or press **Enter**) to open that group in the Gallery.
+- While viewing a group in the Gallery you can use **Alt + Left / Right** to move between groups.
+
+You can also sort stacks, including a semantic sort mode where you type something like “blurry” to surface low-quality duplicates.
+
+## Faces
+
+Faces is where you clean up and organise people.
+
+- Known people appear first.
+- Unknown faces appear below, grouped by similarity.
+
+Useful workflows:
+- **Batch tagging**: select several unknown faces, then type a name on one of them to apply it to the whole selection.
+- **Only unknowns**: this toolbar button allows you to focus on faces that still need names.
+
+When starting from scratch, it's a good idea to select two or three different-looking images of a given person, name those, and then move onto a different person. Having many people setup before refining any individual person helps the automatic naming process and reduces false-positive matches.
+
+### Pick preferred face (per person)
+
+Open a person to manage them in more detail. In this mode you can:
+- Pick a preferred face as their “avatar”
+- Rename the person
+- Remove mistakes (send wrongly tagged faces back to unknown or rename them)
+- Adjust recognition sensitivity for that person
+
+## Database
+
+Database is where you tell Imaginary where your photos live.
+
+- Add folders (scanned recursively)
+- Rescan folders to pick up changes
+- Watch progress for indexing, embeddings, and face work (with ETAs when possible)
+
+Supported image types include: `.jpg`, `.jpeg`, `.png`, `.gif`, `.bmp`, `.tiff`, `.tif`, `.webp`.
 
 ## Installation
 
 ### Requirements
 
 - Python 3.11 or later
-- A GPU with CUDA support is recommended for faster AI processing, but not required
+- A CUDA-capable GPU is recommended for faster processing, but not required
 
 ### Setup
 
-1. **Create a virtual environment:**
+1. **Create a virtual environment**
    ```bash
    python -m venv env
-   ```
+````
 
-2. **Activate it:**
+2. **Activate it**
+
    ```bash
    # Windows (Command Prompt)
    .\env\Scripts\activate
@@ -47,7 +204,8 @@ Imaginary is designed to run fast even with huge photo libraries. It uses locall
    source env/bin/activate
    ```
 
-3. **Install dependencies:**
+3. **Install dependencies**
+
    ```bash
    # Upgrade pip
    python -m pip install --upgrade pip
@@ -61,7 +219,7 @@ Imaginary is designed to run fast even with huge photo libraries. It uses locall
    pip install opencv-python imagehash flask waitress requests
    ```
 
-   > **Note:** You may see pip warnings about facenet-pytorch version conflicts with numpy, Pillow, and torch. These can be safely ignored—the package works correctly with newer versions despite its conservative dependency declarations.
+   Note: you may see pip warnings about facenet-pytorch version conflicts with numpy, Pillow, and torch. These can usually be ignored.
 
 ## Running Imaginary
 
@@ -69,11 +227,11 @@ Imaginary is designed to run fast even with huge photo libraries. It uses locall
 python app.py
 ```
 
-Then open your browser to **http://localhost:5000**
+Then open **[http://localhost:5000](http://localhost:5000)**
 
-On first run, the AI models will download automatically (this only happens once).
+On first run, the AI models will download automatically. This only happens once.
 
-### Command Line Options
+### Command line options
 
 ```bash
 python app.py --port 8080              # Use a different port
@@ -84,239 +242,28 @@ python app.py --group-faces            # Run unknown face grouping on startup
 python app.py --scan --detect-faces    # Combine flags as needed
 ```
 
-By default, no processing runs at startup—add flags to opt in to specific phases.
-
-## Getting Started
-
-1. **Add folders**: Click the Database button and add folders containing your images
-2. **Wait for scanning**: Imaginary will index your images, generate AI embeddings, and detect faces
-3. **Browse**: Return to the Gallery to see your collection
-4. **Search**: Click the Filter button to search by text, date, rating, or people
-
-Note: when you import a folder of images, the indexing process - face recognition in particular - can take a long time! For example, on the developers' machine, it takes about fifteen minutes to ingest 1000 images... With large image libraries, you'll need to be patient during importing before the functionality of the app becomes fully available.
-
-## Using the Gallery
-
-The Gallery is where you'll spend most of your time. It shows your image collection as a grid of thumbnails, with an information panel on the right showing details about the selected image.
-
-### Toolbar
-
-The toolbar across the top gives you quick access to common actions:
-
-**Left side (image actions):**
-- **Thumbnail size**: Make thumbnails smaller or larger
-- **Fullscreen**: Open the selected image in fullscreen view (or double-click a thumbnail)
-- **Open folder**: Reveal the selected image in your file manager
-- **Rotate**: Rotate images left or right (changes are saved to disk)
-- **Face tagging**: Toggle face tagging mode for the fullscreen viewer
-
-**Centre (navigation):**
-- **Database**: Add or remove folders, see scanning progress
-- **Duplicates**: Find duplicate and similar images
-- **Faces**: Browse and manage detected faces
-- **Filter**: Search and filter your collection
-
-**Right side (sorting and selection):**
-- **Sort buttons**: Sort by date, rating, content similarity, or people
-- **Sort direction**: Toggle between ascending and descending
-- **Select all / Clear**: Bulk selection controls
-- **Theme**: Switch between light and dark modes
-
-### Sorting Options
-
-Select any image, then click "Sort by content" to reorder the gallery by visual similarity—great for finding related photos. "Sort by people" groups images by who appears in them.
-
-### Image Information Panel
-
-When you select an image, the panel on the right shows:
-- Filename and folder path
-- Dimensions, file size, and date
-- An RGB histogram of the image
-- Editable description and rating fields
-
-Add descriptions to help with searching later—the AI search understands natural language, so detailed descriptions make images easier to find.
-
-## Fullscreen Viewer
-
-Double-click any thumbnail (or press Enter) to open it in fullscreen view:
-
-- **Navigate**: Arrow keys, swipe gestures, or click the on-screen arrows
-- **Zoom**: Scroll wheel or pinch; double-click toggles between fit-to-screen and actual size
-- **Pan**: Click and drag when zoomed in
-
-Press Escape or click the X button to return to the Gallery.
-
-### Tagging Faces
-
-When face tagging mode is enabled (via the toolbar button), detected faces appear as coloured boxes:
-
-- **Red**: Unknown face, not yet identified
-- **Green**: Known face, already tagged
-- **Orange**: Currently editing
-
-Click any face box to enter a name. As you type, matching names appear for quick selection—the search uses fuzzy matching, so "sro" finds "Steve Rose". Press **Tab** to cycle through unknown faces and tag multiple people quickly.
-
-Once you've tagged someone in a few photos, Imaginary learns to recognise them automatically in other images.
-
-To remove a false detection (something that isn't actually a face), click the **X** button on its bounding box.
-
-## Using the Filter Screen
-
-The Filter screen lets you narrow down which images appear in the Gallery. Combine multiple criteria:
-
-**Text Search**: Enter a description of what you're looking for. This uses AI semantic search, so "people at a beach" will find beach photos even if you never described them that way. When a text search is active, a similarity slider appears in the Gallery toolbar letting you adjust how strict the matching is.
-
-**People**: Click the add button to select one or more people from those you've tagged. The gallery will show images containing all the selected people.
-
-**Date Range**: Set a start date, end date, or both to filter by when photos were taken.
-
-**Rating Filter**: Enter emoji to find images you've rated. If you enter multiple emoji, images matching any of them will be shown.
-
-Click **Apply Filter** to return to the Gallery with your filter active. The filter button highlights when a filter is active; click it again to clear.
-
-## Using the Duplicates Screen
-
-The Duplicates screen helps you find and manage duplicate or similar images.
-
-**Similarity Levels**: Use the slider to control how strict the matching is:
-- **Identical** (rightmost) — Exact file matches with the same checksum
-- **Near-identical**: Same image at different sizes or compression levels
-- **Similar**: Photos from the same sequence or with similar composition
-- **Related** (leftmost) — Thematically related images
-
-**Stacks**: Each stack represents a group of similar images. The image shown on top is automatically chosen as the "best" one based on resolution, focus quality, and whether it's losslessly compressed.
-
-**Opening a Stack**: Double-click to open a stack in the Gallery, filtered to show only that group. Use Alt+Left/Right to move between groups.
-
-**Sorting Stacks**: By default, stacks are sorted by size (largest groups first). Use semantic sort to order by a text query—useful for finding specific duplicates like "blurry" or "dark".
-
-## Using the Faces Screen
-
-The Faces screen (Ctrl+P) shows all detected faces across your collection:
-
-- **Known faces** appear first, grouped by person and sorted alphabetically
-- **Unknown faces** appear below, grouped by visual similarity (largest groups first)
-- Click any face to edit its name or correct a mistaken identification
-- Use "Only unknowns" to focus on faces that need tagging
-- Adjust thumbnail size with the +/- buttons
-
-**Fuzzy name search**: When typing a name, the autocomplete uses subsequence matching. Type "sro" to find "Steve Rose", or "jd" to find "John Doe".
-
-**Batch tagging**: Select multiple unknown faces (Ctrl+Click or drag-select), then type a name on any selected face. All selected faces will be tagged at once.
-
-### Pick-Preferred Mode
-
-Double-click any known person to enter pick-preferred mode, where you can:
-
-- **Set the avatar**: Click the star on any face to make it the person's representative thumbnail
-- **Rename the person**: Click the rename button in the header
-- **Remove mistakes**: Select incorrectly-tagged faces and press Delete to return them to the unknown pool
-- **Adjust recognition sensitivity**: Use the threshold slider to control how strictly faces are matched to this person. Higher values require closer matches; lower values are more permissive. Faces that no longer meet a raised threshold are automatically returned to the unknown pool.
-- **View in context**: Double-click any face to open it in fullscreen view
-
-Press Escape or click the back arrow to return to the main faces view.
-
-## Using the Database Status Screen
-
-This screen allows folders to be added to and removed from the app's image library. Folders are scanned recursively for all compatible image types ('.jpg', '.jpeg', '.png', '.gif', '.bmp', '.tiff', '.tif', '.webp') to add them to the app's database. You may include subdirectories as distinct folders - the app will only catalogue the contents once. Removing the parent directory from those that the app is watching won't affect any registered subdirectories or their images.
-
-The database screen also shows the status of any ongoing indexing processes, along with an estimated time until completion, where possible.
-
-Clicking the "Rescan all folders" button will start a complete check of all registerd folders to see if any of the images within have been added, removed, or modified since the last time they were indexed. Indexing typically runs automatically every time the app (backend) is started.
-
-## Controls
-
-### Gallery View
-
-| Action | Mouse | Touch | Keyboard |
-|--------|-------|-------|----------|
-| Select image | Click | Tap | Arrow keys |
-| Add to selection | Ctrl+Click | — | Shift+Arrows |
-| Toggle selection | Ctrl+Click | — | — |
-| Select range | Shift+Click | — | Shift+Arrows |
-| Select all | — | — | Ctrl+A |
-| Clear selection | — | — | Escape |
-| Select multiple | Drag box | — | — |
-| Open fullscreen | Double-click | Double-tap | Enter |
-| Delete selected | — | — | Delete |
-| Previous/Next group | Toolbar buttons | Toolbar buttons | Alt+Left / Alt+Right |
-| Jump to start/end | — | — | Ctrl+Up / Ctrl+Down |
-| Page up/down | — | — | Page Up / Page Down |
-
-### Fullscreen Viewer
-
-| Action | Mouse | Touch | Keyboard |
-|--------|-------|-------|----------|
-| Exit | Click X button | Tap X button | Escape |
-| Previous/Next image | Click arrows | Swipe left/right | Arrow keys |
-| First/Last image | — | — | Home / End |
-| Zoom in/out | Scroll wheel | Pinch | — |
-| Toggle zoom (fit ↔ 100%) | Double-click | Double-tap | — |
-| Pan (when zoomed) | Click and drag | Drag | — |
-| Next unknown face | — | — | Tab |
-
-### Duplicates View
-
-| Action | Mouse | Touch | Keyboard |
-|--------|-------|-------|----------|
-| Select stack | Click | Tap | Arrow keys |
-| Add to selection | Ctrl+Click | — | Shift+Arrows |
-| Select range | Shift+Click | — | Shift+Arrows |
-| Select all | — | — | Ctrl+A |
-| Clear selection | — | — | Escape |
-| Select multiple | Drag box | — | — |
-| Open stack in Gallery | Double-click | Double-tap | Enter |
-| Jump to start/end | — | — | Ctrl+Up / Ctrl+Down |
-| Page up/down | — | — | Page Up / Page Down |
-
-### Faces View
-
-| Action | Mouse | Touch | Keyboard |
-|--------|-------|-------|----------|
-| Select face | Click | Tap | Arrow keys |
-| Add to selection | Ctrl+Click | — | Shift+Arrows |
-| Select range | Shift+Click | — | Shift+Arrows |
-| Select all unknowns | — | — | Ctrl+A |
-| Clear selection | — | — | Escape |
-| Select multiple | Drag box | — | — |
-| Enter pick-preferred | Double-click known person | Double-tap | Enter |
-| Exit pick-preferred | Click back arrow | Tap back arrow | Escape |
-| Open face in fullscreen | Double-click (in pick-preferred) | Double-tap | Enter |
-| Delete / unassign face | — | — | Delete |
-
-### Global Shortcuts
-
-| Shortcut | Action |
-|----------|--------|
-| Ctrl+G | Go to Gallery |
-| Ctrl+M | Go to Database Management |
-| Ctrl+D | Go to Duplicates |
-| Ctrl+F | Go to Search/Filter |
-| Ctrl+P | Go to Faces (People) |
+By default, no processing runs at startup. Add flags to opt in to the phases you want.
 
 ## Configuration
 
-Settings are stored in `.imaginary.yml` (created automatically on first run):
+Settings are stored in `.imaginary.yml` (created automatically on first run). Examples:
 
-| Setting | Default | Description |
-|---------|---------|-------------|
-| `thumbnail_quality` | 85 | JPEG quality for thumbnails (1-100) |
-| `thumbnail_cache_size_mb` | 100 | RAM cache size for thumbnails |
-| `indexing_threads` | 4 | Parallel threads for scanning |
-| `face_detection_enabled` | true | Enable automatic face detection |
-| `face_detection_min_confidence` | 0.95 | Detection confidence threshold |
-| `face_recognition_threshold` | 0.65 | Default similarity threshold for auto-recognition (can be overridden per person in pick-preferred mode) |
+* `thumbnail_quality`: JPEG quality for thumbnails (1 to 100)
+* `thumbnail_cache_size_mb`: RAM cache size for thumbnails
+* `indexing_threads`: parallel threads for scanning
+* `face_detection_enabled`: enable automatic face detection
+* `face_detection_min_confidence`: detection confidence threshold
+* `face_recognition_threshold`: default similarity threshold for auto-recognition
+  (this can be overridden per person in pick preferred mode)
 
 ## Tips
 
-- **Large collections**: Imaginary handles tens of thousands of images, but initial scanning takes time. Let it run in the background.
-- **Face tagging**: Tag a person in 3-5 clear photos and Imaginary will start recognising them automatically.
-- **Tuning recognition**: If someone is being confused with another person, increase their recognition threshold in pick-preferred mode. If they're not being recognised in enough photos, lower it.
-- **Finding people**: Use the People filter or "Sort by people" to quickly find photos of specific individuals.
-- **Duplicate detection**: Start with "Similar" or "Related" to see what's there, then move to stricter levels to find exact copies.
-- **Semantic sorting**: In Duplicates view, use semantic sort with queries like "blurry" to find low-quality duplicates to delete.
-- **Descriptions & ratings**: Add personal notes and emoji ratings to help you find favourites later.
+* Large imports and database rescans take time. Let it run and come back later.
+* Face recognition improves as you tag more clear examples of the same person.
+* Add multiple people before multiple images of a specific person, this will speed up automatic tagging.
+* If two people get mixed up, increase that person’s recognition threshold.
+* Emoji ratings work well for quick favourites, and make filtering pleasant.
 
-## License
+## Licence
 
 Apache 2.0
