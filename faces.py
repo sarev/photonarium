@@ -587,17 +587,34 @@ class FaceDetector:
                     if face_pixels < self.min_face_size:
                         continue
 
+                    # Clone tensor to CPU immediately to avoid keeping GPU tensor alive
                     all_faces_data.append((
                         image_path,
-                        faces_tensor[i],
+                        faces_tensor[i].clone().cpu(),
                         (norm_x, norm_y, norm_w, norm_h),
                         float(prob),
                     ))
+
+                # Release GPU memory for this image's face tensors
+                del faces_tensor
+
+            # Release GPU memory between dimension groups
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
+
+            # Release PIL images for this group (no longer needed)
+            for _, img, _ in group:
+                img.close()
+
+        # Release references to loaded images (PIL images now closed)
+        del loaded_images
+        del dimension_groups
 
         if not all_faces_data or should_stop():
             return results
 
         # Phase 4: Batch compute embeddings for ALL faces across all images
+        # Tensors are on CPU from Phase 3, move to GPU for ResNet
         all_tensors = torch.stack([fd[1] for fd in all_faces_data]).to(self.device)
         # Note: MTCNN with post_process=True already standardizes to [-1, 1] for ResNet
 
@@ -605,13 +622,25 @@ class FaceDetector:
             embeddings_batch = self.resnet(all_tensors)
             embeddings_batch = embeddings_batch.cpu().numpy()
 
+        # Release GPU memory from embedding computation
+        del all_tensors
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+
+        # Clear CPU tensors from all_faces_data (keep only metadata)
+        all_faces_metadata = [
+            (fd[0], fd[2], fd[3])  # (image_path, norm_box, confidence)
+            for fd in all_faces_data
+        ]
+        del all_faces_data
+
         # Normalize embeddings
         norms = np.linalg.norm(embeddings_batch, axis=1, keepdims=True)
         norms[norms == 0] = 1
         embeddings_batch = embeddings_batch / norms
 
         # Phase 5: Build results dict
-        for idx, (image_path, _, norm_box, confidence) in enumerate(all_faces_data):
+        for idx, (image_path, norm_box, confidence) in enumerate(all_faces_metadata):
             norm_x, norm_y, norm_w, norm_h = norm_box
             results[image_path].append(DetectedFace(
                 box_x=float(norm_x),
