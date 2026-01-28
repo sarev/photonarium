@@ -641,6 +641,13 @@
         input.value = pickPreferredPersonName || '';
         input.dataset.faceId = face.id;
 
+        // Handle focus - pre-fetch cache for fast autocomplete
+        input.addEventListener('focus', () => {
+            if (Date.now() - peopleCacheTime > PEOPLE_CACHE_TTL) {
+                refreshPeopleCache();
+            }
+        });
+
         // Handle input for autocomplete
         input.addEventListener('input', () => {
             showCardAutocomplete(input, input.value, card);
@@ -727,6 +734,10 @@
             return;
         }
 
+        // Immediately show loading and close autocomplete for better UX
+        closeAllAutocompletes();
+        showFacesLoading('Reassigning face…');
+
         // Get selected faces, or just the typed face if none selected
         let faceIds = facesSelection ? facesSelection.getSelected() : [];
 
@@ -788,6 +799,9 @@
                     if (reassignedPreferred) {
                         thumbnailCacheBust.set(pickPreferredPersonId, Date.now());
                     }
+
+                    // Hide loading now that grid is re-rendered
+                    hideFacesLoading();
                 }
 
                 // Bust cache for the destination person too
@@ -805,6 +819,7 @@
             }
         } catch (error) {
             console.error('Failed to reassign face:', error);
+            hideFacesLoading();
             App.showError(`Failed to reassign ${faceIds.length > 1 ? 'faces' : 'face'}.`);
             // Reset input to current name
             const input = card.querySelector('.face-card-input');
@@ -1425,7 +1440,7 @@
             if (facesEmpty) facesEmpty.hidden = false;
         } finally {
             isLoading = false;
-            if (facesLoading) facesLoading.hidden = true;
+            hideFacesLoading();
         }
     }
 
@@ -1478,6 +1493,11 @@
 
         // Build known people list for static section
         knownPeople = buildKnownPeopleList(knownFaces);
+
+        // Sync peopleCache from knownPeople for instant autocomplete
+        // (no API call needed - we already have the data)
+        peopleCache = knownPeople.map(p => ({ id: p.id, name: p.name }));
+        peopleCacheTime = Date.now();
 
         // Check for empty state
         if (faces.length === 0) {
@@ -1674,6 +1694,13 @@
         input.value = '';
         input.dataset.faceId = face.id;
 
+        // Handle focus - pre-fetch cache for fast autocomplete
+        input.addEventListener('focus', () => {
+            if (Date.now() - peopleCacheTime > PEOPLE_CACHE_TTL) {
+                refreshPeopleCache();
+            }
+        });
+
         // Handle input for autocomplete
         input.addEventListener('input', () => {
             showCardAutocomplete(input, input.value, card);
@@ -1779,10 +1806,10 @@
      * @param {string} query - Search query
      * @param {HTMLElement} card - Parent card element
      */
-    async function showCardAutocomplete(input, query, card) {
-        // Refresh people cache if stale
+    function showCardAutocomplete(input, query, card) {
+        // Trigger background refresh if cache is stale (don't await - use current data)
         if (Date.now() - peopleCacheTime > PEOPLE_CACHE_TTL) {
-            await refreshPeopleCache();
+            refreshPeopleCache();
         }
 
         // Remove existing autocomplete
@@ -1831,6 +1858,39 @@
     }
 
     /**
+     * Show the loading overlay with a custom message.
+     * @param {string} message - Message to display
+     */
+    function showFacesLoading(message) {
+        if (facesLoading) {
+            const p = facesLoading.querySelector('p');
+            if (p) p.textContent = message;
+            facesLoading.hidden = false;
+        }
+        if (facesGrid) facesGrid.style.opacity = '0.5';
+    }
+
+    /**
+     * Hide the loading overlay and reset to default message.
+     */
+    function hideFacesLoading() {
+        if (facesLoading) {
+            facesLoading.hidden = true;
+            const p = facesLoading.querySelector('p');
+            if (p) p.textContent = 'Loading faces…';
+        }
+        if (facesGrid) facesGrid.style.opacity = '';
+    }
+
+    /**
+     * Close all autocomplete dropdowns and clear any pending timers.
+     */
+    function closeAllAutocompletes() {
+        const autocompletes = document.querySelectorAll('.face-card-autocomplete');
+        autocompletes.forEach(ac => ac.remove());
+    }
+
+    /**
      * Commit a name change for selected faces.
      * If multiple faces are selected, applies the name to all of them.
      * The face where the user typed becomes the "preferred" face for that person.
@@ -1842,6 +1902,10 @@
      */
     async function commitSelectedFacesName(typedFaceId, name, card) {
         if (!name) return;
+
+        // Immediately show loading and close autocomplete for better UX
+        closeAllAutocompletes();
+        showFacesLoading('Assigning name…');
 
         // Get selected faces, or just the typed face if none selected
         let faceIds = facesSelection ? facesSelection.getSelected() : [];
@@ -1879,6 +1943,7 @@
             }
         } catch (error) {
             console.error('Failed to identify faces:', error);
+            hideFacesLoading();
             App.showError(`Failed to identify ${faceIds.length > 1 ? 'faces' : 'face'}.`);
         }
     }
