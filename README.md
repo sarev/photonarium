@@ -6,20 +6,20 @@ A local image catalogue for people who want to organise their photo collection w
 
 ## Why Imaginary?
 
-Your photos are personal. They live on your hard drive, and that's where they should stay. Imaginary helps you browse, search, and manage your image collection entirely on your own computer—no subscriptions, no cloud uploads, no privacy concerns.
+Your photos are personal. They live on your hard drive, and that's where they should stay. Imaginary helps you browse, search, and manage your image collection entirely on your own computer. No subscriptions, no cloud uploads, no privacy concerns.
 
-Imaginary is designed to run fast even with huge photo libraries. It uses locally-running AI models for semantic search and face recognition, so you can find photos by describing what's in them ("sunset over mountains", "birthday cake") or by who's in them ("photos of Alice and Bob together")—all without sending your images anywhere.
+Imaginary is designed to run fast even with huge photo libraries. It uses locally-running AI models for semantic search and face recognition, so you can find photos by describing what's in them ("sunset over mountains", "birthday cake") or by who's in them ("photos of Alice and Bob together"), all without sending your images anywhere.
 
 ## Features
 
-- **Smart Search** — Find images by describing their content, not just filenames
-- **Face Recognition** — Automatically detect and recognise people in your photos
-- **Duplicate Detection** — Find identical, near-identical, similar, and related images
-- **Fast Browsing** — Virtual scrolling handles collections of any size smoothly
-- **Image Information** — View metadata, dimensions, histograms, and add your own descriptions and ratings
-- **Fullscreen Viewer** — Zoom, pan, navigate, and tag faces in your photos
-- **Light & Dark Themes** — Easy on the eyes, day or night
-- **Fully Offline** — Everything runs locally (AI models download once on first use)
+- **Smart Search**: Find images by describing their content, not just filenames
+- **Face Recognition**: Automatically detect and recognise people in your photos
+- **Duplicate Detection**: Find identical, near-identical, similar, and related images
+- **Fast Browsing**: Virtual scrolling handles collections of any size smoothly
+- **Image Information**: View metadata, dimensions, histograms, and add your own descriptions and ratings
+- **Fullscreen Viewer**: Zoom, pan, navigate, and tag faces in your photos
+- **Light & Dark Themes**: Easy on the eyes, day or night
+- **Fully Offline**: Everything runs locally (AI models download once on first use)
 
 ## Installation
 
@@ -88,10 +88,10 @@ By default, no processing runs at startup—add flags to opt in to specific phas
 
 ## Getting Started
 
-1. **Add folders** — Click the Database button and add folders containing your images
-2. **Wait for scanning** — Imaginary will index your images, generate AI embeddings, and detect faces
-3. **Browse** — Return to the Gallery to see your collection
-4. **Search** — Click the Filter button to search by text, date, rating, or people
+1. **Add folders**: Click the Database button and add folders containing your images
+2. **Wait for scanning**: Imaginary will index your images, generate AI embeddings, and detect faces
+3. **Browse**: Return to the Gallery to see your collection
+4. **Search**: Click the Filter button to search by text, date, rating, or people
 
 Note: when you import a folder of images, the indexing process - face recognition in particular - can take a long time! For example, on the developers' machine, it takes about fifteen minutes to ingest 1000 images... With large image libraries, you'll need to be patient during importing before the functionality of the app becomes fully available.
 
@@ -104,23 +104,23 @@ The Gallery is where you'll spend most of your time. It shows your image collect
 The toolbar across the top gives you quick access to common actions:
 
 **Left side (image actions):**
-- **Thumbnail size** — Make thumbnails smaller or larger
-- **Fullscreen** — Open the selected image in fullscreen view (or double-click a thumbnail)
-- **Open folder** — Reveal the selected image in your file manager
-- **Rotate** — Rotate images left or right (changes are saved to disk)
-- **Face tagging** — Toggle face tagging mode for the fullscreen viewer
+- **Thumbnail size**: Make thumbnails smaller or larger
+- **Fullscreen**: Open the selected image in fullscreen view (or double-click a thumbnail)
+- **Open folder**: Reveal the selected image in your file manager
+- **Rotate**: Rotate images left or right (changes are saved to disk)
+- **Face tagging**: Toggle face tagging mode for the fullscreen viewer
 
 **Centre (navigation):**
-- **Database** — Add or remove folders, see scanning progress
-- **Duplicates** — Find duplicate and similar images
-- **Faces** — Browse and manage detected faces
-- **Filter** — Search and filter your collection
+- **Database**: Add or remove folders, see scanning progress
+- **Duplicates**: Find duplicate and similar images
+- **Faces**: Browse and manage detected faces
+- **Filter**: Search and filter your collection
 
 **Right side (sorting and selection):**
-- **Sort buttons** — Sort by date, rating, content similarity, or people
-- **Sort direction** — Toggle between ascending and descending
-- **Select all / Clear** — Bulk selection controls
-- **Theme** — Switch between light and dark modes
+- **Sort buttons**: Sort by date, rating, content similarity, or people
+- **Sort direction**: Toggle between ascending and descending
+- **Select all / Clear**: Bulk selection controls
+- **Theme**: Switch between light and dark modes
 
 ### Sorting Options
 
@@ -140,9 +140,9 @@ Add descriptions to help with searching later—the AI search understands natura
 
 Double-click any thumbnail (or press Enter) to open it in fullscreen view:
 
-- **Navigate** — Arrow keys, swipe gestures, or click the on-screen arrows
-- **Zoom** — Scroll wheel or pinch; double-click toggles between fit-to-screen and actual size
-- **Pan** — Click and drag when zoomed in
+- **Navigate**: Arrow keys, swipe gestures, or click the on-screen arrows
+- **Zoom**: Scroll wheel or pinch; double-click toggles between fit-to-screen and actual size
+- **Pan**: Click and drag when zoomed in
 
 Press Escape or click the X button to return to the Gallery.
 
@@ -150,9 +150,9 @@ Press Escape or click the X button to return to the Gallery.
 
 When face tagging mode is enabled (via the toolbar button), detected faces appear as coloured boxes:
 
-- **Red** — Unknown face, not yet identified
-- **Green** — Known face, already tagged
-- **Orange** — Currently editing
+- **Red**: Unknown face, not yet identified
+- **Green**: Known face, already tagged
+- **Orange**: Currently editing
 
 Click any face box to enter a name. As you type, matching names appear for quick selection—the search uses fuzzy matching, so "sro" finds "Steve Rose". Press **Tab** to cycle through unknown faces and tag multiple people quickly.
 
@@ -164,13 +164,13 @@ To remove a false detection (something that isn't actually a face), click the **
 
 The Filter screen lets you narrow down which images appear in the Gallery. Combine multiple criteria:
 
-**Text Search** — Enter a description of what you're looking for. This uses AI semantic search, so "people at a beach" will find beach photos even if you never described them that way. When a text search is active, a similarity slider appears in the Gallery toolbar letting you adjust how strict the matching is.
+**Text Search**: Enter a description of what you're looking for. This uses AI semantic search, so "people at a beach" will find beach photos even if you never described them that way. When a text search is active, a similarity slider appears in the Gallery toolbar letting you adjust how strict the matching is.
 
-**People** — Click the add button to select one or more people from those you've tagged. The gallery will show images containing all the selected people.
+**People**: Click the add button to select one or more people from those you've tagged. The gallery will show images containing all the selected people.
 
-**Date Range** — Set a start date, end date, or both to filter by when photos were taken.
+**Date Range**: Set a start date, end date, or both to filter by when photos were taken.
 
-**Rating Filter** — Enter emoji to find images you've rated. If you enter multiple emoji, images matching any of them will be shown.
+**Rating Filter**: Enter emoji to find images you've rated. If you enter multiple emoji, images matching any of them will be shown.
 
 Click **Apply Filter** to return to the Gallery with your filter active. The filter button highlights when a filter is active; click it again to clear.
 
@@ -178,17 +178,17 @@ Click **Apply Filter** to return to the Gallery with your filter active. The fil
 
 The Duplicates screen helps you find and manage duplicate or similar images.
 
-**Similarity Levels** — Use the slider to control how strict the matching is:
+**Similarity Levels**: Use the slider to control how strict the matching is:
 - **Identical** (rightmost) — Exact file matches with the same checksum
-- **Near-identical** — Same image at different sizes or compression levels
-- **Similar** — Photos from the same sequence or with similar composition
+- **Near-identical**: Same image at different sizes or compression levels
+- **Similar**: Photos from the same sequence or with similar composition
 - **Related** (leftmost) — Thematically related images
 
-**Stacks** — Each stack represents a group of similar images. The image shown on top is automatically chosen as the "best" one based on resolution, focus quality, and whether it's losslessly compressed.
+**Stacks**: Each stack represents a group of similar images. The image shown on top is automatically chosen as the "best" one based on resolution, focus quality, and whether it's losslessly compressed.
 
-**Opening a Stack** — Double-click to open a stack in the Gallery, filtered to show only that group. Use Alt+Left/Right to move between groups.
+**Opening a Stack**: Double-click to open a stack in the Gallery, filtered to show only that group. Use Alt+Left/Right to move between groups.
 
-**Sorting Stacks** — By default, stacks are sorted by size (largest groups first). Use semantic sort to order by a text query—useful for finding specific duplicates like "blurry" or "dark".
+**Sorting Stacks**: By default, stacks are sorted by size (largest groups first). Use semantic sort to order by a text query—useful for finding specific duplicates like "blurry" or "dark".
 
 ## Using the Faces Screen
 
@@ -200,19 +200,19 @@ The Faces screen (Ctrl+P) shows all detected faces across your collection:
 - Use "Only unknowns" to focus on faces that need tagging
 - Adjust thumbnail size with the +/- buttons
 
-**Fuzzy name search** — When typing a name, the autocomplete uses subsequence matching. Type "sro" to find "Steve Rose", or "jd" to find "John Doe".
+**Fuzzy name search**: When typing a name, the autocomplete uses subsequence matching. Type "sro" to find "Steve Rose", or "jd" to find "John Doe".
 
-**Batch tagging** — Select multiple unknown faces (Ctrl+Click or drag-select), then type a name on any selected face. All selected faces will be tagged at once.
+**Batch tagging**: Select multiple unknown faces (Ctrl+Click or drag-select), then type a name on any selected face. All selected faces will be tagged at once.
 
 ### Pick-Preferred Mode
 
 Double-click any known person to enter pick-preferred mode, where you can:
 
-- **Set the avatar** — Click the star on any face to make it the person's representative thumbnail
-- **Rename the person** — Click the rename button in the header
-- **Remove mistakes** — Select incorrectly-tagged faces and press Delete to return them to the unknown pool
-- **Adjust recognition sensitivity** — Use the threshold slider to control how strictly faces are matched to this person. Higher values require closer matches; lower values are more permissive. Faces that no longer meet a raised threshold are automatically returned to the unknown pool.
-- **View in context** — Double-click any face to open it in fullscreen view
+- **Set the avatar**: Click the star on any face to make it the person's representative thumbnail
+- **Rename the person**: Click the rename button in the header
+- **Remove mistakes**: Select incorrectly-tagged faces and press Delete to return them to the unknown pool
+- **Adjust recognition sensitivity**: Use the threshold slider to control how strictly faces are matched to this person. Higher values require closer matches; lower values are more permissive. Faces that no longer meet a raised threshold are automatically returned to the unknown pool.
+- **View in context**: Double-click any face to open it in fullscreen view
 
 Press Escape or click the back arrow to return to the main faces view.
 
@@ -309,13 +309,13 @@ Settings are stored in `.imaginary.yml` (created automatically on first run):
 
 ## Tips
 
-- **Large collections** — Imaginary handles tens of thousands of images, but initial scanning takes time. Let it run in the background.
-- **Face tagging** — Tag a person in 3-5 clear photos and Imaginary will start recognising them automatically.
-- **Tuning recognition** — If someone is being confused with another person, increase their recognition threshold in pick-preferred mode. If they're not being recognised in enough photos, lower it.
-- **Finding people** — Use the People filter or "Sort by people" to quickly find photos of specific individuals.
-- **Duplicate detection** — Start with "Similar" or "Related" to see what's there, then move to stricter levels to find exact copies.
-- **Semantic sorting** — In Duplicates view, use semantic sort with queries like "blurry" to find low-quality duplicates to delete.
-- **Descriptions & ratings** — Add personal notes and emoji ratings to help you find favourites later.
+- **Large collections**: Imaginary handles tens of thousands of images, but initial scanning takes time. Let it run in the background.
+- **Face tagging**: Tag a person in 3-5 clear photos and Imaginary will start recognising them automatically.
+- **Tuning recognition**: If someone is being confused with another person, increase their recognition threshold in pick-preferred mode. If they're not being recognised in enough photos, lower it.
+- **Finding people**: Use the People filter or "Sort by people" to quickly find photos of specific individuals.
+- **Duplicate detection**: Start with "Similar" or "Related" to see what's there, then move to stricter levels to find exact copies.
+- **Semantic sorting**: In Duplicates view, use semantic sort with queries like "blurry" to find low-quality duplicates to delete.
+- **Descriptions & ratings**: Add personal notes and emoji ratings to help you find favourites later.
 
 ## License
 
