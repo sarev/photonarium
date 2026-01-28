@@ -221,6 +221,58 @@ const Search = {
         if (this._els.peopleSearch) {
             this._els.peopleSearch.addEventListener('input', () => this._filterPeopleList());
         }
+
+        // Drag-and-drop for people picker panels
+        this._setupPanelDropHandlers(this._els.peopleAvailable, 'available');
+        this._setupPanelDropHandlers(this._els.peopleSelected, 'selected');
+    },
+
+    /**
+     * Sets up drag-and-drop handlers for a people picker panel.
+     * @param {HTMLElement} panel - The panel element
+     * @param {string} panelType - 'available' or 'selected'
+     * @private
+     */
+    _setupPanelDropHandlers(panel, panelType) {
+        if (!panel) return;
+
+        panel.addEventListener('dragover', (e) => {
+            e.preventDefault();
+            e.dataTransfer.dropEffect = 'move';
+            panel.classList.add('drag-over');
+        });
+
+        panel.addEventListener('dragleave', (e) => {
+            // Only remove class if leaving the panel entirely
+            if (!panel.contains(e.relatedTarget)) {
+                panel.classList.remove('drag-over');
+            }
+        });
+
+        panel.addEventListener('drop', (e) => {
+            e.preventDefault();
+            panel.classList.remove('drag-over');
+
+            const sourcePanel = e.dataTransfer.getData('text/panel');
+            if (sourcePanel === panelType) return; // Dropped on same panel
+
+            try {
+                const person = JSON.parse(e.dataTransfer.getData('application/json'));
+                if (panelType === 'selected') {
+                    // Dropping on selected panel = add
+                    if (!this._selectedPeople.some(p => p.id === person.id)) {
+                        this._selectedPeople.push(person);
+                    }
+                } else {
+                    // Dropping on available panel = remove
+                    this._selectedPeople = this._selectedPeople.filter(p => p.id !== person.id);
+                }
+                this._renderPeopleAvailable();
+                this._renderPeopleSelected();
+            } catch (error) {
+                console.error('Failed to parse dropped person data:', error);
+            }
+        });
     },
 
     /**
@@ -333,6 +385,24 @@ const Search = {
     },
 
     /**
+     * Fuzzy/subsequence match - each char in query appears in order in target.
+     * @param {string} query - Search query (lowercase)
+     * @param {string} target - Target string (lowercase)
+     * @returns {boolean}
+     * @private
+     */
+    _fuzzyMatch(query, target) {
+        if (!query) return true;
+        let qi = 0;
+        for (let ti = 0; ti < target.length && qi < query.length; ti++) {
+            if (target[ti] === query[qi]) {
+                qi++;
+            }
+        }
+        return qi === query.length;
+    },
+
+    /**
      * Renders the available people panel in the picker.
      * @private
      */
@@ -342,10 +412,10 @@ const Search = {
         const query = (this._els.peopleSearch?.value || '').toLowerCase().trim();
         const selectedIds = new Set(this._selectedPeople.map(p => p.id));
 
-        // Filter people by search query, excluding already selected
+        // Filter people by search query (fuzzy match), excluding already selected
         let filtered = this._allPeople.filter(p => !selectedIds.has(p.id));
         if (query) {
-            filtered = filtered.filter(p => p.name.toLowerCase().includes(query));
+            filtered = filtered.filter(p => this._fuzzyMatch(query, p.name.toLowerCase()));
         }
 
         this._els.peopleAvailable.innerHTML = '';
@@ -376,7 +446,7 @@ const Search = {
         if (this._selectedPeople.length === 0) {
             const empty = document.createElement('div');
             empty.className = 'people-picker-empty';
-            empty.textContent = 'Click people on the left to add them';
+            empty.textContent = 'Click or drag people from the left to add them';
             this._els.peopleSelected.appendChild(empty);
             return;
         }
@@ -398,6 +468,7 @@ const Search = {
         const item = document.createElement('div');
         item.className = 'people-picker-item';
         item.dataset.personId = person.id;
+        item.draggable = true;
 
         const img = document.createElement('img');
         img.src = `/api/people/${person.id}/thumbnail`;
@@ -420,6 +491,13 @@ const Search = {
             }
             this._renderPeopleAvailable();
             this._renderPeopleSelected();
+        });
+
+        // Drag-and-drop support
+        item.addEventListener('dragstart', (e) => {
+            e.dataTransfer.setData('application/json', JSON.stringify(person));
+            e.dataTransfer.setData('text/panel', panel);
+            e.dataTransfer.effectAllowed = 'move';
         });
 
         return item;

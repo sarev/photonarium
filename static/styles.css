@@ -2270,7 +2270,7 @@ a:hover {
 
 /* People picker dialog */
 #dialog-people-picker {
-    width: min(700px, 90vw);
+    width: min(900px, 90vw);
     max-width: 90vw;
 }
 
@@ -2288,8 +2288,8 @@ a:hover {
     display: flex;
     gap: 1rem;
     flex: 1;
-    min-height: 300px;
-    max-height: 60vh;
+    min-height: 400px;
+    max-height: 70vh;
 }
 
 .people-picker-panel {
@@ -2385,6 +2385,22 @@ a:hover {
     color: var(--color-text-muted);
     font-style: italic;
     padding: 2rem;
+}
+
+.people-picker-content .dialog-actions {
+    margin-top: 1rem;
+}
+
+.people-picker-item[draggable="true"] {
+    cursor: grab;
+}
+
+.people-picker-item[draggable="true"]:active {
+    cursor: grabbing;
+}
+
+.people-picker-grid.drag-over {
+    background-color: var(--color-selection);
 }
 
 
