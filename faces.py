@@ -2265,6 +2265,25 @@ def compute_unknown_face_groups(
     Returns:
         Number of groups created.
     """
+    global _grouping_status
+
+    # Set status to computing
+    with _grouping_lock:
+        _grouping_status = {'status': 'computing'}
+
+    try:
+        return _compute_unknown_face_groups_impl(conn, threshold)
+    finally:
+        # Clear status when done
+        with _grouping_lock:
+            _grouping_status = None
+
+
+def _compute_unknown_face_groups_impl(
+    conn: sqlite3.Connection,
+    threshold: float,
+) -> int:
+    """Internal implementation of face grouping."""
     # Load unknown faces with embeddings
     cursor = conn.execute("""
         SELECT f.id, f.embedding
@@ -2375,8 +2394,9 @@ def compute_unknown_face_groups_async(
                 _grouping_status = {'status': 'computing', 'progress': 0}
 
             # Use shared connection with lock from ImageDatabase
+            # Call impl directly to avoid double status tracking
             with db._db_lock:
-                n_groups = compute_unknown_face_groups(db.conn, threshold)
+                n_groups = _compute_unknown_face_groups_impl(db.conn, threshold)
 
             # Store result
             with _grouping_lock:

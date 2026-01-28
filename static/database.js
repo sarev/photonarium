@@ -119,7 +119,14 @@ const Database = {
             embeddingEta: App.$('embedding-eta'),
             faceQueueRow: App.$('face-queue-row'),
             faceCount: App.$('face-count'),
-            faceEta: App.$('face-eta')
+            faceEta: App.$('face-eta'),
+            // Phase 4 status elements
+            duplicatesRow: App.$('duplicates-row'),
+            duplicatesStatus: App.$('duplicates-status'),
+            faceGroupingRow: App.$('face-grouping-row'),
+            faceGroupingStatus: App.$('face-grouping-status'),
+            faceEmbeddingsRow: App.$('face-embeddings-row'),
+            faceEmbeddingsStatus: App.$('face-embeddings-status'),
         };
 
         this._bindEvents();
@@ -372,6 +379,9 @@ const Database = {
      * @param {number} status.embedding_queue - Items in embedding queue
      * @param {number} status.face_queue - Items in face detection queue
      * @param {number} status.total_images - Total images in database
+     * @param {Object} [status.duplicates] - Duplicate detection status (if computing)
+     * @param {Object} [status.face_grouping] - Face grouping status (if computing)
+     * @param {Object} [status.face_embeddings] - Face CLIP embedding status (if computing)
      * @private
      */
     _updateStatusDisplay(status) {
@@ -384,6 +394,11 @@ const Database = {
         const embedding = status.embedding_queue || 0;
         const faces = status.face_queue || 0;
 
+        // Phase 4 statuses (only present when active)
+        const duplicates = status.duplicates;
+        const faceGrouping = status.face_grouping;
+        const faceEmbeddings = status.face_embeddings;
+
         // Update indicator class
         this._els.statusIndicator.className = 'status-indicator ' + (isUpdating ? 'updating' : 'up-to-date');
 
@@ -395,17 +410,37 @@ const Database = {
             this._els.statusTotal.textContent = String(status.total_images);
         }
 
-        // Show/hide queue counts
-        if (isUpdating && (indexing > 0 || embedding > 0 || faces > 0)) {
+        // Determine if any processing is active
+        const hasQueueWork = indexing > 0 || embedding > 0 || faces > 0;
+        const hasPhase4Work = duplicates || faceGrouping || faceEmbeddings;
+        const hasAnyWork = hasQueueWork || hasPhase4Work;
+
+        if (isUpdating && hasAnyWork) {
             this._els.queueCounts.hidden = false;
-            this._els.indexingCount.textContent = indexing;
-            this._els.embeddingCount.textContent = embedding;
 
-            // Update ETAs
-            this._updateIndexingEta(indexing);
-            this._updateEmbeddingEta(embedding);
+            // Show/hide indexing row (always visible structure, but show count only when active)
+            if (indexing > 0) {
+                this._els.indexingCount.textContent = indexing;
+                this._els.indexingCount.parentElement.hidden = false;
+                this._updateIndexingEta(indexing);
+            } else {
+                this._els.indexingCount.parentElement.hidden = true;
+                this._indexingHistory = [];
+                this._els.indexingEta.textContent = '';
+            }
 
-            // Update face detection queue
+            // Show/hide embedding row
+            if (embedding > 0) {
+                this._els.embeddingCount.textContent = embedding;
+                this._els.embeddingCount.parentElement.hidden = false;
+                this._updateEmbeddingEta(embedding);
+            } else {
+                this._els.embeddingCount.parentElement.hidden = true;
+                this._embeddingHistory = [];
+                this._els.embeddingEta.textContent = '';
+            }
+
+            // Show/hide face detection row
             if (this._els.faceQueueRow && this._els.faceCount) {
                 if (faces > 0) {
                     this._els.faceQueueRow.hidden = false;
@@ -413,6 +448,42 @@ const Database = {
                     this._updateFaceEta(faces);
                 } else {
                     this._els.faceQueueRow.hidden = true;
+                    this._faceHistory = [];
+                    if (this._els.faceEta) this._els.faceEta.textContent = '';
+                }
+            }
+
+            // Show/hide duplicate detection row
+            if (this._els.duplicatesRow) {
+                if (duplicates) {
+                    this._els.duplicatesRow.hidden = false;
+                    const levelNames = ['identical', 'near-identical', 'similar', 'related'];
+                    const levelName = levelNames[duplicates.level] || `level ${duplicates.level}`;
+                    this._els.duplicatesStatus.textContent = levelName;
+                } else {
+                    this._els.duplicatesRow.hidden = true;
+                }
+            }
+
+            // Show/hide face grouping row
+            if (this._els.faceGroupingRow) {
+                if (faceGrouping) {
+                    this._els.faceGroupingRow.hidden = false;
+                    this._els.faceGroupingStatus.textContent = 'computing';
+                } else {
+                    this._els.faceGroupingRow.hidden = true;
+                }
+            }
+
+            // Show/hide face embeddings row
+            if (this._els.faceEmbeddingsRow) {
+                if (faceEmbeddings) {
+                    this._els.faceEmbeddingsRow.hidden = false;
+                    const current = faceEmbeddings.current || 0;
+                    const total = faceEmbeddings.total || 0;
+                    this._els.faceEmbeddingsStatus.textContent = `${current}/${total}`;
+                } else {
+                    this._els.faceEmbeddingsRow.hidden = true;
                 }
             }
         } else {
@@ -424,7 +495,13 @@ const Database = {
             this._els.indexingEta.textContent = '';
             this._els.embeddingEta.textContent = '';
             if (this._els.faceEta) this._els.faceEta.textContent = '';
+            // Hide all rows
+            this._els.indexingCount.parentElement.hidden = false; // Reset to default structure
+            this._els.embeddingCount.parentElement.hidden = false;
             if (this._els.faceQueueRow) this._els.faceQueueRow.hidden = true;
+            if (this._els.duplicatesRow) this._els.duplicatesRow.hidden = true;
+            if (this._els.faceGroupingRow) this._els.faceGroupingRow.hidden = true;
+            if (this._els.faceEmbeddingsRow) this._els.faceEmbeddingsRow.hidden = true;
         }
     },
 

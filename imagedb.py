@@ -227,6 +227,7 @@ from faces import (
     delete_face_thumbnail,
     delete_people_without_faces,
     compute_unknown_face_groups,
+    get_group_computation_status,
     update_face_semantic_embedding,
     get_faces_without_semantic_embedding,
     get_all_faces_for_thumbnail_regen,
@@ -3281,6 +3282,10 @@ class ImageDatabase:
         self._embedding_thread: EmbeddingThread | None = None
         self._face_thread: FaceDetectionThread | None = None
 
+        # Phase 4 status tracking (post-processing after queues empty)
+        self._phase4_status_lock = threading.Lock()
+        self._face_embedding_status: dict[str, Any] = {'status': 'idle'}
+
         # Track if we've been closed
         self._closed = False
 
@@ -3413,34 +3418,52 @@ class ImageDatabase:
         total = len(face_ids)
         logger.info(f'Backfilling CLIP embeddings for {total} faces (for text search)...')
 
+        # Set status to computing
+        with self._phase4_status_lock:
+            self._face_embedding_status = {
+                'status': 'computing',
+                'current': 0,
+                'total': total,
+            }
+
         clip_model = self._get_clip_model()
         count = 0
 
-        for i, face_id in enumerate(face_ids):
-            # Check for shutdown
-            if self._stop_event.is_set():
-                logger.info('Face CLIP embedding backfill interrupted')
-                break
+        try:
+            for i, face_id in enumerate(face_ids):
+                # Check for shutdown
+                if self._stop_event.is_set():
+                    logger.info('Face CLIP embedding backfill interrupted')
+                    break
 
-            thumb_path = get_face_thumbnail_path(face_id, self.thumbnail_dir)
+                thumb_path = get_face_thumbnail_path(face_id, self.thumbnail_dir)
 
-            if not thumb_path.exists():
-                logger.debug(f'Face thumbnail not found for {face_id}, skipping')
-                continue
+                if not thumb_path.exists():
+                    logger.debug(f'Face thumbnail not found for {face_id}, skipping')
+                    continue
 
-            try:
-                embedding = clip_model.encode_image(thumb_path)
-                if embedding is not None:
-                    update_face_semantic_embedding(self.conn, face_id, embedding)
-                    count += 1
-            except Exception as e:
-                logger.warning(f'Failed to compute CLIP embedding for face {face_id}: {e}')
+                try:
+                    embedding = clip_model.encode_image(thumb_path)
+                    if embedding is not None:
+                        update_face_semantic_embedding(self.conn, face_id, embedding)
+                        count += 1
+                except Exception as e:
+                    logger.warning(f'Failed to compute CLIP embedding for face {face_id}: {e}')
 
-            # Progress logging every 100 faces
-            if (i + 1) % 100 == 0:
-                logger.info(f'  Progress: {i + 1}/{total} faces, {count} CLIP embeddings generated')
+                # Update progress status
+                with self._phase4_status_lock:
+                    self._face_embedding_status['current'] = i + 1
 
-        logger.info(f'Backfilled {count} face CLIP embeddings')
+                # Progress logging every 100 faces
+                if (i + 1) % 100 == 0:
+                    logger.info(f'  Progress: {i + 1}/{total} faces, {count} CLIP embeddings generated')
+
+            logger.info(f'Backfilled {count} face CLIP embeddings')
+        finally:
+            # Set status to idle when done
+            with self._phase4_status_lock:
+                self._face_embedding_status = {'status': 'idle'}
+
         return count
 
     def regenerate_face_thumbnails(self) -> int:
@@ -4524,15 +4547,27 @@ class ImageDatabase:
         """Get current processing status.
 
         Returns:
-            Dict with status, indexing_queue, embedding_queue, face_queue counts,
-            and total_images.
+            Dict with status, queue counts, and Phase 4 processing statuses.
         """
         indexing_count = self._ingestion_queue.qsize()
         embedding_count = self._embedding_queue.qsize()
         face_count = self._face_queue.qsize()
 
-        all_queues_empty = (indexing_count == 0 and embedding_count == 0 and face_count == 0)
-        status = 'up_to_date' if all_queues_empty else 'updating'
+        # Get Phase 4 statuses
+        duplicate_status = self._duplicate_manager.get_status()
+        face_grouping_status = get_group_computation_status()
+        with self._phase4_status_lock:
+            face_embedding_status = self._face_embedding_status.copy()
+
+        # Check if any Phase 4 process is active
+        duplicates_computing = any(s == 'computing' for s in duplicate_status.values())
+        face_grouping_computing = face_grouping_status.get('status') == 'computing'
+        face_embedding_computing = face_embedding_status.get('status') == 'computing'
+
+        # Determine overall status
+        queues_empty = (indexing_count == 0 and embedding_count == 0 and face_count == 0)
+        phase4_idle = not (duplicates_computing or face_grouping_computing or face_embedding_computing)
+        status = 'up_to_date' if (queues_empty and phase4_idle) else 'updating'
 
         # Get total image count for live updates during indexing
         cursor = self.conn.execute(
@@ -4540,7 +4575,8 @@ class ImageDatabase:
         )
         total_images = cursor.fetchone()['count']
 
-        return {
+        # Build response - only include Phase 4 statuses if they're active
+        result = {
             'status': status,
             'indexing_queue': indexing_count,
             'embedding_queue': embedding_count,
@@ -4548,6 +4584,28 @@ class ImageDatabase:
             'total_images': total_images,
             'face_detection_enabled': self.config.face_detection_enabled,
         }
+
+        # Include duplicate status if computing
+        if duplicates_computing:
+            # Find which level is currently computing
+            computing_level = next(
+                (level for level, s in duplicate_status.items() if s == 'computing'),
+                None
+            )
+            result['duplicates'] = {
+                'status': 'computing',
+                'level': computing_level,
+            }
+
+        # Include face grouping status if computing
+        if face_grouping_computing:
+            result['face_grouping'] = {'status': 'computing'}
+
+        # Include face embedding status if computing
+        if face_embedding_computing:
+            result['face_embeddings'] = face_embedding_status
+
+        return result
 
     def get_duplicate_status(self) -> dict[int, str]:
         """Get the computation status for each duplicate level.

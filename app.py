@@ -818,13 +818,19 @@ def get_status():
     """Get the current processing status of the database.
 
     Returns the status of background processing threads, including
-    the number of items remaining in the indexing and image embedding queues.
+    queue sizes and Phase 4 post-processing statuses.
 
     Returns:
         JSON object with:
             - status: 'up_to_date' or 'updating'
             - indexing_queue: Number of images awaiting indexing
             - embedding_queue: Number of images awaiting image embedding
+            - face_queue: Number of images awaiting face detection
+            - total_images: Current count of images in database
+            - face_detection_enabled: Whether face detection is enabled
+            - duplicates: (if computing) {status, level} for duplicate detection
+            - face_grouping: (if computing) {status} for face grouping
+            - face_embeddings: (if computing) {status, current, total} for face CLIP embeddings
     """
     status = get_db().get_processing_status()
     return jsonify(status)
