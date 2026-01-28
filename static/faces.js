@@ -603,7 +603,7 @@
     }
 
     /**
-     * Create a face card for pick-preferred mode with star overlay.
+     * Create a face card for pick-preferred mode with star overlay and editable name.
      * @param {Object} face - Face object
      * @param {string} blobUrl - Blob URL for the thumbnail
      * @returns {HTMLElement}
@@ -634,11 +634,43 @@
         });
         card.appendChild(star);
 
-        // Name label (read-only in pick-preferred mode)
-        const nameLabel = document.createElement('div');
-        nameLabel.className = 'face-card-name';
-        nameLabel.textContent = pickPreferredPersonName;
-        card.appendChild(nameLabel);
+        // Editable name input (allows reassigning misclassified faces)
+        const input = document.createElement('input');
+        input.type = 'text';
+        input.className = 'face-card-input';
+        input.value = pickPreferredPersonName || '';
+        input.dataset.faceId = face.id;
+
+        // Handle input for autocomplete
+        input.addEventListener('input', () => {
+            showCardAutocomplete(input, input.value, card);
+        });
+
+        // Handle blur to commit (if name changed)
+        input.addEventListener('blur', () => {
+            // Delay to allow autocomplete click
+            setTimeout(() => {
+                const autocomplete = card.querySelector('.face-card-autocomplete');
+                if (autocomplete) {
+                    autocomplete.remove();
+                }
+                commitPickPreferredFaceName(face.id, input.value.trim(), card);
+            }, 200);
+        });
+
+        // Handle keyboard
+        input.addEventListener('keydown', (e) => {
+            if (e.key === 'Enter') {
+                e.preventDefault();
+                input.blur();
+            } else if (e.key === 'Escape') {
+                e.preventDefault();
+                input.value = pickPreferredPersonName || '';  // Reset to current name
+                input.blur();
+            }
+        });
+
+        card.appendChild(input);
 
         return card;
     }
@@ -674,6 +706,111 @@
         } catch (error) {
             console.error('Failed to set preferred face:', error);
             App.showError('Failed to set preferred face.');
+        }
+    }
+
+    /**
+     * Commit a name change for a face in pick-preferred mode.
+     * If the name is different from the current person, reassigns the face(s).
+     * @param {string} typedFaceId - Face ID where user typed the name
+     * @param {string} name - Name to assign
+     * @param {HTMLElement} card - Card element where user typed
+     */
+    async function commitPickPreferredFaceName(typedFaceId, name, card) {
+        // If name is empty or same as current person, do nothing
+        if (!name || name.toLowerCase() === (pickPreferredPersonName || '').toLowerCase()) {
+            // Reset input to current name (in case user cleared it)
+            const input = card.querySelector('.face-card-input');
+            if (input) {
+                input.value = pickPreferredPersonName || '';
+            }
+            return;
+        }
+
+        // Get selected faces, or just the typed face if none selected
+        let faceIds = facesSelection ? facesSelection.getSelected() : [];
+
+        // If the typed face isn't in the selection, or no selection, just use the typed face
+        if (faceIds.length === 0 || !faceIds.includes(typedFaceId)) {
+            faceIds = [typedFaceId];
+        }
+
+        try {
+            // Use batch endpoint - it now handles source person cleanup
+            const result = await App.api('/faces/identify-batch', {
+                method: 'POST',
+                body: JSON.stringify({
+                    face_ids: faceIds,
+                    name,
+                    preferred_face_id: typedFaceId  // Set as preferred for new person
+                }),
+            });
+
+            if (result && result.success) {
+                // Clear selection
+                if (facesSelection) {
+                    facesSelection.clear();
+                }
+
+                // Remove reassigned faces from local state
+                pickPreferredFaces = pickPreferredFaces.filter(f => !faceIds.includes(f.id));
+
+                // Check if we reassigned the preferred face - backend handles this,
+                // but we need to update local state
+                const reassignedPreferred = pickPreferredFaces.some(f => f.is_preferred) === false
+                    && pickPreferredFaces.length > 0;
+                if (reassignedPreferred) {
+                    // Mark first remaining face as preferred in local state
+                    // (backend selected newest, but order might differ - will refresh below)
+                    pickPreferredFaces[0].is_preferred = true;
+                }
+
+                // If all faces removed, exit pick-preferred mode
+                if (pickPreferredFaces.length === 0) {
+                    exitPickPreferredMode();
+                    // Refresh the main faces view
+                    peopleCacheTime = 0;
+                    loadAllFaces();
+                } else {
+                    // Re-render pick-preferred view
+                    displayedFaces = pickPreferredFaces;
+                    pickPreferredGrid.render();
+
+                    // Update the count in header
+                    const titleH3 = facesGrid.querySelector('.faces-pick-preferred-header h3');
+                    if (titleH3) {
+                        const faceCount = pickPreferredFaces.length;
+                        const countText = faceCount === 1 ? '1 face' : `${faceCount} faces`;
+                        titleH3.innerHTML = `${App.escapeHtml(pickPreferredPersonName)} <span class="face-count">(${countText})</span>`;
+                    }
+
+                    // Bust cache for current person's thumbnail if preferred changed
+                    if (reassignedPreferred) {
+                        thumbnailCacheBust.set(pickPreferredPersonId, Date.now());
+                    }
+                }
+
+                // Bust cache for the destination person too
+                if (result.data && result.data.person && result.data.person.id) {
+                    thumbnailCacheBust.set(result.data.person.id, Date.now());
+                }
+
+                // Invalidate people cache (new person may have been created)
+                peopleCacheTime = 0;
+
+                // Poll for reassessment if triggered
+                if (result.data && result.data.reassessment_triggered) {
+                    pollPickPreferredReassessment();
+                }
+            }
+        } catch (error) {
+            console.error('Failed to reassign face:', error);
+            App.showError(`Failed to reassign ${faceIds.length > 1 ? 'faces' : 'face'}.`);
+            // Reset input to current name
+            const input = card.querySelector('.face-card-input');
+            if (input) {
+                input.value = pickPreferredPersonName || '';
+            }
         }
     }
 

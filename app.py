@@ -1500,6 +1500,13 @@ def identify_faces_batch():
 
     # Batch identify all faces (use lock to avoid conflicts with background threads)
     with db._db_lock:
+        # Track source persons before reassignment (for preferred face cleanup)
+        source_person_ids = set()
+        for face_id in face_ids:
+            face = get_face(db.conn, face_id)
+            if face and face.get('person_id'):
+                source_person_ids.add(face['person_id'])
+
         result = batch_identify_faces(
             db.conn,
             face_ids,
@@ -1507,8 +1514,34 @@ def identify_faces_batch():
             preferred_face_id
         )
 
-    if result['person'] is None:
-        return error_response('Failed to identify faces')
+        if result['person'] is None:
+            return error_response('Failed to identify faces')
+
+        # Exclude the target person from source cleanup
+        target_person_id = result['person']['id']
+        source_person_ids.discard(target_person_id)
+
+        # Fix preferred faces for source persons (faces were moved away)
+        for source_id in source_person_ids:
+            person = get_person(db.conn, source_id)
+            if not person:
+                continue
+
+            remaining_faces = get_faces_for_person(db.conn, source_id)
+            if not remaining_faces:
+                continue  # Person will be deleted below
+
+            # Check if current preferred face is still valid
+            current_preferred = person.get('preferred_face_id')
+            remaining_ids = {f['id'] for f in remaining_faces}
+
+            if current_preferred not in remaining_ids:
+                # Select newest face (last in list, sorted by timestamp ASC)
+                new_preferred = remaining_faces[-1]['id']
+                update_person(db.conn, source_id, preferred_face_id=new_preferred)
+
+        # Delete source persons with no more faces
+        delete_people_without_faces(db.conn)
 
     # Trigger async re-assessment of unknown faces
     # This will match other unknown faces against the newly identified person
