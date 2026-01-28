@@ -964,11 +964,9 @@
         const knownFaces = faces.filter(f => f.person_id);
         const unknownFaces = faces.filter(f => !f.person_id);
 
-        // Sort unknown faces
-        unknownFaces.sort((a, b) => {
-            const cmp = (a.id || '').localeCompare(b.id || '');
-            return sortAscending ? cmp : -cmp;
-        });
+        // Unknown faces are already sorted by backend:
+        // group_size DESC, unknown_group_id, timestamp
+        // This groups similar faces together with largest groups first
 
         // Update displayedFaces for GridSelection (unknown faces only)
         displayedFaces = unknownFaces;
