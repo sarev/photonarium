@@ -656,13 +656,25 @@ const Gallery = {
             App.setSortDirection('desc');
         }
 
+        // Determine if we need to show loading (async operations)
+        const hasPeopleFilter = filter && filter.people && filter.people.length > 0;
+        const hasSemanticFilter = filter && filter.type === 'semantic';
+        const showLoading = App.getScreen() === 'gallery' && (hasPeopleFilter || hasSemanticFilter);
+
+        if (showLoading) {
+            this._showLoading(hasPeopleFilter ? 'Filtering by people…' : 'Applying filter…');
+        }
+
         // If filter has people, load the filtered image IDs from the API
-        if (filter && filter.people && filter.people.length > 0) {
+        if (hasPeopleFilter) {
             await this._loadPeopleFilteredImages(filter);
         }
 
         if (App.getScreen() === 'gallery') {
-            this._loadImages();
+            await this._loadImages();
+            if (showLoading) {
+                this._hideLoading();
+            }
             this._scrollToTop();
         } else {
             this.state.needsRefresh = true;
