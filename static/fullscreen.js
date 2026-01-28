@@ -144,6 +144,19 @@ const Fullscreen = {
         this.state.imageList = Gallery.state.filteredImages;
         this.state.currentIndex = this.state.imageList.findIndex(img => img.id === imageId);
 
+        // If image not in filtered list (e.g., coming from Faces screen with filter active),
+        // fall back to all loaded images
+        if (this.state.currentIndex < 0 && Gallery.state.images) {
+            this.state.imageList = Gallery.state.images;
+            this.state.currentIndex = this.state.imageList.findIndex(img => img.id === imageId);
+        }
+
+        // If still not found, fetch the single image by ID
+        if (this.state.currentIndex < 0) {
+            this._loadSingleImage(imageId);
+            return;
+        }
+
         // Reset zoom/pan state
         this._resetTransform();
 
@@ -152,6 +165,36 @@ const Fullscreen = {
 
         // Bind event listeners
         this._bindEvents();
+    },
+
+    /**
+     * Load a single image by ID when it's not in the gallery's image list.
+     * Used when navigating from Faces screen to an image not currently loaded.
+     * @param {string} imageId - Image ID to load
+     * @private
+     */
+    async _loadSingleImage(imageId) {
+        try {
+            const image = await App.api(`/images/${imageId}`);
+            if (image) {
+                // Create a single-image list
+                this.state.imageList = [image];
+                this.state.currentIndex = 0;
+
+                // Reset zoom/pan state
+                this._resetTransform();
+
+                // Load and display the image
+                this._loadImage(imageId);
+
+                // Bind event listeners
+                this._bindEvents();
+            } else {
+                console.error('Image not found:', imageId);
+            }
+        } catch (error) {
+            console.error('Failed to load image:', imageId, error);
+        }
     },
 
     /**
