@@ -151,9 +151,6 @@
     /** @type {string} Current semantic search query for unknown faces */
     let unknownFacesSearchQuery = '';
 
-    /** @type {number|null} Debounce timer for search input */
-    let searchDebounceTimer = null;
-
     /** @type {number|null} Timer for pick-preferred reassessment polling */
     let pickPreferredPollTimer = null;
 
@@ -1281,10 +1278,6 @@
                     reassessmentPollTimer = null;
                 }
                 // Clear search state
-                if (searchDebounceTimer) {
-                    clearTimeout(searchDebounceTimer);
-                    searchDebounceTimer = null;
-                }
                 unknownFacesSearchQuery = '';
                 // Clear pending reload flag
                 reloadPending = false;
@@ -1397,21 +1390,16 @@
     // =========================================================================
 
     /**
-     * Handle search input with debounce.
-     * @param {string} query - Search query
+     * Execute search with current input value.
+     * Called on blur or Enter key.
+     * @param {HTMLInputElement} input - The search input element
      */
-    function handleSearchInput(query) {
-        // Clear existing timer
-        if (searchDebounceTimer) {
-            clearTimeout(searchDebounceTimer);
+    function executeSearch(input) {
+        const query = input.value.trim();
+        if (query !== unknownFacesSearchQuery) {
+            unknownFacesSearchQuery = query;
+            searchUnknownFaces(query);
         }
-
-        // Debounce: wait 300ms after last keystroke
-        searchDebounceTimer = setTimeout(() => {
-            searchDebounceTimer = null;
-            unknownFacesSearchQuery = query.trim();
-            searchUnknownFaces(unknownFacesSearchQuery);
-        }, 300);
     }
 
     /**
@@ -1694,20 +1682,28 @@
         countEl.textContent = `(${count})`;
         header.appendChild(countEl);
 
-        // Semantic search input
+        // Semantic search input - searches on blur or Enter (not as you type)
         const searchInput = document.createElement('input');
         searchInput.type = 'text';
         searchInput.className = 'faces-search-input';
         searchInput.placeholder = 'Search faces...';
         searchInput.value = unknownFacesSearchQuery;
-        searchInput.addEventListener('input', (e) => {
-            handleSearchInput(e.target.value);
+
+        // Execute search when input loses focus
+        searchInput.addEventListener('blur', (e) => {
+            executeSearch(e.target);
         });
-        // Clear search on Escape
+
+        // Handle special keys
         searchInput.addEventListener('keydown', (e) => {
-            if (e.key === 'Escape') {
+            if (e.key === 'Enter') {
+                // Blur to trigger search
+                e.target.blur();
+            } else if (e.key === 'Escape') {
+                // Clear and reset
                 e.target.value = '';
-                handleSearchInput('');
+                unknownFacesSearchQuery = '';
+                searchUnknownFaces('');
                 e.target.blur();
             }
         });
