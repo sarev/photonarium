@@ -677,6 +677,90 @@ class FaceDetector:
 # FACE THUMBNAIL GENERATION
 # =============================================================================
 
+def _create_face_thumbnail(
+    img: Image.Image,
+    box_x: float,
+    box_y: float,
+    box_w: float,
+    box_h: float,
+    size: int = 200,
+) -> Image.Image:
+    """Create a face thumbnail from a pre-loaded image.
+
+    Core thumbnail generation logic used by both generate_face_thumbnail
+    and batch regeneration.
+
+    Args:
+        img: PIL Image (already RGB, EXIF-corrected).
+        box_x: Normalized x coordinate of face box (0-1).
+        box_y: Normalized y coordinate of face box (0-1).
+        box_w: Normalized width of face box (0-1).
+        box_h: Normalized height of face box (0-1).
+        size: Output thumbnail size in pixels (square).
+
+    Returns:
+        Square PIL Image thumbnail.
+    """
+    width, height = img.size
+
+    # Convert normalized coordinates to pixels
+    px_x = int(box_x * width)
+    px_y = int(box_y * height)
+    px_w = int(box_w * width)
+    px_h = int(box_h * height)
+
+    # Expand crop region slightly for context (10% padding)
+    padding = int(max(px_w, px_h) * 0.1)
+    px_x = max(0, px_x - padding)
+    px_y = max(0, px_y - padding)
+    px_w = min(width - px_x, px_w + 2 * padding)
+    px_h = min(height - px_y, px_h + 2 * padding)
+
+    # Crop the face region
+    face_crop = img.crop((px_x, px_y, px_x + px_w, px_y + px_h))
+
+    # Create square thumbnail without distortion
+    crop_w, crop_h = face_crop.size
+    aspect_ratio = crop_w / crop_h if crop_h > 0 else 1.0
+
+    # If nearly square (within 5%), just resize directly
+    if 0.95 <= aspect_ratio <= 1.05:
+        thumb = face_crop.resize((size, size), Image.Resampling.LANCZOS)
+    else:
+        # Non-square: create blurred/darkened background with centered face
+        # Background: stretch to square, blur, darken
+        background = face_crop.resize((size, size), Image.Resampling.LANCZOS)
+        background = background.filter(ImageFilter.GaussianBlur(radius=8))
+        # Darken by blending with black
+        darkener = Image.new('RGB', (size, size), (0, 0, 0))
+        background = Image.blend(background, darkener, 0.4)
+
+        # Foreground: resize proportionally to fit within square
+        if crop_w > crop_h:
+            # Wider than tall - fit to width
+            new_w = size
+            new_h = int(size * crop_h / crop_w)
+        else:
+            # Taller than wide - fit to height
+            new_h = size
+            new_w = int(size * crop_w / crop_h)
+
+        foreground = face_crop.resize((new_w, new_h), Image.Resampling.LANCZOS)
+
+        # Center foreground on background
+        paste_x = (size - new_w) // 2
+        paste_y = (size - new_h) // 2
+        background.paste(foreground, (paste_x, paste_y))
+        thumb = background
+
+    # Apply subtle sharpening
+    thumb = thumb.filter(
+        ImageFilter.UnsharpMask(radius=1.0, percent=60, threshold=3)
+    )
+
+    return thumb
+
+
 def generate_face_thumbnail(
     source_path: Path | str,
     dest_path: Path | str,
@@ -690,7 +774,8 @@ def generate_face_thumbnail(
     """Generate a face thumbnail from a source image.
 
     Crops the face region from the full-size image and saves as a square
-    thumbnail. Applies sharpening to counteract downscale blur.
+    thumbnail. For non-square crops, creates a blurred background with the
+    undistorted face centered. Applies sharpening to counteract downscale blur.
 
     Args:
         source_path: Path to the source image.
@@ -720,34 +805,8 @@ def generate_face_thumbnail(
             if img.mode != 'RGB':
                 img = img.convert('RGB')
 
-            width, height = img.size
-
-            # Convert normalized coordinates to pixels
-            px_x = int(box_x * width)
-            px_y = int(box_y * height)
-            px_w = int(box_w * width)
-            px_h = int(box_h * height)
-
-            # Expand crop region slightly for context (10% padding)
-            padding = int(max(px_w, px_h) * 0.1)
-            px_x = max(0, px_x - padding)
-            px_y = max(0, px_y - padding)
-            px_w = min(width - px_x, px_w + 2 * padding)
-            px_h = min(height - px_y, px_h + 2 * padding)
-
-            # Crop the face region
-            face_crop = img.crop((px_x, px_y, px_x + px_w, px_y + px_h))
-
-            # Resize to target size (square)
-            face_crop = face_crop.resize((size, size), Image.Resampling.LANCZOS)
-
-            # Apply subtle sharpening
-            face_crop = face_crop.filter(
-                ImageFilter.UnsharpMask(radius=1.0, percent=60, threshold=3)
-            )
-
-            # Save as JPEG
-            face_crop.save(dest_path, 'JPEG', quality=quality, optimize=True)
+            thumb = _create_face_thumbnail(img, box_x, box_y, box_w, box_h, size)
+            thumb.save(dest_path, 'JPEG', quality=quality, optimize=True)
 
         logger.debug(f'Generated face thumbnail: {dest_path}')
         return True
@@ -755,6 +814,67 @@ def generate_face_thumbnail(
     except Exception as e:
         logger.error(f'Failed to generate face thumbnail for {source_path}: {e}')
         return False
+
+
+def generate_face_thumbnails_for_image(
+    source_path: Path | str,
+    faces: list[dict],
+    thumbnail_dir: Path | str,
+    size: int = 200,
+    quality: int = 85,
+) -> int:
+    """Generate thumbnails for multiple faces from a single source image.
+
+    Loads the image once and generates all face thumbnails efficiently.
+
+    Args:
+        source_path: Path to the source image.
+        faces: List of face dicts with 'face_id', 'box_x', 'box_y', 'box_w', 'box_h'.
+        thumbnail_dir: Root thumbnail cache directory.
+        size: Output thumbnail size in pixels (square).
+        quality: JPEG quality (1-100).
+
+    Returns:
+        Number of thumbnails successfully generated.
+    """
+    source_path = Path(source_path)
+
+    if not faces:
+        return 0
+
+    try:
+        with Image.open(source_path) as img:
+            # Handle EXIF orientation
+            img = ImageOps.exif_transpose(img)
+
+            # Convert to RGB
+            if img.mode != 'RGB':
+                img = img.convert('RGB')
+
+            count = 0
+            for face in faces:
+                dest_path = get_face_thumbnail_path(face['face_id'], thumbnail_dir)
+                dest_path.parent.mkdir(parents=True, exist_ok=True)
+
+                try:
+                    thumb = _create_face_thumbnail(
+                        img,
+                        face['box_x'],
+                        face['box_y'],
+                        face['box_w'],
+                        face['box_h'],
+                        size,
+                    )
+                    thumb.save(dest_path, 'JPEG', quality=quality, optimize=True)
+                    count += 1
+                except Exception as e:
+                    logger.warning(f'Failed to generate thumbnail for face {face["face_id"]}: {e}')
+
+            return count
+
+    except Exception as e:
+        logger.error(f'Failed to load image {source_path}: {e}')
+        return 0
 
 
 def get_face_thumbnail_path(
@@ -1183,6 +1303,37 @@ def update_face_semantic_embedding(
     )
     conn.commit()
     return cursor.rowcount > 0
+
+
+def get_all_faces_for_thumbnail_regen(
+    conn: sqlite3.Connection,
+) -> list[dict]:
+    """Get all non-suppressed faces with info needed for thumbnail regeneration.
+
+    Args:
+        conn: Database connection.
+
+    Returns:
+        List of dicts with face_id, image_id, box_x, box_y, box_w, box_h.
+    """
+    cursor = conn.execute("""
+        SELECT f.id, f.image_id, f.box_x, f.box_y, f.box_w, f.box_h, i.path
+        FROM faces f
+        JOIN images i ON f.image_id = i.id
+        WHERE f.suppressed = 0 AND i.deleted = 0
+    """)
+    return [
+        {
+            'face_id': row['id'],
+            'image_id': row['image_id'],
+            'box_x': row['box_x'],
+            'box_y': row['box_y'],
+            'box_w': row['box_w'],
+            'box_h': row['box_h'],
+            'image_path': row['path'],
+        }
+        for row in cursor.fetchall()
+    ]
 
 
 def get_faces_without_semantic_embedding(

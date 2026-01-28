@@ -66,13 +66,17 @@ from faces import (
     search_unknown_faces_semantic,
 )
 
-# Configure logging
+# Configure logging - set root logger to WARNING, our modules to INFO
 logging.basicConfig(
-    level=logging.INFO,
+    level=logging.WARNING,  # Default to WARNING for third-party libraries
     format='%(asctime)s [%(levelname)s] %(name)s: %(message)s',
     datefmt='%H:%M:%S',
 )
 logger = logging.getLogger(__name__)
+
+# Set our modules to INFO level
+for module in ['app', 'imagedb', 'faces', 'thumbnails', 'duplicates', 'config', 'timestamps']:
+    logging.getLogger(module).setLevel(logging.INFO)
 
 app = Flask(__name__, static_folder='static', static_url_path='')
 
@@ -2021,6 +2025,11 @@ if __name__ == '__main__':
         action='store_true',
         help='Generate semantic embeddings for faces (for text search) and exit'
     )
+    parser.add_argument(
+        '-t', '--regenerate-face-thumbnails',
+        action='store_true',
+        help='Regenerate all face thumbnails with non-distorted rendering and exit'
+    )
     args = parser.parse_args()
 
     # Handle thumbnail generation command
@@ -2052,6 +2061,17 @@ if __name__ == '__main__':
         count = db.backfill_face_semantic_embeddings()
         elapsed = time.time() - start_time
         logger.info(f'Generated {count} face embeddings in {elapsed:.1f}s')
+        sys.exit(0)
+
+    # Handle face thumbnail regeneration command
+    if args.regenerate_face_thumbnails:
+        import time
+        db = get_db()
+        logger.info('Starting face thumbnail regeneration...')
+        start_time = time.time()
+        count = db.regenerate_face_thumbnails()
+        elapsed = time.time() - start_time
+        logger.info(f'Regenerated {count} face thumbnails in {elapsed:.1f}s')
         sys.exit(0)
 
     # Set module-level flags before initializing database

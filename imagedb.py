@@ -221,12 +221,14 @@ from faces import (
     find_best_match,
     auto_recognize_face,
     generate_face_thumbnail,
+    generate_face_thumbnails_for_image,
     get_face_thumbnail_path,
     delete_face_thumbnail,
     delete_people_without_faces,
     compute_unknown_face_groups,
     update_face_semantic_embedding,
     get_faces_without_semantic_embedding,
+    get_all_faces_for_thumbnail_regen,
 )
 from timestamps import (
     derive_timestamp,
@@ -3394,8 +3396,7 @@ class ImageDatabase:
         """Generate semantic embeddings for faces that don't have them.
 
         Loads each face thumbnail and encodes it with OpenCLIP for text search.
-        This runs on startup for faces added before the feature, or can be
-        called via CLI --generate-face-embeddings.
+        Respects _stop_event for graceful shutdown.
 
         Returns:
             Number of faces updated.
@@ -3405,12 +3406,18 @@ class ImageDatabase:
         if not face_ids:
             return 0
 
-        logger.info(f'Backfilling semantic embeddings for {len(face_ids)} faces...')
+        total = len(face_ids)
+        logger.info(f'Backfilling semantic embeddings for {total} faces...')
 
         clip_model = self._get_clip_model()
         count = 0
 
-        for face_id in face_ids:
+        for i, face_id in enumerate(face_ids):
+            # Check for shutdown
+            if self._stop_event.is_set():
+                logger.info('Face embedding backfill interrupted')
+                break
+
             thumb_path = get_face_thumbnail_path(face_id, self.thumbnail_dir)
 
             if not thumb_path.exists():
@@ -3425,7 +3432,85 @@ class ImageDatabase:
             except Exception as e:
                 logger.warning(f'Failed to compute semantic embedding for face {face_id}: {e}')
 
+            # Progress logging every 100 faces
+            if (i + 1) % 100 == 0:
+                logger.info(f'  Progress: {i + 1}/{total} faces, {count} embeddings generated')
+
         logger.info(f'Backfilled {count} face semantic embeddings')
+        return count
+
+    def regenerate_face_thumbnails(self) -> int:
+        """Regenerate all face thumbnails with improved non-distorted rendering.
+
+        For non-square face crops, creates a square thumbnail with a blurred,
+        darkened background and the undistorted face centered on top.
+
+        Groups faces by image and processes in parallel using a thread pool.
+        Respects _stop_event for graceful shutdown.
+
+        Returns:
+            Number of thumbnails regenerated.
+        """
+        from collections import defaultdict
+        from concurrent.futures import ThreadPoolExecutor, as_completed
+
+        faces = get_all_faces_for_thumbnail_regen(self.conn)
+
+        if not faces:
+            return 0
+
+        # Group faces by image for efficient processing
+        faces_by_image: dict[str, list[dict]] = defaultdict(list)
+        for face in faces:
+            faces_by_image[face['image_path']].append(face)
+
+        total_faces = len(faces)
+        total_images = len(faces_by_image)
+        logger.info(f'Regenerating {total_faces} face thumbnails from {total_images} images...')
+
+        # Worker function for thread pool
+        def process_image(image_path: str, image_faces: list[dict]) -> int:
+            if self._stop_event.is_set():
+                return 0
+            path = Path(image_path)
+            if not path.exists():
+                return 0
+            return generate_face_thumbnails_for_image(
+                path,
+                image_faces,
+                self.thumbnail_dir,
+                size=200,
+                quality=self.config.thumbnail_quality,
+            )
+
+        count = 0
+        images_processed = 0
+        num_workers = self.config.indexing_threads or 4
+
+        with ThreadPoolExecutor(max_workers=num_workers) as executor:
+            futures = {
+                executor.submit(process_image, image_path, image_faces): image_path
+                for image_path, image_faces in faces_by_image.items()
+            }
+
+            for future in as_completed(futures):
+                # Check for shutdown
+                if self._stop_event.is_set():
+                    logger.info('Face thumbnail regeneration interrupted')
+                    executor.shutdown(wait=False, cancel_futures=True)
+                    break
+
+                try:
+                    count += future.result()
+                except Exception as e:
+                    logger.warning(f'Error processing image: {e}')
+                images_processed += 1
+
+                # Progress logging every 100 images
+                if images_processed % 100 == 0:
+                    logger.info(f'  Progress: {images_processed}/{total_images} images, {count} thumbnails generated')
+
+        logger.info(f'Regenerated {count} face thumbnails from {images_processed} images')
         return count
 
     def _migrate_recalculate_timestamps(self) -> None:
