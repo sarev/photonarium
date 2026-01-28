@@ -78,7 +78,13 @@ On first run, the AI models will download automatically (this only happens once)
 ```bash
 python app.py --port 8080              # Use a different port
 python app.py --generate-thumbnails    # Pre-generate thumbnails for all images
+python app.py --scan                   # Run folder scan on startup
+python app.py --detect-faces           # Run face detection on startup
+python app.py --group-faces            # Run unknown face grouping on startup
+python app.py --scan --detect-faces    # Combine flags as needed
 ```
+
+By default, no processing runs at startup—add flags to opt in to specific phases.
 
 ## Getting Started
 
@@ -148,7 +154,7 @@ When face tagging mode is enabled (via the toolbar button), detected faces appea
 - **Green** — Known face, already tagged
 - **Orange** — Currently editing
 
-Click any face to enter a name. As you type, matching names appear for quick selection. Press **Tab** to cycle through unknown faces and tag multiple people quickly.
+Click any face box to enter a name. As you type, matching names appear for quick selection—the search uses fuzzy matching, so "sro" finds "Steve Rose". Press **Tab** to cycle through unknown faces and tag multiple people quickly.
 
 Once you've tagged someone in a few photos, Imaginary learns to recognise them automatically in other images.
 
@@ -189,12 +195,26 @@ The Duplicates screen helps you find and manage duplicate or similar images.
 The Faces screen (Ctrl+P) shows all detected faces across your collection:
 
 - **Known faces** appear first, grouped by person and sorted alphabetically
-- **Unknown faces** appear below, ready to be identified
+- **Unknown faces** appear below, grouped by visual similarity (largest groups first)
 - Click any face to edit its name or correct a mistaken identification
 - Use "Only unknowns" to focus on faces that need tagging
 - Adjust thumbnail size with the +/- buttons
 
-This screen is useful for bulk-tagging faces and reviewing who Imaginary has detected.
+**Fuzzy name search** — When typing a name, the autocomplete uses subsequence matching. Type "sro" to find "Steve Rose", or "jd" to find "John Doe".
+
+**Batch tagging** — Select multiple unknown faces (Ctrl+Click or drag-select), then type a name on any selected face. All selected faces will be tagged at once.
+
+### Pick-Preferred Mode
+
+Double-click any known person to enter pick-preferred mode, where you can:
+
+- **Set the avatar** — Click the star on any face to make it the person's representative thumbnail
+- **Rename the person** — Click the rename button in the header
+- **Remove mistakes** — Select incorrectly-tagged faces and press Delete to return them to the unknown pool
+- **Adjust recognition sensitivity** — Use the threshold slider to control how strictly faces are matched to this person. Higher values require closer matches; lower values are more permissive. Faces that no longer meet a raised threshold are automatically returned to the unknown pool.
+- **View in context** — Double-click any face to open it in fullscreen view
+
+Press Escape or click the back arrow to return to the main faces view.
 
 ## Using the Database Status Screen
 
@@ -249,6 +269,21 @@ Clicking the "Rescan all folders" button will start a complete check of all regi
 | Jump to start/end | — | — | Ctrl+Up / Ctrl+Down |
 | Page up/down | — | — | Page Up / Page Down |
 
+### Faces View
+
+| Action | Mouse | Touch | Keyboard |
+|--------|-------|-------|----------|
+| Select face | Click | Tap | Arrow keys |
+| Add to selection | Ctrl+Click | — | Shift+Arrows |
+| Select range | Shift+Click | — | Shift+Arrows |
+| Select all unknowns | — | — | Ctrl+A |
+| Clear selection | — | — | Escape |
+| Select multiple | Drag box | — | — |
+| Enter pick-preferred | Double-click known person | Double-tap | Enter |
+| Exit pick-preferred | Click back arrow | Tap back arrow | Escape |
+| Open face in fullscreen | Double-click (in pick-preferred) | Double-tap | Enter |
+| Delete / unassign face | — | — | Delete |
+
 ### Global Shortcuts
 
 | Shortcut | Action |
@@ -270,12 +305,13 @@ Settings are stored in `.imaginary.yml` (created automatically on first run):
 | `indexing_threads` | 4 | Parallel threads for scanning |
 | `face_detection_enabled` | true | Enable automatic face detection |
 | `face_detection_min_confidence` | 0.95 | Detection confidence threshold |
-| `face_recognition_threshold` | 0.65 | Similarity threshold for auto-recognition |
+| `face_recognition_threshold` | 0.65 | Default similarity threshold for auto-recognition (can be overridden per person in pick-preferred mode) |
 
 ## Tips
 
 - **Large collections** — Imaginary handles tens of thousands of images, but initial scanning takes time. Let it run in the background.
 - **Face tagging** — Tag a person in 3-5 clear photos and Imaginary will start recognising them automatically.
+- **Tuning recognition** — If someone is being confused with another person, increase their recognition threshold in pick-preferred mode. If they're not being recognised in enough photos, lower it.
 - **Finding people** — Use the People filter or "Sort by people" to quickly find photos of specific individuals.
 - **Duplicate detection** — Start with "Similar" or "Related" to see what's there, then move to stricter levels to find exact copies.
 - **Semantic sorting** — In Duplicates view, use semantic sort with queries like "blurry" to find low-quality duplicates to delete.
