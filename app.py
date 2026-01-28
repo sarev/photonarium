@@ -60,6 +60,7 @@ from faces import (
     get_reassessment_status,
     compute_unknown_face_groups_async,
     get_group_computation_status,
+    revalidate_person_faces,
 )
 
 # Configure logging
@@ -1122,13 +1123,14 @@ def create_person_endpoint():
 
     db = get_db()
 
-    # Check if person with this name already exists
-    existing = get_person_by_name(db.conn, name)
-    if existing:
-        return error_response(f'Person with name "{name}" already exists', 409)
+    # Check if person with this name already exists and create (with lock)
+    with db._db_lock:
+        existing = get_person_by_name(db.conn, name)
+        if existing:
+            return error_response(f'Person with name "{name}" already exists', 409)
 
-    person_id = create_person(db.conn, name)
-    person = get_person(db.conn, person_id)
+        person_id = create_person(db.conn, name)
+        person = get_person(db.conn, person_id)
 
     return success_response(person)
 
@@ -1189,10 +1191,62 @@ def update_person_endpoint(person_id):
 
     preferred_face_id = data.get('preferred_face_id')
 
-    update_person(db.conn, person_id, name=name, preferred_face_id=preferred_face_id)
-    updated_person = get_person(db.conn, person_id)
+    # Handle recognition_threshold: present key means update, absent means don't change
+    update_kwargs = {'name': name, 'preferred_face_id': preferred_face_id}
+    threshold_changed = False
+    threshold_value = None
+    if 'recognition_threshold' in data:
+        threshold = data['recognition_threshold']
+        # Validate threshold if provided
+        if threshold is not None:
+            try:
+                threshold = float(threshold)
+                if not (0.0 <= threshold <= 1.0):
+                    return error_response('recognition_threshold must be between 0 and 1')
+            except (ValueError, TypeError):
+                return error_response('recognition_threshold must be a number')
+        update_kwargs['recognition_threshold'] = threshold
+        threshold_changed = True
+        threshold_value = threshold
 
-    return success_response(updated_person)
+    ejected_face_ids = []
+    faces_changed = False
+    with db._db_lock:
+        update_person(db.conn, person_id, **update_kwargs)
+
+        # If threshold was changed to a non-null value, revalidate and reassess
+        if threshold_changed and threshold_value is not None:
+            # Eject faces that no longer meet the threshold
+            ejected_face_ids = revalidate_person_faces(db.conn, person_id, threshold_value)
+
+            # If all faces were ejected, delete the person
+            if ejected_face_ids:
+                remaining = get_faces_for_person(db.conn, person_id)
+                if not remaining:
+                    delete_person(db.conn, person_id)
+                    return success_response({
+                        'deleted': True,
+                        'ejected_face_ids': ejected_face_ids,
+                        'message': 'All faces ejected, person deleted'
+                    })
+                faces_changed = True
+
+        updated_person = get_person(db.conn, person_id)
+
+    # Trigger async reassessment to potentially add matching unknowns
+    if threshold_changed and threshold_value is not None:
+        reassess_unknown_faces_async(
+            db,
+            threshold=threshold_value,
+            person_id=person_id,
+        )
+
+    response_data = dict(updated_person) if updated_person else {}
+    if ejected_face_ids:
+        response_data['ejected_face_ids'] = ejected_face_ids
+    response_data['faces_changed'] = faces_changed or (threshold_changed and threshold_value is not None)
+
+    return success_response(response_data)
 
 
 @app.route('/api/people/<person_id>', methods=['DELETE'])
@@ -1209,11 +1263,12 @@ def delete_person_endpoint(person_id):
     """
     db = get_db()
 
-    person = get_person(db.conn, person_id)
-    if person is None:
-        return error_response('Person not found', 404)
+    with db._db_lock:
+        person = get_person(db.conn, person_id)
+        if person is None:
+            return error_response('Person not found', 404)
 
-    delete_person(db.conn, person_id)
+        delete_person(db.conn, person_id)
 
     return success_response(message=f'Person "{person["name"]}" deleted')
 
@@ -1754,23 +1809,24 @@ def set_preferred_face(person_id):
 
     db = get_db()
 
-    # Verify person exists
-    person = get_person(db.conn, person_id)
-    if person is None:
-        return error_response('Person not found', 404)
+    with db._db_lock:
+        # Verify person exists
+        person = get_person(db.conn, person_id)
+        if person is None:
+            return error_response('Person not found', 404)
 
-    # Verify face exists and belongs to this person
-    face = get_face(db.conn, face_id)
-    if face is None:
-        return error_response('Face not found', 404)
-    if face.get('person_id') != person_id:
-        return error_response('Face does not belong to this person', 400)
+        # Verify face exists and belongs to this person
+        face = get_face(db.conn, face_id)
+        if face is None:
+            return error_response('Face not found', 404)
+        if face.get('person_id') != person_id:
+            return error_response('Face does not belong to this person', 400)
 
-    # Update the preferred face
-    update_person(db.conn, person_id, preferred_face_id=face_id)
+        # Update the preferred face
+        update_person(db.conn, person_id, preferred_face_id=face_id)
 
-    # Get updated person
-    updated_person = get_person(db.conn, person_id)
+        # Get updated person
+        updated_person = get_person(db.conn, person_id)
 
     return success_response(updated_person)
 

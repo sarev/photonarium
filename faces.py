@@ -96,6 +96,8 @@ _SQL_CREATE_FACE_INDEXES = [
 _MIGRATIONS = [
     # Add unknown_group_id column for grouping similar unknown faces
     ("faces", "unknown_group_id", "ALTER TABLE faces ADD COLUMN unknown_group_id TEXT"),
+    # Add per-person recognition threshold (NULL = use global default)
+    ("people", "recognition_threshold", "ALTER TABLE people ADD COLUMN recognition_threshold REAL"),
 ]
 
 
@@ -859,11 +861,16 @@ def get_all_people(conn: sqlite3.Connection) -> list[dict[str, Any]]:
     return [dict(row) for row in cursor.fetchall()]
 
 
+# Sentinel value to distinguish "not passed" from "passed as None"
+_NOT_SET = object()
+
+
 def update_person(
     conn: sqlite3.Connection,
     person_id: str,
     name: str | None = None,
     preferred_face_id: str | None = None,
+    recognition_threshold: float | None = _NOT_SET,
 ) -> bool:
     """Update a person record.
 
@@ -872,6 +879,7 @@ def update_person(
         person_id: Person's UUID.
         name: New name (optional).
         preferred_face_id: New preferred face ID (optional).
+        recognition_threshold: Custom threshold (float), or None to clear override.
 
     Returns:
         True if updated, False if person not found.
@@ -887,6 +895,10 @@ def update_person(
         updates.append('preferred_face_id = ?')
         params.append(preferred_face_id)
 
+    if recognition_threshold is not _NOT_SET:
+        updates.append('recognition_threshold = ?')
+        params.append(recognition_threshold)  # Can be float or None
+
     if not updates:
         return True
 
@@ -899,6 +911,94 @@ def update_person(
     )
     conn.commit()
     return cursor.rowcount > 0
+
+
+def revalidate_person_faces(
+    conn: sqlite3.Connection,
+    person_id: str,
+    threshold: float,
+) -> list[str]:
+    """Revalidate faces for a person against a threshold.
+
+    Checks each face's similarity to other faces of the same person.
+    Faces that don't meet the threshold are unassigned (ejected to unknown pool).
+
+    Args:
+        conn: Database connection.
+        person_id: Person's UUID.
+        threshold: Minimum similarity threshold.
+
+    Returns:
+        List of face IDs that were ejected.
+    """
+    # Get all faces for this person with embeddings
+    cursor = conn.execute(
+        '''SELECT id, embedding FROM faces
+           WHERE person_id = ? AND suppressed = 0''',
+        (person_id,)
+    )
+    faces = []
+    for row in cursor.fetchall():
+        embedding = np.frombuffer(row['embedding'], dtype=np.float32)
+        faces.append((row['id'], embedding))
+
+    if len(faces) <= 1:
+        # Can't eject if only 0 or 1 face - nothing to compare against
+        return []
+
+    # Build embedding matrix
+    face_ids = [f[0] for f in faces]
+    embeddings = np.vstack([f[1] for f in faces])
+
+    # Ensure normalized
+    norms = np.linalg.norm(embeddings, axis=1, keepdims=True)
+    if not np.allclose(norms, 1.0, atol=0.01):
+        embeddings = embeddings / norms
+
+    # Compute pairwise similarities
+    similarities = embeddings @ embeddings.T
+
+    # For each face, find max similarity to OTHER faces (exclude self on diagonal)
+    np.fill_diagonal(similarities, -1)  # Exclude self-similarity
+    max_similarities = np.max(similarities, axis=1)
+
+    # Find faces that don't meet threshold
+    ejected_ids = []
+    for i, (face_id, max_sim) in enumerate(zip(face_ids, max_similarities)):
+        if max_sim < threshold:
+            ejected_ids.append(face_id)
+            logger.info(
+                f'Ejecting face {face_id} from person {person_id}: '
+                f'max similarity {max_sim:.3f} < threshold {threshold:.3f}'
+            )
+
+    # Unassign ejected faces
+    if ejected_ids:
+        for face_id in ejected_ids:
+            update_face_person(conn, face_id, None)
+
+        # Check if preferred face was ejected - if so, select new preferred
+        person = get_person(conn, person_id)
+        if person and person.get('preferred_face_id') in ejected_ids:
+            # Get remaining faces
+            remaining = conn.execute(
+                '''SELECT id FROM faces
+                   WHERE person_id = ? AND suppressed = 0
+                   ORDER BY id''',
+                (person_id,)
+            ).fetchall()
+            if remaining:
+                new_preferred = remaining[0]['id']
+                conn.execute(
+                    'UPDATE people SET preferred_face_id = ? WHERE id = ?',
+                    (new_preferred, person_id)
+                )
+                conn.commit()
+
+        # Invalidate embedding cache since faces moved
+        invalidate_embedding_cache()
+
+    return ejected_ids
 
 
 def delete_person(
@@ -1727,16 +1827,23 @@ def reassess_unknown_faces(
     """Re-assess all unknown faces against known embeddings.
 
     Uses vectorized numpy operations for fast comparison.
+    Supports per-person recognition thresholds (overrides global threshold).
 
     Args:
         conn: Database connection.
-        threshold: Minimum cosine similarity for auto-match.
+        threshold: Default minimum cosine similarity for auto-match.
         person_id: If specified, only compare against this person's faces.
 
     Returns:
         List of (face_id, person_id, similarity) for matched faces.
     """
-    logger.info(f'Reassessing unknown faces with threshold={threshold:.3f}, person_id={person_id}')
+    logger.info(f'Reassessing unknown faces with default threshold={threshold:.3f}, person_id={person_id}')
+
+    # Load per-person thresholds (person_id -> threshold, None means use default)
+    person_thresholds: dict[str, float | None] = {}
+    cursor = conn.execute('SELECT id, recognition_threshold FROM people')
+    for row in cursor.fetchall():
+        person_thresholds[row['id']] = row['recognition_threshold']
 
     # Diagnostic: check embedding health
     def diagnose_embeddings(name, embeddings_list):
@@ -1828,8 +1935,13 @@ def reassess_unknown_faces(
         best_idx = np.argmax(similarities[i])
         best_similarity = similarities[i, best_idx]
 
-        if best_similarity >= threshold:
-            _, matched_person_id = known_ids[best_idx]
+        _, matched_person_id = known_ids[best_idx]
+
+        # Use per-person threshold if set, otherwise use global default
+        person_threshold = person_thresholds.get(matched_person_id)
+        effective_threshold = person_threshold if person_threshold is not None else threshold
+
+        if best_similarity >= effective_threshold:
             matched.append((unknown_face_id, matched_person_id, float(best_similarity)))
 
     # Log summary with similarity distribution

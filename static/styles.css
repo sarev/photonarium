@@ -1628,7 +1628,8 @@ a:hover {
 .faces-pick-preferred-title-row {
     display: flex;
     align-items: center;
-    gap: 0.5rem;
+    justify-content: space-between;
+    gap: 1rem;
 }
 
 .faces-pick-preferred-header h3 {
@@ -1662,6 +1663,61 @@ a:hover {
 }
 
 .faces-rename-btn .material-symbols-outlined {
+    font-size: 18px;
+}
+
+.faces-pick-preferred-title-left {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+}
+
+/* Threshold control */
+.faces-threshold-control {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    font-size: 0.85rem;
+    color: var(--color-text-secondary);
+}
+
+.faces-threshold-control label {
+    white-space: nowrap;
+}
+
+.faces-threshold-slider {
+    width: 100px;
+    height: 4px;
+    cursor: pointer;
+    accent-color: var(--color-action-primary);
+}
+
+.faces-threshold-value {
+    min-width: 50px;
+    text-align: right;
+    font-family: monospace;
+    color: var(--color-text-primary);
+}
+
+.faces-threshold-reset {
+    background: transparent;
+    border: none;
+    padding: 2px;
+    cursor: pointer;
+    color: var(--color-text-muted);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    border-radius: 4px;
+    transition: color 0.15s, background-color 0.15s;
+}
+
+.faces-threshold-reset:hover {
+    color: var(--color-text-primary);
+    background-color: var(--color-bg-hover);
+}
+
+.faces-threshold-reset .material-symbols-outlined {
     font-size: 18px;
 }
 

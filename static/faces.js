@@ -142,8 +142,14 @@
     /** @type {Array<Object>} Faces for the selected person in pick-preferred mode */
     let pickPreferredFaces = [];
 
+    /** @type {number|null} Recognition threshold for current person (null = use default) */
+    let pickPreferredPersonThreshold = null;
+
     /** @type {Map<string, number>} Person IDs whose thumbnails need cache busting */
     let thumbnailCacheBust = new Map();
+
+    /** @type {number|null} Timer for pick-preferred reassessment polling */
+    let pickPreferredPollTimer = null;
 
     // =========================================================================
     // INITIALIZATION
@@ -367,20 +373,25 @@
      * @param {string} personId - Person ID to focus on
      */
     async function enterPickPreferredMode(personId) {
-        // Get person details
-        const person = knownPeople.find(p => p.id === personId);
-        if (!person) return;
+        // Get person details from local cache (for name)
+        const localPerson = knownPeople.find(p => p.id === personId);
+        if (!localPerson) return;
 
         viewMode = 'pick-preferred';
         pickPreferredPersonId = personId;
-        pickPreferredPersonName = person.name;
+        pickPreferredPersonName = localPerson.name;
+        pickPreferredPersonThreshold = null;  // Default until loaded
 
-        // Load all faces for this person
+        // Load person details (including threshold) and faces in parallel
         try {
-            const faces = await App.api(`/people/${personId}/faces`);
+            const [personResult, faces] = await Promise.all([
+                App.api(`/people/${personId}`),
+                App.api(`/people/${personId}/faces`)
+            ]);
             pickPreferredFaces = faces || [];
+            pickPreferredPersonThreshold = personResult?.data?.recognition_threshold ?? null;
         } catch (error) {
-            console.error('Failed to load faces for person:', error);
+            console.error('Failed to load person data:', error);
             pickPreferredFaces = [];
         }
 
@@ -397,6 +408,13 @@
         pickPreferredPersonId = null;
         pickPreferredPersonName = null;
         pickPreferredFaces = [];
+        pickPreferredPersonThreshold = null;
+
+        // Clear any pending reassessment poll
+        if (pickPreferredPollTimer) {
+            clearTimeout(pickPreferredPollTimer);
+            pickPreferredPollTimer = null;
+        }
 
         // Clean up pick-preferred grid
         if (pickPreferredGrid) {
@@ -438,6 +456,10 @@
         const titleRow = document.createElement('div');
         titleRow.className = 'faces-pick-preferred-title-row';
 
+        // Left side: name, count, rename button
+        const titleLeft = document.createElement('div');
+        titleLeft.className = 'faces-pick-preferred-title-left';
+
         const title = document.createElement('h3');
         title.innerHTML = `${App.escapeHtml(pickPreferredPersonName)} <span class="face-count">(${countText})</span>`;
 
@@ -447,8 +469,58 @@
         renameBtn.innerHTML = '<span class="material-symbols-outlined">edit</span>';
         renameBtn.addEventListener('click', handleRenamePersonClick);
 
-        titleRow.appendChild(title);
-        titleRow.appendChild(renameBtn);
+        titleLeft.appendChild(title);
+        titleLeft.appendChild(renameBtn);
+        titleRow.appendChild(titleLeft);
+
+        // Right side: threshold slider
+        const thresholdControl = document.createElement('div');
+        thresholdControl.className = 'faces-threshold-control';
+
+        const thresholdLabel = document.createElement('label');
+        thresholdLabel.textContent = 'Match threshold:';
+        thresholdLabel.htmlFor = 'threshold-slider';
+
+        const thresholdSlider = document.createElement('input');
+        thresholdSlider.type = 'range';
+        thresholdSlider.id = 'threshold-slider';
+        thresholdSlider.className = 'faces-threshold-slider';
+        thresholdSlider.min = '60';
+        thresholdSlider.max = '99';
+        thresholdSlider.step = '1';
+        // Convert threshold (0.0-1.0) to percentage (60-99)
+        const currentPercent = pickPreferredPersonThreshold !== null
+            ? Math.round(pickPreferredPersonThreshold * 100)
+            : 80;  // Default display value
+        thresholdSlider.value = String(currentPercent);
+
+        const thresholdValue = document.createElement('span');
+        thresholdValue.className = 'faces-threshold-value';
+        thresholdValue.textContent = pickPreferredPersonThreshold !== null
+            ? `${currentPercent}%`
+            : 'default';
+
+        // Update display on input
+        thresholdSlider.addEventListener('input', () => {
+            thresholdValue.textContent = `${thresholdSlider.value}%`;
+        });
+
+        // Save on change (mouse release)
+        thresholdSlider.addEventListener('change', () => handleThresholdChange(thresholdSlider.value));
+
+        // Reset to default button
+        const resetBtn = document.createElement('button');
+        resetBtn.className = 'faces-threshold-reset';
+        resetBtn.title = 'Reset to default';
+        resetBtn.innerHTML = '<span class="material-symbols-outlined">restart_alt</span>';
+        resetBtn.addEventListener('click', () => handleThresholdReset(thresholdSlider, thresholdValue));
+
+        thresholdControl.appendChild(thresholdLabel);
+        thresholdControl.appendChild(thresholdSlider);
+        thresholdControl.appendChild(thresholdValue);
+        thresholdControl.appendChild(resetBtn);
+        titleRow.appendChild(thresholdControl);
+
         header.appendChild(titleRow);
 
         const hint = document.createElement('span');
@@ -659,6 +731,178 @@
         } catch (error) {
             console.error('Failed to rename person:', error);
             App.showError('Failed to rename person.');
+        }
+    }
+
+    /**
+     * Handle threshold slider change.
+     * @param {string} percentValue - Threshold as percentage string (60-99)
+     */
+    async function handleThresholdChange(percentValue) {
+        if (!pickPreferredPersonId) return;
+
+        const threshold = parseInt(percentValue, 10) / 100;
+
+        try {
+            const result = await App.api(`/people/${pickPreferredPersonId}`, {
+                method: 'PATCH',
+                body: JSON.stringify({ recognition_threshold: threshold })
+            });
+
+            if (result && result.success) {
+                pickPreferredPersonThreshold = threshold;
+
+                const data = result.data || {};
+
+                // Check if person was deleted (all faces ejected)
+                if (data.deleted) {
+                    App.showError(`All faces ejected - person deleted`);
+                    exitPickPreferredMode();
+                    peopleCacheTime = 0;
+                    loadAllFaces();
+                    return;
+                }
+
+                // If faces changed (ejected or potentially added), reload the view
+                if (data.faces_changed) {
+                    const ejectedCount = (data.ejected_face_ids || []).length;
+                    if (ejectedCount > 0) {
+                        const msg = ejectedCount === 1
+                            ? '1 face no longer meets threshold'
+                            : `${ejectedCount} faces no longer meet threshold`;
+                        App.showError(msg);
+                    }
+
+                    // Reload faces for this person
+                    try {
+                        const faces = await App.api(`/people/${pickPreferredPersonId}/faces`);
+                        pickPreferredFaces = faces || [];
+                        displayedFaces = pickPreferredFaces;
+
+                        // Clear selection
+                        if (facesSelection) {
+                            facesSelection.clear();
+                        }
+
+                        // Update header
+                        const titleH3 = facesGrid.querySelector('.faces-pick-preferred-header h3');
+                        if (titleH3) {
+                            const faceCount = pickPreferredFaces.length;
+                            const countText = faceCount === 1 ? '1 image' : `${faceCount} images`;
+                            titleH3.innerHTML = `${App.escapeHtml(pickPreferredPersonName)} <span class="face-count">(${countText})</span>`;
+                        }
+
+                        // Re-render grid
+                        if (pickPreferredGrid) {
+                            pickPreferredGrid.render();
+                        }
+                    } catch (e) {
+                        console.error('Failed to reload faces:', e);
+                    }
+
+                    // Invalidate caches
+                    peopleCacheTime = 0;
+                }
+
+                // Poll for reassessment completion (may add matching unknowns)
+                if (data.faces_changed) {
+                    pollPickPreferredReassessment();
+                }
+            }
+        } catch (error) {
+            console.error('Failed to update threshold:', error);
+            App.showError('Failed to update threshold.');
+        }
+    }
+
+    /**
+     * Poll reassessment status and reload pick-preferred faces when complete.
+     */
+    async function pollPickPreferredReassessment() {
+        // Clear any existing poll
+        if (pickPreferredPollTimer) {
+            clearTimeout(pickPreferredPollTimer);
+            pickPreferredPollTimer = null;
+        }
+
+        // Only poll if still in pick-preferred mode
+        if (viewMode !== 'pick-preferred' || !pickPreferredPersonId) {
+            return;
+        }
+
+        try {
+            const result = await App.api('/faces/reassess-status');
+            if (result && result.success && result.data) {
+                if (result.data.in_progress) {
+                    // Still running, poll again in 500ms
+                    pickPreferredPollTimer = setTimeout(pollPickPreferredReassessment, 500);
+                } else if (result.data.last_result && result.data.last_result.matched_count > 0) {
+                    // Reassessment complete with matches - reload this person's faces
+                    try {
+                        const faces = await App.api(`/people/${pickPreferredPersonId}/faces`);
+                        const newCount = (faces || []).length;
+                        const oldCount = pickPreferredFaces.length;
+
+                        if (newCount !== oldCount) {
+                            pickPreferredFaces = faces || [];
+                            displayedFaces = pickPreferredFaces;
+
+                            // Update header
+                            const titleH3 = facesGrid.querySelector('.faces-pick-preferred-header h3');
+                            if (titleH3) {
+                                const countText = newCount === 1 ? '1 image' : `${newCount} images`;
+                                titleH3.innerHTML = `${App.escapeHtml(pickPreferredPersonName)} <span class="face-count">(${countText})</span>`;
+                            }
+
+                            // Re-render grid
+                            if (pickPreferredGrid) {
+                                pickPreferredGrid.render();
+                            }
+
+                            // Notify if faces were added
+                            if (newCount > oldCount) {
+                                const added = newCount - oldCount;
+                                const msg = added === 1
+                                    ? '1 matching face was added'
+                                    : `${added} matching faces were added`;
+                                App.showError(msg);  // Using showError for notifications
+                            }
+                        }
+                    } catch (e) {
+                        console.error('Failed to reload faces after reassessment:', e);
+                    }
+
+                    // Invalidate caches
+                    peopleCacheTime = 0;
+                }
+            }
+        } catch (error) {
+            console.error('Failed to poll reassessment status:', error);
+        }
+    }
+
+    /**
+     * Handle threshold reset button click.
+     * @param {HTMLInputElement} slider - The slider element
+     * @param {HTMLElement} valueDisplay - The value display element
+     */
+    async function handleThresholdReset(slider, valueDisplay) {
+        if (!pickPreferredPersonId) return;
+
+        try {
+            const result = await App.api(`/people/${pickPreferredPersonId}`, {
+                method: 'PATCH',
+                body: JSON.stringify({ recognition_threshold: null })
+            });
+
+            if (result && result.success) {
+                pickPreferredPersonThreshold = null;
+                slider.value = '80';  // Reset slider to default position
+                valueDisplay.textContent = 'default';
+            }
+        } catch (error) {
+            console.error('Failed to reset threshold:', error);
+            App.showError('Failed to reset threshold.');
         }
     }
 
