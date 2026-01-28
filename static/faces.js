@@ -590,10 +590,14 @@
 
     /**
      * Handle face activation in pick-preferred mode (Enter/double-click).
+     * Opens fullscreen view for the corresponding image.
      */
     function handlePickPreferredFaceActivated(faceId) {
-        // Set as preferred on activation
-        handleStarClick(faceId);
+        const face = pickPreferredFaces.find(f => f.id === faceId);
+        if (face && face.image_id) {
+            App.showFullscreen(face.image_id);
+            setTaggingMode(true);
+        }
     }
 
     /**
