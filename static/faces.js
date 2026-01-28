@@ -142,6 +142,9 @@
     /** @type {Array<Object>} Faces for the selected person in pick-preferred mode */
     let pickPreferredFaces = [];
 
+    /** @type {Map<string, number>} Person IDs whose thumbnails need cache busting */
+    let thumbnailCacheBust = new Map();
+
     // =========================================================================
     // INITIALIZATION
     // =========================================================================
@@ -431,10 +434,28 @@
         header.className = 'faces-pick-preferred-header';
         const faceCount = pickPreferredFaces.length;
         const countText = faceCount === 1 ? '1 image' : `${faceCount} images`;
-        header.innerHTML = `
-            <h3>${App.escapeHtml(pickPreferredPersonName)} <span class="face-count">(${countText})</span></h3>
-            <span class="hint">Click a star to set as preferred face. Press Delete to unassign faces.</span>
-        `;
+
+        const titleRow = document.createElement('div');
+        titleRow.className = 'faces-pick-preferred-title-row';
+
+        const title = document.createElement('h3');
+        title.innerHTML = `${App.escapeHtml(pickPreferredPersonName)} <span class="face-count">(${countText})</span>`;
+
+        const renameBtn = document.createElement('button');
+        renameBtn.className = 'faces-rename-btn';
+        renameBtn.title = 'Rename person';
+        renameBtn.innerHTML = '<span class="material-symbols-outlined">edit</span>';
+        renameBtn.addEventListener('click', handleRenamePersonClick);
+
+        titleRow.appendChild(title);
+        titleRow.appendChild(renameBtn);
+        header.appendChild(titleRow);
+
+        const hint = document.createElement('span');
+        hint.className = 'hint';
+        hint.textContent = 'Click a star to set as preferred face. Press Delete to unassign faces.';
+        header.appendChild(hint);
+
         facesGrid.appendChild(header);
 
         // Create container for the grid
@@ -550,6 +571,9 @@
                 allStars.forEach(star => {
                     star.classList.toggle('preferred', star.dataset.faceId === faceId);
                 });
+
+                // Mark person thumbnail for cache busting when returning to grid
+                thumbnailCacheBust.set(pickPreferredPersonId, Date.now());
             }
         } catch (error) {
             console.error('Failed to set preferred face:', error);
@@ -570,6 +594,68 @@
     function handlePickPreferredFaceActivated(faceId) {
         // Set as preferred on activation
         handleStarClick(faceId);
+    }
+
+    /**
+     * Handle rename button click in pick-preferred mode.
+     */
+    async function handleRenamePersonClick() {
+        if (!pickPreferredPersonId || !pickPreferredPersonName) return;
+
+        const newName = await App.prompt('Rename Person', 'Enter new name:', pickPreferredPersonName);
+        if (!newName || newName.trim() === '' || newName.trim() === pickPreferredPersonName) return;
+
+        const trimmedName = newName.trim();
+
+        try {
+            // Check for collision with existing person
+            const existingPeople = await App.api('/people') || [];
+            const collision = existingPeople.find(p =>
+                p.name.toLowerCase() === trimmedName.toLowerCase() && p.id !== pickPreferredPersonId
+            );
+
+            if (collision) {
+                App.showError(`A person named "${trimmedName}" already exists.`);
+                return;
+            }
+
+            // Update the person name
+            const result = await App.api(`/people/${pickPreferredPersonId}`, {
+                method: 'PATCH',
+                body: JSON.stringify({ name: trimmedName })
+            });
+
+            if (result && result.success) {
+                // Update local state
+                pickPreferredPersonName = trimmedName;
+
+                // Update faces in pickPreferredFaces
+                for (const face of pickPreferredFaces) {
+                    face.person_name = trimmedName;
+                }
+
+                // Update faces in allFaces (so grid shows correct name after exiting)
+                for (const face of allFaces) {
+                    if (face.person_id === pickPreferredPersonId) {
+                        face.person_name = trimmedName;
+                    }
+                }
+
+                // Update header display
+                const titleH3 = facesGrid.querySelector('.faces-pick-preferred-header h3');
+                if (titleH3) {
+                    const faceCount = pickPreferredFaces.length;
+                    const countText = faceCount === 1 ? '1 image' : `${faceCount} images`;
+                    titleH3.innerHTML = `${App.escapeHtml(trimmedName)} <span class="face-count">(${countText})</span>`;
+                }
+
+                // Invalidate people cache (for autocomplete)
+                peopleCacheTime = 0;
+            }
+        } catch (error) {
+            console.error('Failed to rename person:', error);
+            App.showError('Failed to rename person.');
+        }
     }
 
     /**
@@ -881,6 +967,10 @@
         if (isLoading) return;
         isLoading = true;
 
+        // Save scroll position before reload
+        const unknownContainer = facesGrid?.querySelector('.faces-unknown-container');
+        const scrollTopBefore = unknownContainer ? unknownContainer.scrollTop : 0;
+
         // Unbind selection during reload
         if (facesSelection) {
             facesSelection.unbind();
@@ -909,6 +999,12 @@
             allFaces = await App.api('/faces') || [];
             needsRefresh = false;
             renderFacesGrid();
+
+            // Restore scroll position after render
+            const newUnknownContainer = facesGrid?.querySelector('.faces-unknown-container');
+            if (newUnknownContainer && scrollTopBefore > 0) {
+                newUnknownContainer.scrollTop = scrollTopBefore;
+            }
 
             // Bind selection after grid is rendered
             if (facesSelection) {
@@ -1219,21 +1315,25 @@
         thumb.className = 'face-card-thumb';
 
         const img = document.createElement('img');
-        img.src = `/api/people/${person.id}/thumbnail`;
+        // Use cache bust timestamp if available (after preferred face changed)
+        const bustTime = thumbnailCacheBust.get(person.id);
+        img.src = bustTime
+            ? `/api/people/${person.id}/thumbnail?t=${bustTime}`
+            : `/api/people/${person.id}/thumbnail`;
         img.alt = person.name;
         img.loading = 'lazy';
         thumb.appendChild(img);
 
-        // Add face count badge if multiple faces
+        card.appendChild(thumb);
+
+        // Add face count badge if multiple faces (outside thumb to avoid circle clipping)
         if (person.faces.length > 1) {
             const badge = document.createElement('div');
-            badge.className = 'face-card-preferred';
+            badge.className = 'face-card-badge';
             badge.innerHTML = `<span class="material-symbols-outlined">star</span>`;
             badge.title = `${person.faces.length} faces`;
-            thumb.appendChild(badge);
+            card.appendChild(badge);
         }
-
-        card.appendChild(thumb);
 
         const name = document.createElement('div');
         name.className = 'face-card-name';

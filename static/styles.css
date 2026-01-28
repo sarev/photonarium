@@ -1370,6 +1370,7 @@ a:hover {
     display: flex;
     align-items: center;
     gap: 8px;
+    color: var(--color-text-primary);
 }
 
 .face-autocomplete-item:hover,
@@ -1562,6 +1563,26 @@ a:hover {
     color: var(--color-text-amber);
 }
 
+/* Face count badge for person cards (outside thumbnail to avoid circle clipping) */
+.face-card-badge {
+    position: absolute;
+    bottom: calc(0.5rem + 24px);  /* Above the name label */
+    right: 4px;
+    width: 20px;
+    height: 20px;
+    background: var(--color-bg-elevated);
+    border-radius: 50%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    box-shadow: var(--shadow-sm);
+}
+
+.face-card-badge .material-symbols-outlined {
+    font-size: 14px;
+    color: var(--color-text-amber);
+}
+
 /* Clickable star overlay for pick-preferred mode */
 .face-card-star {
     position: absolute;
@@ -1597,11 +1618,17 @@ a:hover {
 /* Pick-preferred mode header */
 .faces-pick-preferred-header {
     display: flex;
-    align-items: center;
-    gap: 0.75rem;
+    flex-direction: column;
+    gap: 0.25rem;
     padding: 0.75rem 1rem;
     background-color: var(--color-bg-secondary);
     border-bottom: 1px solid var(--color-border);
+}
+
+.faces-pick-preferred-title-row {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
 }
 
 .faces-pick-preferred-header h3 {
@@ -1614,6 +1641,28 @@ a:hover {
 .faces-pick-preferred-header h3 .face-count {
     font-weight: 400;
     color: var(--color-text-muted);
+}
+
+.faces-rename-btn {
+    background: transparent;
+    border: none;
+    padding: 2px;
+    cursor: pointer;
+    color: var(--color-text-muted);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    border-radius: 4px;
+    transition: color 0.15s, background-color 0.15s;
+}
+
+.faces-rename-btn:hover {
+    color: var(--color-text-primary);
+    background-color: var(--color-bg-hover);
+}
+
+.faces-rename-btn .material-symbols-outlined {
+    font-size: 18px;
 }
 
 .faces-pick-preferred-header .hint {
@@ -1732,6 +1781,7 @@ a:hover {
     padding: 8px 12px;
     cursor: pointer;
     transition: background-color 0.1s;
+    color: var(--color-text-primary);
 }
 
 .face-card-autocomplete-item:hover,
@@ -2525,6 +2575,24 @@ dialog::backdrop {
     display: flex;
     justify-content: flex-end;
     gap: 0.75rem;
+}
+
+.dialog-input {
+    width: 100%;
+    padding: 0.5rem 0.75rem;
+    margin-bottom: 1rem;
+    font-family: inherit;
+    font-size: 0.9rem;
+    background-color: var(--color-bg-primary);
+    border: 1px solid var(--color-border);
+    border-radius: 4px;
+    color: var(--color-text-primary);
+}
+
+.dialog-input:focus {
+    outline: none;
+    border-color: var(--color-action-primary);
+    box-shadow: 0 0 0 2px var(--color-action-light);
 }
 
 /* Emoji picker dialog */

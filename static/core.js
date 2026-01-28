@@ -1316,6 +1316,54 @@ const App = {
     },
 
     /**
+     * Shows a prompt dialog for text input.
+     * @param {string} title - Dialog title
+     * @param {string} message - Dialog message
+     * @param {string} [defaultValue=''] - Default input value
+     * @returns {Promise<string|null>} Resolves with the entered value, or null if cancelled
+     */
+    prompt(title, message, defaultValue = '') {
+        return new Promise(resolve => {
+            const dialog = document.getElementById('dialog-prompt');
+            const titleEl = document.getElementById('dialog-prompt-title');
+            const msgEl = document.getElementById('dialog-prompt-message');
+            const inputEl = document.getElementById('dialog-prompt-input');
+            const okBtn = document.getElementById('dialog-prompt-ok');
+            const cancelBtn = document.getElementById('dialog-prompt-cancel');
+
+            titleEl.textContent = title;
+            msgEl.textContent = message;
+            inputEl.value = defaultValue;
+
+            const cleanup = (result) => {
+                okBtn.removeEventListener('click', onOk);
+                cancelBtn.removeEventListener('click', onCancel);
+                inputEl.removeEventListener('keydown', onKeydown);
+                dialog.removeEventListener('cancel', onCancel);
+                dialog.close();
+                resolve(result);
+            };
+
+            const onOk = () => cleanup(inputEl.value);
+            const onCancel = () => cleanup(null);
+            const onKeydown = (e) => {
+                if (e.key === 'Enter') {
+                    e.preventDefault();
+                    onOk();
+                }
+            };
+
+            okBtn.addEventListener('click', onOk);
+            cancelBtn.addEventListener('click', onCancel);
+            inputEl.addEventListener('keydown', onKeydown);
+            dialog.addEventListener('cancel', onCancel); // Escape key
+
+            dialog.showModal();
+            inputEl.select(); // Select text for easy replacement
+        });
+    },
+
+    /**
      * Shows the emoji picker dialog.
      * @param {Function} onSelect - Callback when an emoji is selected
      */
