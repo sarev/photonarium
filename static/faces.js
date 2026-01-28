@@ -152,6 +152,30 @@
     let pickPreferredPollTimer = null;
 
     // =========================================================================
+    // UTILITY FUNCTIONS
+    // =========================================================================
+
+    /**
+     * Check if query matches target using fuzzy/subsequence matching.
+     * Each character in query must appear in target in order, but not necessarily consecutively.
+     * Example: "sro" matches "steve rose" because s...r...o appear in order.
+     *
+     * @param {string} query - The search query (lowercase)
+     * @param {string} target - The target string to match against (lowercase)
+     * @returns {boolean} True if query is a subsequence of target
+     */
+    function fuzzyMatch(query, target) {
+        if (!query) return true;
+        let qi = 0;
+        for (let ti = 0; ti < target.length && qi < query.length; ti++) {
+            if (target[ti] === query[qi]) {
+                qi++;
+            }
+        }
+        return qi === query.length;
+    }
+
+    // =========================================================================
     // INITIALIZATION
     // =========================================================================
 
@@ -1626,11 +1650,11 @@
         const existing = card.querySelector('.face-card-autocomplete');
         if (existing) existing.remove();
 
-        // Filter people by query
+        // Filter people by query (subsequence match - "sro" matches "Steve Rose")
         const q = query.toLowerCase().trim();
         if (!q) return;
 
-        const matches = peopleCache.filter(p => p.name.toLowerCase().includes(q));
+        const matches = peopleCache.filter(p => fuzzyMatch(q, p.name.toLowerCase()));
         if (matches.length === 0) return;
 
         // Create autocomplete dropdown
@@ -2102,10 +2126,10 @@
             await refreshPeopleCache();
         }
 
-        // Filter people by query
+        // Filter people by query (subsequence match - "sro" matches "Steve Rose")
         const q = query.toLowerCase().trim();
         const matches = q
-            ? peopleCache.filter(p => p.name.toLowerCase().includes(q))
+            ? peopleCache.filter(p => fuzzyMatch(q, p.name.toLowerCase()))
             : peopleCache;
 
         // Close if no matches

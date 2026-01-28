@@ -1819,8 +1819,8 @@ a:hover {
 .face-card-autocomplete {
     position: absolute;
     top: 100%;
-    left: 0;
-    right: 0;
+    left: -25%;
+    width: 150%;
     background: var(--color-bg-elevated);
     border: 1px solid var(--color-border);
     border-radius: 4px;
