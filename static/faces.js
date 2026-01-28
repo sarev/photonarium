@@ -1717,6 +1717,29 @@
         const label = createFaceLabel(face, top, imgHeight);
         box.appendChild(label);
 
+        // Click on face box focuses the label input
+        box.addEventListener('click', (e) => {
+            // Don't handle if clicking on the label itself or delete button
+            if (e.target.closest('.face-label') || e.target.closest('.face-delete-btn')) {
+                return;
+            }
+
+            // For known faces, click the name span to show input (same as clicking label)
+            const nameSpan = label.querySelector('.face-name');
+            if (nameSpan) {
+                nameSpan.click();
+                // Focus will happen after showNameInput creates the input
+                setTimeout(() => {
+                    const input = label.querySelector('.face-input');
+                    if (input) input.focus();
+                }, 0);
+            } else {
+                // For unknown faces, just focus the existing input
+                const input = label.querySelector('.face-input');
+                if (input) input.focus();
+            }
+        });
+
         return box;
     }
 
