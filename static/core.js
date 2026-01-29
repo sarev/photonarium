@@ -1740,9 +1740,9 @@ const App = {
         // Determine initial screen
         this._determineInitialScreen();
 
-        // Speculatively preload data that will likely be needed soon
-        // (people and faces for the Faces screen and Search filter)
-        AppState.preloadAll();
+        // Speculative preloading: only start when user has been idle for 3 seconds
+        // This avoids blocking initial interactions while still warming caches
+        this._scheduleIdlePreload();
 
         // Mark as ready and run callbacks
         this._isReady = true;
@@ -1760,25 +1760,24 @@ const App = {
 
     /**
      * Determines and navigates to the initial screen.
-     * Shows database screen if no images, otherwise gallery.
+     * Shows gallery immediately, redirects to database if empty.
      * @private
      */
-    async _determineInitialScreen() {
-        try {
-            const stats = await this.apiGet('/stats');
-            if (stats.totalImages === 0) {
-                this.navigateTo('database', { pushHistory: false });
-            } else {
-                this.navigateTo('gallery', { pushHistory: false });
-            }
-        } catch (error) {
-            console.error('Error checking database:', error);
-            // Default to gallery on error
-            this.navigateTo('gallery', { pushHistory: false });
-        }
+    _determineInitialScreen() {
+        // Show gallery immediately - don't wait for stats
+        this.navigateTo('gallery', { pushHistory: false });
 
-        // Hide loading splash and show app
+        // Hide loading splash right away
         this._hideLoadingSplash();
+
+        // Check stats in background and redirect if database is empty
+        this.apiGet('/stats').then(stats => {
+            if (stats.totalImages === 0 && this.getScreen() === 'gallery') {
+                this.navigateTo('database', { pushHistory: false });
+            }
+        }).catch(error => {
+            console.error('Error checking database:', error);
+        });
     },
 
     /**
@@ -1794,6 +1793,62 @@ const App = {
         }
         if (app) {
             app.classList.add('ready');
+        }
+    },
+
+    /**
+     * Schedules speculative preloading to run shortly after images load.
+     * Waits for initial images to load, then a brief idle period before preloading.
+     * This ensures preloading doesn't compete with the initial gallery load.
+     * @private
+     */
+    _scheduleIdlePreload() {
+        const IDLE_DELAY = 500; // 500ms after images load (enough for initial render)
+        let idleTimer = null;
+        let preloadDone = false;
+        let imagesLoaded = false;
+
+        const doPreload = () => {
+            if (preloadDone || !imagesLoaded) return;
+            preloadDone = true;
+            // Remove listeners once preload starts
+            document.removeEventListener('mousemove', resetTimer);
+            document.removeEventListener('keydown', resetTimer);
+            document.removeEventListener('click', resetTimer);
+            document.removeEventListener('scroll', resetTimer, true);
+            // Fire preload
+            AppState.preloadAll();
+        };
+
+        const resetTimer = () => {
+            if (preloadDone || !imagesLoaded) return;
+            if (idleTimer) clearTimeout(idleTimer);
+            idleTimer = setTimeout(doPreload, IDLE_DELAY);
+        };
+
+        // Wait for images to load before starting idle detection
+        const onImagesLoaded = () => {
+            if (imagesLoaded) return;
+            imagesLoaded = true;
+            // Start listening for user activity only after images are loaded
+            document.addEventListener('mousemove', resetTimer, { passive: true });
+            document.addEventListener('keydown', resetTimer, { passive: true });
+            document.addEventListener('click', resetTimer, { passive: true });
+            document.addEventListener('scroll', resetTimer, { passive: true, capture: true });
+            // Start the idle timer
+            resetTimer();
+        };
+
+        // Check if images already loaded, otherwise subscribe
+        if (AppState.images.isLoaded()) {
+            onImagesLoaded();
+        } else {
+            const unsub = AppState.images.onChanged(() => {
+                if (AppState.images.isLoaded()) {
+                    unsub(); // Unsubscribe after first load
+                    onImagesLoaded();
+                }
+            });
         }
     }
 };

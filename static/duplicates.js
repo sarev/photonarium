@@ -287,14 +287,8 @@ const Duplicates = {
         this._grid.unbind();
         this._selection.unbind();
 
-        // Stop AppState polling for duplicates
+        // Stop AppState polling for duplicates (cleanup)
         AppState.duplicates.stopPolling();
-
-        // Clear any pending local poll (legacy, should not be active)
-        if (this._pollTimeout) {
-            clearTimeout(this._pollTimeout);
-            this._pollTimeout = null;
-        }
 
         // Remove Escape key handler
         if (this._escapeHandler) {
@@ -353,18 +347,18 @@ const Duplicates = {
         });
 
         // Subscribe to AppState.duplicates for centralized state management
+        // Purely reactive: just re-render when data changes
         AppState.duplicates.onChanged((event) => {
-            if (App.getScreen() === 'duplicates') {
-                if (event.type === 'computationComplete') {
-                    // Computation finished - reload groups
-                    this._loadGroups();
-                } else if (event.type === 'progress') {
-                    // Update progress indicator if needed
-                    const status = AppState.duplicates.getStatus(this.state.currentLevel);
-                    if (status) {
-                        this.state.currentStatus = status.status;
-                    }
-                }
+            if (App.getScreen() === 'duplicates' && event.level === this.state.currentLevel) {
+                // Data changed - update local state from AppState and re-render
+                const groups = AppState.duplicates.getGroups(this.state.currentLevel);
+                const statusObj = AppState.duplicates.getStatus(this.state.currentLevel);
+
+                this.state.allGroups = groups;
+                this.state.currentStatus = statusObj?.status || 'done';
+
+                // Apply current sort order and render
+                this._applySortOrder();
             }
         });
     },
@@ -428,16 +422,11 @@ const Duplicates = {
 /**
  * Loads duplicate groups from the backend for the current level.
  * Uses cache if available, otherwise fetches from API.
+ * AppState handles polling internally if computation is in progress.
  * @private
  */
 Duplicates._loadGroups = async function() {
     this._showLoading('Loading duplicates…');
-
-    // Cancel any pending local poll (we use AppState polling instead)
-    if (this._pollTimeout) {
-        clearTimeout(this._pollTimeout);
-        this._pollTimeout = null;
-    }
 
     try {
         const { groups, status } = await this._getGroupsForLevel(this.state.currentLevel);
@@ -447,9 +436,6 @@ Duplicates._loadGroups = async function() {
 
         // Apply current sort mode (also applies min group size filter)
         await this._applySortOrder();
-
-        // Note: AppState.duplicates.startPolling() is called inside _getGroupsForLevel
-        // when status is 'computing'. The subscription handles computationComplete.
     } catch (err) {
         App.showError('Failed to load duplicates: ' + err.message);
     } finally {
@@ -460,22 +446,18 @@ Duplicates._loadGroups = async function() {
 /**
  * Gets duplicate groups for a given similarity level.
  * Delegates to AppState.duplicates for centralized caching.
+ * AppState automatically handles polling if computation is in progress.
  * @param {number} level - Similarity level (0-3)
  * @returns {Promise<{groups: Array<Object>, status: string}>} Groups and computation status
  * @private
  */
 Duplicates._getGroupsForLevel = async function(level) {
-    // Load via AppState (handles caching internally)
+    // Load via AppState (handles caching and polling internally)
     await AppState.duplicates.loadLevel(level);
 
     const groups = AppState.duplicates.getGroups(level);
     const statusObj = AppState.duplicates.getStatus(level);
     const status = statusObj?.status || 'done';
-
-    // Start polling if still computing
-    if (status === 'computing' || status === 'pending') {
-        AppState.duplicates.startPolling(level);
-    }
 
     return { groups, status };
 };
@@ -495,12 +477,6 @@ Duplicates._setLevel = async function(level) {
     // Clear selection when changing level
     this._selection.clear();
 
-    // Cancel any pending local poll
-    if (this._pollTimeout) {
-        clearTimeout(this._pollTimeout);
-        this._pollTimeout = null;
-    }
-
     this._showLoading('Loading duplicates…');
 
     try {
@@ -510,65 +486,11 @@ Duplicates._setLevel = async function(level) {
 
         // Apply current sort mode (also applies min group size filter)
         await this._applySortOrder();
-
-        // Note: AppState.duplicates.startPolling() is called inside _getGroupsForLevel
-        // when status is 'computing'. The subscription handles computationComplete.
     } catch (err) {
         App.showError('Failed to load duplicates: ' + err.message);
     } finally {
         this._hideLoading();
     }
-};
-
-/**
- * Schedules a poll to check for updated duplicate computation status.
- * @param {number} level - The level to poll for
- * @private
- */
-Duplicates._scheduleStatusPoll = function(level) {
-    // Clear any existing poll
-    if (this._pollTimeout) {
-        clearTimeout(this._pollTimeout);
-    }
-
-    // Poll again in 2 seconds
-    this._pollTimeout = setTimeout(async () => {
-        // Only poll if still on same level and screen is visible
-        if (this.state.currentLevel !== level) return;
-        if (!this._els.grid.offsetParent) return;
-
-        try {
-            const { groups, status, unchanged } = await this._getGroupsForLevel(level);
-
-            // Check if groups actually changed (compare count and first few hashes)
-            const oldGroups = this.state.allGroups;
-            const groupsChanged = !unchanged && (
-                groups.length !== oldGroups.length ||
-                groups.slice(0, 10).some((g, i) => !oldGroups[i] || g.group_hash !== oldGroups[i].group_hash)
-            );
-
-            // Update status
-            const statusChanged = status !== this.state.currentStatus;
-            this.state.currentStatus = status;
-
-            // Only update and re-render if groups actually changed
-            if (groupsChanged) {
-                this.state.allGroups = groups;
-                this._applyMinGroupSizeFilter();
-                this._renderGroups();
-            } else if (statusChanged && this.state.groups.length === 0) {
-                // Status changed but no groups - update empty state message
-                this._renderGroups();
-            }
-
-            // Continue polling if still not done
-            if (status === 'computing' || status === 'pending') {
-                this._scheduleStatusPoll(level);
-            }
-        } catch (err) {
-            // Silently fail polls, user can manually refresh
-        }
-    }, 2000);
 };
 
 /**

@@ -224,12 +224,8 @@
     /** @type {Array<Object>} Currently displayed unknown faces (for selection) */
     let displayedFaces = [];
 
-    /** @type {number|null} Reassessment polling timer */
-    let reassessmentPollTimer = null;
-
     /**
      * Whether a full reload is pending (deferred because user had active selection).
-     * Set to true by pollReassessmentStatus when matches found but user has selection.
      * Checked by handleFacesSelectionChanged to trigger reload when selection clears.
      *
      * IMPORTANT: Any operation that handles its own update/reload should set this
@@ -307,9 +303,6 @@
 
     /** @type {string} Current semantic search query for filtering unknown faces */
     let unknownFacesSearchQuery = '';
-
-    /** @type {number|null} Timer for polling reassessment in pick-preferred mode */
-    let pickPreferredPollTimer = null;
 
     // =========================================================================
     // UTILITY FUNCTIONS
@@ -676,12 +669,6 @@
         pickPreferredPersonName = null;
         pickPreferredFaces = [];
         pickPreferredPersonThreshold = null;
-
-        // Clear any pending reassessment poll
-        if (pickPreferredPollTimer) {
-            clearTimeout(pickPreferredPollTimer);
-            pickPreferredPollTimer = null;
-        }
 
         // Clean up pick-preferred grid
         if (pickPreferredGrid) {
@@ -1086,10 +1073,8 @@
                     }
                     // Invalidate people cache (new person may have been created)
                     invalidatePeopleCache();
-                    // Poll for reassessment if triggered
-                    if (result.data?.reassessment_triggered) {
-                        pollPickPreferredReassessment();
-                    }
+                    // Note: Backend may trigger async reassessment to find similar faces.
+                    // This runs in the background - users see newly matched faces on next load.
                 } else {
                     throw new Error(result?.error || 'Unknown error');
                 }
@@ -1201,10 +1186,8 @@
                         // Re-render to show correct person card
                         renderFacesGrid();
                     }
-                    // Poll for reassessment if triggered
-                    if (result.data?.reassessment_triggered) {
-                        pollReassessmentStatus();
-                    }
+                    // Note: Backend may trigger async reassessment to find similar faces.
+                    // This runs in the background - users see newly matched faces on next load.
                 } else {
                     // API failed - revert optimistic update
                     console.error('Identify API failed:', result?.error);
@@ -1373,10 +1356,8 @@
                     invalidatePeopleCache();
                 }
 
-                // Poll for reassessment completion (may add matching unknowns)
-                if (data.faces_changed) {
-                    pollPickPreferredReassessment();
-                }
+                // Note: Backend may trigger async reassessment after threshold change.
+                // This runs in the background - users see changes on next load or re-entry.
             }
         } catch (error) {
             console.error('Failed to update threshold:', error);
@@ -1384,71 +1365,6 @@
         }
     }
 
-    /**
-     * Poll reassessment status and reload pick-preferred faces when complete.
-     */
-    async function pollPickPreferredReassessment() {
-        // Clear any existing poll
-        if (pickPreferredPollTimer) {
-            clearTimeout(pickPreferredPollTimer);
-            pickPreferredPollTimer = null;
-        }
-
-        // Only poll if still in pick-preferred mode
-        if (viewMode !== 'pick-preferred' || !pickPreferredPersonId) {
-            return;
-        }
-
-        try {
-            const result = await AppState.faces.checkReassessment();
-            if (result && result.success && result.data) {
-                if (result.data.in_progress) {
-                    // Still running, poll again in 500ms
-                    pickPreferredPollTimer = setTimeout(pollPickPreferredReassessment, 500);
-                } else if (result.data.last_result && result.data.last_result.matched_count > 0) {
-                    // Reassessment complete with matches - reload this person's faces via AppState
-                    try {
-                        const faces = await AppState.faces.fetchForPerson(pickPreferredPersonId);
-                        const newCount = (faces || []).length;
-                        const oldCount = pickPreferredFaces.length;
-
-                        if (newCount !== oldCount) {
-                            pickPreferredFaces = faces || [];
-                            displayedFaces = pickPreferredFaces;
-
-                            // Update header
-                            const titleH3 = facesGrid.querySelector('.faces-pick-preferred-header h3');
-                            if (titleH3) {
-                                const countText = newCount === 1 ? '1 image' : `${newCount} images`;
-                                titleH3.innerHTML = `${App.escapeHtml(pickPreferredPersonName)} <span class="face-count">(${countText})</span>`;
-                            }
-
-                            // Re-render grid
-                            if (pickPreferredGrid) {
-                                pickPreferredGrid.render();
-                            }
-
-                            // Notify if faces were added
-                            if (newCount > oldCount) {
-                                const added = newCount - oldCount;
-                                const msg = added === 1
-                                    ? '1 matching face was added'
-                                    : `${added} matching faces were added`;
-                                App.showError(msg);  // Using showError for notifications
-                            }
-                        }
-                    } catch (e) {
-                        console.error('Failed to reload faces after reassessment:', e);
-                    }
-
-                    // Invalidate caches
-                    invalidatePeopleCache();
-                }
-            }
-        } catch (error) {
-            console.error('Failed to poll reassessment status:', error);
-        }
-    }
 
     /**
      * Handle threshold reset button click.
@@ -1760,7 +1676,6 @@
      *   - Saves scroll position for restoration on return
      *   - Unbinds VirtualGrid (stops scroll listeners, thumbnail loading)
      *   - Unbinds GridSelection (stops keyboard/mouse handlers)
-     *   - Stops reassessment polling
      *   - Does NOT destroy data (allFaces, knownPeople retained)
      *
      * WHY BIND/UNBIND: VirtualGrid has scroll listeners that continue firing
@@ -1820,11 +1735,6 @@
                 // Unbind selection handlers
                 if (facesSelection) {
                     facesSelection.unbind();
-                }
-                // Stop reassessment polling
-                if (reassessmentPollTimer) {
-                    clearTimeout(reassessmentPollTimer);
-                    reassessmentPollTimer = null;
                 }
                 // Clear search state
                 unknownFacesSearchQuery = '';
@@ -2774,63 +2684,6 @@
         await identifyFacesAsPerson(faceIds, name, { preferredFaceId: typedFaceId });
     }
 
-    /**
-     * Poll for background face reassessment completion.
-     *
-     * BACKGROUND: When faces are identified, the backend triggers async
-     * reassessment to find similar unknown faces. This runs in a background
-     * thread and can take several seconds for large face databases.
-     *
-     * POLLING MECHANISM:
-     * - Started after successful batch identify
-     * - Polls /faces/reassess-status every 500ms while in_progress
-     * - When complete with matches: triggers reload to show newly matched faces
-     *
-     * USER EXPERIENCE CONSIDERATIONS:
-     * - If user has active selection: defer reload (set reloadPending flag).
-     *   Reload happens when selection clears (via handleFacesSelectionChanged).
-     * - If in pick-preferred mode: skip entirely (user focused on one person,
-     *   can exit/re-enter to see changes).
-     *
-     * WHY DEFER: Immediate reload during multi-select operations would clear
-     * selection and disrupt workflow. Better to wait for natural pause.
-     */
-    async function pollReassessmentStatus() {
-        if (reassessmentPollTimer) {
-            clearTimeout(reassessmentPollTimer);
-            reassessmentPollTimer = null;
-        }
-
-        try {
-            const result = await AppState.faces.checkReassessment();
-            if (result && result.success && result.data) {
-                if (result.data.in_progress) {
-                    // Still running - continue polling
-                    reassessmentPollTimer = setTimeout(pollReassessmentStatus, 500);
-                } else if (result.data.last_result && result.data.last_result.matched_count > 0) {
-                    // Complete with new matches - refresh UI
-
-                    // Skip in pick-preferred mode (user focused elsewhere)
-                    if (viewMode !== 'all') {
-                        return;
-                    }
-
-                    // Check for active selection
-                    const hasSelection = facesSelection && facesSelection.getSelected().length > 0;
-                    if (!hasSelection) {
-                        // Safe to reload immediately
-                        invalidatePeopleCache();
-                        loadAllFaces();
-                    } else {
-                        // Defer reload until selection clears
-                        reloadPending = true;
-                    }
-                }
-            }
-        } catch (error) {
-            console.error('Failed to poll reassessment status:', error);
-        }
-    }
 
     /**
      * Commit a name change for a single face card (legacy/internal use).

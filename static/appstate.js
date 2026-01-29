@@ -1295,44 +1295,6 @@ const AppState = (function() {
                 return await App.apiGet(url) || [];
             },
 
-            // --- Reassessment ---
-            _reassessPollTimer: null,
-
-            /**
-             * Check the current reassessment status.
-             * @returns {Promise<Object>} Reassessment status
-             */
-            async checkReassessment() {
-                return await App.apiGet('/faces/reassess-status');
-            },
-
-            /**
-             * Start polling for reassessment status.
-             * @param {Function} callback - Called with reassessment status on each poll
-             * @param {number} intervalMs - Poll interval in milliseconds
-             */
-            startReassessmentPolling(callback, intervalMs = 500) {
-                this.stopReassessmentPolling();
-                this._reassessPollTimer = setInterval(async () => {
-                    try {
-                        const result = await this.checkReassessment();
-                        callback(result);
-                    } catch (err) {
-                        console.error('Reassessment poll error:', err);
-                    }
-                }, intervalMs);
-            },
-
-            /**
-             * Stop polling for reassessment status.
-             */
-            stopReassessmentPolling() {
-                if (this._reassessPollTimer) {
-                    clearInterval(this._reassessPollTimer);
-                    this._reassessPollTimer = null;
-                }
-            },
-
             // --- Mutations ---
             // Note: All mutation methods accept arrays for consistency.
             // TODO: Some endpoints pending batch normalization (see api-batch-normalization.md)
@@ -1512,9 +1474,67 @@ const AppState = (function() {
         let _currentLevel = 2;          // Default level (Similar)
         let _computing = false;
         let _pollTimer = null;
+        let _pollLevel = null;          // Level being polled
+
+        /**
+         * Internal: Start polling for a level if computation is in progress.
+         * Polling is automatic and internal - GUI should not call this.
+         */
+        function _startPollingIfNeeded(level, status) {
+            // Only poll if computing or pending
+            if (status !== 'computing' && status !== 'pending') {
+                return;
+            }
+
+            // Already polling this level
+            if (_pollTimer && _pollLevel === level) {
+                return;
+            }
+
+            // Stop any existing poll for different level
+            _stopPolling();
+
+            _pollLevel = level;
+            _pollTimer = setInterval(async () => {
+                try {
+                    const response = await App.apiGet(`/duplicates?level=${level}`);
+                    const newStatus = response.status;
+
+                    _statusCache[level] = {
+                        status: newStatus,
+                        progress: response.progress,
+                        total: response.total
+                    };
+
+                    // Check if computation finished
+                    if (newStatus !== 'computing' && newStatus !== 'pending') {
+                        _stopPolling();
+                        _computing = false;
+                        _groupCache[level] = response.groups || [];
+                        _epochCache[level] = Date.now();
+                        broadcast({ type: 'changed', level });
+                    }
+                    // Don't broadcast during polling - avoid unnecessary re-renders
+                } catch (err) {
+                    console.error('Duplicates poll error:', err);
+                }
+            }, 2000);
+        }
+
+        /**
+         * Internal: Stop polling.
+         */
+        function _stopPolling() {
+            if (_pollTimer) {
+                clearInterval(_pollTimer);
+                _pollTimer = null;
+                _pollLevel = null;
+            }
+        }
 
         /**
          * Load duplicate groups for a level.
+         * Automatically starts internal polling if computation is in progress.
          */
         async function loadLevel(level, force = false) {
             // Return cached if available and not forced
@@ -1533,7 +1553,11 @@ const AppState = (function() {
                 _epochCache[level] = Date.now();
 
                 // Update computing flag
-                _computing = response.status === 'computing';
+                const status = response.status;
+                _computing = status === 'computing' || status === 'pending';
+
+                // Automatically start polling if computation in progress
+                _startPollingIfNeeded(level, status);
 
                 broadcast({ type: 'changed', level });
 
@@ -1542,44 +1566,6 @@ const AppState = (function() {
                 console.error('AppState.duplicates load error:', err);
                 broadcastError(err.message || 'Failed to load duplicates');
                 throw err;
-            }
-        }
-
-        /**
-         * Poll status during computation.
-         */
-        function startPolling(level) {
-            if (_pollTimer) return;
-
-            _pollTimer = setInterval(async () => {
-                try {
-                    const response = await App.apiGet(`/duplicates?level=${level}`);
-                    _statusCache[level] = {
-                        status: response.status,
-                        progress: response.progress,
-                        total: response.total
-                    };
-
-                    if (response.status !== 'computing') {
-                        // Computation complete
-                        stopPolling();
-                        _computing = false;
-                        _groupCache[level] = response.groups || [];
-                        _epochCache[level] = Date.now();
-                        broadcast({ type: 'computationComplete', level });
-                    } else {
-                        broadcast({ type: 'progress', level });
-                    }
-                } catch (err) {
-                    console.error('Duplicates poll error:', err);
-                }
-            }, 2000);
-        }
-
-        function stopPolling() {
-            if (_pollTimer) {
-                clearInterval(_pollTimer);
-                _pollTimer = null;
             }
         }
 
@@ -1637,8 +1623,10 @@ const AppState = (function() {
             },
 
             // --- Lifecycle ---
-            startPolling,
-            stopPolling,
+            // stopPolling is exposed for cleanup when leaving the screen
+            stopPolling() {
+                _stopPolling();
+            },
 
             // --- Cache management ---
             invalidate(level) {
@@ -1787,13 +1775,26 @@ const AppState = (function() {
     /**
      * Speculatively preload data that will likely be needed soon.
      * Call this after initial page load completes to warm caches in background.
-     * Does not block - all loads happen in parallel without awaiting.
+     * Does not block - all loads happen sequentially without awaiting.
+     *
+     * Loads are sequential to avoid SQLite connection contention
+     * (Python's sqlite3 serializes access to a single connection).
      */
     function preloadAll() {
-        // Load people and faces in background (commonly accessed screens)
-        // Don't await - let them load speculatively
-        people.load().catch(err => console.warn('Speculative people load failed:', err));
-        faces.load().catch(err => console.warn('Speculative faces load failed:', err));
+        console.time('preload /people');
+        people.load()
+            .then(() => {
+                console.timeEnd('preload /people');
+                console.time('preload /faces');
+                return faces.load();
+            })
+            .then(() => {
+                console.timeEnd('preload /faces');
+                console.time('preload /duplicates');
+                return duplicates.loadLevel(2);
+            })
+            .then(() => console.timeEnd('preload /duplicates'))
+            .catch(err => console.warn('Speculative preload failed:', err));
     }
 
     // =========================================================================

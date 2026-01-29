@@ -333,6 +333,8 @@ _SQL_CREATE_INDEXES = [
     "CREATE INDEX IF NOT EXISTS idx_images_perceptual_hash ON images(perceptual_hash)",
     "CREATE INDEX IF NOT EXISTS idx_images_deleted ON images(deleted)",
     "CREATE INDEX IF NOT EXISTS idx_images_timestamp ON images(timestamp)",
+    # Composite index for efficient gallery listing (covers WHERE deleted=0 ORDER BY timestamp DESC)
+    "CREATE INDEX IF NOT EXISTS idx_images_deleted_timestamp ON images(deleted, timestamp DESC)",
     "CREATE INDEX IF NOT EXISTS idx_dup_level_group ON duplicate_groups(level, group_hash)",
     "CREATE INDEX IF NOT EXISTS idx_dup_updated_at ON duplicate_groups(updated_at)",
 ]
@@ -375,6 +377,10 @@ def init_database(db_path: Path | str) -> sqlite3.Connection:
 
     # Set busy timeout (milliseconds) for lock contention
     conn.execute('PRAGMA busy_timeout=5000')
+
+    # Increase cache size to 100MB (default is 2MB) for better read performance
+    # Negative value = kibibytes, so -102400 = 100 MB
+    conn.execute('PRAGMA cache_size=-102400')
 
     # Use Row factory for dict-like access to rows
     conn.row_factory = sqlite3.Row
@@ -771,7 +777,7 @@ def get_all_images_lightweight(conn: sqlite3.Connection) -> list[dict[str, Any]]
         SELECT id, basename, width, height, timestamp, timestamp_confidence, rating, description
         FROM images
         WHERE deleted = 0
-        ORDER BY timestamp DESC, path ASC
+        ORDER BY timestamp DESC
     """)
 
     return rows_to_dicts(cursor.fetchall())

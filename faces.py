@@ -90,6 +90,9 @@ _SQL_CREATE_FACE_INDEXES = [
     "CREATE INDEX IF NOT EXISTS idx_faces_person ON faces(person_id)",
     "CREATE INDEX IF NOT EXISTS idx_faces_suppressed ON faces(suppressed)",
     "CREATE INDEX IF NOT EXISTS idx_people_name ON people(name COLLATE NOCASE)",
+    # Composite index for efficient face count queries (used by get_all_people)
+    # Without this, SQLite uses idx_faces_suppressed which causes full scans
+    "CREATE INDEX IF NOT EXISTS idx_faces_person_suppressed ON faces(person_id, suppressed)",
 ]
 
 # Migrations for schema updates

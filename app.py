@@ -27,8 +27,23 @@ import sys
 import threading
 from pathlib import Path
 
-from flask import Flask, Response, jsonify, request, send_file, abort
+import orjson
+from flask import Flask, Response, request, send_file, abort
+from flask import jsonify as flask_jsonify
 # flask_cors not needed for localhost-only deployment (same-origin requests)
+
+# Toggle between orjson and stdlib json for testing
+USE_ORJSON = True
+
+def jsonify(data):
+    """JSON response - uses orjson when USE_ORJSON is True."""
+    if USE_ORJSON:
+        return Response(
+            orjson.dumps(data),
+            mimetype='application/json'
+        )
+    else:
+        return flask_jsonify(data)
 
 from imagedb import ImageDatabase, register_signal_handlers
 from thumbnails import (
@@ -108,6 +123,30 @@ _run_face_grouping = False  # Set via command-line args in __main__
 _face_thumb_regenerating: set[str] = set()
 _face_thumb_regen_lock = threading.Lock()
 
+# Cache for /api/images full response (avoids slow SQLite reads on every request)
+_images_cache: dict | None = None
+_images_cache_lock = threading.Lock()
+
+
+def _get_images_cache():
+    """Get cached images response if available."""
+    with _images_cache_lock:
+        return _images_cache
+
+
+def _set_images_cache(epoch: str, json_bytes: bytes):
+    """Cache the images JSON response."""
+    global _images_cache
+    with _images_cache_lock:
+        _images_cache = {'epoch': epoch, 'bytes': json_bytes}
+
+
+def invalidate_images_cache():
+    """Invalidate the images cache (call when images change)."""
+    global _images_cache
+    with _images_cache_lock:
+        _images_cache = None
+
 
 def get_db() -> ImageDatabase:
     """Get the database instance, initializing if necessary."""
@@ -125,7 +164,22 @@ def get_db() -> ImageDatabase:
         )
         register_signal_handlers(db)
         logger.info('ImageDatabase initialised')
+        # Pre-populate images cache for fast first request
+        _prepopulate_images_cache(db)
     return db
+
+
+def _prepopulate_images_cache(database: ImageDatabase):
+    """Pre-populate the images cache during startup."""
+    import time
+    t0 = time.perf_counter()
+    images = database.get_all_images_lightweight()
+    epoch = database.get_current_epoch()
+    data = {'epoch': epoch, 'images': images}
+    json_bytes = orjson.dumps(data)
+    _set_images_cache(epoch, json_bytes)
+    elapsed = time.perf_counter() - t0
+    logger.info(f'Images cache pre-populated: {len(images)} images, {len(json_bytes)//1024//1024}MB, {elapsed*1000:.0f}ms')
 
 
 def shutdown_db():
@@ -264,22 +318,29 @@ def get_images():
 
         return jsonify(delta)
     else:
-        # Full load - return all images with current epoch
+        # Full load - use cached response if available
         db = get_db()
 
         if person_ids:
-            # Filter by people
+            # Filter by people - can't use cache
             matching_image_ids = set(get_images_with_people(db.conn, person_ids))
             all_images = db.get_all_images_lightweight()
             images = [img for img in all_images if img['id'] in matching_image_ids]
+            epoch = db.get_current_epoch()
+            return jsonify({'epoch': epoch, 'images': images})
         else:
-            images = db.get_all_images_lightweight()
+            # Use cached JSON bytes if epoch matches
+            epoch = db.get_current_epoch()
+            cached = _get_images_cache()
+            if cached and cached['epoch'] == epoch:
+                return Response(cached['bytes'], mimetype='application/json')
 
-        epoch = db.get_current_epoch()
-        return jsonify({
-            'epoch': epoch,
-            'images': images,
-        })
+            # Cache miss - build and cache response
+            images = db.get_all_images_lightweight()
+            data = {'epoch': epoch, 'images': images}
+            json_bytes = orjson.dumps(data)
+            _set_images_cache(epoch, json_bytes)
+            return Response(json_bytes, mimetype='application/json')
 
 
 @app.route('/api/images/<image_id>', methods=['GET'])

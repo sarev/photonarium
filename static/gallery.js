@@ -71,7 +71,6 @@ const Gallery = {
         needsRefresh: true,
         contentSimilarities: null,
         contentReferenceId: null,
-        refreshIntervalId: null,
         lastImageCount: 0,
         pendingSelection: null  // Selection to apply when item loads
     },
@@ -203,6 +202,9 @@ const Gallery = {
         App.on('selectionChanged', (sel) => this._onSelectionChanged(sel));
         App.on('selectAll', () => this._selection.selectAll());
         App.on('imageRotated', (imageId) => this._onImageRotated(imageId));
+
+        // Subscribe to database changes (indexing completed) - event-driven, no polling
+        App.on('databaseChanged', () => this._onDatabaseChanged());
     },
 
     /**
@@ -219,8 +221,6 @@ const Gallery = {
         }
         // Bind selection handlers
         this._selection.bind();
-        // Start background refresh while database is updating
-        this._startBackgroundRefresh();
         // Update duplicate group nav button state
         this._updateDupGroupNavState();
     },
@@ -233,8 +233,6 @@ const Gallery = {
         this._selection.unbind();
         // Unbind grid scroll handler
         this._grid.unbind();
-        // Stop background refresh
-        this._stopBackgroundRefresh();
         // Hide scroll indicator overlay
         if (this._scrollOverlayTimer) {
             clearTimeout(this._scrollOverlayTimer);
@@ -321,47 +319,25 @@ const Gallery = {
     },
 
     /**
-     * Starts background refresh polling.
+     * Handles database changes (indexing completed).
+     * Event-driven replacement for polling - reloads images when notified.
      * @private
      */
-    _startBackgroundRefresh() {
-        if (this.state.refreshIntervalId) return;
-
-        this.state.refreshIntervalId = setInterval(() => {
-            this._checkForNewImages();
-        }, 30000);
-    },
-
-    /**
-     * Stops background refresh polling.
-     * @private
-     */
-    _stopBackgroundRefresh() {
-        if (this.state.refreshIntervalId) {
-            clearInterval(this.state.refreshIntervalId);
-            this.state.refreshIntervalId = null;
+    async _onDatabaseChanged() {
+        // Only refresh if we're on the gallery screen
+        if (App.getScreen() !== 'gallery') {
+            this.state.needsRefresh = true;
+            return;
         }
-    },
 
-    /**
-     * Checks if new images are available and refreshes.
-     * @private
-     */
-    async _checkForNewImages() {
         try {
-            // Use AppState.status - load if not already loaded
-            let status = AppState.status.get();
-            if (!status) {
-                status = await AppState.status.load();
-            }
-            if (status.status !== 'updating') return;
-
-            const images = await App.getImages();
-            if (images.length === this.state.lastImageCount) return;
-
             // Preserve state
             const scrollTop = this._els.grid?.scrollTop || 0;
             const currentSelection = App.getSelectedImages();
+
+            // Reload images
+            const images = await App.getImages();
+            if (images.length === this.state.lastImageCount) return;
 
             // Update images
             this.state.images = this._sortImages(images);
@@ -375,14 +351,14 @@ const Gallery = {
                 this._els.grid.scrollTop = scrollTop;
             }
 
-            // Restore selection
+            // Restore selection (filter out deleted images)
             const existingIds = new Set(this.state.images.map(img => img.id));
             const validSelection = currentSelection.filter(id => existingIds.has(id));
             if (validSelection.length > 0) {
                 App.setSelectedImages(validSelection);
             }
         } catch (error) {
-            console.debug('Background refresh error:', error);
+            console.debug('Database change refresh error:', error);
         }
     },
 
