@@ -3099,8 +3099,9 @@
      * Suppress a face (mark as false positive) from fullscreen tagging mode.
      *
      * CONTEXT: Called when user clicks the X button on a face bounding box
-     * in fullscreen view. The face is marked as suppressed in the database
-     * (won't appear in future face lists).
+     * in fullscreen view. The face box is removed immediately (optimistic UI)
+     * and then marked as suppressed in the database (won't appear in future
+     * face lists).
      *
      * BACKEND BEHAVIOR (app.py suppress_face_endpoint):
      * - If this was a person's preferred face, auto-selects new preferred
@@ -3120,11 +3121,11 @@
      * @param {HTMLElement} faceBox - Face box DOM element (removed from overlay)
      */
     async function suppressFace(faceId, faceBox) {
+        // Remove from fullscreen overlay immediately (optimistic UI)
+        faceBox.remove();
+
         try {
             await App.api(`/faces/${faceId}/suppress`, { method: 'POST' });
-
-            // Remove from fullscreen overlay immediately
-            faceBox.remove();
 
             // Determine if this was a known or unknown face
             const face = allFaces.find(f => f.id === faceId);
