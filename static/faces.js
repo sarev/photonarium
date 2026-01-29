@@ -28,7 +28,7 @@
  *   API /faces → (group by person) → knownPeople[] → static DOM cards
  *
  * CACHES (see detailed docs in cache section below):
- *   - peopleCache: Autocomplete suggestions (TTL-based)
+ *   - AppState.people: Autocomplete suggestions (TTL-based, managed by AppState)
  *   - thumbnailCacheBust: Forces browser to refetch changed person thumbnails
  *   - knownPeople: Denormalized people+faces for known section
  *   - allFaces/displayedFaces: Face data with client-side filtering
@@ -57,21 +57,35 @@
     let faceDetectionEnabled = true;
 
     // -------------------------------------------------------------------------
-    // PEOPLE CACHE - Lightweight list for autocomplete dropdowns
+    // PEOPLE CACHE - Now managed by AppState.people
     // -------------------------------------------------------------------------
     // Used by both fullscreen tagging mode and faces screen card autocomplete.
     // Contains {id, name, face_count} - NOT full face data (that's in knownPeople).
-    // Invalidated (peopleCacheTime=0) when faces are identified/suppressed.
-    // Refreshed lazily on next autocomplete focus if TTL expired.
+    //
+    // MIGRATION: peopleCache and peopleCacheTime have been replaced by AppState.people.
+    // Use AppState.people.getAll() for data, AppState.people.invalidate() to force refresh.
+    // The TTL logic is now internal to AppState.people.
+    //
+    // Legacy references kept for backward compatibility during migration:
+    // - getPeopleCache() - returns AppState.people.getAll()
+    // - invalidatePeopleCache() - calls AppState.people.invalidate()
 
-    /** @type {Array<Object>} Cached list of all people for autocomplete */
-    let peopleCache = [];
+    /**
+     * Get the people cache (delegates to AppState.people).
+     * @returns {Array<Object>} People list for autocomplete
+     * @deprecated Use AppState.people.getAll() directly
+     */
+    function getPeopleCache() {
+        return AppState.people.getAll();
+    }
 
-    /** @type {number} Timestamp of last people cache update (0 = invalidated) */
-    let peopleCacheTime = 0;
-
-    /** @type {number} Cache TTL in milliseconds (30 seconds) */
-    const PEOPLE_CACHE_TTL = 30000;
+    /**
+     * Invalidate the people cache (delegates to AppState.people).
+     * @deprecated Use AppState.people.invalidate() directly
+     */
+    function invalidatePeopleCache() {
+        AppState.people.invalidate();
+    }
 
     // -------------------------------------------------------------------------
     // AUTOCOMPLETE STATE - Tracks active dropdown
@@ -797,9 +811,8 @@
 
         // Handle focus - pre-fetch cache for fast autocomplete
         input.addEventListener('focus', () => {
-            if (Date.now() - peopleCacheTime > PEOPLE_CACHE_TTL) {
-                refreshPeopleCache();
-            }
+            // AppState.people.load() handles TTL internally
+            AppState.people.load();
         });
 
         // Handle input for autocomplete
@@ -950,7 +963,7 @@
                 if (pickPreferredFaces.length === 0) {
                     exitPickPreferredMode();
                     // Refresh the main faces view
-                    peopleCacheTime = 0;
+                    invalidatePeopleCache();
                     loadAllFaces();
                 } else {
                     // Re-render pick-preferred view
@@ -980,7 +993,7 @@
                 }
 
                 // Invalidate people cache (new person may have been created)
-                peopleCacheTime = 0;
+                invalidatePeopleCache();
 
                 // Poll for reassessment if triggered
                 if (result.data && result.data.reassessment_triggered) {
@@ -1072,7 +1085,7 @@
                 }
 
                 // Invalidate people cache (for autocomplete)
-                peopleCacheTime = 0;
+                invalidatePeopleCache();
             }
         } catch (error) {
             console.error('Failed to rename person:', error);
@@ -1104,7 +1117,7 @@
                 if (data.deleted) {
                     App.showError(`All faces ejected - person deleted`);
                     exitPickPreferredMode();
-                    peopleCacheTime = 0;
+                    invalidatePeopleCache();
                     loadAllFaces();
                     return;
                 }
@@ -1150,7 +1163,7 @@
                     }
 
                     // Invalidate caches
-                    peopleCacheTime = 0;
+                    invalidatePeopleCache();
                 }
 
                 // Poll for reassessment completion (may add matching unknowns)
@@ -1222,7 +1235,7 @@
                     }
 
                     // Invalidate caches
-                    peopleCacheTime = 0;
+                    invalidatePeopleCache();
                 }
             }
         } catch (error) {
@@ -1309,7 +1322,7 @@
             if (pickPreferredFaces.length === 0) {
                 // No faces left - exit mode and reload (person may be deleted)
                 exitPickPreferredMode();
-                peopleCacheTime = 0;
+                invalidatePeopleCache();
                 loadAllFaces();
             } else {
                 // Re-render with remaining faces
@@ -1361,7 +1374,7 @@
         // Only trigger deferred reload in normal mode - pick-preferred handles its own
         if (selectedIds.length === 0 && reloadPending && viewMode === 'all') {
             reloadPending = false;
-            peopleCacheTime = 0;
+            invalidatePeopleCache();
             loadAllFaces();
         }
     }
@@ -1409,7 +1422,7 @@
      * 1. Set reloadPending=false BEFORE clearing selection
      *    (prevents handleFacesSelectionChanged from triggering duplicate reload)
      * 2. Clear selection
-     * 3. Invalidate peopleCache (face counts may have changed)
+     * 3. Invalidate AppState.people (face counts may have changed)
      * 4. Update allFaces and displayedFaces arrays
      * 5. Update header count
      * 6. Re-render grid (or set needsRerender if container hidden)
@@ -1427,7 +1440,7 @@
         }
 
         // Invalidate people cache (face counts changed)
-        peopleCacheTime = 0;
+        invalidatePeopleCache();
 
         // Update local data arrays
         allFaces = allFaces.filter(f => !ids.has(f.id));
@@ -1865,7 +1878,7 @@
      *
      * SIDE EFFECTS:
      * - Clears reloadPending and selection
-     * - Rebuilds knownPeople[] and syncs to peopleCache[]
+     * - Rebuilds knownPeople[] and invalidates AppState.people cache
      * - Creates new VirtualGrid instance (destroys previous)
      * - Initializes GridSelection for unknown faces
      */
@@ -1907,10 +1920,9 @@
         // Build known people list for static section
         knownPeople = buildKnownPeopleList(knownFaces);
 
-        // Sync peopleCache from knownPeople for instant autocomplete
-        // (no API call needed - we already have the data)
-        peopleCache = knownPeople.map(p => ({ id: p.id, name: p.name }));
-        peopleCacheTime = Date.now();
+        // Invalidate people cache - it will be refreshed on next autocomplete access
+        // (AppState.people now manages the cache)
+        invalidatePeopleCache();
 
         // Check for empty state
         if (faces.length === 0) {
@@ -2148,9 +2160,8 @@
 
         // Handle focus - pre-fetch cache for fast autocomplete
         input.addEventListener('focus', () => {
-            if (Date.now() - peopleCacheTime > PEOPLE_CACHE_TTL) {
-                refreshPeopleCache();
-            }
+            // AppState.people.load() handles TTL internally
+            AppState.people.load();
         });
 
         // Handle input for autocomplete
@@ -2260,9 +2271,8 @@
      */
     function showCardAutocomplete(input, query, card) {
         // Trigger background refresh if cache is stale (don't await - use current data)
-        if (Date.now() - peopleCacheTime > PEOPLE_CACHE_TTL) {
-            refreshPeopleCache();
-        }
+        // AppState.people.load() handles TTL internally
+        AppState.people.load();
 
         // Remove existing autocomplete
         const existing = card.querySelector('.face-card-autocomplete');
@@ -2272,7 +2282,7 @@
         const q = query.toLowerCase().trim();
         if (!q) return;
 
-        const matches = peopleCache.filter(p => fuzzyMatch(q, p.name.toLowerCase()));
+        const matches = getPeopleCache().filter(p => fuzzyMatch(q, p.name.toLowerCase()));
         if (matches.length === 0) return;
 
         // Create autocomplete dropdown
@@ -2392,7 +2402,7 @@
                 }
 
                 // Invalidate cache and reload
-                peopleCacheTime = 0;
+                invalidatePeopleCache();
                 loadAllFaces();
 
                 // Poll for reassessment completion and reload when done
@@ -2452,7 +2462,7 @@
                     const hasSelection = facesSelection && facesSelection.getSelected().length > 0;
                     if (!hasSelection) {
                         // Safe to reload immediately
-                        peopleCacheTime = 0;
+                        invalidatePeopleCache();
                         loadAllFaces();
                     } else {
                         // Defer reload until selection clears
@@ -2482,7 +2492,7 @@
 
             if (result && result.success) {
                 // Invalidate cache and reload
-                peopleCacheTime = 0;
+                invalidatePeopleCache();
                 loadAllFaces();
             }
         } catch (error) {
@@ -2759,9 +2769,8 @@
                 faceBox.classList.add('focused');
             }
             // Pre-fetch cache if stale (don't await - let it load in background)
-            if (Date.now() - peopleCacheTime > PEOPLE_CACHE_TTL) {
-                refreshPeopleCache();
-            }
+            // AppState.people.load() handles TTL internally
+            AppState.people.load();
         });
 
         // Handle blur (commit changes)
@@ -2818,9 +2827,10 @@
     function showAutocomplete(input, query) {
         // Filter people by query (subsequence match - "sro" matches "Steve Rose")
         const q = query.toLowerCase().trim();
+        const people = getPeopleCache();
         const matches = q
-            ? peopleCache.filter(p => fuzzyMatch(q, p.name.toLowerCase()))
-            : peopleCache;
+            ? people.filter(p => fuzzyMatch(q, p.name.toLowerCase()))
+            : people;
 
         // Close if no matches
         if (matches.length === 0) {
@@ -2900,15 +2910,10 @@
 
     /**
      * Refresh the people cache from API.
+     * @deprecated Use AppState.people.reload() directly
      */
     async function refreshPeopleCache() {
-        try {
-            const people = await App.api('/people');
-            peopleCache = people || [];
-            peopleCacheTime = Date.now();
-        } catch (error) {
-            console.error('Failed to refresh people cache:', error);
-        }
+        await AppState.people.reload();
     }
 
     // =========================================================================
@@ -3061,7 +3066,7 @@
                     label.appendChild(nameSpan);
 
                     // Invalidate people cache and mark faces screen for refresh
-                    peopleCacheTime = 0;
+                    invalidatePeopleCache();
                     needsRefresh = true;
                 }
             } else if (face.person_id) {
@@ -3081,7 +3086,7 @@
                 }
 
                 // Invalidate people cache and mark faces screen for refresh
-                peopleCacheTime = 0;
+                invalidatePeopleCache();
                 needsRefresh = true;
             }
         } catch (error) {
@@ -3136,7 +3141,7 @@
 
                 // Known face - need full refresh (person may be deleted/changed)
                 needsRefresh = true;
-                peopleCacheTime = 0;
+                invalidatePeopleCache();
 
                 // Bust cache in case this was the preferred face
                 thumbnailCacheBust.set(personId, Date.now());
