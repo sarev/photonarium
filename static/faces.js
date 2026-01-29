@@ -382,15 +382,30 @@
         });
 
         // Subscribe to AppState.faces for centralized state management
-        // When faces change (identify, suppress, etc.), sync local state
+        // Note: We handle our own optimistic updates in faces.js, so this subscription
+        // is mainly for external changes (e.g., from fullscreen tagging mode).
         AppState.faces.onChanged((event) => {
-            // Only sync if we have data loaded and are on the faces screen
-            if (AppState.faces.isLoaded() && App.getScreen() === 'faces') {
-                // Sync local allFaces with AppState cache
-                allFaces = AppState.faces.getAll();
-                // Mark for re-render (not full refresh - data already updated)
-                needsRerender = true;
+            // Skip if we're not on the faces screen
+            if (App.getScreen() !== 'faces') {
+                // Mark for refresh when we return to faces screen
+                needsRefresh = true;
+                return;
             }
+            // Skip if data isn't loaded yet
+            if (!AppState.faces.isLoaded()) return;
+
+            // For external changes, sync and re-render
+            // Our own optimistic updates already handle local state, but this catches
+            // changes from other sources (fullscreen mode, background reassessment, etc.)
+            allFaces = AppState.faces.getAll();
+            needsRerender = true;
+            // Trigger re-render on next animation frame to batch multiple changes
+            requestAnimationFrame(() => {
+                if (needsRerender && App.getScreen() === 'faces') {
+                    needsRerender = false;
+                    renderFacesGrid();
+                }
+            });
         });
 
         // Register the faces screen module
@@ -944,7 +959,7 @@
      * @param {string} name - New person name to assign to
      * @param {HTMLElement} card - Card element (for resetting input on no-op)
      */
-    async function commitPickPreferredFaceName(typedFaceId, name, card) {
+    function commitPickPreferredFaceName(typedFaceId, name, card) {
         // No-op if name unchanged
         if (!name || name.toLowerCase() === (pickPreferredPersonName || '').toLowerCase()) {
             const input = card.querySelector('.face-card-input');
@@ -954,9 +969,8 @@
             return;
         }
 
-        // Immediately show loading and close autocomplete for better UX
+        // Close autocomplete for better UX
         closeAllAutocompletes();
-        showFacesLoading('Reassigning face…');
 
         // Get selected faces, or just the typed face if none selected
         let faceIds = facesSelection ? facesSelection.getSelected() : [];
@@ -966,83 +980,94 @@
             faceIds = [typedFaceId];
         }
 
-        try {
-            // Use shared API helper
-            const result = await callIdentifyBatchApi(faceIds, name, typedFaceId);
+        const faceIdSet = new Set(faceIds);
 
-            if (result && result.success) {
-                // Clear any pending reload flag (we're handling the update ourselves)
-                reloadPending = false;
+        // Optimistic update: Find or create destination person
+        const destPerson = AppState.people.getByName(name);
+        const destPersonId = destPerson?.id || `temp-${Date.now()}`;
 
-                // Clear selection
-                if (facesSelection) {
-                    facesSelection.clear();
-                }
-
-                // Remove reassigned faces from local state
-                pickPreferredFaces = pickPreferredFaces.filter(f => !faceIds.includes(f.id));
-
-                // Check if we reassigned the preferred face - backend handles this,
-                // but we need to update local state
-                const reassignedPreferred = pickPreferredFaces.some(f => f.is_preferred) === false
-                    && pickPreferredFaces.length > 0;
-                if (reassignedPreferred) {
-                    // Mark first remaining face as preferred in local state
-                    // (backend selected newest, but order might differ - will refresh below)
-                    pickPreferredFaces[0].is_preferred = true;
-                }
-
-                // If all faces removed, exit pick-preferred mode
-                if (pickPreferredFaces.length === 0) {
-                    exitPickPreferredMode();
-                    // Refresh the main faces view
-                    invalidatePeopleCache();
-                    loadAllFaces();
-                } else {
-                    // Re-render pick-preferred view
-                    displayedFaces = pickPreferredFaces;
-                    pickPreferredGrid.render();
-
-                    // Update the count in header
-                    const titleH3 = facesGrid.querySelector('.faces-pick-preferred-header h3');
-                    if (titleH3) {
-                        const faceCount = pickPreferredFaces.length;
-                        const countText = faceCount === 1 ? '1 face' : `${faceCount} faces`;
-                        titleH3.innerHTML = `${App.escapeHtml(pickPreferredPersonName)} <span class="face-count">(${countText})</span>`;
-                    }
-
-                    // Bust cache for current person's thumbnail if preferred changed
-                    if (reassignedPreferred) {
-                        thumbnailCacheBust.set(pickPreferredPersonId, Date.now());
-                    }
-
-                    // Hide loading now that grid is re-rendered
-                    hideFacesLoading();
-                }
-
-                // Bust cache for the destination person too
-                if (result.data && result.data.person && result.data.person.id) {
-                    thumbnailCacheBust.set(result.data.person.id, Date.now());
-                }
-
-                // Invalidate people cache (new person may have been created)
-                invalidatePeopleCache();
-
-                // Poll for reassessment if triggered
-                if (result.data && result.data.reassessment_triggered) {
-                    pollPickPreferredReassessment();
-                }
-            }
-        } catch (error) {
-            console.error('Failed to reassign face:', error);
-            hideFacesLoading();
-            App.showError(`Failed to reassign ${faceIds.length > 1 ? 'faces' : 'face'}.`);
-            // Reset input to current name
-            const input = card.querySelector('.face-card-input');
-            if (input) {
-                input.value = pickPreferredPersonName || '';
+        // Update face objects in allFaces
+        for (const face of allFaces) {
+            if (faceIdSet.has(face.id)) {
+                face.person_id = destPersonId;
+                face.person_name = name;
             }
         }
+
+        // Clear any pending reload flag (we're handling the update ourselves)
+        reloadPending = false;
+
+        // Clear selection
+        if (facesSelection) {
+            facesSelection.clear();
+        }
+
+        // Remove reassigned faces from local state
+        pickPreferredFaces = pickPreferredFaces.filter(f => !faceIdSet.has(f.id));
+
+        // Check if we reassigned the preferred face
+        const reassignedPreferred = pickPreferredFaces.some(f => f.is_preferred) === false
+            && pickPreferredFaces.length > 0;
+        if (reassignedPreferred) {
+            // Mark first remaining face as preferred in local state
+            pickPreferredFaces[0].is_preferred = true;
+            // Bust cache for current person's thumbnail
+            thumbnailCacheBust.set(pickPreferredPersonId, Date.now());
+        }
+
+        // If all faces removed, exit pick-preferred mode
+        if (pickPreferredFaces.length === 0) {
+            exitPickPreferredMode();
+            invalidatePeopleCache();
+            renderFacesGrid();
+        } else {
+            // Re-render pick-preferred view
+            displayedFaces = pickPreferredFaces;
+            pickPreferredGrid.render();
+
+            // Update the count in header
+            const titleH3 = facesGrid.querySelector('.faces-pick-preferred-header h3');
+            if (titleH3) {
+                const faceCount = pickPreferredFaces.length;
+                const countText = faceCount === 1 ? '1 face' : `${faceCount} faces`;
+                titleH3.innerHTML = `${App.escapeHtml(pickPreferredPersonName)} <span class="face-count">(${countText})</span>`;
+            }
+        }
+
+        // Fire API in background
+        callIdentifyBatchApi(faceIds, name, typedFaceId)
+            .then(result => {
+                if (result && result.success) {
+                    // Update temp ID with real ID if it was a new person
+                    if (destPersonId.startsWith('temp-') && result.data?.person?.id) {
+                        const realId = result.data.person.id;
+                        for (const face of allFaces) {
+                            if (face.person_id === destPersonId) {
+                                face.person_id = realId;
+                            }
+                        }
+                    }
+                    // Bust cache for destination person
+                    if (result.data?.person?.id) {
+                        thumbnailCacheBust.set(result.data.person.id, Date.now());
+                    }
+                    // Invalidate people cache (new person may have been created)
+                    invalidatePeopleCache();
+                    // Poll for reassessment if triggered
+                    if (result.data?.reassessment_triggered) {
+                        pollPickPreferredReassessment();
+                    }
+                } else {
+                    throw new Error(result?.error || 'Unknown error');
+                }
+            })
+            .catch(error => {
+                console.error('Failed to reassign face:', error);
+                App.showError(`Failed to reassign ${faceIds.length > 1 ? 'faces' : 'face'}.`);
+                // Reload to get correct state
+                needsRefresh = true;
+                loadAllFaces();
+            });
     }
 
     /**
@@ -1081,48 +1106,80 @@
      * Identify multiple faces as a specific person (normal mode).
      * Used by typing a name in unknown faces and drag-and-drop onto person.
      *
+     * Uses optimistic updates - immediately updates local state and fires the
+     * API call in the background. No loading spinner needed.
+     *
      * @param {Array<string>} faceIds - Face IDs to identify
      * @param {string} name - Name of the person (existing or new)
      * @param {Object} [options] - Optional settings
      * @param {string} [options.preferredFaceId] - Face ID to set as preferred (for new persons)
-     * @returns {Promise<boolean>} True if successful
+     * @returns {Promise<boolean>} True if API call succeeded (for callers that need to know)
      */
     async function identifyFacesAsPerson(faceIds, name, options = {}) {
         if (!faceIds || faceIds.length === 0 || !name) return false;
 
-        showFacesLoading(`Identifying ${faceIds.length} face${faceIds.length > 1 ? 's' : ''}…`);
-
-        try {
-            const result = await callIdentifyBatchApi(faceIds, name, options.preferredFaceId);
-
-            if (result && result.success) {
-                // Clear any pending reload flag (we're doing a full reload ourselves)
-                reloadPending = false;
-
-                // Clear selection
-                if (facesSelection) {
-                    facesSelection.clear();
-                }
-
-                // Invalidate caches and reload
-                invalidatePeopleCache();
-                await loadAllFaces();
-
-                // Poll for reassessment completion if triggered
-                if (result.data && result.data.reassessment_triggered) {
-                    pollReassessmentStatus();
-                }
-
-                return true;
-            } else {
-                throw new Error(result?.error || 'Unknown error');
-            }
-        } catch (error) {
-            console.error('Failed to identify faces:', error);
-            hideFacesLoading();
-            App.showError(`Failed to identify ${faceIds.length > 1 ? 'faces' : 'face'}.`);
-            return false;
+        // Clear selection immediately
+        if (facesSelection) {
+            facesSelection.clear();
         }
+
+        // Optimistic update: Find or create person, update face objects locally
+        const existingPerson = AppState.people.getByName(name);
+        const personId = existingPerson?.id || `temp-${Date.now()}`;  // Temp ID for new person
+
+        // Update local face objects (AppState.faces.identify does this too, but we do it
+        // here for immediate UI feedback before the async call completes)
+        const faceIdSet = new Set(faceIds);
+        for (const face of allFaces) {
+            if (faceIdSet.has(face.id)) {
+                face.person_id = personId;
+                face.person_name = name;
+            }
+        }
+
+        // Re-render grid immediately with updated faces
+        renderFacesGrid();
+
+        // Fire API call in background (AppState handles cache updates on completion)
+        // Don't await - let it complete asynchronously
+        callIdentifyBatchApi(faceIds, name, options.preferredFaceId)
+            .then(result => {
+                if (result && result.success) {
+                    // Update temp ID with real ID if it was a new person
+                    if (personId.startsWith('temp-') && result.data?.person?.id) {
+                        const realId = result.data.person.id;
+                        for (const face of allFaces) {
+                            if (face.person_id === personId) {
+                                face.person_id = realId;
+                            }
+                        }
+                        // Invalidate people cache to pick up new person
+                        invalidatePeopleCache();
+                        // Re-render to show correct person card
+                        renderFacesGrid();
+                    }
+                    // Poll for reassessment if triggered
+                    if (result.data?.reassessment_triggered) {
+                        pollReassessmentStatus();
+                    }
+                } else {
+                    // API failed - revert optimistic update
+                    console.error('Identify API failed:', result?.error);
+                    // Reload to get correct state
+                    needsRefresh = true;
+                    loadAllFaces();
+                    App.showError(`Failed to identify ${faceIds.length > 1 ? 'faces' : 'face'}.`);
+                }
+            })
+            .catch(error => {
+                console.error('Failed to identify faces:', error);
+                // Reload to get correct state
+                needsRefresh = true;
+                loadAllFaces();
+                App.showError(`Failed to identify ${faceIds.length > 1 ? 'faces' : 'face'}.`);
+            });
+
+        return true;  // Optimistically return success
     }
 
     /**
@@ -1408,33 +1465,45 @@
         const confirmed = await App.confirm('Unassign Faces', message);
         if (!confirmed) return;
 
-        try {
-            await AppState.faces.unassign(faceIds);
-            // Local state updated via AppState.faces.onChanged subscription
+        // Optimistic update - update local state immediately
+        const faceIdSet = new Set(faceIds);
 
-            // Update local pick-preferred state
-            pickPreferredFaces = pickPreferredFaces.filter(f => !faceIds.includes(f.id));
-
-            // Prevent duplicate reload from selection change handler
-            reloadPending = false;
-            if (facesSelection) {
-                facesSelection.clear();
+        // Update faces in allFaces (return to unknown pool)
+        for (const face of allFaces) {
+            if (faceIdSet.has(face.id)) {
+                face.person_id = null;
+                face.person_name = null;
             }
+        }
 
-            if (pickPreferredFaces.length === 0) {
-                // No faces left - exit mode and reload (person may be deleted)
-                exitPickPreferredMode();
-                invalidatePeopleCache();
-                loadAllFaces();
-            } else {
-                // Re-render with remaining faces
-                displayedFaces = pickPreferredFaces;
-                pickPreferredGrid.render();
-            }
-        } catch (error) {
+        // Update local pick-preferred state
+        pickPreferredFaces = pickPreferredFaces.filter(f => !faceIdSet.has(f.id));
+
+        // Prevent duplicate reload from selection change handler
+        reloadPending = false;
+        if (facesSelection) {
+            facesSelection.clear();
+        }
+
+        if (pickPreferredFaces.length === 0) {
+            // No faces left - exit mode and refresh (person may be deleted by backend)
+            exitPickPreferredMode();
+            invalidatePeopleCache();
+            renderFacesGrid();  // Re-render with unassigned faces back in unknown pool
+        } else {
+            // Re-render with remaining faces
+            displayedFaces = pickPreferredFaces;
+            pickPreferredGrid.render();
+        }
+
+        // Fire API in background
+        AppState.faces.unassign(faceIds).catch(error => {
             console.error('Failed to unassign faces:', error);
             App.showError('Failed to unassign faces');
-        }
+            // On failure, reload to get correct state
+            needsRefresh = true;
+            loadAllFaces();
+        });
     }
 
     /**
@@ -1572,22 +1641,26 @@
 
     /**
      * Suppress a single face (mark as false positive) without confirmation.
-     * Used when clicking the suppress button on a face card.
+     * Uses optimistic update - removes from UI immediately, API call is background.
      * @param {string} faceId - Face ID to suppress
      */
-    async function suppressSingleFace(faceId) {
-        try {
-            await AppState.faces.suppress(faceId);
-            // Local state updated via AppState.faces.onChanged subscription
-            removeUnknownFacesLocally(faceId);
-        } catch (error) {
+    function suppressSingleFace(faceId) {
+        // Optimistic update - remove from UI immediately
+        removeUnknownFacesLocally(faceId);
+
+        // Fire API in background
+        AppState.faces.suppress(faceId).catch(error => {
             console.error(`Failed to suppress face ${faceId}:`, error);
-        }
+            // On failure, reload to get correct state
+            needsRefresh = true;
+            loadAllFaces();
+        });
     }
 
     /**
      * Handle delete request for selected faces.
      * Suppresses faces (marks as false positives) rather than deleting images.
+     * Uses optimistic update - removes from UI immediately after confirmation.
      * @param {Array<string>} faceIds - Selected face IDs
      */
     async function handleFacesDeleteRequested(faceIds) {
@@ -1601,14 +1674,17 @@
         const confirmed = await App.confirm('Suppress Faces', message);
         if (!confirmed) return;
 
-        try {
-            // AppState.faces.suppress handles batch suppression
-            await AppState.faces.suppress(faceIds);
-            // Local state updated via AppState.faces.onChanged subscription
-            removeUnknownFacesLocally(faceIds);
-        } catch (error) {
+        // Optimistic update - remove from UI immediately
+        removeUnknownFacesLocally(faceIds);
+
+        // Fire API in background
+        AppState.faces.suppress(faceIds).catch(error => {
             console.error('Failed to suppress faces:', error);
-        }
+            // On failure, reload to get correct state
+            needsRefresh = true;
+            loadAllFaces();
+            App.showError('Failed to suppress faces.');
+        });
     }
 
     /**
