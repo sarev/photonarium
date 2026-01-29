@@ -556,7 +556,6 @@ const VirtualGrid = {
 
                 // Check for zero-size container (can happen during screen transitions)
                 if (container.clientWidth === 0 || container.clientHeight === 0) {
-                    console.warn('VirtualGrid: container has zero dimensions, deferring render');
                     return false;
                 }
 
@@ -797,6 +796,9 @@ const VirtualGrid = {
                 const container = this._config.container;
                 const items = this._config.getItems();
 
+                // Save scroll position before clearing (innerHTML = '' can reset scrollTop)
+                const savedScrollTop = container.scrollTop;
+
                 // Revoke all blob URLs before clearing
                 for (const [, {blobUrl}] of this._state.renderedItems) {
                     URL.revokeObjectURL(blobUrl);
@@ -814,11 +816,13 @@ const VirtualGrid = {
 
                 // Calculate dimensions - may fail if container not yet laid out
                 if (!this._calculateDimensions()) {
-                    // Defer render until container has dimensions (but only once)
-                    if (!this._pendingRenderFrame) {
+                    // Defer render until container has dimensions (only if still bound)
+                    if (!this._pendingRenderFrame && this._bound) {
                         this._pendingRenderFrame = requestAnimationFrame(() => {
                             this._pendingRenderFrame = null;
-                            this.render();
+                            if (this._bound) {
+                                this.render();
+                            }
                         });
                     }
                     return;
@@ -829,6 +833,10 @@ const VirtualGrid = {
                 this._innerContainer.style.height = this._state.totalHeight + 'px';
                 this._updateGridPattern();
                 container.appendChild(this._innerContainer);
+
+                // Restore scroll position (clamped to new max)
+                const maxScroll = Math.max(0, this._state.totalHeight - container.clientHeight);
+                container.scrollTop = Math.min(savedScrollTop, maxScroll);
 
                 // Request thumbnails for visible items
                 this._updateVisibleItems(container.scrollTop);
@@ -949,10 +957,16 @@ const VirtualGrid = {
 
             /**
              * Rebinds scroll listener (for screen enter).
+             * Also triggers a visible items update to ensure thumbnails load.
              */
             bind() {
                 this._attachScrollListener();
                 this._bound = true;
+
+                // Ensure visible items are rendered (fixes blank grid on re-enter)
+                if (this._config.container && this._state.itemHeight > 0) {
+                    this._updateVisibleItems(this._config.container.scrollTop);
+                }
             },
 
             /**

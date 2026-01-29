@@ -2440,7 +2440,13 @@ class FaceDetectionThread(threading.Thread):
     # Batch size for face detection - now configured via config.face_detection_batch_size
 
     def run(self) -> None:
-        """Main thread loop - process images from the queue in batches."""
+        """Main thread loop - process images from the queue in batches.
+
+        Uses prefetching: while the GPU processes batch N, the CPU loads
+        batch N+1's images in parallel for better throughput.
+        """
+        from concurrent.futures import ThreadPoolExecutor, Future
+
         logger.info('Face detection thread started')
 
         # Don't do anything if face detection is disabled
@@ -2458,60 +2464,145 @@ class FaceDetectionThread(threading.Thread):
         progress_interval = 5.0
         first_batch = True
 
-        while not self.stop_event.is_set():
-            batch_ids = []
+        # Prefetch state
+        prefetch_executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix='face-prefetch')
+        prefetch_future: Future | None = None
+        prefetch_batch_ids: list[str] = []
+
+        def collect_batch() -> list[str]:
+            """Collect up to batch_size image IDs from the queue."""
+            batch = []
             try:
                 # Get first image (blocking with timeout)
-                try:
-                    image_id = self.face_queue.get(timeout=0.5)
-                    batch_ids.append(image_id)
-                except queue.Empty:
-                    # Queue empty - check if we should trigger completion
-                    self._check_completion()
-                    continue
+                image_id = self.face_queue.get(timeout=0.5)
+                batch.append(image_id)
 
-                # Try to get more images to fill the batch (non-blocking)
-                while len(batch_ids) < self.config.face_detection_batch_size:
+                # Try to fill the batch (non-blocking)
+                while len(batch) < self.config.face_detection_batch_size:
                     try:
                         image_id = self.face_queue.get_nowait()
-                        batch_ids.append(image_id)
+                        batch.append(image_id)
                     except queue.Empty:
                         break
+            except queue.Empty:
+                pass
+            return batch
 
-                # Log before first batch (model loading happens here)
-                if first_batch:
-                    logger.info('Loading face detection models (MTCNN + InceptionResnetV1)...')
-                    first_batch = False
+        def resolve_and_preload(batch_ids: list[str]) -> tuple[dict, dict, list]:
+            """Resolve image IDs to paths and preload images (runs in prefetch thread)."""
+            id_to_path: dict[str, Path] = {}
+            path_to_id: dict[Path, str] = {}
 
-                # Process the batch (pass stop_event for interruptibility)
-                self._process_batch(batch_ids)
-                self._completion_triggered = False  # Reset completion flag
+            for image_id in batch_ids:
+                # Check for shutdown during path resolution
+                if self.stop_event.is_set():
+                    break
 
-                # Periodic progress logging
-                now = time.time()
-                if now - last_progress_time >= progress_interval:
-                    remaining = self.face_queue.qsize()
-                    if remaining > 0 or self._processed_count > 0:
-                        logger.info(
-                            f'Face detection progress: {self._processed_count} images, '
-                            f'{self._faces_detected_count} faces, {remaining} remaining'
-                        )
-                    last_progress_time = now
+                image = get_image(self.conn, image_id)
+                if image is None:
+                    logger.warning(f'Image not found for face detection: {image_id}')
+                    continue
 
-            except Exception as e:
-                logger.error(f'Error in face detection thread: {e}')
-                self._error_count += len(batch_ids)
-            finally:
-                # Always mark items as done, even on error or shutdown
-                for _ in batch_ids:
+                path = Path(image['path'])
+                if not path.exists():
+                    logger.warning(f'Image file not found for face detection: {path}')
+                    continue
+
+                # Skip if already processed
+                with self._db_lock:
+                    if has_faces_detected(self.conn, image_id):
+                        logger.debug(f'Skipping already-processed image: {path.name}')
+                        self._processed_count += 1
+                        continue
+
+                id_to_path[image_id] = path
+                path_to_id[path] = image_id
+
+            # Preload images in parallel (CPU-bound) - skip if shutting down
+            if id_to_path and not self.stop_event.is_set():
+                paths = list(id_to_path.values())
+                loaded_images = self.face_detector.preload_images_batch(paths, num_workers=4)
+            else:
+                loaded_images = []
+
+            return id_to_path, path_to_id, loaded_images
+
+        try:
+            while not self.stop_event.is_set():
+                batch_ids = []
+                try:
+                    # If we have a prefetch ready, use it; otherwise collect new batch
+                    if prefetch_future is not None:
+                        # Wait for prefetch to complete
+                        id_to_path, path_to_id, loaded_images = prefetch_future.result()
+                        batch_ids = prefetch_batch_ids
+                        prefetch_future = None
+                        prefetch_batch_ids = []
+                    else:
+                        # No prefetch - collect and prepare synchronously
+                        batch_ids = collect_batch()
+                        if not batch_ids:
+                            self._check_completion()
+                            continue
+
+                        # Log before first batch (model loading happens here)
+                        if first_batch:
+                            logger.info('Loading face detection models (MTCNN + InceptionResnetV1)...')
+                            first_batch = False
+
+                        id_to_path, path_to_id, loaded_images = resolve_and_preload(batch_ids)
+
+                    # Start prefetching next batch while we process current one
+                    # (but only if we're not shutting down)
+                    if not self.stop_event.is_set():
+                        next_batch_ids = collect_batch()
+                        if next_batch_ids:
+                            prefetch_batch_ids = next_batch_ids
+                            prefetch_future = prefetch_executor.submit(resolve_and_preload, next_batch_ids)
+
+                    # Process the current batch (GPU work + DB writes)
+                    if loaded_images:
+                        self._process_preloaded_batch(id_to_path, path_to_id, loaded_images)
+                    self._completion_triggered = False
+
+                    # Periodic progress logging
+                    now = time.time()
+                    if now - last_progress_time >= progress_interval:
+                        remaining = self.face_queue.qsize()
+                        if remaining > 0 or self._processed_count > 0:
+                            logger.info(
+                                f'Face detection progress: {self._processed_count} images, '
+                                f'{self._faces_detected_count} faces, {remaining} remaining'
+                            )
+                        last_progress_time = now
+
+                except Exception as e:
+                    logger.error(f'Error in face detection thread: {e}')
+                    self._error_count += len(batch_ids)
+                finally:
+                    # Always mark items as done, even on error or shutdown
+                    for _ in batch_ids:
+                        self.face_queue.task_done()
+        finally:
+            # Clean up any pending prefetch
+            if prefetch_future is not None:
+                try:
+                    # Wait for prefetch to complete (it checks stop_event internally)
+                    prefetch_future.result(timeout=5.0)
+                except Exception:
+                    pass  # Ignore errors during shutdown
+            if prefetch_batch_ids:
+                for _ in prefetch_batch_ids:
                     self.face_queue.task_done()
+            prefetch_executor.shutdown(wait=True)
 
         logger.info('Face detection thread stopped')
 
     def _process_batch(self, image_ids: list[str]) -> None:
         """Process a batch of images for face detection.
 
-        Uses batched GPU processing for better utilization.
+        Legacy method - loads images synchronously then processes.
+        For better throughput, use the prefetching approach in run().
 
         Args:
             image_ids: List of image IDs to process.
@@ -2546,7 +2637,32 @@ class FaceDetectionThread(threading.Thread):
 
         # Run batched face detection (pass stop_event for graceful interruption)
         paths = list(id_to_path.values())
-        results = self.face_detector.detect_faces_batch(paths, stop_event=self.stop_event)
+        loaded_images = self.face_detector.preload_images_batch(paths, num_workers=4)
+        self._process_preloaded_batch(id_to_path, path_to_id, loaded_images)
+
+    def _process_preloaded_batch(
+        self,
+        id_to_path: dict[str, Path],
+        path_to_id: dict[Path, str],
+        loaded_images: list,
+    ) -> None:
+        """Process pre-loaded images for face detection.
+
+        This is the GPU phase - takes images that were already loaded and
+        runs MTCNN detection + embedding generation.
+
+        Args:
+            id_to_path: Mapping of image_id to file path.
+            path_to_id: Mapping of file path to image_id.
+            loaded_images: List of (path, PIL.Image, scale) tuples from preload.
+        """
+        if not loaded_images:
+            return
+
+        # Run GPU face detection on pre-loaded images
+        results = self.face_detector.detect_faces_from_preloaded(
+            loaded_images, stop_event=self.stop_event
+        )
 
         # Get known face embeddings for auto-recognition
         with self._db_lock:

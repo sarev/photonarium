@@ -1567,6 +1567,35 @@ a:hover {
     object-fit: cover;
 }
 
+/* Suppress button on unknown face cards */
+.face-card-suppress {
+    position: absolute;
+    top: 0.25rem;
+    right: 0.25rem;
+    width: 22px;
+    height: 22px;
+    border: none;
+    border-radius: 50%;
+    background: var(--color-danger);
+    color: white;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    opacity: 0;
+    transition: opacity 0.2s;
+    z-index: 10;
+}
+
+.face-card:hover .face-card-suppress,
+.face-card-suppress:focus {
+    opacity: 1;
+}
+
+.face-card-suppress .material-symbols-outlined {
+    font-size: 14px;
+}
+
 /* Preferred face indicator */
 .face-card-preferred {
     position: absolute;

@@ -1,8 +1,42 @@
 /**
  * Face tagging module for Imaginary.
  *
- * Handles face detection overlay rendering in fullscreen view,
- * name input fields with autocomplete, and face identification.
+ * This module handles two distinct UI contexts:
+ *
+ * 1. FULLSCREEN TAGGING MODE - Overlay on fullscreen image viewer
+ *    - Renders bounding boxes over detected faces
+ *    - Inline name input with autocomplete for identification
+ *    - Suppress button (X) to mark false positives
+ *    - Activated via toolbar toggle button
+ *
+ * 2. FACES SCREEN - Dedicated screen for face/people management
+ *    - Two sections: Known people (identified) and Unknown faces
+ *    - Known section: Static grid of person cards (one per person, shows preferred face)
+ *    - Unknown section: VirtualGrid of unidentified face thumbnails
+ *    - Supports batch operations via multi-select
+ *
+ * VIEW MODES (Faces Screen):
+ *   'all'            - Default. Shows known people section + unknown faces section
+ *   'unknowns'       - Hides known section, only shows unknown faces (toolbar toggle)
+ *   'pick-preferred' - Focus mode for one person. Shows all their faces with star
+ *                      icons to select preferred. Entered by double-clicking a
+ *                      known person or via focus button. Delete key here unassigns
+ *                      faces (returns to unknown pool) rather than suppressing.
+ *
+ * DATA FLOW:
+ *   API /faces → allFaces[] → (filter by search) → displayedFaces[] → VirtualGrid
+ *   API /faces → (group by person) → knownPeople[] → static DOM cards
+ *
+ * CACHES (see detailed docs in cache section below):
+ *   - peopleCache: Autocomplete suggestions (TTL-based)
+ *   - thumbnailCacheBust: Forces browser to refetch changed person thumbnails
+ *   - knownPeople: Denormalized people+faces for known section
+ *   - allFaces/displayedFaces: Face data with client-side filtering
+ *
+ * REFRESH FLAGS (coordinate updates without full reloads):
+ *   - needsRefresh: Full API reload needed on next screen enter
+ *   - needsRerender: Just re-render grid (local data already updated)
+ *   - reloadPending: Deferred reload waiting for selection to clear
  *
  * @module faces
  */
@@ -13,25 +47,37 @@
     'use strict';
 
     // =========================================================================
-    // STATE
+    // STATE - FULLSCREEN TAGGING MODE
     // =========================================================================
 
-    /** @type {boolean} Whether face tagging mode is active */
+    /** @type {boolean} Whether face tagging mode is active (toolbar toggle) */
     let taggingMode = false;
 
     /** @type {boolean} Whether face detection is enabled in config */
     let faceDetectionEnabled = true;
 
+    // -------------------------------------------------------------------------
+    // PEOPLE CACHE - Lightweight list for autocomplete dropdowns
+    // -------------------------------------------------------------------------
+    // Used by both fullscreen tagging mode and faces screen card autocomplete.
+    // Contains {id, name, face_count} - NOT full face data (that's in knownPeople).
+    // Invalidated (peopleCacheTime=0) when faces are identified/suppressed.
+    // Refreshed lazily on next autocomplete focus if TTL expired.
+
     /** @type {Array<Object>} Cached list of all people for autocomplete */
     let peopleCache = [];
 
-    /** @type {number} Timestamp of last people cache update */
+    /** @type {number} Timestamp of last people cache update (0 = invalidated) */
     let peopleCacheTime = 0;
 
-    /** @type {number} Cache TTL in milliseconds */
+    /** @type {number} Cache TTL in milliseconds (30 seconds) */
     const PEOPLE_CACHE_TTL = 30000;
 
-    /** @type {HTMLElement|null} Currently focused face input */
+    // -------------------------------------------------------------------------
+    // AUTOCOMPLETE STATE - Tracks active dropdown
+    // -------------------------------------------------------------------------
+
+    /** @type {HTMLElement|null} Currently focused face input field */
     let focusedInput = null;
 
     /** @type {HTMLElement|null} Currently open autocomplete dropdown */
@@ -62,26 +108,63 @@
     // =========================================================================
     // FACES SCREEN STATE
     // =========================================================================
+    //
+    // DATA ARRAYS AND THEIR RELATIONSHIPS:
+    //
+    //   allFaces[]        - Raw API response. All faces (known + unknown).
+    //                       Each face has: id, image_id, person_id, person_name,
+    //                       bbox, is_preferred, image_timestamp, etc.
+    //
+    //   displayedFaces[]  - Filtered/sorted subset for current view.
+    //                       In 'all'/'unknowns' mode: unknown faces only.
+    //                       Fed to unknownFacesGrid for virtual rendering.
+    //
+    //   knownPeople[]     - Grouped by person for known section. Each entry:
+    //                       {id, name, faces[], preferredFace}
+    //                       Built from allFaces where person_id is set.
+    //                       Rendered as static DOM (not virtualized - small count).
+    //
+    //   pickPreferredFaces[] - In pick-preferred mode only. All faces for one
+    //                          person, loaded separately via /people/:id/faces.
+    //
+    // WHY SEPARATE ARRAYS: The known section needs person-grouped data while
+    // unknown section needs flat face list. Keeping both avoids repeated
+    // grouping operations. displayedFaces is separate from allFaces to support
+    // client-side filtering (search) without re-fetching.
 
     /** @type {number} Thumbnail size for faces screen (pixels) */
     let facesThumbnailSize = 100;
 
-    /** @type {boolean} Show only unknown faces */
+    /** @type {boolean} Show only unknown faces (hides known section) */
     let showOnlyUnknowns = false;
 
-    /** @type {boolean} Sort direction (true = ascending) */
+    /** @type {boolean} Sort direction for unknown faces (true = oldest first) */
     let sortAscending = true;
 
-    /** @type {Array<Object>} All faces loaded from API */
+    /** @type {Array<Object>} All faces from API (source of truth for this session) */
     let allFaces = [];
 
-    /** @type {boolean} Whether faces screen is currently loading */
+    /** @type {boolean} Whether faces screen is currently loading from API */
     let isLoading = false;
 
-    /** @type {boolean} Whether faces need to be reloaded on next enter */
+    // -------------------------------------------------------------------------
+    // REFRESH FLAGS - Coordinate screen updates without unnecessary API calls
+    // -------------------------------------------------------------------------
+    // These flags work together to handle updates from various sources:
+    // - User actions in fullscreen tagging mode
+    // - Background face reassessment completing
+    // - User actions within faces screen itself
+    //
+    // Priority: needsRefresh (full reload) > needsRerender (just redraw grid)
+    // The reloadPending flag defers reload until user finishes their selection.
+
+    /** @type {boolean} Full API reload needed on next screen enter */
     let needsRefresh = true;
 
-    /** @type {number} Saved scroll position for restoration */
+    /** @type {boolean} Grid re-render needed (data already updated locally) */
+    let needsRerender = false;
+
+    /** @type {number} Saved scroll position for unknown faces container */
     let savedScrollTop = 0;
 
     // Faces screen DOM references
@@ -118,40 +201,88 @@
     /** @type {number|null} Reassessment polling timer */
     let reassessmentPollTimer = null;
 
-    /** @type {boolean} Whether a reload is pending (skipped due to active selection) */
+    /**
+     * Whether a full reload is pending (deferred because user had active selection).
+     * Set to true by pollReassessmentStatus when matches found but user has selection.
+     * Checked by handleFacesSelectionChanged to trigger reload when selection clears.
+     *
+     * IMPORTANT: Any operation that handles its own update/reload should set this
+     * to false BEFORE clearing selection, to prevent handleFacesSelectionChanged
+     * from triggering a duplicate/interfering reload.
+     * @type {boolean}
+     */
     let reloadPending = false;
 
-    /** @type {Object|null} VirtualGrid instance for unknown faces */
+    /** @type {Object|null} VirtualGrid instance for unknown faces section */
     let unknownFacesGrid = null;
 
-    /** @type {Array<Object>} Known people with their faces (for static section) */
+    /** @type {Array<Object>} Known people with faces, for static known section */
     let knownPeople = [];
 
-    /** @type {string} Current view mode: 'all' | 'unknowns' | 'pick-preferred' */
+    // -------------------------------------------------------------------------
+    // VIEW MODE STATE
+    // -------------------------------------------------------------------------
+    // The faces screen has three view modes with different UI and behavior:
+    //
+    //   'all'            Default. Known section (static) + Unknown section (VirtualGrid).
+    //                    Selection applies to unknown faces only.
+    //                    Delete = suppress (mark as false positive).
+    //
+    //   'unknowns'       Only unknown faces (hides known section).
+    //                    Same behavior as 'all', just filtered view.
+    //
+    //   'pick-preferred' Focus on single person. Replaces both sections with
+    //                    VirtualGrid of that person's faces. Star icon on each
+    //                    face to set as preferred thumbnail. Delete = unassign
+    //                    (return face to unknown pool, not suppress).
+    //
+    // Transitions:
+    //   'all' ↔ 'unknowns'       : Toggle button in toolbar
+    //   'all' → 'pick-preferred' : Double-click known person OR focus button
+    //   'pick-preferred' → 'all' : Focus button OR Escape key
+
+    /** @type {string} Current view mode */
     let viewMode = 'all';
 
-    /** @type {string|null} Person ID when in pick-preferred mode */
+    /** @type {string|null} Person ID in pick-preferred mode (null otherwise) */
     let pickPreferredPersonId = null;
 
-    /** @type {string|null} Person name when in pick-preferred mode */
+    /** @type {string|null} Person name in pick-preferred mode (for header display) */
     let pickPreferredPersonName = null;
 
-    /** @type {Object|null} VirtualGrid for pick-preferred mode */
+    /** @type {Object|null} VirtualGrid for pick-preferred mode (separate from unknownFacesGrid) */
     let pickPreferredGrid = null;
 
-    /** @type {Array<Object>} Faces for the selected person in pick-preferred mode */
+    /** @type {Array<Object>} All faces for focused person in pick-preferred mode */
     let pickPreferredFaces = [];
 
-    /** @type {number|null} Recognition threshold for current person (null = use default) */
+    /** @type {number|null} Per-person recognition threshold (null = use global default) */
     let pickPreferredPersonThreshold = null;
 
-    /** @type {Map<string, number>} Person IDs whose thumbnails need cache busting */
+    // -------------------------------------------------------------------------
+    // THUMBNAIL CACHE BUSTING
+    // -------------------------------------------------------------------------
+    // Problem: Browser caches /api/people/:id/thumbnail URLs. When the preferred
+    // face changes (star click, suppression, reassignment), the cached thumbnail
+    // becomes stale.
+    //
+    // Solution: Map of personId → timestamp. When rendering person thumbnails,
+    // append ?t=timestamp to force refetch. The timestamp is set when:
+    //   - User clicks star to change preferred face
+    //   - User suppresses a face that was the preferred face
+    //   - User reassigns the preferred face to another person
+    //
+    // Used by: renderKnownFacesSection(), showCardAutocomplete(), fullscreen
+    // autocomplete rendering. Cleared on page reload (acceptable - browser
+    // cache will eventually expire anyway).
+
+    /** @type {Map<string, number>} Person ID → cache bust timestamp */
     let thumbnailCacheBust = new Map();
 
-    /** @type {string} Current semantic search query for unknown faces */
+    /** @type {string} Current semantic search query for filtering unknown faces */
     let unknownFacesSearchQuery = '';
 
-    /** @type {number|null} Timer for pick-preferred reassessment polling */
+    /** @type {number|null} Timer for polling reassessment in pick-preferred mode */
     let pickPreferredPollTimer = null;
 
     // =========================================================================
@@ -397,23 +528,41 @@
 
     /**
      * Enter pick-preferred mode for a person.
+     *
+     * WHAT THIS MODE DOES:
+     * - Replaces known/unknown sections with single grid of person's faces
+     * - Each face card has a star icon (★/☆) to set as preferred thumbnail
+     * - Delete key unassigns faces (returns to unknown) instead of suppressing
+     * - Triggers reassessment to find similar unknown faces
+     *
+     * STATE CHANGES:
+     * - viewMode → 'pick-preferred'
+     * - pickPreferredPersonId/Name set for header display
+     * - pickPreferredFaces loaded from API (separate from allFaces)
+     * - pickPreferredGrid replaces unknownFacesGrid
+     *
+     * WHY SEPARATE FACES ARRAY: The /people/:id/faces endpoint returns faces
+     * sorted by timestamp with is_preferred flag. This is different from
+     * allFaces which contains all faces grouped by person.
+     *
      * @param {string} personId - Person ID to focus on
      */
     async function enterPickPreferredMode(personId) {
-        // Get person details from local cache (for name)
+        // Get name from local cache for immediate header display
         const localPerson = knownPeople.find(p => p.id === personId);
         if (!localPerson) return;
 
+        // Set state before async load (enables UI update)
         viewMode = 'pick-preferred';
         pickPreferredPersonId = personId;
         pickPreferredPersonName = localPerson.name;
-        pickPreferredPersonThreshold = null;  // Default until loaded
+        pickPreferredPersonThreshold = null;
 
-        // Load person details (including threshold) and faces in parallel
+        // Load person details and faces in parallel
         try {
             const [personResult, faces] = await Promise.all([
-                App.api(`/people/${personId}`),
-                App.api(`/people/${personId}/faces`)
+                App.api(`/people/${personId}`),         // For recognition_threshold
+                App.api(`/people/${personId}/faces`)    // All faces for this person
             ]);
             pickPreferredFaces = faces || [];
             pickPreferredPersonThreshold = personResult?.data?.recognition_threshold ?? null;
@@ -422,13 +571,15 @@
             pickPreferredFaces = [];
         }
 
-        // Render pick-preferred view
         renderPickPreferredMode();
         updateFocusButtonState();
     }
 
     /**
-     * Exit pick-preferred mode and return to normal view.
+     * Exit pick-preferred mode and return to normal all/unknowns view.
+     *
+     * Cleans up pick-preferred state and restores the standard two-section
+     * layout. Does NOT reload from API - uses existing allFaces/knownPeople.
      */
     function exitPickPreferredMode() {
         viewMode = 'all';
@@ -721,15 +872,28 @@
 
     /**
      * Commit a name change for a face in pick-preferred mode.
-     * If the name is different from the current person, reassigns the face(s).
-     * @param {string} typedFaceId - Face ID where user typed the name
-     * @param {string} name - Name to assign
-     * @param {HTMLElement} card - Card element where user typed
+     *
+     * SCENARIO: User is viewing Person A's faces and types a different name
+     * (Person B) in one of the face card inputs. This reassigns the face(s)
+     * from Person A to Person B.
+     *
+     * BATCH BEHAVIOR: If faces are selected, reassigns all selected faces.
+     * Otherwise just reassigns the single face where user typed.
+     *
+     * PREFERRED FACE HANDLING:
+     * - Backend auto-selects new preferred for source person (Person A)
+     * - If the typed face was Person A's preferred, local state marks
+     *   first remaining face as preferred (approximation - may differ from
+     *   backend's "newest" selection, but will be corrected on next refresh)
+     * - Cache busted so thumbnail updates
+     *
+     * @param {string} typedFaceId - Face ID where user typed the new name
+     * @param {string} name - New person name to assign to
+     * @param {HTMLElement} card - Card element (for resetting input on no-op)
      */
     async function commitPickPreferredFaceName(typedFaceId, name, card) {
-        // If name is empty or same as current person, do nothing
+        // No-op if name unchanged
         if (!name || name.toLowerCase() === (pickPreferredPersonName || '').toLowerCase()) {
-            // Reset input to current name (in case user cleared it)
             const input = card.querySelector('.face-card-input');
             if (input) {
                 input.value = pickPreferredPersonName || '';
@@ -761,6 +925,9 @@
             });
 
             if (result && result.success) {
+                // Clear any pending reload flag (we're handling the update ourselves)
+                reloadPending = false;
+
                 // Clear selection
                 if (facesSelection) {
                     facesSelection.clear();
@@ -958,6 +1125,9 @@
                         pickPreferredFaces = faces || [];
                         displayedFaces = pickPreferredFaces;
 
+                        // Clear any pending reload flag (we're handling the update ourselves)
+                        reloadPending = false;
+
                         // Clear selection
                         if (facesSelection) {
                             facesSelection.clear();
@@ -1086,7 +1256,19 @@
     }
 
     /**
-     * Handle delete request in pick-preferred mode (unassign faces).
+     * Handle delete request in pick-preferred mode.
+     *
+     * KEY DIFFERENCE FROM NORMAL MODE:
+     * In normal mode, delete = suppress (mark as false positive, hide forever).
+     * In pick-preferred mode, delete = unassign (return to unknown pool).
+     *
+     * This allows correcting misidentifications without losing the face data.
+     * The unassigned faces will reappear in the unknown section and can be
+     * re-identified to a different person.
+     *
+     * EDGE CASE: If all faces are unassigned, exits pick-preferred mode and
+     * triggers full reload (person may have been deleted by backend).
+     *
      * @param {Array<string>} faceIds - Selected face IDs to unassign
      */
     async function handlePickPreferredDeleteRequested(faceIds) {
@@ -1115,22 +1297,22 @@
         }
 
         if (successCount > 0) {
-            // Remove unassigned faces from local state
+            // Update local state
             pickPreferredFaces = pickPreferredFaces.filter(f => !faceIds.includes(f.id));
 
-            // Clear selection
+            // Prevent duplicate reload from selection change handler
+            reloadPending = false;
             if (facesSelection) {
                 facesSelection.clear();
             }
 
-            // If all faces removed, exit pick-preferred mode
             if (pickPreferredFaces.length === 0) {
+                // No faces left - exit mode and reload (person may be deleted)
                 exitPickPreferredMode();
-                // Mark for refresh to show the faces in unknown section
                 peopleCacheTime = 0;
                 loadAllFaces();
             } else {
-                // Re-render pick-preferred view (render, not refresh, to remove deleted items)
+                // Re-render with remaining faces
                 displayedFaces = pickPreferredFaces;
                 pickPreferredGrid.render();
             }
@@ -1161,11 +1343,23 @@
 
     /**
      * Handle selection change in faces grid.
+     *
+     * KEY BEHAVIOR: Triggers deferred reload when selection clears.
+     *
+     * When background reassessment finds matches while user has an active
+     * selection, we can't reload immediately (would disrupt their work).
+     * Instead, reloadPending is set. When selection clears, this handler
+     * triggers the deferred reload.
+     *
+     * IMPORTANT: Operations that handle their own reload (batch identify,
+     * suppress, etc.) must set reloadPending=false BEFORE clearing selection,
+     * otherwise this handler will trigger a duplicate reload.
+     *
      * @param {Array<string>} selectedIds - Selected face IDs
      */
     function handleFacesSelectionChanged(selectedIds) {
-        // If selection is cleared and we have a pending reload, do it now
-        if (selectedIds.length === 0 && reloadPending) {
+        // Only trigger deferred reload in normal mode - pick-preferred handles its own
+        if (selectedIds.length === 0 && reloadPending && viewMode === 'all') {
             reloadPending = false;
             peopleCacheTime = 0;
             loadAllFaces();
@@ -1173,13 +1367,18 @@
     }
 
     /**
-     * Handle face activation (Enter key or double-click).
-     * Navigate to fullscreen with tagging mode.
+     * Handle face activation (Enter key or double-click on unknown face).
+     *
+     * Opens fullscreen viewer on the face's source image with tagging mode
+     * enabled. This allows quick navigation to see the face in context.
+     *
+     * Note: Known person cards have separate double-click handling that
+     * enters pick-preferred mode instead.
+     *
      * @param {string} faceId - Activated face ID
      */
     function handleFaceActivated(faceId) {
-        // Don't activate if user is interacting with an input field
-        // (e.g., double-clicking to select text in the name input)
+        // Ignore if user is editing a name input (double-click selects text)
         const activeEl = document.activeElement;
         if (activeEl && (activeEl.classList.contains('face-card-input') ||
             activeEl.closest('.face-card-input'))) {
@@ -1190,6 +1389,82 @@
         if (face && face.image_id) {
             App.showFullscreen(face.image_id);
             setTaggingMode(true);
+        }
+    }
+
+    /**
+     * Remove unknown faces from display WITHOUT full API reload.
+     *
+     * PURPOSE: Provides smooth UX for suppress/identify operations by updating
+     * local state and re-rendering, preserving scroll position and search query.
+     *
+     * WHEN TO USE: After successfully suppressing or identifying unknown faces.
+     * These operations remove faces from the unknown section, and we have all
+     * the info needed to update locally without hitting the API again.
+     *
+     * WHEN NOT TO USE: Known face operations that might affect person state
+     * (deletion, preferred face changes) - use needsRefresh=true instead.
+     *
+     * ORDER OF OPERATIONS (critical for avoiding race conditions):
+     * 1. Set reloadPending=false BEFORE clearing selection
+     *    (prevents handleFacesSelectionChanged from triggering duplicate reload)
+     * 2. Clear selection
+     * 3. Invalidate peopleCache (face counts may have changed)
+     * 4. Update allFaces and displayedFaces arrays
+     * 5. Update header count
+     * 6. Re-render grid (or set needsRerender if container hidden)
+     *
+     * @param {Array<string>|string} faceIds - Face ID(s) to remove
+     */
+    function removeUnknownFacesLocally(faceIds) {
+        const ids = new Set(Array.isArray(faceIds) ? faceIds : [faceIds]);
+
+        // CRITICAL: Set flag BEFORE clearing selection to prevent race
+        reloadPending = false;
+
+        if (facesSelection) {
+            facesSelection.clear();
+        }
+
+        // Invalidate people cache (face counts changed)
+        peopleCacheTime = 0;
+
+        // Update local data arrays
+        allFaces = allFaces.filter(f => !ids.has(f.id));
+        displayedFaces = displayedFaces.filter(f => !ids.has(f.id));
+
+        // Update section header count
+        const countEl = facesGrid?.querySelector('.faces-section.unknown .faces-section-count');
+        if (countEl) {
+            countEl.textContent = `(${displayedFaces.length})`;
+        }
+
+        // Re-render VirtualGrid (preserves scroll and search)
+        // But only if container is visible - otherwise mark for re-render on return
+        if (unknownFacesGrid) {
+            const container = facesGrid?.querySelector('.faces-unknown-container');
+            if (container && container.offsetWidth > 0) {
+                unknownFacesGrid.render();
+            } else {
+                // Local data is already updated - just need re-render when visible
+                needsRerender = true;
+            }
+        }
+    }
+
+    /**
+     * Suppress a single face (mark as false positive) without confirmation.
+     * Used when clicking the suppress button on a face card.
+     * @param {string} faceId - Face ID to suppress
+     */
+    async function suppressSingleFace(faceId) {
+        try {
+            const result = await App.api(`/faces/${faceId}/suppress`, { method: 'POST' });
+            if (result && result.success) {
+                removeUnknownFacesLocally(faceId);
+            }
+        } catch (error) {
+            console.error(`Failed to suppress face ${faceId}:`, error);
         }
     }
 
@@ -1222,49 +1497,74 @@
         }
 
         if (successCount > 0) {
-            // Clear selection and reload
-            if (facesSelection) {
-                facesSelection.clear();
-            }
-            peopleCacheTime = 0;
-            loadAllFaces();
+            removeUnknownFacesLocally(faceIds);
         }
     }
 
     /**
      * Register the faces screen module with App.
+     *
+     * LIFECYCLE HOOKS:
+     *
+     * onEnter: Called when navigating TO faces screen.
+     *   - If needsRefresh: Full API reload (data changed externally)
+     *   - If needsRerender: Just re-render grid (local data already updated)
+     *   - Otherwise: Restore scroll position, rebind event handlers
+     *
+     * onLeave: Called when navigating AWAY from faces screen.
+     *   - Saves scroll position for restoration on return
+     *   - Unbinds VirtualGrid (stops scroll listeners, thumbnail loading)
+     *   - Unbinds GridSelection (stops keyboard/mouse handlers)
+     *   - Stops reassessment polling
+     *   - Does NOT destroy data (allFaces, knownPeople retained)
+     *
+     * WHY BIND/UNBIND: VirtualGrid has scroll listeners that continue firing
+     * if not unbound. When screen is hidden (e.g., fullscreen overlay),
+     * scroll events with zero container dimensions cause issues.
+     * GridSelection has keyboard handlers that could interfere with other screens.
      */
     function registerFacesModule() {
         App.registerModule('faces', {
             onEnter() {
                 if (needsRefresh) {
-                    loadAllFaces(); // Selection is bound after load completes
+                    // External change requires full reload from API
+                    loadAllFaces();
                 } else {
-                    // Restore scroll position (now from unknown container if exists)
+                    // Restore scroll position to unknown container
                     const unknownContainer = facesGrid?.querySelector('.faces-unknown-container');
                     if (unknownContainer) {
                         unknownContainer.scrollTop = savedScrollTop;
                     } else if (facesGrid) {
                         facesGrid.scrollTop = savedScrollTop;
                     }
-                    // Bind VirtualGrid and selection handlers
+
+                    // Rebind VirtualGrid (scroll listeners, thumbnail loading)
                     if (unknownFacesGrid) {
                         unknownFacesGrid.bind();
+                        // Handle deferred re-render (data changed while hidden)
+                        if (needsRerender) {
+                            unknownFacesGrid.render();
+                            needsRerender = false;
+                        }
                     }
+
+                    // Rebind selection (keyboard/mouse handlers)
                     if (facesSelection) {
                         facesSelection.bind();
                     }
                 }
             },
+
             onLeave() {
-                // Save scroll position from unknown container
+                // Preserve scroll position for return
                 const unknownContainer = facesGrid?.querySelector('.faces-unknown-container');
                 if (unknownContainer) {
                     savedScrollTop = unknownContainer.scrollTop;
                 } else if (facesGrid) {
                     savedScrollTop = facesGrid.scrollTop;
                 }
-                // Unbind VirtualGrid
+
+                // Unbind VirtualGrid (critical - stops scroll events on hidden container)
                 if (unknownFacesGrid) {
                     unknownFacesGrid.unbind();
                 }
@@ -1403,11 +1703,29 @@
     }
 
     /**
-     * Search unknown faces by semantic similarity.
-     * @param {string} query - Search query (empty to reset to default sort)
+     * Search unknown faces by semantic similarity (OpenCLIP embeddings).
+     *
+     * SEARCH MODE (query non-empty):
+     * - Backend returns ONLY unknown faces matching the query, sorted by similarity
+     * - Known faces are preserved from current allFaces (not refetched)
+     * - displayedFaces is set to search results only
+     *
+     * DEFAULT MODE (query empty):
+     * - Backend returns all faces with group-based sorting
+     * - displayedFaces filtered to unknown faces only
+     *
+     * STATE PRESERVATION:
+     * - Saves/restores scroll position around API call
+     * - Restores search input value (in case DOM recreated during render)
+     * - Uses unknownFacesSearchQuery to track current search state
+     *
+     * @param {string} query - Search query (empty string resets to default)
      */
     async function searchUnknownFaces(query) {
-        // Build API URL
+        // Preserve scroll position for restoration after render
+        const unknownContainer = facesGrid?.querySelector('.faces-unknown-container');
+        const scrollTopBefore = unknownContainer ? unknownContainer.scrollTop : 0;
+
         const url = query ? `/faces?search=${encodeURIComponent(query)}` : '/faces';
 
         try {
@@ -1416,13 +1734,12 @@
             const faces = await App.api(url) || [];
 
             if (query) {
-                // Search mode: API returns only matching unknown faces sorted by similarity
-                // Keep known faces, replace unknown faces with search results
+                // Search mode: merge results with existing known faces
                 const knownFaces = allFaces.filter(f => f.person_id);
                 allFaces = [...knownFaces, ...faces];
                 displayedFaces = faces;
             } else {
-                // Default mode: API returns all faces with group-based sorting
+                // Default mode: full replacement
                 allFaces = faces;
                 displayedFaces = faces.filter(f => !f.person_id);
             }
@@ -1436,6 +1753,18 @@
             const countEl = facesGrid?.querySelector('.faces-section-count');
             if (countEl) {
                 countEl.textContent = `(${displayedFaces.length})`;
+            }
+
+            // Restore search input value (in case DOM was recreated)
+            const searchInput = facesGrid?.querySelector('.faces-search-input');
+            if (searchInput && searchInput.value !== unknownFacesSearchQuery) {
+                searchInput.value = unknownFacesSearchQuery;
+            }
+
+            // Restore scroll position after render
+            const newUnknownContainer = facesGrid?.querySelector('.faces-unknown-container');
+            if (newUnknownContainer && scrollTopBefore > 0) {
+                newUnknownContainer.scrollTop = scrollTopBefore;
             }
         } catch (error) {
             console.error('Failed to search faces:', error);
@@ -1483,6 +1812,7 @@
             // Load all faces in a single API call
             allFaces = await App.api('/faces') || [];
             needsRefresh = false;
+            needsRerender = false;
             renderFacesGrid();
 
             // Restore scroll position after render
@@ -1494,6 +1824,12 @@
             // Bind selection after grid is rendered
             if (facesSelection) {
                 facesSelection.bind();
+            }
+
+            // If there's an active search query, re-run it to filter results
+            if (unknownFacesSearchQuery) {
+                // Don't await - let it run async to avoid blocking
+                searchUnknownFaces(unknownFacesSearchQuery);
             }
         } catch (error) {
             console.error('Failed to load faces:', error);
@@ -1514,42 +1850,58 @@
     }
 
     /**
-     * Render the faces grid with sections.
-     * Known faces section is static DOM, unknown faces use VirtualGrid.
+     * Render the faces grid with known and unknown sections.
+     *
+     * ARCHITECTURE:
+     * - Known section: Static DOM cards (small count, no virtualization needed).
+     *   One card per person showing their preferred face thumbnail.
+     * - Unknown section: VirtualGrid (can have thousands of faces).
+     *   Face cards with name input for identification.
+     *
+     * DATA FLOW:
+     *   allFaces → (filter showOnlyUnknowns) → split known/unknown
+     *   knownFaces → buildKnownPeopleList() → knownPeople[] → static DOM
+     *   unknownFaces → displayedFaces[] → VirtualGrid → lazy-rendered cards
+     *
+     * SIDE EFFECTS:
+     * - Clears reloadPending and selection
+     * - Rebuilds knownPeople[] and syncs to peopleCache[]
+     * - Creates new VirtualGrid instance (destroys previous)
+     * - Initializes GridSelection for unknown faces
      */
     function renderFacesGrid() {
         if (!facesGrid) return;
 
-        // Clear selection when re-rendering
+        // Clear pending flags - we're doing a complete render
+        reloadPending = false;
+
+        // Clear selection (will be re-initialized after grid setup)
         if (facesSelection) {
             facesSelection.clear();
         }
 
-        // Unbind and destroy existing unknown grid
+        // Destroy existing VirtualGrid to avoid orphaned event listeners
         if (unknownFacesGrid) {
             unknownFacesGrid.unbind();
             unknownFacesGrid.destroy();
             unknownFacesGrid = null;
         }
 
-        // Clear grid
         facesGrid.innerHTML = '';
 
-        // Filter faces
+        // Apply view filter
         let faces = [...allFaces];
         if (showOnlyUnknowns) {
             faces = faces.filter(f => !f.person_id);
         }
 
-        // Group faces by known/unknown
+        // Partition into known (has person_id) and unknown
         const knownFaces = faces.filter(f => f.person_id);
         const unknownFaces = faces.filter(f => !f.person_id);
+        // Note: unknownFaces already sorted by backend (group_size DESC, group_id, timestamp)
+        // This clusters similar faces together with largest groups first
 
-        // Unknown faces are already sorted by backend:
-        // group_size DESC, unknown_group_id, timestamp
-        // This groups similar faces together with largest groups first
-
-        // Update displayedFaces for GridSelection (unknown faces only)
+        // Update displayedFaces - this is what VirtualGrid and GridSelection use
         displayedFaces = unknownFaces;
 
         // Build known people list for static section
@@ -1772,7 +2124,19 @@
         img.alt = 'Unknown face';
         thumb.appendChild(img);
 
+        // Suppress button (mark as false positive)
+        const suppressBtn = document.createElement('button');
+        suppressBtn.className = 'face-card-suppress';
+        suppressBtn.title = 'Mark as false positive (not a face)';
+        suppressBtn.innerHTML = '<span class="material-symbols-outlined">close</span>';
+        suppressBtn.addEventListener('click', async (e) => {
+            e.stopPropagation();
+            e.preventDefault();
+            await suppressSingleFace(face.id);
+        });
+
         card.appendChild(thumb);
+        card.appendChild(suppressBtn);
 
         // Create editable name input
         const input = document.createElement('input');
@@ -1922,7 +2286,11 @@
             item.className = 'face-card-autocomplete-item';
 
             const img = document.createElement('img');
-            img.src = `/api/people/${person.id}/thumbnail`;
+            // Use cache bust timestamp if available (in case preferred face changed)
+            const bustTime = thumbnailCacheBust.get(person.id);
+            img.src = bustTime
+                ? `/api/people/${person.id}/thumbnail?t=${bustTime}`
+                : `/api/people/${person.id}/thumbnail`;
             img.alt = '';
             item.appendChild(img);
 
@@ -2015,6 +2383,9 @@
             });
 
             if (result && result.success) {
+                // Clear any pending reload flag (we're doing a full reload ourselves)
+                reloadPending = false;
+
                 // Clear selection - identified faces will move to "known" section
                 if (facesSelection) {
                     facesSelection.clear();
@@ -2037,11 +2408,27 @@
     }
 
     /**
-     * Poll reassessment status and reload faces when complete.
-     * Auto-matched faces will appear after reassessment finishes.
+     * Poll for background face reassessment completion.
+     *
+     * BACKGROUND: When faces are identified, the backend triggers async
+     * reassessment to find similar unknown faces. This runs in a background
+     * thread and can take several seconds for large face databases.
+     *
+     * POLLING MECHANISM:
+     * - Started after successful batch identify
+     * - Polls /faces/reassess-status every 500ms while in_progress
+     * - When complete with matches: triggers reload to show newly matched faces
+     *
+     * USER EXPERIENCE CONSIDERATIONS:
+     * - If user has active selection: defer reload (set reloadPending flag).
+     *   Reload happens when selection clears (via handleFacesSelectionChanged).
+     * - If in pick-preferred mode: skip entirely (user focused on one person,
+     *   can exit/re-enter to see changes).
+     *
+     * WHY DEFER: Immediate reload during multi-select operations would clear
+     * selection and disrupt workflow. Better to wait for natural pause.
      */
     async function pollReassessmentStatus() {
-        // Clear any existing poll
         if (reassessmentPollTimer) {
             clearTimeout(reassessmentPollTimer);
             reassessmentPollTimer = null;
@@ -2051,17 +2438,24 @@
             const result = await App.api('/faces/reassess-status');
             if (result && result.success && result.data) {
                 if (result.data.in_progress) {
-                    // Still running, poll again in 500ms
+                    // Still running - continue polling
                     reassessmentPollTimer = setTimeout(pollReassessmentStatus, 500);
                 } else if (result.data.last_result && result.data.last_result.matched_count > 0) {
-                    // Reassessment complete with matches - reload faces
-                    // But only if user doesn't have an active selection (don't interrupt their work)
+                    // Complete with new matches - refresh UI
+
+                    // Skip in pick-preferred mode (user focused elsewhere)
+                    if (viewMode !== 'all') {
+                        return;
+                    }
+
+                    // Check for active selection
                     const hasSelection = facesSelection && facesSelection.getSelected().length > 0;
                     if (!hasSelection) {
+                        // Safe to reload immediately
                         peopleCacheTime = 0;
                         loadAllFaces();
                     } else {
-                        // User has selection - defer reload until they clear it
+                        // Defer reload until selection clears
                         reloadPending = true;
                     }
                 }
@@ -2456,9 +2850,12 @@
             item.dataset.personId = person.id;
             item.dataset.name = person.name;
 
-            // Add thumbnail
+            // Add thumbnail (with cache busting if preferred face changed)
             const img = document.createElement('img');
-            img.src = `/api/people/${person.id}/thumbnail`;
+            const bustTime = thumbnailCacheBust.get(person.id);
+            img.src = bustTime
+                ? `/api/people/${person.id}/thumbnail?t=${bustTime}`
+                : `/api/people/${person.id}/thumbnail`;
             img.alt = '';
             img.onerror = () => { img.style.display = 'none'; };
             item.appendChild(img);
@@ -2699,21 +3096,57 @@
     }
 
     /**
-     * Suppress a face (mark as false positive).
-     * @param {string} faceId - Face ID
-     * @param {HTMLElement} faceBox - Face box element
+     * Suppress a face (mark as false positive) from fullscreen tagging mode.
+     *
+     * CONTEXT: Called when user clicks the X button on a face bounding box
+     * in fullscreen view. The face is marked as suppressed in the database
+     * (won't appear in future face lists).
+     *
+     * BACKEND BEHAVIOR (app.py suppress_face_endpoint):
+     * - If this was a person's preferred face, auto-selects new preferred
+     * - If this was the person's only face, deletes the person
+     *
+     * KNOWN VS UNKNOWN FACE HANDLING:
+     * - Known face: Set needsRefresh (person state may have changed), bust
+     *   thumbnail cache (preferred may have changed), update local arrays.
+     * - Unknown face: Use removeUnknownFacesLocally() which preserves scroll
+     *   position and search state, only re-renders if container visible.
+     *
+     * WHY DIFFERENT: Known faces require full refresh because person may be
+     * deleted or preferred changed. Unknown faces can update locally since
+     * no person-level state is affected.
+     *
+     * @param {string} faceId - Face ID to suppress
+     * @param {HTMLElement} faceBox - Face box DOM element (removed from overlay)
      */
     async function suppressFace(faceId, faceBox) {
         try {
-            await App.api(`/faces/${faceId}/suppress`, {
-                method: 'POST',
-            });
+            await App.api(`/faces/${faceId}/suppress`, { method: 'POST' });
 
-            // Remove face box from overlay
+            // Remove from fullscreen overlay immediately
             faceBox.remove();
 
-            // Invalidate people cache
-            peopleCacheTime = 0;
+            // Determine if this was a known or unknown face
+            const face = allFaces.find(f => f.id === faceId);
+            const wasKnownFace = face && face.person_id;
+
+            if (wasKnownFace) {
+                const personId = face.person_id;
+
+                // Known face - need full refresh (person may be deleted/changed)
+                needsRefresh = true;
+                peopleCacheTime = 0;
+
+                // Bust cache in case this was the preferred face
+                thumbnailCacheBust.set(personId, Date.now());
+
+                // Update local arrays for partial consistency
+                allFaces = allFaces.filter(f => f.id !== faceId);
+                displayedFaces = displayedFaces.filter(f => f.id !== faceId);
+            } else {
+                // Unknown face - can update locally (preserves scroll/search)
+                removeUnknownFacesLocally(faceId);
+            }
         } catch (error) {
             console.error('Failed to suppress face:', error);
             App.showError('Failed to remove face.');

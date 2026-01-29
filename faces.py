@@ -416,47 +416,30 @@ class FaceDetector:
             logger.error(f'Face detection failed for {image_path}: {e}')
             return []
 
-    def detect_faces_batch(
+    def preload_images_batch(
         self,
         image_paths: list[Path | str],
         max_dimension: int = 4096,
         num_workers: int = 4,
-        stop_event: threading.Event | None = None,
-    ) -> dict[Path, list[DetectedFace]]:
-        """Detect faces in multiple images using GPU batch processing.
+    ) -> list[tuple[Path, Image.Image, float]]:
+        """Preload and preprocess images in parallel on CPU.
 
-        This method loads images in parallel on CPU, groups them by dimension
-        (MTCNN requires equal-sized images for batching), then processes each
-        group through MTCNN on GPU. Images from the same camera typically share
-        dimensions, so this provides good batching in practice.
+        This is the first phase of face detection, separated out to allow
+        prefetching the next batch while the GPU processes the current batch.
 
         Args:
             image_paths: List of paths to image files.
             max_dimension: Maximum image dimension for processing.
             num_workers: Number of parallel workers for image loading.
-            stop_event: Optional threading.Event to signal early termination.
 
         Returns:
-            Dict mapping each image path to its list of DetectedFace objects.
-            Images that fail to process will have empty lists.
+            List of (path, PIL.Image, scale) tuples for successfully loaded images.
         """
-        import torch
         from concurrent.futures import ThreadPoolExecutor, as_completed
-        from collections import defaultdict
 
         if not image_paths:
-            return {}
+            return []
 
-        def should_stop():
-            return stop_event is not None and stop_event.is_set()
-
-        results: dict[Path, list[DetectedFace]] = {}
-
-        # Initialize results with empty lists
-        for p in image_paths:
-            results[Path(p)] = []
-
-        # Phase 1: Load and preprocess all images in parallel on CPU
         loaded_images = []  # List of (path, img, scale)
 
         def load_single_image(image_path: Path | str):
@@ -491,6 +474,37 @@ class FaceDetector:
                         loaded_images.append((image_path, img, scale))
                 except Exception as e:
                     logger.error(f'Image loading worker failed: {e}')
+
+        return loaded_images
+
+    def detect_faces_from_preloaded(
+        self,
+        loaded_images: list[tuple[Path, Image.Image, float]],
+        stop_event: threading.Event | None = None,
+    ) -> dict[Path, list[DetectedFace]]:
+        """Detect faces in pre-loaded images using GPU batch processing.
+
+        This is the GPU phase of face detection, processing images that were
+        already loaded by preload_images_batch().
+
+        Args:
+            loaded_images: List of (path, PIL.Image, scale) tuples from preload_images_batch().
+            stop_event: Optional threading.Event to signal early termination.
+
+        Returns:
+            Dict mapping each image path to its list of DetectedFace objects.
+        """
+        import torch
+        from collections import defaultdict
+
+        def should_stop():
+            return stop_event is not None and stop_event.is_set()
+
+        results: dict[Path, list[DetectedFace]] = {}
+
+        # Initialize results with empty lists
+        for path, _, _ in loaded_images:
+            results[path] = []
 
         if not loaded_images or should_stop():
             return results
@@ -654,6 +668,35 @@ class FaceDetector:
             ))
 
         return results
+
+    def detect_faces_batch(
+        self,
+        image_paths: list[Path | str],
+        max_dimension: int = 4096,
+        num_workers: int = 4,
+        stop_event: threading.Event | None = None,
+    ) -> dict[Path, list[DetectedFace]]:
+        """Detect faces in multiple images using GPU batch processing.
+
+        Convenience wrapper that calls preload_images_batch() then
+        detect_faces_from_preloaded(). For better throughput with large
+        queues, use those methods directly with prefetching.
+
+        Args:
+            image_paths: List of paths to image files.
+            max_dimension: Maximum image dimension for processing.
+            num_workers: Number of parallel workers for image loading.
+            stop_event: Optional threading.Event to signal early termination.
+
+        Returns:
+            Dict mapping each image path to its list of DetectedFace objects.
+        """
+        loaded_images = self.preload_images_batch(
+            image_paths,
+            max_dimension=max_dimension,
+            num_workers=num_workers,
+        )
+        return self.detect_faces_from_preloaded(loaded_images, stop_event=stop_event)
 
     def compute_similarity(
         self,

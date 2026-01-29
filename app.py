@@ -1639,13 +1639,19 @@ def suppress_face_endpoint(face_id):
     Suppressed faces are excluded from all face-related queries and UI,
     but the bounding box is kept to prevent re-detection on reindex.
 
+    If the face was associated with a person:
+    - If it was their only face, the person is deleted
+    - If it was their preferred face, a new preferred face is selected
+
     Args:
         face_id: Face's UUID.
 
     Returns:
-        Success message.
+        Success message with person_deleted flag if applicable.
     """
     db = get_db()
+    person_deleted = False
+    new_preferred_selected = False
 
     # Use lock to avoid conflicts with background threads
     with db._db_lock:
@@ -1655,13 +1661,46 @@ def suppress_face_endpoint(face_id):
 
         old_person_id = face.get('person_id')
 
+        # Check if this was the preferred face before suppressing
+        was_preferred = False
+        if old_person_id:
+            person = get_person(db.conn, old_person_id)
+            if person and person.get('preferred_face_id') == face_id:
+                was_preferred = True
+
         suppress_face(db.conn, face_id)
 
-        # Delete person if they have no more faces
+        # Handle person cleanup if face was associated with someone
         if old_person_id:
-            delete_people_without_faces(db.conn)
+            # Check if person still has faces
+            remaining_faces = db.conn.execute(
+                '''SELECT id FROM faces
+                   WHERE person_id = ? AND suppressed = 0
+                   ORDER BY created_at DESC
+                   LIMIT 1''',
+                (old_person_id,)
+            ).fetchone()
 
-    return success_response(message='Face suppressed')
+            if not remaining_faces:
+                # No faces left - delete the person
+                delete_people_without_faces(db.conn)
+                person_deleted = True
+            elif was_preferred:
+                # Person still has faces but lost their preferred - select new one
+                db.conn.execute(
+                    'UPDATE people SET preferred_face_id = ? WHERE id = ?',
+                    (remaining_faces['id'], old_person_id)
+                )
+                db.conn.commit()
+                new_preferred_selected = True
+
+    return success_response(
+        message='Face suppressed',
+        data={
+            'person_deleted': person_deleted,
+            'new_preferred_selected': new_preferred_selected,
+        }
+    )
 
 
 @app.route('/api/faces/<face_id>', methods=['DELETE'])
