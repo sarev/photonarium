@@ -845,6 +845,15 @@ Order domains by dependency (least dependencies first):
 
 **Implementation complete**: See `static/appstate.js` for all nine domains.
 
+### API Compatibility Phase
+
+- [x] Audit AppState API calls vs actual backend endpoints
+- [x] Document gaps in `snippets/appstate-api-gaps.md`
+- [x] Fix `faces.identify()` endpoint name (`/faces/identify-batch`)
+- [x] Fix `faces.search()` endpoint format (`/faces?search=`)
+- [x] Simplify `folders` domain (remove epoch reconciliation)
+- [x] Remove `duplicates.recompute()` (endpoint doesn't exist)
+
 ### Migration Phase (per domain)
 
 For each domain above:

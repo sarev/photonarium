@@ -347,6 +347,10 @@ const AppState = (function() {
     // FOLDERS DOMAIN
     // =========================================================================
     // Folder list, scan/indexing status - persisted to backend
+    //
+    // Note: Folder operations are infrequent, so we use simple request/response
+    // rather than optimistic updates with epoch reconciliation. The backend
+    // doesn't support epochs for folder operations anyway.
 
     const folders = (function() {
         const { subscribe, subscribeError, broadcast, broadcastError } = createSubscriberSystem();
@@ -354,62 +358,17 @@ const AppState = (function() {
         // State
         let _folders = [];      // [{path, count}, ...]
         let _status = null;     // {status, indexing_queue, embedding_queue, face_queue, total_images, ...}
-        let _epoch = 0;
         let _loading = false;
 
         /**
-         * Persist to backend with epoch-based reconciliation.
-         */
-        async function persistToBackend(operation, data, requestEpoch) {
-            try {
-                let response;
-                switch (operation) {
-                    case 'add':
-                        response = await App.apiPost('/folders', { path: data.path, epoch: requestEpoch });
-                        break;
-                    case 'remove':
-                        response = await App.apiDelete(`/folders/${encodeURIComponent(data.path)}?epoch=${requestEpoch}`);
-                        break;
-                    case 'rescan':
-                        response = await App.apiPost('/rescan', { epoch: requestEpoch });
-                        break;
-                }
-
-                // Success - epoch matches, state is consistent
-                if (response?.response_epoch === requestEpoch) {
-                    return;
-                }
-
-                // Stale response - newer request superseded
-                if (response?.request_epoch < _epoch) {
-                    return;
-                }
-
-                // Rollback if needed
-                if (response?.response_epoch < requestEpoch) {
-                    await load(); // Reload from backend
-                    broadcastError(response?.error || 'Operation failed');
-                }
-            } catch (err) {
-                console.error('AppState.folders persist error:', err);
-                await load(); // Reload to get consistent state
-                broadcastError(err.message || 'Failed to save folder changes');
-            }
-        }
-
-        /**
-         * Load folders and stats from backend.
+         * Load folders from backend.
          */
         async function load() {
             if (_loading) return;
             _loading = true;
             try {
-                const [foldersResponse, statsResponse] = await Promise.all([
-                    App.apiGet('/folders'),
-                    App.apiGet('/stats')
-                ]);
+                const foldersResponse = await App.apiGet('/folders');
                 _folders = foldersResponse || [];
-                _epoch = Date.now();
                 broadcast({ type: 'changed' });
             } catch (err) {
                 console.error('AppState.folders load error:', err);
@@ -432,29 +391,38 @@ const AppState = (function() {
                 return _folders;
             },
             async add(path) {
-                // Optimistic update
-                const requestEpoch = Date.now();
-                _folders = [..._folders, { path, count: 0 }];
-                _epoch = requestEpoch;
-                broadcast({ type: 'changed' });
-
-                // Persist
-                await persistToBackend('add', { path }, requestEpoch);
+                try {
+                    const response = await App.apiPost('/folders', { path });
+                    // Add to local list
+                    if (response?.data) {
+                        _folders = [..._folders, response.data];
+                        broadcast({ type: 'changed' });
+                    }
+                    return response?.data;
+                } catch (err) {
+                    broadcastError(err.message || 'Failed to add folder');
+                    throw err;
+                }
             },
             async remove(path) {
-                // Optimistic update
-                const requestEpoch = Date.now();
-                _folders = _folders.filter(f => f.path !== path);
-                _epoch = requestEpoch;
-                broadcast({ type: 'changed' });
-
-                // Persist
-                await persistToBackend('remove', { path }, requestEpoch);
+                try {
+                    await App.apiDelete(`/folders/${encodeURIComponent(path)}`);
+                    // Remove from local list
+                    _folders = _folders.filter(f => f.path !== path);
+                    broadcast({ type: 'changed' });
+                } catch (err) {
+                    broadcastError(err.message || 'Failed to remove folder');
+                    throw err;
+                }
             },
             async rescan() {
-                const requestEpoch = Date.now();
-                _epoch = requestEpoch;
-                await persistToBackend('rescan', {}, requestEpoch);
+                try {
+                    await App.apiPost('/rescan');
+                    broadcast({ type: 'rescanStarted' });
+                } catch (err) {
+                    broadcastError(err.message || 'Failed to start rescan');
+                    throw err;
+                }
             },
 
             // --- Status ---
@@ -1017,8 +985,8 @@ const AppState = (function() {
                 }
 
                 try {
-                    // Use batch identify API
-                    const response = await App.apiPost('/faces/batch-identify', {
+                    // Use batch identify API (note: endpoint is identify-batch, not batch-identify)
+                    const response = await App.apiPost('/faces/identify-batch', {
                         face_ids: faceIds,
                         name: personName,
                         person_id: personId,
@@ -1132,11 +1100,12 @@ const AppState = (function() {
 
             /**
              * Search faces by semantic query.
+             * Uses the /faces endpoint with search parameter (not a separate endpoint).
              */
             async search(query) {
                 try {
-                    const response = await App.apiGet(`/faces/search?q=${encodeURIComponent(query)}`);
-                    return response; // Returns faces with scores
+                    const response = await App.apiGet(`/faces?search=${encodeURIComponent(query)}`);
+                    return response; // Returns unknown faces sorted by similarity
                 } catch (err) {
                     broadcastError(err.message || 'Failed to search faces');
                     throw err;
@@ -1270,21 +1239,12 @@ const AppState = (function() {
             },
 
             // --- Actions ---
-            async recompute(level) {
-                level = level ?? _currentLevel;
-
-                try {
-                    await App.apiPost(`/duplicates/recompute?level=${level}`);
-                    _computing = true;
-                    delete _groupCache[level];
-                    delete _epochCache[level];
-                    startPolling(level);
-                    broadcast({ type: 'computationStarted', level });
-                } catch (err) {
-                    broadcastError(err.message || 'Failed to start duplicate computation');
-                    throw err;
-                }
-            },
+            // Note: Duplicates are computed automatically during image scanning.
+            // There's no manual recompute endpoint. To recompute duplicates,
+            // trigger a rescan via AppState.folders.rescan().
+            //
+            // If manual recomputation is needed in the future, add:
+            // POST /api/duplicates/recompute?level={level}
 
             // --- Lifecycle ---
             startPolling,
