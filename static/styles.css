@@ -244,6 +244,14 @@ body {
     background-color: var(--color-bg-primary);
     -webkit-font-smoothing: antialiased;
     -moz-osx-font-smoothing: grayscale;
+    user-select: none;  /* Disable text selection globally */
+    -webkit-user-select: none;
+}
+
+/* Re-enable text selection for editable fields */
+input, textarea, [contenteditable="true"] {
+    user-select: text;
+    -webkit-user-select: text;
 }
 
 /* Typography */
@@ -1443,6 +1451,39 @@ a:hover {
 
 .faces-section.known {
     flex-shrink: 0;  /* Don't shrink known section */
+    overflow-y: auto;
+    min-height: 100px;  /* Minimum height constraint */
+}
+
+/* Draggable divider between known and unknown sections */
+.faces-divider {
+    flex-shrink: 0;
+    height: 8px;
+    margin: 0 -1rem;  /* Extend to edges */
+    padding: 0 1rem;  /* But keep content aligned */
+    cursor: ns-resize;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+
+.faces-divider::before {
+    content: '';
+    width: 40px;
+    height: 4px;
+    background: var(--color-border);
+    border-radius: 2px;
+    transition: background-color 0.15s, width 0.15s;
+}
+
+.faces-divider:hover::before,
+.faces-divider.dragging::before {
+    background: var(--color-text-muted);
+    width: 60px;
+}
+
+.faces-divider.dragging {
+    cursor: ns-resize;
 }
 
 .faces-section-header {
@@ -1550,6 +1591,22 @@ a:hover {
 .face-card.selected {
     border-color: var(--color-selection-border);
     background-color: var(--color-selection);
+}
+
+/* Drag-and-drop states */
+.face-card.dragging {
+    opacity: 0.5;
+}
+
+.face-card.drop-target {
+    border-color: var(--color-text-green);
+    box-shadow: 0 0 0 3px var(--color-text-green-light, rgba(76, 175, 80, 0.3));
+    transform: scale(1.05);
+    transition: transform 0.15s, box-shadow 0.15s;
+}
+
+.face-card.drop-target .face-card-thumb {
+    filter: brightness(1.1);
 }
 
 .face-card-thumb {

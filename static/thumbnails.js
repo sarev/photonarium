@@ -467,6 +467,7 @@ const VirtualGrid = {
      * @param {Function} [config.getItemHeight] - Custom item height calculator: (thumbSize, itemWidth) => height
      * @param {Function} [config.onItemCreated] - Called when item is added to DOM: (id, element) => void
      * @param {Function} [config.getThumbnailUrl] - Custom URL builder: (thumbId) => string (defaults to App.thumbnailUrl)
+     * @param {Function} [config.getThumbSize] - Custom thumbnail size getter: () => number (defaults to App.getThumbnailSize)
      * @returns {Object} VirtualGrid instance
      */
     create(config) {
@@ -483,7 +484,8 @@ const VirtualGrid = {
                 padding: config.padding ?? 16,
                 getItemHeight: config.getItemHeight || null,
                 onItemCreated: config.onItemCreated || null,
-                getThumbnailUrl: config.getThumbnailUrl || null
+                getThumbnailUrl: config.getThumbnailUrl || null,
+                getThumbSize: config.getThumbSize || null
             },
 
             // ---------------------------------------------------------------
@@ -651,7 +653,7 @@ const VirtualGrid = {
              */
             _calculateDimensions() {
                 const container = this._config.container;
-                const thumbSize = App.getThumbnailSize();
+                const thumbSize = this._config.getThumbSize ? this._config.getThumbSize() : App.getThumbnailSize();
                 const gap = this._config.gap;
                 const padding = this._config.padding;
 

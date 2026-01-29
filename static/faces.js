@@ -155,6 +155,15 @@
     /** @type {boolean} Sort direction for unknown faces (true = oldest first) */
     let sortAscending = true;
 
+    /** @type {number|null} Known section height in pixels (null = auto/default) */
+    let knownSectionHeight = null;
+
+    // Load persisted known section height from localStorage
+    try {
+        const saved = localStorage.getItem('faces-known-height');
+        if (saved) knownSectionHeight = parseInt(saved, 10);
+    } catch (e) { /* ignore */ }
+
     /** @type {Array<Object>} All faces from API (source of truth for this session) */
     let allFaces = [];
 
@@ -481,6 +490,24 @@
                 renderFacesGrid();
             });
         }
+
+        // Keyboard handler for known section (Enter to enter pick-preferred)
+        document.addEventListener('keydown', (e) => {
+            // Only handle when on faces screen and not in pick-preferred mode
+            if (App.getScreen() !== 'faces') return;
+            if (viewMode === 'pick-preferred') return;
+
+            // Don't intercept if focus is in an input field
+            if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA') return;
+
+            if (e.key === 'Enter') {
+                const selectedPersonId = getSelectedKnownPersonId();
+                if (selectedPersonId) {
+                    e.preventDefault();
+                    enterPickPreferredMode(selectedPersonId);
+                }
+            }
+        });
     }
 
     /**
@@ -741,6 +768,7 @@
             itemSelector: '.face-card',
             gap: 16,
             padding: 16,
+            getThumbSize: () => facesThumbnailSize,
             getItemHeight: (thumbSize, itemWidth) => itemWidth + 50,
             onItemCreated: (id, el) => {
                 if (facesSelection && facesSelection.isSelected(id)) {
@@ -927,15 +955,8 @@
         }
 
         try {
-            // Use batch endpoint - it now handles source person cleanup
-            const result = await App.api('/faces/identify-batch', {
-                method: 'POST',
-                body: JSON.stringify({
-                    face_ids: faceIds,
-                    name,
-                    preferred_face_id: typedFaceId  // Set as preferred for new person
-                }),
-            });
+            // Use shared API helper
+            const result = await callIdentifyBatchApi(faceIds, name, typedFaceId);
 
             if (result && result.success) {
                 // Clear any pending reload flag (we're handling the update ourselves)
@@ -1009,6 +1030,75 @@
             if (input) {
                 input.value = pickPreferredPersonName || '';
             }
+        }
+    }
+
+    /**
+     * Low-level API call to identify faces. Returns the result for caller to handle.
+     * This is the single source of truth for the /faces/identify-batch endpoint.
+     *
+     * @param {Array<string>} faceIds - Face IDs to identify
+     * @param {string} name - Name of the person (existing or new)
+     * @param {string} [preferredFaceId] - Face ID to set as preferred (for new persons)
+     * @returns {Promise<{success: boolean, data?: Object, error?: string}>}
+     */
+    async function callIdentifyBatchApi(faceIds, name, preferredFaceId = null) {
+        const payload = { face_ids: faceIds, name };
+        if (preferredFaceId) {
+            payload.preferred_face_id = preferredFaceId;
+        }
+
+        return await App.api('/faces/identify-batch', {
+            method: 'POST',
+            body: JSON.stringify(payload),
+        });
+    }
+
+    /**
+     * Identify multiple faces as a specific person (normal mode).
+     * Used by typing a name in unknown faces and drag-and-drop onto person.
+     *
+     * @param {Array<string>} faceIds - Face IDs to identify
+     * @param {string} name - Name of the person (existing or new)
+     * @param {Object} [options] - Optional settings
+     * @param {string} [options.preferredFaceId] - Face ID to set as preferred (for new persons)
+     * @returns {Promise<boolean>} True if successful
+     */
+    async function identifyFacesAsPerson(faceIds, name, options = {}) {
+        if (!faceIds || faceIds.length === 0 || !name) return false;
+
+        showFacesLoading(`Identifying ${faceIds.length} face${faceIds.length > 1 ? 's' : ''}…`);
+
+        try {
+            const result = await callIdentifyBatchApi(faceIds, name, options.preferredFaceId);
+
+            if (result && result.success) {
+                // Clear any pending reload flag (we're doing a full reload ourselves)
+                reloadPending = false;
+
+                // Clear selection
+                if (facesSelection) {
+                    facesSelection.clear();
+                }
+
+                // Invalidate caches and reload
+                invalidatePeopleCache();
+                await loadAllFaces();
+
+                // Poll for reassessment completion if triggered
+                if (result.data && result.data.reassessment_triggered) {
+                    pollReassessmentStatus();
+                }
+
+                return true;
+            } else {
+                throw new Error(result?.error || 'Unknown error');
+            }
+        } catch (error) {
+            console.error('Failed to identify faces:', error);
+            hideFacesLoading();
+            App.showError(`Failed to identify ${faceIds.length > 1 ? 'faces' : 'face'}.`);
+            return false;
         }
     }
 
@@ -1543,6 +1633,10 @@
                     // External change requires full reload from API
                     loadAllFaces();
                 } else {
+                    // Ensure people cache is loaded for autocomplete
+                    // (fire-and-forget - will complete before user types)
+                    AppState.people.load();
+
                     // Restore scroll position to unknown container
                     const unknownContainer = facesGrid?.querySelector('.faces-unknown-container');
                     if (unknownContainer) {
@@ -1822,8 +1916,13 @@
         if (facesLoading) facesLoading.hidden = false;
 
         try {
-            // Load all faces in a single API call
-            allFaces = await App.api('/faces') || [];
+            // Pre-load people cache so autocomplete works immediately
+            // (load in parallel with faces for efficiency)
+            const [facesData] = await Promise.all([
+                App.api('/faces'),
+                AppState.people.load()
+            ]);
+            allFaces = facesData || [];
             needsRefresh = false;
             needsRerender = false;
             renderFacesGrid();
@@ -1936,7 +2035,17 @@
         // Render known faces section (static DOM - one card per person)
         if (knownPeople.length > 0 && !showOnlyUnknowns) {
             const section = createKnownFacesSection(knownPeople);
+            // Apply stored height if available
+            if (knownSectionHeight) {
+                section.style.height = `${knownSectionHeight}px`;
+            }
             facesGrid.appendChild(section);
+
+            // Add divider between known and unknown sections (only if both exist)
+            if (unknownFaces.length > 0) {
+                const divider = createFacesDivider(section);
+                facesGrid.appendChild(divider);
+            }
         }
 
         // Render unknown faces section using VirtualGrid
@@ -2025,6 +2134,80 @@
     }
 
     /**
+     * Create a draggable divider between known and unknown sections.
+     * @param {HTMLElement} knownSection - The known faces section to resize
+     * @returns {HTMLElement}
+     */
+    function createFacesDivider(knownSection) {
+        const divider = document.createElement('div');
+        divider.className = 'faces-divider';
+
+        let isDragging = false;
+        let startY = 0;
+        let startHeight = 0;
+
+        const onMouseMove = (e) => {
+            if (!isDragging) return;
+            e.preventDefault();
+
+            const deltaY = e.clientY - startY;
+            const newHeight = Math.max(100, Math.min(startHeight + deltaY, window.innerHeight * 0.7));
+
+            knownSection.style.height = `${newHeight}px`;
+        };
+
+        const onMouseUp = (e) => {
+            if (!isDragging) return;
+            isDragging = false;
+            divider.classList.remove('dragging');
+            document.body.style.cursor = '';
+
+            // Persist the new height
+            const rect = knownSection.getBoundingClientRect();
+            knownSectionHeight = Math.round(rect.height);
+            try {
+                localStorage.setItem('faces-known-height', String(knownSectionHeight));
+            } catch (e) { /* ignore */ }
+
+            // Refresh VirtualGrid after resize
+            if (unknownFacesGrid) {
+                unknownFacesGrid.refresh();
+            }
+
+            document.removeEventListener('mousemove', onMouseMove);
+            document.removeEventListener('mouseup', onMouseUp);
+        };
+
+        divider.addEventListener('mousedown', (e) => {
+            e.preventDefault();
+            isDragging = true;
+            startY = e.clientY;
+            startHeight = knownSection.getBoundingClientRect().height;
+            divider.classList.add('dragging');
+            document.body.style.cursor = 'ns-resize';
+
+            document.addEventListener('mousemove', onMouseMove);
+            document.addEventListener('mouseup', onMouseUp);
+        });
+
+        // Double-click to reset to auto height
+        divider.addEventListener('dblclick', (e) => {
+            e.preventDefault();
+            knownSection.style.height = '';
+            knownSectionHeight = null;
+            try {
+                localStorage.removeItem('faces-known-height');
+            } catch (e) { /* ignore */ }
+
+            if (unknownFacesGrid) {
+                unknownFacesGrid.refresh();
+            }
+        });
+
+        return divider;
+    }
+
+    /**
      * Create the unknown faces section with VirtualGrid container.
      * @param {number} count - Number of unknown faces
      * @returns {HTMLElement}
@@ -2100,6 +2283,7 @@
             itemSelector: '.face-card',
             gap: 16,
             padding: 0,  // Section already has padding
+            getThumbSize: () => facesThumbnailSize,
             getItemHeight: (thumbSize, itemWidth) => {
                 // Face card: thumbnail (square) + input height + padding
                 return itemWidth + 50;
@@ -2127,6 +2311,36 @@
         const card = document.createElement('div');
         card.className = 'face-card';
         card.dataset.id = face.id;
+        card.draggable = true;
+
+        // Drag start - include this face and any other selected faces
+        card.addEventListener('dragstart', (e) => {
+            // If this card isn't selected, select only this one
+            let faceIds;
+            if (facesSelection && facesSelection.isSelected(face.id)) {
+                faceIds = facesSelection.getSelectedIds();
+            } else {
+                faceIds = [face.id];
+            }
+
+            e.dataTransfer.setData('application/x-face-ids', JSON.stringify(faceIds));
+            e.dataTransfer.effectAllowed = 'move';
+
+            // Mark all dragged cards
+            setTimeout(() => {
+                faceIds.forEach(id => {
+                    const el = facesGrid?.querySelector(`.face-card[data-id="${id}"]`);
+                    if (el) el.classList.add('dragging');
+                });
+            }, 0);
+        });
+
+        card.addEventListener('dragend', () => {
+            // Remove dragging class from all cards
+            facesGrid?.querySelectorAll('.face-card.dragging').forEach(el => {
+                el.classList.remove('dragging');
+            });
+        });
 
         const thumb = document.createElement('div');
         thumb.className = 'face-card-thumb';
@@ -2259,6 +2473,42 @@
             enterPickPreferredMode(person.id);
         });
 
+        // Drop target for unknown faces
+        card.addEventListener('dragover', (e) => {
+            // Check if dragging faces
+            if (e.dataTransfer.types.includes('application/x-face-ids')) {
+                e.preventDefault();
+                e.dataTransfer.dropEffect = 'move';
+                card.classList.add('drop-target');
+            }
+        });
+
+        card.addEventListener('dragleave', (e) => {
+            // Only remove if actually leaving the card (not entering a child)
+            if (!card.contains(e.relatedTarget)) {
+                card.classList.remove('drop-target');
+            }
+        });
+
+        card.addEventListener('drop', async (e) => {
+            e.preventDefault();
+            card.classList.remove('drop-target');
+
+            const data = e.dataTransfer.getData('application/x-face-ids');
+            if (!data) return;
+
+            try {
+                const faceIds = JSON.parse(data);
+                if (!faceIds || faceIds.length === 0) return;
+
+                // Identify all dropped faces as this person
+                await identifyFacesAsPerson(faceIds, person.name);
+            } catch (err) {
+                console.error('Drop failed:', err);
+                App.showError('Failed to identify faces');
+            }
+        });
+
         return card;
     }
 
@@ -2369,9 +2619,8 @@
     async function commitSelectedFacesName(typedFaceId, name, card) {
         if (!name) return;
 
-        // Immediately show loading and close autocomplete for better UX
+        // Close autocomplete for better UX
         closeAllAutocompletes();
-        showFacesLoading('Assigning name…');
 
         // Get selected faces, or just the typed face if none selected
         let faceIds = facesSelection ? facesSelection.getSelected() : [];
@@ -2381,40 +2630,8 @@
             faceIds = [typedFaceId];
         }
 
-        try {
-            // Use batch endpoint for efficiency
-            const result = await App.api('/faces/identify-batch', {
-                method: 'POST',
-                body: JSON.stringify({
-                    face_ids: faceIds,
-                    name,
-                    preferred_face_id: typedFaceId
-                }),
-            });
-
-            if (result && result.success) {
-                // Clear any pending reload flag (we're doing a full reload ourselves)
-                reloadPending = false;
-
-                // Clear selection - identified faces will move to "known" section
-                if (facesSelection) {
-                    facesSelection.clear();
-                }
-
-                // Invalidate cache and reload
-                invalidatePeopleCache();
-                loadAllFaces();
-
-                // Poll for reassessment completion and reload when done
-                if (result.data && result.data.reassessment_triggered) {
-                    pollReassessmentStatus();
-                }
-            }
-        } catch (error) {
-            console.error('Failed to identify faces:', error);
-            hideFacesLoading();
-            App.showError(`Failed to identify ${faceIds.length > 1 ? 'faces' : 'face'}.`);
-        }
+        // Use shared identification function
+        await identifyFacesAsPerson(faceIds, name, { preferredFaceId: typedFaceId });
     }
 
     /**
@@ -3033,15 +3250,8 @@
     async function commitNameChange(faceId, name, label, face) {
         try {
             if (name) {
-                // Use batch endpoint - same as faces screen - handles preferred_face_id correctly
-                const result = await App.api('/faces/identify-batch', {
-                    method: 'POST',
-                    body: JSON.stringify({
-                        face_ids: [faceId],
-                        name,
-                        preferred_face_id: faceId,
-                    }),
-                });
+                // Use shared API helper
+                const result = await callIdentifyBatchApi([faceId], name, faceId);
 
                 if (result && result.success) {
                     // Update face object and re-render label
