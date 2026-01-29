@@ -368,6 +368,129 @@ const AppState = (function() {
     })();
 
     // =========================================================================
+    // STATUS DOMAIN
+    // =========================================================================
+    // Global processing status with polling - memory only
+    //
+    // Consolidates all /status API calls from database.js, gallery.js, search.js, faces.js.
+    // Provides polling with configurable interval and automatic stop when status is up_to_date.
+
+    const status = (function() {
+        const { subscribe, broadcast } = createSubscriberSystem();
+
+        // State
+        let _status = null;     // {status, indexing_queue, embedding_queue, face_queue, total_images, face_detection_enabled, ...}
+        let _pollTimer = null;
+        let _loading = false;
+
+        return {
+            // --- Subscriptions ---
+            onChanged: subscribe,
+
+            // --- Load ---
+            async load() {
+                if (_loading) return _status;
+                _loading = true;
+                try {
+                    _status = await App.apiGet('/status');
+                    broadcast({ type: 'changed' });
+                    return _status;
+                } catch (err) {
+                    console.error('AppState.status load error:', err);
+                    throw err;
+                } finally {
+                    _loading = false;
+                }
+            },
+
+            // --- Accessors ---
+            get() { return _status; },
+            isFaceDetectionEnabled() { return _status?.face_detection_enabled !== false; },
+            isUpdating() { return _status?.status === 'updating'; },
+            getQueues() {
+                return {
+                    indexing: _status?.indexing_queue || 0,
+                    embedding: _status?.embedding_queue || 0,
+                    face: _status?.face_queue || 0
+                };
+            },
+
+            // --- Polling ---
+            startPolling(intervalMs = 1000) {
+                if (_pollTimer) return;
+                this.load();
+                _pollTimer = setInterval(() => this.load(), intervalMs);
+            },
+
+            stopPolling() {
+                if (_pollTimer) {
+                    clearInterval(_pollTimer);
+                    _pollTimer = null;
+                }
+            },
+
+            isPolling() {
+                return _pollTimer !== null;
+            }
+        };
+    })();
+
+    // =========================================================================
+    // SEARCH DOMAIN
+    // =========================================================================
+    // Semantic search - memory only
+    //
+    // Encapsulates semantic search (currently in gallery.js, search.js).
+
+    const search = (function() {
+        const { subscribe, broadcast } = createSubscriberSystem();
+
+        // State
+        let _results = null;    // {results: [{id, score}, ...]}
+        let _loading = false;
+        let _query = null;
+        let _threshold = null;
+
+        return {
+            // --- Subscriptions ---
+            onChanged: subscribe,
+
+            // --- Execute ---
+            async execute(query, threshold = 0.2, limit = 500) {
+                _loading = true;
+                _query = query;
+                _threshold = threshold;
+                broadcast({ type: 'loading' });
+                try {
+                    const response = await App.apiPost('/search', { query, threshold, limit });
+                    _results = response;
+                    _loading = false;
+                    broadcast({ type: 'changed' });
+                    return _results;
+                } catch (err) {
+                    _loading = false;
+                    broadcast({ type: 'error', message: err.message });
+                    throw err;
+                }
+            },
+
+            // --- Accessors ---
+            getResults() { return _results; },
+            getQuery() { return _query; },
+            getThreshold() { return _threshold; },
+            isLoading() { return _loading; },
+
+            // --- Clear ---
+            clear() {
+                _results = null;
+                _query = null;
+                _threshold = null;
+                broadcast({ type: 'changed' });
+            }
+        };
+    })();
+
+    // =========================================================================
     // FOLDERS DOMAIN
     // =========================================================================
     // Folder list, scan/indexing status - persisted to backend
@@ -382,6 +505,7 @@ const AppState = (function() {
         // State
         let _folders = [];      // [{path, count}, ...]
         let _status = null;     // {status, indexing_queue, embedding_queue, face_queue, total_images, ...}
+        let _stats = null;      // {totalImages, totalFolders}
         let _loading = false;
 
         /**
@@ -451,6 +575,22 @@ const AppState = (function() {
                     broadcastError(err.message || 'Failed to start rescan');
                     throw err;
                 }
+            },
+
+            // --- Stats ---
+            async loadStats() {
+                try {
+                    _stats = await App.apiGet('/stats');
+                    broadcast({ type: 'changed', property: 'stats' });
+                    return _stats;
+                } catch (err) {
+                    console.error('AppState.folders loadStats error:', err);
+                    broadcastError(err.message || 'Failed to load stats');
+                    throw err;
+                }
+            },
+            getStats() {
+                return _stats;
             },
 
             // --- Status ---
@@ -662,6 +802,86 @@ const AppState = (function() {
                 }
             },
 
+            // --- Single image fetch ---
+            /**
+             * Fetch a single image by ID.
+             * Returns from cache if available, otherwise fetches from backend.
+             * @param {string} id - Image ID
+             * @returns {Promise<Object>} Image data
+             */
+            async fetchById(id) {
+                // Return from cache if available
+                if (_cache?.has(id)) {
+                    return _cache.get(id);
+                }
+                // Fetch from backend
+                const image = await App.apiGet(`/images/${id}`);
+                // Store in cache if cache exists
+                if (_cache && image) {
+                    _cache.set(image.id, image);
+                }
+                return image;
+            },
+
+            // --- Similarity data for sort-by-similarity ---
+            _similarities: null,
+
+            async loadSimilarities(referenceId) {
+                const response = await App.apiGet(`/similar/${referenceId}`);
+                this._similarities = {
+                    referenceId,
+                    scores: new Map(response.results.map(r => [r.id, r.similarity]))
+                };
+                broadcast({ type: 'changed', property: 'similarities' });
+                return response;
+            },
+
+            getSimilarity(imageId) {
+                return this._similarities?.scores.get(imageId) || 0;
+            },
+
+            getSimilarityReferenceId() {
+                return this._similarities?.referenceId || null;
+            },
+
+            clearSimilarities() {
+                this._similarities = null;
+            },
+
+            // --- People names for sort-by-people ---
+            _peopleNames: null,
+
+            async loadPeopleNames() {
+                const response = await App.apiGet('/images/people-names');
+                this._peopleNames = response;
+                broadcast({ type: 'changed', property: 'peopleNames' });
+                return response;
+            },
+
+            getPeopleNames(imageId) {
+                return this._peopleNames?.[imageId] || '';
+            },
+
+            hasPeopleNames() {
+                return this._peopleNames !== null;
+            },
+
+            clearPeopleNames() {
+                this._peopleNames = null;
+            },
+
+            // --- Filter by people ---
+            /**
+             * Get image IDs filtered by people.
+             * @param {Array<string>} peopleIds - Array of person IDs
+             * @returns {Promise<Set<string>>} Set of image IDs containing those people
+             */
+            async getFilteredByPeople(peopleIds) {
+                const response = await App.apiGet(`/images?people=${encodeURIComponent(peopleIds.join(','))}`);
+                const images = response.images || response;
+                return new Set(images.map(img => String(img.id)));
+            },
+
             // --- Cache invalidation ---
             invalidate() {
                 _cache = null;
@@ -757,6 +977,22 @@ const AppState = (function() {
                 }
                 return null;
             },
+
+            /**
+             * Fetch a single person by ID from the backend.
+             * Unlike getById, this always fetches fresh data.
+             * @param {string} id - Person ID
+             * @returns {Promise<Object>} Person data
+             */
+            async fetchById(id) {
+                const response = await App.apiGet(`/people/${id}`);
+                // Update cache if loaded
+                if (_cache && response) {
+                    _cache.set(response.id, response);
+                }
+                return response;
+            },
+
             getCount() {
                 return _cache?.size || 0;
             },
@@ -1022,6 +1258,79 @@ const AppState = (function() {
                     }
                 }
                 return _facesByImage.get(imageId) || [];
+            },
+
+            /**
+             * Fetch faces for an image directly from the backend.
+             * Use this when you need fresh data or the global cache isn't loaded.
+             * @param {string} imageId - Image ID
+             * @returns {Promise<Array>} Faces for the image
+             */
+            async fetchForImage(imageId) {
+                // If cache is loaded, use it
+                if (_cache) {
+                    return this.getForImage(imageId);
+                }
+                // Otherwise fetch from backend
+                return await App.apiGet(`/images/${imageId}/faces`);
+            },
+
+            /**
+             * Fetch all faces for a person from the backend.
+             * Used for pick-preferred mode in faces screen.
+             * @param {string} personId - Person ID
+             * @returns {Promise<Array>} Faces for the person
+             */
+            async fetchForPerson(personId) {
+                return await App.apiGet(`/people/${personId}/faces`);
+            },
+
+            /**
+             * Search faces by semantic similarity (OpenCLIP embeddings).
+             * @param {string} query - Optional search query (empty returns all)
+             * @returns {Promise<Array>} Matching faces sorted by similarity
+             */
+            async search(query) {
+                const url = query ? `/faces?search=${encodeURIComponent(query)}` : '/faces';
+                return await App.apiGet(url) || [];
+            },
+
+            // --- Reassessment ---
+            _reassessPollTimer: null,
+
+            /**
+             * Check the current reassessment status.
+             * @returns {Promise<Object>} Reassessment status
+             */
+            async checkReassessment() {
+                return await App.apiGet('/faces/reassess-status');
+            },
+
+            /**
+             * Start polling for reassessment status.
+             * @param {Function} callback - Called with reassessment status on each poll
+             * @param {number} intervalMs - Poll interval in milliseconds
+             */
+            startReassessmentPolling(callback, intervalMs = 500) {
+                this.stopReassessmentPolling();
+                this._reassessPollTimer = setInterval(async () => {
+                    try {
+                        const result = await this.checkReassessment();
+                        callback(result);
+                    } catch (err) {
+                        console.error('Reassessment poll error:', err);
+                    }
+                }, intervalMs);
+            },
+
+            /**
+             * Stop polling for reassessment status.
+             */
+            stopReassessmentPolling() {
+                if (this._reassessPollTimer) {
+                    clearInterval(this._reassessPollTimer);
+                    this._reassessPollTimer = null;
+                }
             },
 
             // --- Mutations ---
@@ -1313,6 +1622,20 @@ const AppState = (function() {
             // If manual recomputation is needed in the future, add:
             // POST /api/duplicates/recompute?level={level}
 
+            /**
+             * Sort duplicate groups by semantic similarity to a query.
+             * @param {string} query - Semantic query string
+             * @param {Array<string>} imageIds - Image IDs to get similarity scores for
+             * @returns {Promise<Array>} Array of {image_id, score} sorted by score
+             */
+            async sortSemantic(query, imageIds) {
+                const response = await App.apiPost('/duplicates/sort-semantic', {
+                    query,
+                    image_ids: imageIds
+                });
+                return response.scores || [];
+            },
+
             // --- Lifecycle ---
             startPolling,
             stopPolling,
@@ -1481,6 +1804,8 @@ const AppState = (function() {
         view,
         nav,
         filter,
+        status,
+        search,
         folders,
         images,
         people,

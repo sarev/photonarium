@@ -133,6 +133,14 @@ const Search = {
 
         // Bind button events
         this._bindEvents();
+
+        // Subscribe to AppState.people for instant dialog updates
+        AppState.people.onChanged(() => {
+            // Re-render people picker if dialog is open
+            if (this._els.peopleDialog?.open) {
+                this._renderPeopleAvailable();
+            }
+        });
     },
 
     /**
@@ -286,7 +294,11 @@ const Search = {
      */
     async _loadFaceDetectionStatus() {
         try {
-            const status = await App.api('/status');
+            // Use AppState.status - load if not already loaded
+            let status = AppState.status.get();
+            if (!status) {
+                status = await AppState.status.load();
+            }
             this._faceDetectionEnabled = status?.face_detection_enabled !== false;
         } catch (error) {
             // Default to enabled if can't reach backend
@@ -325,26 +337,33 @@ const Search = {
 
     /**
      * Opens the people picker dialog.
+     * Shows immediately with cached data, loads fresh data in background.
      * @private
      */
-    async _openPeoplePicker() {
+    _openPeoplePicker() {
         if (!this._faceDetectionEnabled) return;
         if (!this._els.peopleDialog) return;
-
-        // Ensure people are loaded (AppState.people handles caching)
-        await AppState.people.load();
 
         // Clear search
         if (this._els.peopleSearch) {
             this._els.peopleSearch.value = '';
         }
 
-        // Render panels
+        // Show dialog immediately with whatever cached data we have
         this._renderPeopleAvailable();
         this._renderPeopleSelected();
-
-        // Show dialog
         this._els.peopleDialog.showModal();
+
+        // Load fresh data in background - explicit re-render on completion
+        // (The subscription also handles this, but this ensures it works even
+        // if the subscription hasn't fired yet or if the cache was empty)
+        AppState.people.load().then(() => {
+            if (this._els.peopleDialog?.open) {
+                this._renderPeopleAvailable();
+            }
+        }).catch(() => {
+            // Ignore errors - we already showed what we have
+        });
     },
 
     /**
@@ -692,11 +711,7 @@ const Search = {
                 Gallery._showLoading('Searching…');
             }
             try {
-                const response = await App.apiPost('/search', {
-                    query: filter.text,
-                    threshold: threshold,
-                    limit: 500
-                });
+                const response = await AppState.search.execute(filter.text, threshold, 500);
 
                 if (response && response.results) {
                     // Store matching image IDs, scores, and threshold in the filter

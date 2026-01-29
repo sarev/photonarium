@@ -55,13 +55,6 @@ const Database = {
     _els: {},
 
     /**
-     * Status polling timer id.
-     * @type {number|null}
-     * @private
-     */
-    _pollTimer: null,
-
-    /**
      * Last known processing status to detect changes.
      * @type {string|null}
      * @private
@@ -69,11 +62,11 @@ const Database = {
     _lastStatus: null,
 
     /**
-     * AppState subscription cleanup function.
-     * @type {Function|null}
+     * AppState subscription cleanup functions.
+     * @type {Array<Function>}
      * @private
      */
-    _foldersUnsubscribe: null,
+    _unsubs: [],
 
     /**
      * History of indexing queue samples for ETA calculation.
@@ -139,19 +132,40 @@ const Database = {
         this._bindEvents();
 
         // Subscribe to AppState.folders changes for auto-rendering
-        this._foldersUnsubscribe = AppState.folders.onChanged((event) => {
+        this._unsubs.push(AppState.folders.onChanged((event) => {
             if (App.getScreen() === 'database') {
                 // Re-render folder list when folders change
                 if (event.type === 'changed' && !event.property) {
                     this._renderFolders(AppState.folders.getAll());
                 }
+                // Handle stats update
+                if (event.type === 'changed' && event.property === 'stats') {
+                    const stats = AppState.folders.getStats();
+                    if (stats && typeof stats.totalImages === 'number') {
+                        this._els.statusTotal.textContent = String(stats.totalImages);
+                    }
+                }
                 // Handle databaseChanged event (processing completed)
                 if (event.type === 'databaseChanged') {
-                    this._refreshStats();
+                    AppState.folders.loadStats();
                     App.emit('databaseChanged');
                 }
             }
-        });
+        }));
+
+        // Subscribe to AppState.status changes for status display
+        this._unsubs.push(AppState.status.onChanged(() => {
+            if (App.getScreen() === 'database') {
+                const status = AppState.status.get();
+                if (status) {
+                    // Update AppState.folders with status for databaseChanged detection
+                    AppState.folders.setStatus(status);
+                    // Update local display
+                    this._updateStatusDisplay(status);
+                    this._lastStatus = status.status;
+                }
+            }
+        }));
     },
 
     /**
@@ -159,7 +173,8 @@ const Database = {
      */
     onEnter() {
         this._refresh();
-        this._startPolling();
+        // Start status polling via AppState
+        AppState.status.startPolling(1000);
 
         // Bind Escape key to return to gallery
         this._escapeHandler = (e) => {
@@ -175,7 +190,8 @@ const Database = {
      * Called when leaving the database screen.
      */
     onLeave() {
-        this._stopPolling();
+        // Stop status polling via AppState
+        AppState.status.stopPolling();
 
         // Remove Escape key handler
         if (this._escapeHandler) {
@@ -308,25 +324,13 @@ const Database = {
         try {
             await Promise.all([
                 AppState.folders.load(),
-                this._refreshStats()
+                AppState.folders.loadStats()
             ]);
             this._renderFolders(AppState.folders.getAll());
+            // Stats will be updated via subscription
         } catch (error) {
             console.error('Error loading database status:', error);
             App.showError('Could not load database status.');
-        }
-    },
-
-    /**
-     * Refreshes just the stats from the backend.
-     * @private
-     */
-    async _refreshStats() {
-        try {
-            const stats = await App.apiGet('/stats');
-            this._els.statusTotal.textContent = stats && typeof stats.totalImages === 'number' ? String(stats.totalImages) : '0';
-        } catch (error) {
-            console.error('Error loading stats:', error);
         }
     },
 
@@ -341,57 +345,6 @@ const Database = {
         } catch (error) {
             console.error('Error initiating rescan:', error);
             App.showError('Could not start rescan.');
-        }
-    },
-
-    /* ----------------------------------------------------------------------
-       Processing status polling
-       ---------------------------------------------------------------------- */
-
-    /**
-     * Starts polling for processing status.
-     * @private
-     */
-    _startPolling() {
-        if (this._pollTimer) {
-            return;
-        }
-
-        const poll = () => this._pollStatus();
-        this._pollTimer = window.setInterval(poll, 1000);
-        poll(); // Immediate first poll
-    },
-
-    /**
-     * Stops polling for processing status.
-     * @private
-     */
-    _stopPolling() {
-        if (this._pollTimer) {
-            clearInterval(this._pollTimer);
-            this._pollTimer = null;
-        }
-    },
-
-    /**
-     * Polls the backend for current processing status.
-     * @private
-     */
-    async _pollStatus() {
-        try {
-            const status = await App.apiGet('/status');
-
-            // Update AppState with status (triggers databaseChanged when processing completes)
-            // The subscription handler will call _refreshStats() and emit databaseChanged
-            AppState.folders.setStatus(status);
-
-            // Update local display
-            this._updateStatusDisplay(status);
-
-            this._lastStatus = status.status;
-        } catch (error) {
-            console.error('Error polling status:', error);
-            // Don't show error toast for polling failures
         }
     },
 

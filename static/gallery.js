@@ -349,7 +349,11 @@ const Gallery = {
      */
     async _checkForNewImages() {
         try {
-            const status = await App.apiGet('/status');
+            // Use AppState.status - load if not already loaded
+            let status = AppState.status.get();
+            if (!status) {
+                status = await AppState.status.load();
+            }
             if (status.status !== 'updating') return;
 
             const images = await App.getImages();
@@ -433,7 +437,7 @@ const Gallery = {
         const referenceId = selected[0];
 
         try {
-            const response = await App.apiGet(`/similar/${referenceId}`);
+            const response = await AppState.images.loadSimilarities(referenceId);
             if (response && response.results) {
                 this.state.contentSimilarities = {};
                 this.state.contentReferenceId = referenceId;
@@ -601,8 +605,8 @@ const Gallery = {
      */
     async _loadPeopleNames() {
         try {
-            // Fetch all people names in a single bulk request
-            this.state.peopleNames = await App.api('/images/people-names');
+            // Fetch all people names in a single bulk request via AppState
+            this.state.peopleNames = await AppState.images.loadPeopleNames();
 
             this.state.images = this._sortImages(this.state.images);
             this._renderGrid();
@@ -672,17 +676,8 @@ const Gallery = {
      */
     async _loadPeopleFilteredImages(filter) {
         try {
-            const peopleIds = filter.people.map(p => p.id).join(',');
-            const response = await App.api(`/images?people=${encodeURIComponent(peopleIds)}`);
-
-            // Store filtered image IDs in the filter object
-            if (response && Array.isArray(response.images)) {
-                filter.peopleImageIds = new Set(response.images.map(img => String(img.id)));
-            } else if (Array.isArray(response)) {
-                filter.peopleImageIds = new Set(response.map(img => String(img.id)));
-            } else {
-                filter.peopleImageIds = new Set();
-            }
+            const peopleIds = filter.people.map(p => p.id);
+            filter.peopleImageIds = await AppState.images.getFilteredByPeople(peopleIds);
         } catch (error) {
             console.error('Failed to load people-filtered images:', error);
             filter.peopleImageIds = null;
@@ -1037,11 +1032,7 @@ const Gallery = {
 
                 this._showLoading('Searching…');
                 try {
-                    const response = await App.apiPost('/search', {
-                        query: filter.text,
-                        threshold: threshold,
-                        limit: 500
-                    });
+                    const response = await AppState.search.execute(filter.text, threshold, 500);
 
                     if (response && response.results) {
                         filter.threshold = threshold;
@@ -1117,7 +1108,7 @@ const Gallery = {
 
         let img;
         try {
-            img = await App.apiGet(`/images/${imageId}`);
+            img = await AppState.images.fetchById(imageId);
         } catch (error) {
             console.error('Failed to load image details:', error);
             content.innerHTML = '<p class="info-placeholder">Failed to load details</p>';
@@ -1238,13 +1229,8 @@ const Gallery = {
      * @private
      */
     async _saveImageField(imageId, field, value) {
-        const img = this.state.images.find(i => i.id === imageId);
-        if (img) {
-            img[field] = value;
-        }
-
         try {
-            await App.apiPost(`/images/${imageId}`, { [field]: value });
+            await AppState.images.update({ id: imageId, [field]: value });
         } catch (error) {
             console.error(`Failed to save ${field}:`, error);
             App.showError(`Failed to save ${field}.`);
@@ -1337,19 +1323,15 @@ const Gallery = {
         const confirmed = await App.confirm('Delete Images', message);
         if (!confirmed) return;
 
-        let failedCount = 0;
-        for (const id of ids) {
-            try {
-                await App.apiDelete(`/images/${id}`);
-                this.state.images = this.state.images.filter(img => img.id !== id);
-            } catch (error) {
-                console.error(`Failed to delete image ${id}:`, error);
-                failedCount++;
-            }
-        }
-
-        if (failedCount > 0) {
-            App.showError(`Failed to delete ${failedCount} image${failedCount > 1 ? 's' : ''}.`);
+        try {
+            // Delete via AppState (handles optimistic update and rollback)
+            await AppState.images.delete(ids);
+            // Update local state to match
+            const deletedSet = new Set(ids);
+            this.state.images = this.state.images.filter(img => !deletedSet.has(img.id));
+        } catch (error) {
+            console.error('Failed to delete images:', error);
+            // Error is already shown by AppState
         }
 
         App.clearSelection();

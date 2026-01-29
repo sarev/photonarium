@@ -428,9 +428,13 @@
      */
     async function loadFaceDetectionConfig() {
         try {
-            const response = await App.api('/status');
-            if (response && response.face_detection_enabled !== undefined) {
-                faceDetectionEnabled = response.face_detection_enabled;
+            // Use AppState.status - load if not already loaded
+            let status = AppState.status.get();
+            if (!status) {
+                status = await AppState.status.load();
+            }
+            if (status && status.face_detection_enabled !== undefined) {
+                faceDetectionEnabled = status.face_detection_enabled;
                 updateButtonStates();
             }
         } catch (error) {
@@ -625,7 +629,7 @@
      *
      * @param {string} personId - Person ID to focus on
      */
-    async function enterPickPreferredMode(personId) {
+    function enterPickPreferredMode(personId) {
         // Get name from local cache for immediate header display
         const localPerson = knownPeople.find(p => p.id === personId);
         if (!localPerson) return;
@@ -635,22 +639,29 @@
         pickPreferredPersonId = personId;
         pickPreferredPersonName = localPerson.name;
         pickPreferredPersonThreshold = null;
+        pickPreferredFaces = []; // Start empty, will populate when data loads
 
-        // Load person details and faces in parallel
-        try {
-            const [personResult, faces] = await Promise.all([
-                App.api(`/people/${personId}`),         // For recognition_threshold
-                App.api(`/people/${personId}/faces`)    // All faces for this person
-            ]);
-            pickPreferredFaces = faces || [];
-            pickPreferredPersonThreshold = personResult?.data?.recognition_threshold ?? null;
-        } catch (error) {
-            console.error('Failed to load person data:', error);
-            pickPreferredFaces = [];
-        }
-
+        // Render immediately with loading state
         renderPickPreferredMode();
         updateFocusButtonState();
+
+        // Load person details and faces in background
+        Promise.all([
+            AppState.people.fetchById(personId),       // For recognition_threshold
+            AppState.faces.fetchForPerson(personId)    // All faces for this person
+        ]).then(([personResult, faces]) => {
+            // Only update if still in pick-preferred mode for this person
+            if (viewMode !== 'pick-preferred' || pickPreferredPersonId !== personId) return;
+
+            pickPreferredFaces = faces || [];
+            pickPreferredPersonThreshold = personResult?.recognition_threshold ?? null;
+
+            // Re-render with actual data
+            renderPickPreferredMode();
+        }).catch(error => {
+            console.error('Failed to load person data:', error);
+            // Still in loading state but with empty data - renderPickPreferredMode handles this
+        });
     }
 
     /**
@@ -791,6 +802,16 @@
         container.className = 'faces-pick-preferred-container';
         facesGrid.appendChild(container);
 
+        // Show loading state if no faces yet
+        if (pickPreferredFaces.length === 0) {
+            const loading = document.createElement('div');
+            loading.className = 'faces-loading-inline';
+            loading.innerHTML = '<div class="loading-spinner"></div><p>Loading faces…</p>';
+            container.appendChild(loading);
+            // Don't create the grid yet - will be created when data loads
+            return;
+        }
+
         // Set displayed faces for selection
         displayedFaces = pickPreferredFaces;
 
@@ -922,26 +943,22 @@
         if (!pickPreferredPersonId) return;
 
         try {
-            const result = await App.api(`/people/${pickPreferredPersonId}/set-preferred`, {
-                method: 'POST',
-                body: JSON.stringify({ face_id: faceId })
+            // Use AppState.people.setPreferredFace()
+            await AppState.people.setPreferredFace(pickPreferredPersonId, faceId);
+
+            // Update local state
+            for (const face of pickPreferredFaces) {
+                face.is_preferred = (face.id === faceId);
+            }
+
+            // Update star visuals
+            const allStars = facesGrid.querySelectorAll('.face-card-star');
+            allStars.forEach(star => {
+                star.classList.toggle('preferred', star.dataset.faceId === faceId);
             });
 
-            if (result && result.success) {
-                // Update local state
-                for (const face of pickPreferredFaces) {
-                    face.is_preferred = (face.id === faceId);
-                }
-
-                // Update star visuals
-                const allStars = facesGrid.querySelectorAll('.face-card-star');
-                allStars.forEach(star => {
-                    star.classList.toggle('preferred', star.dataset.faceId === faceId);
-                });
-
-                // Mark person thumbnail for cache busting when returning to grid
-                thumbnailCacheBust.set(pickPreferredPersonId, Date.now());
-            }
+            // Mark person thumbnail for cache busting when returning to grid
+            thumbnailCacheBust.set(pickPreferredPersonId, Date.now());
         } catch (error) {
             console.error('Failed to set preferred face:', error);
             App.showError('Failed to set preferred face.');
@@ -1242,8 +1259,9 @@
         const trimmedName = newName.trim();
 
         try {
-            // Check for collision with existing person
-            const existingPeople = await App.api('/people') || [];
+            // Check for collision with existing person via AppState.people
+            await AppState.people.load();
+            const existingPeople = AppState.people.getAll();
             const collision = existingPeople.find(p =>
                 p.name.toLowerCase() === trimmedName.toLowerCase() && p.id !== pickPreferredPersonId
             );
@@ -1253,38 +1271,30 @@
                 return;
             }
 
-            // Update the person name
-            const result = await App.api(`/people/${pickPreferredPersonId}`, {
-                method: 'PATCH',
-                body: JSON.stringify({ name: trimmedName })
-            });
+            // Update the person name via AppState.people.rename()
+            await AppState.people.rename(pickPreferredPersonId, trimmedName);
 
-            if (result && result.success) {
-                // Update local state
-                pickPreferredPersonName = trimmedName;
+            // Update local state
+            pickPreferredPersonName = trimmedName;
 
-                // Update faces in pickPreferredFaces
-                for (const face of pickPreferredFaces) {
+            // Update faces in pickPreferredFaces
+            for (const face of pickPreferredFaces) {
+                face.person_name = trimmedName;
+            }
+
+            // Update faces in allFaces (so grid shows correct name after exiting)
+            for (const face of allFaces) {
+                if (face.person_id === pickPreferredPersonId) {
                     face.person_name = trimmedName;
                 }
+            }
 
-                // Update faces in allFaces (so grid shows correct name after exiting)
-                for (const face of allFaces) {
-                    if (face.person_id === pickPreferredPersonId) {
-                        face.person_name = trimmedName;
-                    }
-                }
-
-                // Update header display
-                const titleH3 = facesGrid.querySelector('.faces-pick-preferred-header h3');
-                if (titleH3) {
-                    const faceCount = pickPreferredFaces.length;
-                    const countText = faceCount === 1 ? '1 image' : `${faceCount} images`;
-                    titleH3.innerHTML = `${App.escapeHtml(trimmedName)} <span class="face-count">(${countText})</span>`;
-                }
-
-                // Invalidate people cache (for autocomplete)
-                invalidatePeopleCache();
+            // Update header display
+            const titleH3 = facesGrid.querySelector('.faces-pick-preferred-header h3');
+            if (titleH3) {
+                const faceCount = pickPreferredFaces.length;
+                const countText = faceCount === 1 ? '1 image' : `${faceCount} images`;
+                titleH3.innerHTML = `${App.escapeHtml(trimmedName)} <span class="face-count">(${countText})</span>`;
             }
         } catch (error) {
             console.error('Failed to rename person:', error);
@@ -1302,10 +1312,8 @@
         const threshold = parseInt(percentValue, 10) / 100;
 
         try {
-            const result = await App.api(`/people/${pickPreferredPersonId}`, {
-                method: 'PATCH',
-                body: JSON.stringify({ recognition_threshold: threshold })
-            });
+            // Use AppState.people.setThreshold() - returns {success, data}
+            const result = await AppState.people.setThreshold(pickPreferredPersonId, threshold);
 
             if (result && result.success) {
                 pickPreferredPersonThreshold = threshold;
@@ -1331,9 +1339,9 @@
                         App.showError(msg);
                     }
 
-                    // Reload faces for this person
+                    // Reload faces for this person via AppState
                     try {
-                        const faces = await App.api(`/people/${pickPreferredPersonId}/faces`);
+                        const faces = await AppState.faces.fetchForPerson(pickPreferredPersonId);
                         pickPreferredFaces = faces || [];
                         displayedFaces = pickPreferredFaces;
 
@@ -1392,15 +1400,15 @@
         }
 
         try {
-            const result = await App.api('/faces/reassess-status');
+            const result = await AppState.faces.checkReassessment();
             if (result && result.success && result.data) {
                 if (result.data.in_progress) {
                     // Still running, poll again in 500ms
                     pickPreferredPollTimer = setTimeout(pollPickPreferredReassessment, 500);
                 } else if (result.data.last_result && result.data.last_result.matched_count > 0) {
-                    // Reassessment complete with matches - reload this person's faces
+                    // Reassessment complete with matches - reload this person's faces via AppState
                     try {
-                        const faces = await App.api(`/people/${pickPreferredPersonId}/faces`);
+                        const faces = await AppState.faces.fetchForPerson(pickPreferredPersonId);
                         const newCount = (faces || []).length;
                         const oldCount = pickPreferredFaces.length;
 
@@ -1451,10 +1459,8 @@
         if (!pickPreferredPersonId) return;
 
         try {
-            const result = await App.api(`/people/${pickPreferredPersonId}`, {
-                method: 'PATCH',
-                body: JSON.stringify({ recognition_threshold: null })
-            });
+            // Use AppState.people.setThreshold() with null to reset
+            const result = await AppState.people.setThreshold(pickPreferredPersonId, null);
 
             if (result && result.success) {
                 pickPreferredPersonThreshold = null;
@@ -1969,12 +1975,11 @@
         const unknownContainer = facesGrid?.querySelector('.faces-unknown-container');
         const scrollTopBefore = unknownContainer ? unknownContainer.scrollTop : 0;
 
-        const url = query ? `/faces?search=${encodeURIComponent(query)}` : '/faces';
-
         try {
             showFacesLoading(query ? 'Searching faces…' : 'Loading faces…');
 
-            const faces = await App.api(url) || [];
+            // Use AppState.faces.search() for semantic face search
+            const faces = await AppState.faces.search(query);
 
             if (query) {
                 // Search mode: merge results with existing known faces
@@ -2797,7 +2802,7 @@
         }
 
         try {
-            const result = await App.api('/faces/reassess-status');
+            const result = await AppState.faces.checkReassessment();
             if (result && result.success && result.data) {
                 if (result.data.in_progress) {
                     // Still running - continue polling
@@ -2903,7 +2908,7 @@
         if (!faceOverlay) return;
 
         try {
-            const faces = await App.api(`/images/${imageId}/faces`);
+            const faces = await AppState.faces.fetchForImage(imageId);
             renderFaces(faces || []);
         } catch (error) {
             console.error('Failed to load faces:', error);

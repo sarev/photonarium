@@ -1776,6 +1776,25 @@ const App = {
             // Default to gallery on error
             this.navigateTo('gallery', { pushHistory: false });
         }
+
+        // Hide loading splash and show app
+        this._hideLoadingSplash();
+    },
+
+    /**
+     * Hides the loading splash and shows the app.
+     * @private
+     */
+    _hideLoadingSplash() {
+        const splash = document.getElementById('app-loading');
+        const app = document.getElementById('app');
+
+        if (splash) {
+            splash.hidden = true;
+        }
+        if (app) {
+            app.classList.add('ready');
+        }
     }
 };
 

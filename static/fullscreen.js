@@ -175,7 +175,7 @@ const Fullscreen = {
      */
     async _loadSingleImage(imageId) {
         try {
-            const image = await App.api(`/images/${imageId}`);
+            const image = await AppState.images.fetchById(imageId);
             if (image) {
                 // Create a single-image list
                 this.state.imageList = [image];

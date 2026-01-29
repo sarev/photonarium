@@ -287,7 +287,10 @@ const Duplicates = {
         this._grid.unbind();
         this._selection.unbind();
 
-        // Clear any pending status poll
+        // Stop AppState polling for duplicates
+        AppState.duplicates.stopPolling();
+
+        // Clear any pending local poll (legacy, should not be active)
         if (this._pollTimeout) {
             clearTimeout(this._pollTimeout);
             this._pollTimeout = null;
@@ -430,6 +433,12 @@ const Duplicates = {
 Duplicates._loadGroups = async function() {
     this._showLoading('Loading duplicates…');
 
+    // Cancel any pending local poll (we use AppState polling instead)
+    if (this._pollTimeout) {
+        clearTimeout(this._pollTimeout);
+        this._pollTimeout = null;
+    }
+
     try {
         const { groups, status } = await this._getGroupsForLevel(this.state.currentLevel);
         this.state.allGroups = groups;
@@ -439,10 +448,8 @@ Duplicates._loadGroups = async function() {
         // Apply current sort mode (also applies min group size filter)
         await this._applySortOrder();
 
-        // If still computing, poll for updates
-        if (status === 'computing' || status === 'pending') {
-            this._scheduleStatusPoll(this.state.currentLevel);
-        }
+        // Note: AppState.duplicates.startPolling() is called inside _getGroupsForLevel
+        // when status is 'computing'. The subscription handles computationComplete.
     } catch (err) {
         App.showError('Failed to load duplicates: ' + err.message);
     } finally {
@@ -488,6 +495,12 @@ Duplicates._setLevel = async function(level) {
     // Clear selection when changing level
     this._selection.clear();
 
+    // Cancel any pending local poll
+    if (this._pollTimeout) {
+        clearTimeout(this._pollTimeout);
+        this._pollTimeout = null;
+    }
+
     this._showLoading('Loading duplicates…');
 
     try {
@@ -498,10 +511,8 @@ Duplicates._setLevel = async function(level) {
         // Apply current sort mode (also applies min group size filter)
         await this._applySortOrder();
 
-        // If still computing, poll for updates
-        if (status === 'computing' || status === 'pending') {
-            this._scheduleStatusPoll(level);
-        }
+        // Note: AppState.duplicates.startPolling() is called inside _getGroupsForLevel
+        // when status is 'computing'. The subscription handles computationComplete.
     } catch (err) {
         App.showError('Failed to load duplicates: ' + err.message);
     } finally {
@@ -670,7 +681,7 @@ Duplicates._sortGroupsByPeople = async function() {
             continue;
         }
         try {
-            const faces = await App.api(`/images/${group.best_image.id}/faces`);
+            const faces = await AppState.faces.fetchForImage(group.best_image.id);
             const names = (faces || [])
                 .filter(f => f.person_name)
                 .map(f => f.person_name)
@@ -740,16 +751,16 @@ Duplicates._applySemanticSort = async function() {
     try {
         this._showLoading('Sorting by similarity…');
 
-        // Call backend to get similarity scores
-        const response = await App.apiPost('/duplicates/sort-semantic', {
-            query: query,
-            image_ids: groupImageIds.map(g => g.image_id)
-        });
+        // Call backend to get similarity scores via AppState
+        const scores = await AppState.duplicates.sortSemantic(
+            query,
+            groupImageIds.map(g => g.image_id)
+        );
 
-        if (response.scores) {
+        if (scores && scores.length > 0) {
             // Create a map of image_id -> score
             const scoreMap = new Map(
-                response.scores.map(s => [s.image_id, s.score])
+                scores.map(s => [s.image_id, s.score])
             );
 
             // Sort allGroups by score (descending)
