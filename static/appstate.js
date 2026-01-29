@@ -804,6 +804,52 @@ const AppState = (function() {
         let _loading = false;
         let _pendingLoad = null;    // Prevent concurrent loads
 
+        // Domain reference for transaction system
+        const domainRef = { _name: 'images', _notify: notify };
+
+        // =====================================================================
+        // INTERNAL API
+        // =====================================================================
+        // Used by other domains within transactions.
+
+        const _internal = {
+            /**
+             * Update an image in the cache.
+             * @param {string} id - Image ID
+             * @param {Object} changes - Properties to merge
+             */
+            update(id, changes) {
+                const image = _cache?.get(id);
+                if (image) {
+                    Object.assign(image, changes);
+                    markDirty(domainRef);
+                }
+            },
+
+            /**
+             * Remove an image from the cache.
+             * @param {string} id - Image ID
+             */
+            remove(id) {
+                if (_cache?.delete(id)) {
+                    markDirty(domainRef);
+                }
+            },
+
+            /**
+             * Get image by ID (sync read).
+             * @param {string} id - Image ID
+             * @returns {Object|null} Image or null
+             */
+            get(id) {
+                return _cache?.get(id) || null;
+            }
+        };
+
+        // =====================================================================
+        // LOAD / CACHE MANAGEMENT
+        // =====================================================================
+
         /**
          * Load all images (full or delta based on cache state).
          */
@@ -850,10 +896,68 @@ const AppState = (function() {
             return _pendingLoad;
         }
 
+        /**
+         * Helper: Handle face/person cleanup when deleting an image.
+         * Called within a transaction.
+         * @param {string} imageId - Image being deleted
+         */
+        function handleFaceCleanup(imageId) {
+            // Get faces on this image
+            const imageFaces = faces._internal.getForPerson ?
+                faces.getForImage(imageId) : [];
+
+            if (!imageFaces || imageFaces.length === 0) return;
+
+            // Track persons that need face count updates
+            const personUpdates = new Map(); // personId → {decrement, wasPreferred}
+
+            for (const face of imageFaces) {
+                if (face.person_id) {
+                    const existing = personUpdates.get(face.person_id) || { decrement: 0, preferredFaces: [] };
+                    existing.decrement++;
+                    const person = people._internal.get(face.person_id);
+                    if (person?.preferred_face_id === face.id) {
+                        existing.wasPreferred = true;
+                    }
+                    personUpdates.set(face.person_id, existing);
+                }
+                // Remove face from faces cache
+                faces._internal.remove(face.id);
+            }
+
+            // Update person face counts
+            for (const [personId, updates] of personUpdates) {
+                for (let i = 0; i < updates.decrement; i++) {
+                    const newCount = people._internal.decrementFaceCount(personId);
+                    // Delete person if no more faces
+                    if (newCount === 0) {
+                        people._internal.remove(personId);
+                        break;
+                    }
+                }
+                // Update preferred face if needed
+                const person = people._internal.get(personId);
+                if (person && updates.wasPreferred) {
+                    const remainingFaces = faces._internal.getFirstForPerson(personId, { excludingImageId: imageId });
+                    if (remainingFaces) {
+                        people._internal.update(personId, { preferred_face_id: remainingFaces.id });
+                        people._internal.bustThumbnail(personId);
+                    }
+                }
+            }
+        }
+
+        // =====================================================================
+        // PUBLIC API
+        // =====================================================================
+
         return {
             // --- Transaction system metadata ---
             _name: 'images',
             _notify: notify,
+
+            // --- Internal API (for cross-domain transactions) ---
+            _internal,
 
             // --- Subscriptions ---
             onChanged: subscribe,
@@ -865,7 +969,7 @@ const AppState = (function() {
                 return load(true);
             },
 
-            // --- Accessors ---
+            // --- Accessors (sync reads, no transaction needed) ---
             getAll() {
                 return _cache ? Array.from(_cache.values()) : [];
             },
@@ -882,95 +986,120 @@ const AppState = (function() {
                 return _loading;
             },
 
-            // --- Mutations (optimistic) ---
-            // Note: All mutation methods accept arrays for consistency.
-            // TODO: Backend batch endpoints pending (see api-batch-normalization.md)
+            // --- Mutations (wrapped in transactions) ---
 
             /**
-             * Update one or more images.
+             * Update one or more images (description, rating, etc.).
              * @param {Array|Object} updates - Single {id, ...changes} or array of them
              */
-            async update(updates) {
+            update(updates) {
                 if (!Array.isArray(updates)) updates = [updates];
 
-                // Optimistic update
-                const backup = new Map();
-                const ids = [];
-                for (const upd of updates) {
-                    const image = _cache?.get(upd.id);
-                    if (image) {
-                        backup.set(upd.id, { ...image });
-                        Object.assign(image, upd);
-                        ids.push(upd.id);
-                    }
-                }
-                if (ids.length > 0) {
-                    broadcast({ type: 'changed', ids });
-                }
-
-                // Persist - currently uses singular endpoint per image
-                // TODO: Replace with POST /images/update {updates: [...]}
-                try {
+                return queueTransaction(async () => {
+                    // Backup for rollback
+                    const backup = new Map();
                     for (const upd of updates) {
-                        const { id, ...changes } = upd;
-                        await App.apiPost(`/images/${id}`, changes);
+                        const image = _cache?.get(upd.id);
+                        if (image) {
+                            backup.set(upd.id, { ...image });
+                            _internal.update(upd.id, upd);
+                        }
                     }
-                } catch (err) {
-                    // Rollback
-                    for (const [id, img] of backup) {
-                        _cache.set(id, img);
+
+                    // Persist
+                    try {
+                        for (const upd of updates) {
+                            const { id, ...changes } = upd;
+                            await App.apiPost(`/images/${id}`, changes);
+                        }
+                    } catch (err) {
+                        // Rollback
+                        for (const [id, img] of backup) {
+                            _cache.set(id, img);
+                            markDirty(domainRef);
+                        }
+                        broadcastError(err.message || 'Failed to update images');
+                        throw err;
                     }
-                    broadcast({ type: 'changed', ids });
-                    broadcastError(err.message || 'Failed to update images');
-                }
+                });
             },
 
             /**
              * Delete one or more images.
+             * Handles full cascade: faces → people → duplicates → images.
              * @param {Array|string} ids - Single ID or array of IDs
              * @param {Object} options - {deleteFiles: bool}
              */
-            async delete(ids, options = {}) {
+            delete(ids, options = {}) {
                 if (!Array.isArray(ids)) ids = [ids];
                 const { deleteFiles = false } = options;
 
-                // Optimistic update
-                const backup = new Map();
-                for (const id of ids) {
-                    const img = _cache?.get(id);
-                    if (img) {
-                        backup.set(id, img);
-                        _cache.delete(id);
-                    }
-                }
-                broadcast({ type: 'changed', ids });
-
-                // Persist - currently uses singular endpoint per image
-                // TODO: Replace with POST /images/delete {ids: [...], delete_files: bool}
-                try {
-                    const deleteFileParam = deleteFiles ? '?delete_file=true' : '';
+                return queueTransaction(async () => {
+                    // Backup for rollback
+                    const backup = new Map();
                     for (const id of ids) {
-                        await App.apiDelete(`/images/${id}${deleteFileParam}`);
+                        const img = _cache?.get(id);
+                        if (img) {
+                            backup.set(id, img);
+                        }
                     }
-                } catch (err) {
-                    // Rollback
-                    for (const [id, img] of backup) {
-                        _cache.set(id, img);
+
+                    // Handle cascade cleanup for each image
+                    for (const id of ids) {
+                        // 1. Handle faces on this image (updates people too)
+                        handleFaceCleanup(id);
+
+                        // 2. Remove from duplicate groups
+                        duplicates._internal.removeImage(id);
+
+                        // 3. Remove image from cache
+                        _internal.remove(id);
                     }
-                    broadcast({ type: 'changed', ids });
-                    broadcastError(err.message || 'Failed to delete images');
-                }
+
+                    // Persist
+                    try {
+                        const deleteFileParam = deleteFiles ? '?delete_file=true' : '';
+                        for (const id of ids) {
+                            await App.apiDelete(`/images/${id}${deleteFileParam}`);
+                        }
+                    } catch (err) {
+                        // Rollback is complex with cascade - reload affected domains instead
+                        broadcastError(err.message || 'Failed to delete images');
+                        // Force reload to restore consistent state
+                        faces.reload();
+                        people.reload();
+                        load(true);
+                        throw err;
+                    }
+                });
             },
 
-            async rotate(ids, degrees) {
+            /**
+             * Rotate one or more images.
+             * @param {Array|string} ids - Single ID or array of IDs
+             * @param {number} degrees - Rotation degrees (90, 180, 270)
+             */
+            rotate(ids, degrees) {
                 if (!Array.isArray(ids)) ids = [ids];
 
-                try {
-                    await App.apiPost('/images/rotate', { ids, degrees });
-                    broadcast({ type: 'rotated', ids });
-                } catch (err) {
-                    broadcastError(err.message || 'Failed to rotate images');
-                }
+                return queueTransaction(async () => {
+                    try {
+                        await App.apiPost('/images/rotate', { ids, degrees });
+                        // Swap dimensions in cache
+                        for (const id of ids) {
+                            const image = _cache?.get(id);
+                            if (image && (degrees === 90 || degrees === 270)) {
+                                const temp = image.width;
+                                image.width = image.height;
+                                image.height = temp;
+                            }
+                        }
+                        markDirty(domainRef);
+                    } catch (err) {
+                        broadcastError(err.message || 'Failed to rotate images');
+                        throw err;
+                    }
+                });
             },
 
             // --- Single image fetch ---
@@ -2019,6 +2148,44 @@ const AppState = (function() {
         let _pollTimer = null;
         let _pollLevel = null;          // Level being polled
 
+        // Domain reference for transaction system
+        const domainRef = { _name: 'duplicates', _notify: notify };
+
+        // =====================================================================
+        // INTERNAL API
+        // =====================================================================
+        // Used by images domain for delete cascade.
+
+        const _internal = {
+            /**
+             * Remove an image from all cached duplicate groups.
+             * @param {string} imageId - Image ID to remove
+             */
+            removeImage(imageId) {
+                let changed = false;
+                for (const level of Object.keys(_groupCache)) {
+                    const groups = _groupCache[level];
+                    if (!groups) continue;
+
+                    for (let i = groups.length - 1; i >= 0; i--) {
+                        const group = groups[i];
+                        const idx = group.image_ids.indexOf(imageId);
+                        if (idx !== -1) {
+                            group.image_ids.splice(idx, 1);
+                            changed = true;
+                            // Remove group if only 1 image left
+                            if (group.image_ids.length <= 1) {
+                                groups.splice(i, 1);
+                            }
+                        }
+                    }
+                }
+                if (changed) {
+                    markDirty(domainRef);
+                }
+            }
+        };
+
         /**
          * Internal: Start polling for a level if computation is in progress.
          * Polling is automatic and internal - GUI should not call this.
@@ -2116,6 +2283,9 @@ const AppState = (function() {
             // --- Transaction system metadata ---
             _name: 'duplicates',
             _notify: notify,
+
+            // --- Internal API (for cross-domain transactions) ---
+            _internal,
 
             // --- Subscriptions ---
             onChanged: subscribe,
