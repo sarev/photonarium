@@ -381,6 +381,18 @@
             needsRefresh = true;
         });
 
+        // Subscribe to AppState.faces for centralized state management
+        // When faces change (identify, suppress, etc.), sync local state
+        AppState.faces.onChanged((event) => {
+            // Only sync if we have data loaded and are on the faces screen
+            if (AppState.faces.isLoaded() && App.getScreen() === 'faces') {
+                // Sync local allFaces with AppState cache
+                allFaces = AppState.faces.getAll();
+                // Mark for re-render (not full refresh - data already updated)
+                needsRerender = true;
+            }
+        });
+
         // Register the faces screen module
         // Note: GridSelection is initialized in renderFacesGrid after VirtualGrid is set up
         registerFacesModule();
@@ -1034,8 +1046,8 @@
     }
 
     /**
-     * Low-level API call to identify faces. Returns the result for caller to handle.
-     * This is the single source of truth for the /faces/identify-batch endpoint.
+     * Identify faces via AppState (centralized state management).
+     * Returns a response format compatible with legacy callers.
      *
      * @param {Array<string>} faceIds - Face IDs to identify
      * @param {string} name - Name of the person (existing or new)
@@ -1043,15 +1055,26 @@
      * @returns {Promise<{success: boolean, data?: Object, error?: string}>}
      */
     async function callIdentifyBatchApi(faceIds, name, preferredFaceId = null) {
-        const payload = { face_ids: faceIds, name };
-        if (preferredFaceId) {
-            payload.preferred_face_id = preferredFaceId;
+        try {
+            const result = await AppState.faces.identify(faceIds, name, {
+                preferredFaceId
+            });
+            // Return format compatible with legacy callers
+            return {
+                success: true,
+                data: {
+                    person: {
+                        id: result.personId,
+                        name: name
+                    }
+                }
+            };
+        } catch (error) {
+            return {
+                success: false,
+                error: error.message || 'Failed to identify faces'
+            };
         }
-
-        return await App.api('/faces/identify-batch', {
-            method: 'POST',
-            body: JSON.stringify(payload),
-        });
     }
 
     /**
@@ -1385,22 +1408,11 @@
         const confirmed = await App.confirm('Unassign Faces', message);
         if (!confirmed) return;
 
-        let successCount = 0;
         try {
-            const result = await App.api('/faces/unassign-batch', {
-                method: 'POST',
-                body: JSON.stringify({ face_ids: faceIds }),
-            });
-            if (result && result.success) {
-                successCount = result.unassigned_count || faceIds.length;
-            }
-        } catch (error) {
-            console.error('Failed to unassign faces:', error);
-            App.showError('Failed to unassign faces');
-        }
+            await AppState.faces.unassign(faceIds);
+            // Local state updated via AppState.faces.onChanged subscription
 
-        if (successCount > 0) {
-            // Update local state
+            // Update local pick-preferred state
             pickPreferredFaces = pickPreferredFaces.filter(f => !faceIds.includes(f.id));
 
             // Prevent duplicate reload from selection change handler
@@ -1419,6 +1431,9 @@
                 displayedFaces = pickPreferredFaces;
                 pickPreferredGrid.render();
             }
+        } catch (error) {
+            console.error('Failed to unassign faces:', error);
+            App.showError('Failed to unassign faces');
         }
     }
 
@@ -1562,10 +1577,9 @@
      */
     async function suppressSingleFace(faceId) {
         try {
-            const result = await App.api(`/faces/${faceId}/suppress`, { method: 'POST' });
-            if (result && result.success) {
-                removeUnknownFacesLocally(faceId);
-            }
+            await AppState.faces.suppress(faceId);
+            // Local state updated via AppState.faces.onChanged subscription
+            removeUnknownFacesLocally(faceId);
         } catch (error) {
             console.error(`Failed to suppress face ${faceId}:`, error);
         }
@@ -1587,20 +1601,13 @@
         const confirmed = await App.confirm('Suppress Faces', message);
         if (!confirmed) return;
 
-        let successCount = 0;
-        for (const faceId of faceIds) {
-            try {
-                const result = await App.api(`/faces/${faceId}/suppress`, { method: 'POST' });
-                if (result && result.success) {
-                    successCount++;
-                }
-            } catch (error) {
-                console.error(`Failed to suppress face ${faceId}:`, error);
-            }
-        }
-
-        if (successCount > 0) {
+        try {
+            // AppState.faces.suppress handles batch suppression
+            await AppState.faces.suppress(faceIds);
+            // Local state updated via AppState.faces.onChanged subscription
             removeUnknownFacesLocally(faceIds);
+        } catch (error) {
+            console.error('Failed to suppress faces:', error);
         }
     }
 
@@ -2701,16 +2708,11 @@
         if (!name) return;
 
         try {
-            const result = await App.api(`/faces/${faceId}/identify`, {
-                method: 'POST',
-                body: JSON.stringify({ name }),
-            });
-
-            if (result && result.success) {
-                // Invalidate cache and reload
-                invalidatePeopleCache();
-                loadAllFaces();
-            }
+            await AppState.faces.identify([faceId], name);
+            // Local state updated via AppState.faces.onChanged subscription
+            // Invalidate people cache and reload for full consistency
+            invalidatePeopleCache();
+            loadAllFaces();
         } catch (error) {
             console.error('Failed to identify face:', error);
             App.showError('Failed to identify face.');
@@ -3279,10 +3281,8 @@
                     needsRefresh = true;
                 }
             } else if (face.person_id) {
-                // Unidentify face
-                await App.api(`/faces/${faceId}/unidentify`, {
-                    method: 'POST',
-                });
+                // Unidentify face using AppState
+                await AppState.faces.unassign(faceId);
 
                 face.person_id = null;
                 face.person_name = null;
@@ -3335,19 +3335,19 @@
      * @param {HTMLElement} faceBox - Face box DOM element (removed from overlay)
      */
     async function suppressFace(faceId, faceBox) {
+        // Determine if this was a known or unknown face BEFORE suppressing
+        const face = allFaces.find(f => f.id === faceId);
+        const wasKnownFace = face && face.person_id;
+        const personId = wasKnownFace ? face.person_id : null;
+
         // Remove from fullscreen overlay immediately (optimistic UI)
         faceBox.remove();
 
         try {
-            await App.api(`/faces/${faceId}/suppress`, { method: 'POST' });
-
-            // Determine if this was a known or unknown face
-            const face = allFaces.find(f => f.id === faceId);
-            const wasKnownFace = face && face.person_id;
+            await AppState.faces.suppress(faceId);
+            // Local state updated via AppState.faces.onChanged subscription
 
             if (wasKnownFace) {
-                const personId = face.person_id;
-
                 // Known face - need full refresh (person may be deleted/changed)
                 needsRefresh = true;
                 invalidatePeopleCache();

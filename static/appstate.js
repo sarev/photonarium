@@ -1102,12 +1102,9 @@ const AppState = (function() {
                 invalidateDerived();
                 broadcast({ type: 'changed', ids: faceIds });
 
-                // Persist - currently uses singular endpoint per face
-                // TODO: Replace with POST /faces/unidentify {ids: [...]}
                 try {
-                    for (const faceId of faceIds) {
-                        await App.apiPost(`/faces/${faceId}/unidentify`);
-                    }
+                    // Use batch endpoint for efficiency
+                    await App.apiPost('/faces/unassign-batch', { face_ids: faceIds });
 
                     // Invalidate people cache (face counts changed)
                     people.invalidate();
