@@ -238,7 +238,9 @@ const AppState = (function() {
         const { subscribe, broadcast } = createSubscriberSystem();
 
         // State
-        let _screen = 'gallery';
+        // NOTE: _screen starts as null so the first navigateTo() actually runs
+        // (if it defaulted to 'gallery', navigateTo('gallery') would return early)
+        let _screen = null;
         let _previousScreen = null;
         let _history = [];
         let _fullscreenSourceScreen = 'gallery';

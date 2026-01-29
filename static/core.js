@@ -140,17 +140,19 @@ const App = {
     /**
      * Gets the current screen name.
      * @returns {string} The current screen name
+     * @deprecated Use AppState.nav.getScreen() instead
      */
     getScreen() {
-        return this.state.screen;
+        return AppState.nav.getScreen();
     },
 
     /**
      * Gets the current image ID being viewed in fullscreen.
      * @returns {string|null} The current image ID or null if not in fullscreen
+     * @deprecated Use AppState.nav.getFullscreenImageId() instead
      */
     getCurrentImageId() {
-        return this.state.currentImageId;
+        return AppState.nav.getFullscreenImageId();
     },
 
     /**
@@ -414,6 +416,10 @@ const App = {
         this.state.selectedImages = AppState.selection.get('gallery');
         // Sync filter from AppState.filter to App.state
         this.state.filter = AppState.filter.get();
+        // Sync nav from AppState.nav to App.state
+        this.state.screen = AppState.nav.getScreen();
+        this.state.currentImageId = AppState.nav.getFullscreenImageId();
+        this.state.fullscreenSourceScreen = AppState.nav.getFullscreenSourceScreen();
     },
 
     /**
@@ -503,11 +509,12 @@ const App = {
         }
 
         // Don't navigate if already on this screen (unless fullscreen with different image)
-        if (screen === this.state.screen && screen !== 'fullscreen') {
+        const currentScreen = AppState.nav.getScreen();
+        if (screen === currentScreen && screen !== 'fullscreen') {
             return;
         }
 
-        const previousScreen = this.state.screen;
+        const previousScreen = currentScreen;
 
         // Call onLeave hook for current screen
         this._callScreenHook(previousScreen, 'onLeave');
@@ -523,7 +530,8 @@ const App = {
             });
         }
 
-        // Update state
+        // Update state (both AppState and legacy state for backward compatibility)
+        AppState.nav.setScreen(screen, { addToHistory: false }); // We manage history ourselves
         this.state.screen = screen;
 
         // Update DOM
@@ -662,7 +670,8 @@ const App = {
             // Find the scrollable container within the screen
             const scrollable = screenEl.querySelector('.gallery-container, .duplicates-container, .database-container, .search-container');
             if (scrollable) {
-                this.state.scrollPositions[screen] = scrollable.scrollTop;
+                AppState.nav.setScrollPosition(screen, scrollable.scrollTop);
+                this.state.scrollPositions[screen] = scrollable.scrollTop; // Keep legacy sync
             }
         }
     },
@@ -673,8 +682,8 @@ const App = {
      * @private
      */
     _restoreScrollPosition(screen) {
-        const savedPosition = this.state.scrollPositions[screen];
-        if (savedPosition !== undefined) {
+        const savedPosition = AppState.nav.getScrollPosition(screen);
+        if (savedPosition > 0) {
             const screenEl = document.getElementById(`screen-${screen}`);
             if (screenEl) {
                 const scrollable = screenEl.querySelector('.gallery-container, .duplicates-container, .database-container, .search-container');
@@ -702,10 +711,13 @@ const App = {
      */
     showFullscreen(imageId) {
         // Remember where we came from (default to gallery if already in fullscreen)
-        if (this.state.screen !== 'fullscreen') {
-            this.state.fullscreenSourceScreen = this.state.screen || 'gallery';
+        const currentScreen = AppState.nav.getScreen();
+        if (currentScreen !== 'fullscreen') {
+            AppState.nav.setFullscreenSourceScreen(currentScreen || 'gallery');
+            this.state.fullscreenSourceScreen = currentScreen || 'gallery'; // Keep legacy sync
         }
-        this.state.currentImageId = imageId;
+        AppState.nav.setFullscreenImageId(imageId);
+        this.state.currentImageId = imageId; // Keep legacy sync
         this.navigateTo('fullscreen', { data: imageId, pushHistory: false });
     },
 
@@ -714,7 +726,7 @@ const App = {
      * Convenience method.
      */
     hideFullscreen() {
-        const returnTo = this.state.fullscreenSourceScreen || 'gallery';
+        const returnTo = AppState.nav.getFullscreenSourceScreen() || 'gallery';
         this.navigateTo(returnTo);
     },
 
@@ -755,8 +767,8 @@ const App = {
      * Ensures the viewed image remains visible in gallery.
      */
     exitFullscreen() {
-        if (this.state.screen === 'fullscreen') {
-            const returnTo = this.state.fullscreenSourceScreen || 'gallery';
+        if (AppState.nav.getScreen() === 'fullscreen') {
+            const returnTo = AppState.nav.getFullscreenSourceScreen() || 'gallery';
             this.navigateTo(returnTo, { pushHistory: false });
         }
     },
