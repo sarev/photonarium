@@ -196,6 +196,240 @@ unsubscribe();
 
 ---
 
+## Concrete Example: Faces Domain
+
+The faces/people data is a good candidate for initial AppState integration due to its complexity and the current pain points around cache invalidation.
+
+### State Shape
+
+```javascript
+AppState.faces = {
+    // Raw data (cached from backend)
+    _faces: Map<faceId, Face>,        // All face records
+    _people: Map<personId, Person>,   // All people records
+
+    // Derived views (cached, invalidated on change)
+    _unknownFaces: null,              // Lazy: faces where person_id is null
+    _facesByPerson: null,             // Lazy: Map<personId, Face[]>
+
+    // Sync state
+    _epoch: 0,                        // Current state version
+    _pendingChanges: [],              // Debounce buffer
+    _debounceTimer: null,
+}
+```
+
+### Optimistic Update Flow
+
+**Example: User selects 5 faces and clicks "Suppress"**
+
+```
+┌─────────────────────────────────────────────────────────────────────────┐
+│ 1. GUI ACTION                                                            │
+│    User selects faces, presses Delete                                    │
+│    → faces.js calls AppState.faces.suppress([id1, id2, id3, id4, id5])  │
+└─────────────────────────────────────────────────────────────────────────┘
+                                    │
+                                    ▼
+┌─────────────────────────────────────────────────────────────────────────┐
+│ 2. DEBOUNCE                                                              │
+│    AppState buffers the change for ~50ms                                 │
+│    If more suppress() calls arrive, they're batched together            │
+└─────────────────────────────────────────────────────────────────────────┘
+                                    │
+                                    ▼
+┌─────────────────────────────────────────────────────────────────────────┐
+│ 3. OPTIMISTIC UPDATE                                                     │
+│    AppState increments internal epoch (e.g., epoch = 1706540000123)     │
+│    Updates RAM cache: marks faces as suppressed                          │
+│    Invalidates derived views (_unknownFaces = null)                     │
+│    Broadcasts to listeners: { type: 'changed' }  ← simple, no epoch     │
+└─────────────────────────────────────────────────────────────────────────┘
+                                    │
+                    ┌───────────────┴───────────────┐
+                    ▼                               ▼
+┌─────────────────────────────────┐   ┌─────────────────────────────────┐
+│ 4a. LISTENERS UPDATE            │   │ 4b. BACKEND PERSIST             │
+│     Faces screen re-renders     │   │     POST /api/faces/suppress    │
+│     (faces already gone from    │   │     Body: { ids: [...],         │
+│      view - instant feedback)   │   │             epoch: 170654... }  │
+└─────────────────────────────────┘   └─────────────────────────────────┘
+                                                    │
+                                    ┌───────────────┴───────────────┐
+                                    ▼                               ▼
+                    ┌─────────────────────────────┐   ┌─────────────────────────────┐
+                    │ 5a. SUCCESS                 │   │ 5b. FAILURE                 │
+                    │     Backend returns:        │   │     Backend returns:        │
+                    │     { ok: true,             │   │     { ok: false,            │
+                    │       epoch: 170654... }    │   │       error: "...",         │
+                    │                             │   │       epoch: 170653...,     │
+                    │     AppState absorbs -      │   │       state: [...] }        │
+                    │     epoch matches, no-op    │   │                             │
+                    └─────────────────────────────┘   │     AppState:               │
+                                                      │     - Replaces RAM cache    │
+                                                      │     - Sets epoch to older   │
+                                                      │     - Broadcasts correction │  <-- just another `type: 'changed'` broadcast
+                                                      │     - Broadcasts error      │  <-- e.g. for an error banner listener to consume
+                                                      └─────────────────────────────┘
+```
+
+### Event Types
+
+Subscribers receive simple events - epochs are internal to AppState/backend sync.
+
+```javascript
+// Change events (for data subscribers)
+{
+    type: 'changed',              // Faces data changed
+    ids: ['face-1', 'face-2'],    // Affected entities (optional, for fine-grained updates)
+}
+
+// Error events (for error banner UI)
+{
+    type: 'error',
+    message: 'Failed to suppress faces: network error',
+}
+```
+
+### Subscriber Simplicity
+
+The key benefit: **subscribers don't need to think about what to refresh**.
+
+```javascript
+// OLD: Complex flag juggling in faces.js
+if (needsRefresh) {
+    await loadAllFaces();
+    needsRefresh = false;
+} else if (needsRerender) {
+    unknownFacesGrid.render();
+    needsRerender = false;
+}
+// Plus: reloadPending checks, peopleCacheTime invalidation,
+// "set flag BEFORE clearing selection" ordering bugs...
+
+// NEW: Simple subscription
+AppState.faces.onChanged(() => {
+    // Data already updated in AppState, just re-render
+    this.render();
+});
+
+AppState.people.onChanged(() => {
+    // People list changed, refresh the known faces section
+    this.renderKnownFaces();
+});
+```
+
+Subscribers don't care whether the change was:
+- A user action (optimistic update)
+- A backend confirmation
+- A rollback after failure
+- A sync from another tab
+
+They just react to "the data I care about changed" and render current state.
+
+### Debouncing Logic
+
+```javascript
+suppress(faceIds) {
+    this._pendingChanges.push({ op: 'suppress', ids: faceIds });
+
+    if (this._debounceTimer) {
+        clearTimeout(this._debounceTimer);
+    }
+
+    this._debounceTimer = setTimeout(() => {
+        this._flushChanges();
+    }, 50);  // 50ms debounce window
+}
+
+_flushChanges() {
+    const batch = this._consolidateChanges(this._pendingChanges);
+    this._pendingChanges = [];
+
+    // Optimistic update
+    const epoch = Date.now();
+    this._applyChanges(batch, epoch);
+    this._broadcast({ ...batch, epoch });
+
+    // Persist to backend
+    this._persistToBackend(batch, epoch);
+}
+```
+
+### Epoch-Based Reconciliation (Internal)
+
+Epochs are an **internal implementation detail** that spans the full persistence stack. Subscribers never see them.
+
+```
+┌──────────────┐      ┌──────────────┐      ┌──────────────┐
+│   AppState   │ ←──→ │   Backend    │ ←──→ │   Database   │
+│  (frontend)  │epoch │  (Waitress)  │epoch │   (SQLite)   │
+└──────────────┘      └──────────────┘      └──────────────┘
+```
+
+At each boundary, epochs provide the recovery mechanism:
+- Backend operation succeeds but database write fails asynchronously
+- Database write happens in another thread and fails
+- Network hiccup causes retry with stale data
+
+The epoch serves as a logical clock for ordering updates. Responses include two epochs:
+- `request_epoch` (X): The epoch of the request being answered
+- `response_epoch` (Y): The epoch of the state being returned
+
+**Response handling logic:**
+
+1. **Stale response**: If X < current epoch, a newer request superseded this one - ignore
+2. **Success**: X == current AND Y == X - state confirmed, no action needed
+3. **Rollback**: X == current AND Y < X - apply older state, broadcast change + error
+
+```javascript
+async _persistToBackend(batch, requestEpoch) {
+    const response = await App.api('/faces/batch', {
+        method: 'POST',
+        body: { operations: batch, epoch: requestEpoch }
+    });
+
+    // Response contains: { request_epoch: X, response_epoch: Y, state?: [...], error?: "..." }
+
+    // Stale response - a newer request superseded this one, ignore
+    if (response.request_epoch < this._epoch) {
+        return;
+    }
+
+    // Success - state confirmed
+    if (response.response_epoch === response.request_epoch) {
+        return;
+    }
+
+    // Rollback - response_epoch < request_epoch means persistence failed
+    this._epoch = response.response_epoch;
+    this._faces = new Map(response.state.map(f => [f.id, f]));
+    this._invalidateDerivedViews();
+
+    // Subscribers just see "data changed" - they don't know it was a rollback
+    this._broadcast({ type: 'changed' });
+
+    // Error banner gets notified separately
+    if (response.error) {
+        this._broadcastError({ message: response.error });
+    }
+}
+```
+
+From the subscriber's perspective, a rollback is indistinguishable from any other state change - they just re-render with current data. This keeps subscriber code trivially simple.
+
+### Why Faces First?
+
+The faces domain is a good starting point because:
+
+1. **High pain currently** - `peopleCacheTime`, `thumbnailCacheBust`, `needsRefresh` flags
+2. **Multi-consumer** - Faces screen, fullscreen tagging, autocomplete all need people data
+3. **Frequent updates** - Identifying faces, suppressing, preferred face changes
+4. **Complex derived views** - Unknown faces, faces-by-person, people-with-counts
+5. **Isolated enough** - Can migrate without touching gallery/duplicates initially
+
+---
+
 ## Benefits for Current Pain Points
 
 | Current Pain | With AppState |
