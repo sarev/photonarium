@@ -544,28 +544,56 @@ const AppState = (function() {
             },
 
             // --- Mutations (optimistic) ---
-            async update(id, updates) {
-                const image = _cache?.get(id);
-                if (!image) return;
+            // Note: All mutation methods accept arrays for consistency.
+            // TODO: Backend batch endpoints pending (see api-batch-normalization.md)
+
+            /**
+             * Update one or more images.
+             * @param {Array|Object} updates - Single {id, ...changes} or array of them
+             */
+            async update(updates) {
+                if (!Array.isArray(updates)) updates = [updates];
 
                 // Optimistic update
-                const updated = { ...image, ...updates };
-                _cache.set(id, updated);
-                broadcast({ type: 'changed', ids: [id] });
+                const backup = new Map();
+                const ids = [];
+                for (const upd of updates) {
+                    const image = _cache?.get(upd.id);
+                    if (image) {
+                        backup.set(upd.id, { ...image });
+                        Object.assign(image, upd);
+                        ids.push(upd.id);
+                    }
+                }
+                if (ids.length > 0) {
+                    broadcast({ type: 'changed', ids });
+                }
 
-                // Persist
+                // Persist - currently uses singular endpoint per image
+                // TODO: Replace with POST /images/update {updates: [...]}
                 try {
-                    await App.apiPost(`/images/${id}`, updates);
+                    for (const upd of updates) {
+                        const { id, ...changes } = upd;
+                        await App.apiPost(`/images/${id}`, changes);
+                    }
                 } catch (err) {
                     // Rollback
-                    _cache.set(id, image);
-                    broadcast({ type: 'changed', ids: [id] });
-                    broadcastError(err.message || 'Failed to update image');
+                    for (const [id, img] of backup) {
+                        _cache.set(id, img);
+                    }
+                    broadcast({ type: 'changed', ids });
+                    broadcastError(err.message || 'Failed to update images');
                 }
             },
 
-            async delete(ids) {
+            /**
+             * Delete one or more images.
+             * @param {Array|string} ids - Single ID or array of IDs
+             * @param {Object} options - {deleteFiles: bool}
+             */
+            async delete(ids, options = {}) {
                 if (!Array.isArray(ids)) ids = [ids];
+                const { deleteFiles = false } = options;
 
                 // Optimistic update
                 const backup = new Map();
@@ -578,10 +606,12 @@ const AppState = (function() {
                 }
                 broadcast({ type: 'changed', ids });
 
-                // Persist
+                // Persist - currently uses singular endpoint per image
+                // TODO: Replace with POST /images/delete {ids: [...], delete_files: bool}
                 try {
+                    const deleteFileParam = deleteFiles ? '?delete_file=true' : '';
                     for (const id of ids) {
-                        await App.apiDelete(`/images/${id}`);
+                        await App.apiDelete(`/images/${id}${deleteFileParam}`);
                     }
                 } catch (err) {
                     // Rollback
@@ -967,9 +997,14 @@ const AppState = (function() {
             },
 
             // --- Mutations ---
+            // Note: All mutation methods accept arrays for consistency.
+            // TODO: Some endpoints pending batch normalization (see api-batch-normalization.md)
 
             /**
              * Identify faces - assign to a person.
+             * @param {Array|string} faceIds - Single ID or array of IDs
+             * @param {string} personName - Name for the person
+             * @param {Object} options - {preferredFaceId, existingPersonId}
              */
             async identify(faceIds, personName, options = {}) {
                 if (!Array.isArray(faceIds)) faceIds = [faceIds];
@@ -985,7 +1020,8 @@ const AppState = (function() {
                 }
 
                 try {
-                    // Use batch identify API (note: endpoint is identify-batch, not batch-identify)
+                    // Uses batch endpoint (already normalized)
+                    // TODO: Rename endpoint from /faces/identify-batch to /faces/identify
                     const response = await App.apiPost('/faces/identify-batch', {
                         face_ids: faceIds,
                         name: personName,
@@ -1019,6 +1055,7 @@ const AppState = (function() {
 
             /**
              * Unassign faces - return to unknown pool.
+             * @param {Array|string} faceIds - Single ID or array of IDs
              */
             async unassign(faceIds) {
                 if (!Array.isArray(faceIds)) faceIds = [faceIds];
@@ -1037,6 +1074,8 @@ const AppState = (function() {
                 invalidateDerived();
                 broadcast({ type: 'changed', ids: faceIds });
 
+                // Persist - currently uses singular endpoint per face
+                // TODO: Replace with POST /faces/unidentify {ids: [...]}
                 try {
                     for (const faceId of faceIds) {
                         await App.apiPost(`/faces/${faceId}/unidentify`);
@@ -1062,6 +1101,7 @@ const AppState = (function() {
 
             /**
              * Suppress faces - mark as false positives.
+             * @param {Array|string} faceIds - Single ID or array of IDs
              */
             async suppress(faceIds) {
                 if (!Array.isArray(faceIds)) faceIds = [faceIds];
@@ -1079,6 +1119,8 @@ const AppState = (function() {
                 invalidateDerived();
                 broadcast({ type: 'changed', ids: faceIds });
 
+                // Persist - currently uses singular endpoint per face
+                // TODO: Replace with POST /faces/suppress {ids: [...]}
                 try {
                     for (const faceId of faceIds) {
                         await App.apiPost(`/faces/${faceId}/suppress`);

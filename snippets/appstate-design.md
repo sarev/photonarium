@@ -854,6 +854,29 @@ Order domains by dependency (least dependencies first):
 - [x] Simplify `folders` domain (remove epoch reconciliation)
 - [x] Remove `duplicates.recompute()` (endpoint doesn't exist)
 
+### API Batch Normalization Phase
+
+See `snippets/api-batch-normalization.md` for full details.
+
+**Principle:** Every mutation endpoint that could operate on multiple items should always accept an array.
+
+- [ ] Add batch endpoints (backend):
+  - [ ] `POST /images/delete` - `{ids: [], delete_files: bool}`
+  - [ ] `POST /images/update` - `{updates: [{id, ...}, ...]}`
+  - [ ] `POST /faces/suppress` - `{ids: []}`
+  - [ ] `POST /faces/unidentify` - `{ids: []}`
+  - [ ] `POST /faces/delete` - `{ids: []}`
+  - [ ] `POST /people/delete` - `{ids: []}`
+
+- [ ] Consolidate backend code:
+  - [ ] Extract `identify_faces()` to handle arrays (merge singular/batch)
+  - [ ] Extract `suppress_faces()` with shared person cleanup
+  - [ ] Extract `delete_images()` with single transaction
+
+- [ ] Update AppState to use batch endpoints exclusively
+- [ ] Deprecate singular endpoints
+- [ ] (Later) Remove deprecated singular endpoints
+
 ### Migration Phase (per domain)
 
 For each domain above:
