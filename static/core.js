@@ -287,66 +287,59 @@ const App = {
     /**
      * Gets the array of selected image IDs.
      * @returns {Array<string>} Array of selected image IDs
+     * @deprecated Use AppState.selection.get('gallery') instead
      */
     getSelectedImages() {
-        return [...this.state.selectedImages];
+        return AppState.selection.get('gallery');
     },
 
     /**
      * Sets the selected images.
      * @param {Array<string>} imageIds - Array of image IDs to select
      * @fires App#selectionChanged
+     * @deprecated Use AppState.selection.set('gallery', ids) instead
      */
     setSelectedImages(imageIds) {
-        this.state.selectedImages = [...imageIds];
-        this.emit('selectionChanged', this.state.selectedImages);
+        AppState.selection.set('gallery', imageIds);
     },
 
     /**
      * Adds an image to the selection.
      * @param {string} imageId - The image ID to add
      * @fires App#selectionChanged
+     * @deprecated Use AppState.selection.add('gallery', id) instead
      */
     addToSelection(imageId) {
-        if (!this.state.selectedImages.includes(imageId)) {
-            this.state.selectedImages.push(imageId);
-            this.emit('selectionChanged', this.state.selectedImages);
-        }
+        AppState.selection.add('gallery', imageId);
     },
 
     /**
      * Removes an image from the selection.
      * @param {string} imageId - The image ID to remove
      * @fires App#selectionChanged
+     * @deprecated Use AppState.selection.remove('gallery', id) instead
      */
     removeFromSelection(imageId) {
-        const index = this.state.selectedImages.indexOf(imageId);
-        if (index !== -1) {
-            this.state.selectedImages.splice(index, 1);
-            this.emit('selectionChanged', this.state.selectedImages);
-        }
+        AppState.selection.remove('gallery', imageId);
     },
 
     /**
      * Toggles an image's selection state.
      * @param {string} imageId - The image ID to toggle
      * @fires App#selectionChanged
+     * @deprecated Use AppState.selection.toggle('gallery', id) instead
      */
     toggleSelection(imageId) {
-        if (this.state.selectedImages.includes(imageId)) {
-            this.removeFromSelection(imageId);
-        } else {
-            this.addToSelection(imageId);
-        }
+        AppState.selection.toggle('gallery', imageId);
     },
 
     /**
      * Clears all selected images.
      * @fires App#selectionChanged
+     * @deprecated Use AppState.selection.clear('gallery') instead
      */
     clearSelection() {
-        this.state.selectedImages = [];
-        this.emit('selectionChanged', this.state.selectedImages);
+        AppState.selection.clear('gallery');
     },
 
     /* ----------------------------------------------------------------------
@@ -416,6 +409,8 @@ const App = {
         this.state.thumbnailSize = AppState.view.getThumbnailSize();
         this.state.sortBy = AppState.view.getSortBy();
         this.state.sortDirection = AppState.view.getSortDirection();
+        // Sync selection from AppState.selection to App.state
+        this.state.selectedImages = AppState.selection.get('gallery');
     },
 
     /**
@@ -442,6 +437,17 @@ const App = {
                 case 'sortDirection':
                     this.emit('sortChanged', AppState.view.getSort());
                     break;
+            }
+        });
+
+        // Bridge AppState.selection changes to App events
+        AppState.selection.onChanged((event) => {
+            // Only bridge 'gallery' context to maintain backward compatibility
+            if (event.context === 'gallery') {
+                // Keep App.state.selectedImages in sync
+                this.state.selectedImages = AppState.selection.get('gallery');
+                // Emit the legacy event
+                this.emit('selectionChanged', this.state.selectedImages);
             }
         });
     },
