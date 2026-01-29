@@ -41,11 +41,26 @@ const AppState = (function() {
 
     /**
      * Create a subscriber management system for a domain.
-     * @returns {Object} {subscribe, broadcast, broadcastError}
+     * @returns {Object} {subscribe, subscribeError, broadcast, notify, broadcastError}
      */
     function createSubscriberSystem() {
         const subscribers = new Set();
         const errorSubscribers = new Set();
+
+        /**
+         * Notify all subscribers of a state change.
+         * This is the core notification function used by both broadcast() and the transaction system.
+         * @param {Object} event - Event object (default: {type: 'changed'})
+         */
+        function notify(event = { type: 'changed' }) {
+            for (const callback of subscribers) {
+                try {
+                    callback(event);
+                } catch (err) {
+                    console.error('AppState subscriber error:', err);
+                }
+            }
+        }
 
         return {
             /**
@@ -70,17 +85,16 @@ const AppState = (function() {
 
             /**
              * Broadcast state change to all subscribers.
+             * Alias for notify() - used by existing code.
              * @param {Object} event - Event object (default: {type: 'changed'})
              */
-            broadcast(event = { type: 'changed' }) {
-                for (const callback of subscribers) {
-                    try {
-                        callback(event);
-                    } catch (err) {
-                        console.error('AppState subscriber error:', err);
-                    }
-                }
-            },
+            broadcast: notify,
+
+            /**
+             * Notify function reference - for transaction system.
+             * Domains store this as _notify for use by markDirty/flushDirty.
+             */
+            notify,
 
             /**
              * Broadcast error to error subscribers.
@@ -121,12 +135,141 @@ const AppState = (function() {
     };
 
     // =========================================================================
+    // TRANSACTION SYSTEM
+    // =========================================================================
+    // Batches state changes and notifications within a single transaction.
+    // External API methods will wrap operations in transactions.
+    // Internal methods can mark domains dirty without triggering immediate notifications.
+    //
+    // Phase 1: Infrastructure only - existing code continues to use broadcast() directly.
+    // Future phases will migrate external methods to use queueTransaction().
+
+    let _txEpoch = 0;                           // Global transaction epoch counter
+    let _inTransaction = false;                  // Are we inside a transaction?
+    let _dirtyDomains = new Set();              // Domains that need notification
+    let _transactionQueue = Promise.resolve();  // Sequential execution queue
+
+    /**
+     * Mark a domain as needing notification.
+     * Called by internal API when state changes.
+     * @param {Object} domain - Domain object with _notify method
+     */
+    function markDirty(domain) {
+        if (_inTransaction) {
+            _dirtyDomains.add(domain);
+        } else {
+            // Called outside transaction - warn in dev, notify immediately
+            console.warn('AppState: State mutation outside transaction:', domain._name);
+            domain._notify({ type: 'changed', epoch: _txEpoch });
+        }
+    }
+
+    /**
+     * Flush notifications for all dirty domains.
+     * Called at end of transaction.
+     */
+    function flushDirty() {
+        const domains = Array.from(_dirtyDomains);
+        _dirtyDomains.clear();
+
+        // Schedule notifications via microtask (allows current call stack to complete)
+        if (domains.length > 0) {
+            queueMicrotask(() => {
+                for (const domain of domains) {
+                    domain._notify({ type: 'changed', epoch: _txEpoch });
+                }
+            });
+        }
+    }
+
+    /**
+     * Run a function within a transaction.
+     * - Tracks dirty domains
+     * - Batches notifications at end
+     * - Handles sync and async functions
+     * - Nested transactions are flattened (inner marks dirty, outer flushes)
+     * @param {Function} fn - Function to run in transaction
+     * @returns {*} Result of fn
+     */
+    function transaction(fn) {
+        // If already in a transaction, just run (nested)
+        if (_inTransaction) {
+            return fn();
+        }
+
+        _inTransaction = true;
+        _txEpoch++;
+        _dirtyDomains.clear();
+
+        try {
+            const result = fn();
+
+            // Handle async
+            if (result && typeof result.then === 'function') {
+                return result
+                    .then(value => {
+                        flushDirty();
+                        _inTransaction = false;
+                        return value;
+                    })
+                    .catch(err => {
+                        flushDirty(); // Still notify on error - state may have partially changed
+                        _inTransaction = false;
+                        throw err;
+                    });
+            }
+
+            // Sync
+            flushDirty();
+            _inTransaction = false;
+            return result;
+
+        } catch (err) {
+            flushDirty();
+            _inTransaction = false;
+            throw err;
+        }
+    }
+
+    /**
+     * Queue a transaction to run after any pending transactions complete.
+     * Ensures sequential execution of async operations.
+     * @param {Function} fn - Function to run in transaction
+     * @returns {Promise} Promise that resolves when transaction completes
+     */
+    function queueTransaction(fn) {
+        _transactionQueue = _transactionQueue
+            .then(() => transaction(fn))
+            .catch(err => {
+                console.error('AppState: Transaction failed:', err);
+                throw err;
+            });
+        return _transactionQueue;
+    }
+
+    /**
+     * Check if currently inside a transaction.
+     * @returns {boolean}
+     */
+    function isInTransaction() {
+        return _inTransaction;
+    }
+
+    /**
+     * Get current transaction epoch.
+     * @returns {number}
+     */
+    function getTransactionEpoch() {
+        return _txEpoch;
+    }
+
+    // =========================================================================
     // VIEW DOMAIN
     // =========================================================================
     // Theme, thumbnail size, sort settings - persisted to localStorage
 
     const view = (function() {
-        const { subscribe, broadcast } = createSubscriberSystem();
+        const { subscribe, broadcast, notify } = createSubscriberSystem();
 
         // State - loaded from localStorage on init
         let _theme = storage.get('theme', null);
@@ -150,6 +293,10 @@ const AppState = (function() {
         }
 
         return {
+            // --- Transaction system metadata ---
+            _name: 'view',
+            _notify: notify,
+
             // --- Subscriptions ---
             onChanged: subscribe,
 
@@ -235,7 +382,7 @@ const AppState = (function() {
     // Current screen, navigation history, fullscreen tracking - memory only
 
     const nav = (function() {
-        const { subscribe, broadcast } = createSubscriberSystem();
+        const { subscribe, broadcast, notify } = createSubscriberSystem();
 
         // State
         // NOTE: _screen starts as null so the first navigateTo() actually runs
@@ -248,6 +395,10 @@ const AppState = (function() {
         let _scrollPositions = {}; // screen → scrollTop
 
         return {
+            // --- Transaction system metadata ---
+            _name: 'nav',
+            _notify: notify,
+
             // --- Subscriptions ---
             onChanged: subscribe,
 
@@ -321,12 +472,16 @@ const AppState = (function() {
     // Search/filter criteria - memory only
 
     const filter = (function() {
-        const { subscribe, broadcast } = createSubscriberSystem();
+        const { subscribe, broadcast, notify } = createSubscriberSystem();
 
         // State
         let _filter = null; // {text, dateStart, dateEnd, rating, people, type, threshold, imageIds, scores}
 
         return {
+            // --- Transaction system metadata ---
+            _name: 'filter',
+            _notify: notify,
+
             // --- Subscriptions ---
             onChanged: subscribe,
 
@@ -376,7 +531,7 @@ const AppState = (function() {
     // Provides polling with configurable interval and automatic stop when status is up_to_date.
 
     const status = (function() {
-        const { subscribe, broadcast } = createSubscriberSystem();
+        const { subscribe, broadcast, notify } = createSubscriberSystem();
 
         // State
         let _status = null;     // {status, indexing_queue, embedding_queue, face_queue, total_images, face_detection_enabled, ...}
@@ -384,6 +539,10 @@ const AppState = (function() {
         let _loading = false;
 
         return {
+            // --- Transaction system metadata ---
+            _name: 'status',
+            _notify: notify,
+
             // --- Subscriptions ---
             onChanged: subscribe,
 
@@ -443,7 +602,7 @@ const AppState = (function() {
     // Encapsulates semantic search (currently in gallery.js, search.js).
 
     const search = (function() {
-        const { subscribe, broadcast } = createSubscriberSystem();
+        const { subscribe, broadcast, notify } = createSubscriberSystem();
 
         // State
         let _results = null;    // {results: [{id, score}, ...]}
@@ -452,6 +611,10 @@ const AppState = (function() {
         let _threshold = null;
 
         return {
+            // --- Transaction system metadata ---
+            _name: 'search',
+            _notify: notify,
+
             // --- Subscriptions ---
             onChanged: subscribe,
 
@@ -500,7 +663,7 @@ const AppState = (function() {
     // doesn't support epochs for folder operations anyway.
 
     const folders = (function() {
-        const { subscribe, subscribeError, broadcast, broadcastError } = createSubscriberSystem();
+        const { subscribe, subscribeError, broadcast, notify, broadcastError } = createSubscriberSystem();
 
         // State
         let _folders = [];      // [{path, count}, ...]
@@ -527,6 +690,10 @@ const AppState = (function() {
         }
 
         return {
+            // --- Transaction system metadata ---
+            _name: 'folders',
+            _notify: notify,
+
             // --- Subscriptions ---
             onChanged: subscribe,
             onError: subscribeError,
@@ -629,7 +796,7 @@ const AppState = (function() {
     // Image metadata cache with delta sync - persisted to backend
 
     const images = (function() {
-        const { subscribe, subscribeError, broadcast, broadcastError } = createSubscriberSystem();
+        const { subscribe, subscribeError, broadcast, notify, broadcastError } = createSubscriberSystem();
 
         // State
         let _cache = null;          // Map<imageId, image>
@@ -684,6 +851,10 @@ const AppState = (function() {
         }
 
         return {
+            // --- Transaction system metadata ---
+            _name: 'images',
+            _notify: notify,
+
             // --- Subscriptions ---
             onChanged: subscribe,
             onError: subscribeError,
@@ -896,7 +1067,7 @@ const AppState = (function() {
     // People with face counts, cache-busted thumbnail URLs - persisted to backend
 
     const people = (function() {
-        const { subscribe, subscribeError, broadcast, broadcastError } = createSubscriberSystem();
+        const { subscribe, subscribeError, broadcast, notify, broadcastError } = createSubscriberSystem();
 
         // State
         let _cache = null;              // Map<personId, {id, name, face_count, threshold, preferred_face_id}>
@@ -949,6 +1120,10 @@ const AppState = (function() {
         }
 
         return {
+            // --- Transaction system metadata ---
+            _name: 'people',
+            _notify: notify,
+
             // --- Subscriptions ---
             onChanged: subscribe,
             onError: subscribeError,
@@ -1130,7 +1305,7 @@ const AppState = (function() {
     // All faces with derived views - persisted to backend
 
     const faces = (function() {
-        const { subscribe, subscribeError, broadcast, broadcastError } = createSubscriberSystem();
+        const { subscribe, subscribeError, broadcast, notify, broadcastError } = createSubscriberSystem();
 
         // State
         let _cache = null;              // Map<faceId, face>
@@ -1184,6 +1359,10 @@ const AppState = (function() {
         }
 
         return {
+            // --- Transaction system metadata ---
+            _name: 'faces',
+            _notify: notify,
+
             // --- Subscriptions ---
             onChanged: subscribe,
             onError: subscribeError,
@@ -1464,7 +1643,7 @@ const AppState = (function() {
     // Duplicate groups by similarity level - persisted to backend
 
     const duplicates = (function() {
-        const { subscribe, subscribeError, broadcast, broadcastError } = createSubscriberSystem();
+        const { subscribe, subscribeError, broadcast, notify, broadcastError } = createSubscriberSystem();
 
         // Per-level caching
         let _groupCache = {};           // level → groups array
@@ -1570,6 +1749,10 @@ const AppState = (function() {
         }
 
         return {
+            // --- Transaction system metadata ---
+            _name: 'duplicates',
+            _notify: notify,
+
             // --- Subscriptions ---
             onChanged: subscribe,
             onError: subscribeError,
@@ -1647,7 +1830,7 @@ const AppState = (function() {
     // Per-context selection state - memory only
 
     const selection = (function() {
-        const { subscribe, broadcast } = createSubscriberSystem();
+        const { subscribe, broadcast, notify } = createSubscriberSystem();
 
         // Per-context selection storage
         // Keys: 'gallery', 'duplicates', 'faces', 'faces-pick'
@@ -1667,6 +1850,10 @@ const AppState = (function() {
         }
 
         return {
+            // --- Transaction system metadata ---
+            _name: 'selection',
+            _notify: notify,
+
             // --- Subscriptions ---
             onChanged: subscribe,
 
@@ -1802,6 +1989,7 @@ const AppState = (function() {
     // =========================================================================
 
     return {
+        // Domains
         view,
         nav,
         filter,
@@ -1815,7 +2003,17 @@ const AppState = (function() {
         selection,
 
         // Utility functions
-        preloadAll
+        preloadAll,
+
+        // Transaction system (for internal use by domains)
+        // These will be used in Phase 2+ to wrap external methods
+        _tx: {
+            markDirty,
+            transaction,
+            queueTransaction,
+            isInTransaction,
+            getEpoch: getTransactionEpoch
+        }
     };
 })();
 
