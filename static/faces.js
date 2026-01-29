@@ -57,39 +57,11 @@
     let faceDetectionEnabled = true;
 
     // -------------------------------------------------------------------------
-    // PEOPLE CACHE - Now managed by AppState.people
-    // -------------------------------------------------------------------------
-    // Used by both fullscreen tagging mode and faces screen card autocomplete.
-    // Contains {id, name, face_count} - NOT full face data (that's in knownPeople).
-    //
-    // MIGRATION: peopleCache and peopleCacheTime have been replaced by AppState.people.
-    // Use AppState.people.getAll() for data, AppState.people.invalidate() to force refresh.
-    // The TTL logic is now internal to AppState.people.
-    //
-    // Legacy references kept for backward compatibility during migration:
-    // - getPeopleCache() - returns AppState.people.getAll()
-    // - invalidatePeopleCache() - calls AppState.people.invalidate()
-
-    /**
-     * Get the people cache (delegates to AppState.people).
-     * @returns {Array<Object>} People list for autocomplete
-     * @deprecated Use AppState.people.getAll() directly
-     */
-    function getPeopleCache() {
-        return AppState.people.getAll();
-    }
-
-    /**
-     * Invalidate the people cache (delegates to AppState.people).
-     * @deprecated Use AppState.people.invalidate() directly
-     */
-    function invalidatePeopleCache() {
-        AppState.people.invalidate();
-    }
-
     // -------------------------------------------------------------------------
     // AUTOCOMPLETE STATE - Tracks active dropdown
     // -------------------------------------------------------------------------
+    // People data is managed by AppState.people.
+    // Use AppState.people.search() for autocomplete queries.
 
     /** @type {HTMLElement|null} Currently focused face input field */
     let focusedInput = null;
@@ -303,30 +275,6 @@
 
     /** @type {string} Current semantic search query for filtering unknown faces */
     let unknownFacesSearchQuery = '';
-
-    // =========================================================================
-    // UTILITY FUNCTIONS
-    // =========================================================================
-
-    /**
-     * Check if query matches target using fuzzy/subsequence matching.
-     * Each character in query must appear in target in order, but not necessarily consecutively.
-     * Example: "sro" matches "steve rose" because s...r...o appear in order.
-     *
-     * @param {string} query - The search query (lowercase)
-     * @param {string} target - The target string to match against (lowercase)
-     * @returns {boolean} True if query is a subsequence of target
-     */
-    function fuzzyMatch(query, target) {
-        if (!query) return true;
-        let qi = 0;
-        for (let ti = 0; ti < target.length && qi < query.length; ti++) {
-            if (target[ti] === query[qi]) {
-                qi++;
-            }
-        }
-        return qi === query.length;
-    }
 
     // =========================================================================
     // INITIALIZATION
@@ -1035,7 +983,7 @@
         // If all faces removed, exit pick-preferred mode
         if (pickPreferredFaces.length === 0) {
             exitPickPreferredMode();
-            invalidatePeopleCache();
+            AppState.people.invalidate();
             renderFacesGrid();
         } else {
             // Re-render pick-preferred view
@@ -1072,7 +1020,7 @@
                         thumbnailCacheBust.set(result.data.person.id, Date.now());
                     }
                     // Invalidate people cache (new person may have been created)
-                    invalidatePeopleCache();
+                    AppState.people.invalidate();
                     // Note: Backend may trigger async reassessment to find similar faces.
                     // This runs in the background - users see newly matched faces on next load.
                 } else {
@@ -1182,7 +1130,7 @@
                             }
                         }
                         // Invalidate people cache to pick up new person
-                        invalidatePeopleCache();
+                        AppState.people.invalidate();
                         // Re-render to show correct person card
                         renderFacesGrid();
                     }
@@ -1307,7 +1255,7 @@
                 if (data.deleted) {
                     App.showError(`All faces ejected - person deleted`);
                     exitPickPreferredMode();
-                    invalidatePeopleCache();
+                    AppState.people.invalidate();
                     loadAllFaces();
                     return;
                 }
@@ -1353,7 +1301,7 @@
                     }
 
                     // Invalidate caches
-                    invalidatePeopleCache();
+                    AppState.people.invalidate();
                 }
 
                 // Note: Backend may trigger async reassessment after threshold change.
@@ -1442,7 +1390,7 @@
         if (pickPreferredFaces.length === 0) {
             // No faces left - exit mode and refresh (person may be deleted by backend)
             exitPickPreferredMode();
-            invalidatePeopleCache();
+            AppState.people.invalidate();
             renderFacesGrid();  // Re-render with unassigned faces back in unknown pool
         } else {
             // Re-render with remaining faces
@@ -1507,7 +1455,7 @@
         // Only trigger deferred reload in normal mode - pick-preferred handles its own
         if (selectedIds.length === 0 && reloadPending && viewMode === 'all') {
             reloadPending = false;
-            invalidatePeopleCache();
+            AppState.people.invalidate();
             loadAllFaces();
         }
     }
@@ -1573,7 +1521,7 @@
         }
 
         // Invalidate people cache (face counts changed)
-        invalidatePeopleCache();
+        AppState.people.invalidate();
 
         // Update local data arrays
         allFaces = allFaces.filter(f => !ids.has(f.id));
@@ -2071,7 +2019,7 @@
 
         // Invalidate people cache - it will be refreshed on next autocomplete access
         // (AppState.people now manages the cache)
-        invalidatePeopleCache();
+        AppState.people.invalidate();
 
         // Check for empty state
         if (faces.length === 0) {
@@ -2578,11 +2526,11 @@
         const existing = card.querySelector('.face-card-autocomplete');
         if (existing) existing.remove();
 
-        // Filter people by query (subsequence match - "sro" matches "Steve Rose")
-        const q = query.toLowerCase().trim();
+        // Use AppState for fuzzy search with proper sorting
+        const q = query.trim();
         if (!q) return;
 
-        const matches = getPeopleCache().filter(p => fuzzyMatch(q, p.name.toLowerCase()));
+        const matches = AppState.people.search(q);
         if (matches.length === 0) return;
 
         // Create autocomplete dropdown
@@ -2698,7 +2646,7 @@
             await AppState.faces.identify([faceId], name);
             // Local state updated via AppState.faces.onChanged subscription
             // Invalidate people cache and reload for full consistency
-            invalidatePeopleCache();
+            AppState.people.invalidate();
             loadAllFaces();
         } catch (error) {
             console.error('Failed to identify face:', error);
@@ -3025,17 +2973,13 @@
 
     /**
      * Show autocomplete dropdown for name input.
-     * Uses cached people list for instant response - cache is pre-fetched on focus.
+     * Uses AppState.people.search() for fuzzy matching and sorting.
      * @param {HTMLInputElement} input - Input element
      * @param {string} query - Search query
      */
     function showAutocomplete(input, query) {
-        // Filter people by query (subsequence match - "sro" matches "Steve Rose")
-        const q = query.toLowerCase().trim();
-        const people = getPeopleCache();
-        const matches = q
-            ? people.filter(p => fuzzyMatch(q, p.name.toLowerCase()))
-            : people;
+        // Use AppState for fuzzy search with proper sorting
+        const matches = AppState.people.search(query);
 
         // Close if no matches
         if (matches.length === 0) {
@@ -3264,7 +3208,7 @@
                     label.appendChild(nameSpan);
 
                     // Invalidate people cache and mark faces screen for refresh
-                    invalidatePeopleCache();
+                    AppState.people.invalidate();
                     needsRefresh = true;
                 }
             } else if (face.person_id) {
@@ -3282,7 +3226,7 @@
                 }
 
                 // Invalidate people cache and mark faces screen for refresh
-                invalidatePeopleCache();
+                AppState.people.invalidate();
                 needsRefresh = true;
             }
         } catch (error) {
@@ -3337,7 +3281,7 @@
             if (wasKnownFace) {
                 // Known face - need full refresh (person may be deleted/changed)
                 needsRefresh = true;
-                invalidatePeopleCache();
+                AppState.people.invalidate();
 
                 // Bust cache in case this was the preferred face
                 thumbnailCacheBust.set(personId, Date.now());

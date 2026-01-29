@@ -1402,10 +1402,10 @@ const AppState = (function() {
             },
 
             /**
-             * Search people by name prefix/substring.
-             * Used by autocomplete.
+             * Search people by name using fuzzy subsequence matching.
+             * Used by autocomplete. Query "sro" matches "Steve Rose".
              * @param {string} query - Search query
-             * @returns {Array} Matching people sorted by face_count desc, then name
+             * @returns {Array} Matching people sorted by: prefix match, face_count desc, name
              */
             search(query) {
                 if (!_cache) return [];
@@ -1415,13 +1415,29 @@ const AppState = (function() {
                     return Array.from(_cache.values())
                         .sort((a, b) => (b.face_count || 0) - (a.face_count || 0) || a.name.localeCompare(b.name));
                 }
+
+                // Fuzzy subsequence match: "sro" matches "Steve Rose"
+                function fuzzyMatch(q, target) {
+                    let qi = 0;
+                    for (let ti = 0; ti < target.length && qi < q.length; ti++) {
+                        if (target[ti] === q[qi]) {
+                            qi++;
+                        }
+                    }
+                    return qi === q.length;
+                }
+
                 return Array.from(_cache.values())
-                    .filter(p => p.name.toLowerCase().includes(lowerQuery))
+                    .filter(p => fuzzyMatch(lowerQuery, p.name.toLowerCase()))
                     .sort((a, b) => {
-                        // Prefer prefix matches
+                        // Prefer prefix matches (exact start)
                         const aPrefix = a.name.toLowerCase().startsWith(lowerQuery);
                         const bPrefix = b.name.toLowerCase().startsWith(lowerQuery);
                         if (aPrefix !== bPrefix) return bPrefix - aPrefix;
+                        // Then substring matches before fuzzy-only matches
+                        const aSubstr = a.name.toLowerCase().includes(lowerQuery);
+                        const bSubstr = b.name.toLowerCase().includes(lowerQuery);
+                        if (aSubstr !== bSubstr) return bSubstr - aSubstr;
                         // Then by face count
                         return (b.face_count || 0) - (a.face_count || 0) || a.name.localeCompare(b.name);
                     });
