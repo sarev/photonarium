@@ -245,9 +245,10 @@ const App = {
     /**
      * Gets the current filter criteria.
      * @returns {Object|null} The filter object or null if no filter active
+     * @deprecated Use AppState.filter.get() instead
      */
     getFilter() {
-        return this.state.filter;
+        return AppState.filter.get();
     },
 
     /**
@@ -260,28 +261,28 @@ const App = {
      * @param {Object} [options] - Options for filter setting
      * @param {boolean} [options.silent] - If true, don't emit filterChanged event
      * @fires App#filterChanged
+     * @deprecated Use AppState.filter.set() instead
      */
     setFilter(filter, options = {}) {
-        this.state.filter = filter;
-        if (!options.silent) {
-            this.emit('filterChanged', filter);
-        }
+        AppState.filter.set(filter, options);
     },
 
     /**
      * Checks if a filter is currently active.
      * @returns {boolean} True if a filter is active
+     * @deprecated Use AppState.filter.isActive() instead
      */
     hasActiveFilter() {
-        return this.state.filter !== null;
+        return AppState.filter.isActive();
     },
 
     /**
      * Clears the current filter.
      * @fires App#filterChanged
+     * @deprecated Use AppState.filter.clear() instead
      */
     clearFilter() {
-        this.setFilter(null);
+        AppState.filter.clear();
     },
 
     /**
@@ -411,6 +412,8 @@ const App = {
         this.state.sortDirection = AppState.view.getSortDirection();
         // Sync selection from AppState.selection to App.state
         this.state.selectedImages = AppState.selection.get('gallery');
+        // Sync filter from AppState.filter to App.state
+        this.state.filter = AppState.filter.get();
     },
 
     /**
@@ -449,6 +452,14 @@ const App = {
                 // Emit the legacy event
                 this.emit('selectionChanged', this.state.selectedImages);
             }
+        });
+
+        // Bridge AppState.filter changes to App events
+        AppState.filter.onChanged(() => {
+            // Keep App.state.filter in sync
+            this.state.filter = AppState.filter.get();
+            // Emit the legacy event
+            this.emit('filterChanged', this.state.filter);
         });
     },
 
