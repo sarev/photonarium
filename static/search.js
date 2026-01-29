@@ -81,11 +81,16 @@ const Search = {
     _selectedPeople: [],
 
     /**
-     * All available people (cached).
-     * @type {Array<Object>}
+     * Get all people sorted by name.
+     * Delegates to AppState.people with sorting applied.
+     * @returns {Array<Object>} Sorted people list
      * @private
      */
-    _allPeople: [],
+    _getAllPeopleSorted() {
+        return AppState.people.getAll().sort((a, b) =>
+            a.name.localeCompare(b.name, undefined, { sensitivity: 'base' })
+        );
+    },
 
     /**
      * Whether face detection is enabled.
@@ -326,10 +331,8 @@ const Search = {
         if (!this._faceDetectionEnabled) return;
         if (!this._els.peopleDialog) return;
 
-        // Load all people if not cached
-        if (this._allPeople.length === 0) {
-            await this._loadAllPeople();
-        }
+        // Ensure people are loaded (AppState.people handles caching)
+        await AppState.people.load();
 
         // Clear search
         if (this._els.peopleSearch) {
@@ -360,21 +363,7 @@ const Search = {
         this._els.peopleDialog.close();
     },
 
-    /**
-     * Loads all people from the API.
-     * @private
-     */
-    async _loadAllPeople() {
-        try {
-            const people = await App.api('/people');
-            this._allPeople = (people || []).sort((a, b) =>
-                a.name.localeCompare(b.name, undefined, { sensitivity: 'base' })
-            );
-        } catch (error) {
-            console.error('Failed to load people:', error);
-            this._allPeople = [];
-        }
-    },
+    // _loadAllPeople() removed - now uses AppState.people.load()
 
     /**
      * Filters the available people list by search query.
@@ -413,7 +402,7 @@ const Search = {
         const selectedIds = new Set(this._selectedPeople.map(p => p.id));
 
         // Filter people by search query (fuzzy match), excluding already selected
-        let filtered = this._allPeople.filter(p => !selectedIds.has(p.id));
+        let filtered = this._getAllPeopleSorted().filter(p => !selectedIds.has(p.id));
         if (query) {
             filtered = filtered.filter(p => this._fuzzyMatch(query, p.name.toLowerCase()));
         }
