@@ -1078,6 +1078,118 @@ const AppState = (function() {
 
         const CACHE_TTL = 30000;        // 30 seconds
 
+        // Domain reference for transaction system
+        const domainRef = { _name: 'people', _notify: notify };
+
+        // =====================================================================
+        // INTERNAL API
+        // =====================================================================
+        // Used by other domains (e.g., faces) within transactions.
+        // These methods mutate state and call markDirty() but don't make API calls.
+        // API calls are the responsibility of the caller.
+
+        const _internal = {
+            /**
+             * Add a person to the cache.
+             * Called after API creates the person.
+             * @param {Object} person - Person object from API response
+             */
+            add(person) {
+                if (_cache) {
+                    _cache.set(person.id, person);
+                    markDirty(domainRef);
+                }
+            },
+
+            /**
+             * Update a person in the cache.
+             * @param {string} id - Person ID
+             * @param {Object} changes - Properties to merge
+             */
+            update(id, changes) {
+                const person = _cache?.get(id);
+                if (person) {
+                    Object.assign(person, changes);
+                    markDirty(domainRef);
+                }
+            },
+
+            /**
+             * Remove a person from the cache.
+             * Called after API deletes or when face_count reaches 0.
+             * @param {string} id - Person ID
+             */
+            remove(id) {
+                if (_cache?.delete(id)) {
+                    markDirty(domainRef);
+                }
+            },
+
+            /**
+             * Get person by ID (sync read).
+             * @param {string} id - Person ID
+             * @returns {Object|null} Person or null
+             */
+            get(id) {
+                return _cache?.get(id) || null;
+            },
+
+            /**
+             * Find person by name (case-insensitive, sync read).
+             * @param {string} name - Person name
+             * @returns {Object|null} Person or null
+             */
+            findByName(name) {
+                if (!_cache) return null;
+                const lowerName = name.toLowerCase().trim();
+                for (const person of _cache.values()) {
+                    if (person.name.toLowerCase() === lowerName) {
+                        return person;
+                    }
+                }
+                return null;
+            },
+
+            /**
+             * Increment face count for a person.
+             * @param {string} id - Person ID
+             */
+            incrementFaceCount(id) {
+                const person = _cache?.get(id);
+                if (person) {
+                    person.face_count = (person.face_count || 0) + 1;
+                    markDirty(domainRef);
+                }
+            },
+
+            /**
+             * Decrement face count for a person.
+             * @param {string} id - Person ID
+             * @returns {number} New face count
+             */
+            decrementFaceCount(id) {
+                const person = _cache?.get(id);
+                if (person) {
+                    person.face_count = Math.max(0, (person.face_count || 1) - 1);
+                    markDirty(domainRef);
+                    return person.face_count;
+                }
+                return 0;
+            },
+
+            /**
+             * Bust thumbnail cache for a person.
+             * @param {string} id - Person ID
+             */
+            bustThumbnail(id) {
+                _thumbnailBust.set(id, Date.now());
+            }
+        };
+
+        // =====================================================================
+        // LOAD / CACHE MANAGEMENT
+        // =====================================================================
+
         /**
          * Load people list from backend.
          */
@@ -1119,10 +1231,17 @@ const AppState = (function() {
             _cacheTime = 0;
         }
 
+        // =====================================================================
+        // PUBLIC API
+        // =====================================================================
+
         return {
             // --- Transaction system metadata ---
             _name: 'people',
             _notify: notify,
+
+            // --- Internal API (for cross-domain transactions) ---
+            _internal,
 
             // --- Subscriptions ---
             onChanged: subscribe,
@@ -1135,7 +1254,7 @@ const AppState = (function() {
                 return load(true);
             },
 
-            // --- Accessors ---
+            // --- Accessors (sync reads, no transaction needed) ---
             getAll() {
                 return _cache ? Array.from(_cache.values()) : [];
             },
@@ -1151,6 +1270,32 @@ const AppState = (function() {
                     }
                 }
                 return null;
+            },
+
+            /**
+             * Search people by name prefix/substring.
+             * Used by autocomplete.
+             * @param {string} query - Search query
+             * @returns {Array} Matching people sorted by face_count desc, then name
+             */
+            search(query) {
+                if (!_cache) return [];
+                const lowerQuery = query.toLowerCase().trim();
+                if (!lowerQuery) {
+                    // Return all, sorted by face count
+                    return Array.from(_cache.values())
+                        .sort((a, b) => (b.face_count || 0) - (a.face_count || 0) || a.name.localeCompare(b.name));
+                }
+                return Array.from(_cache.values())
+                    .filter(p => p.name.toLowerCase().includes(lowerQuery))
+                    .sort((a, b) => {
+                        // Prefer prefix matches
+                        const aPrefix = a.name.toLowerCase().startsWith(lowerQuery);
+                        const bPrefix = b.name.toLowerCase().startsWith(lowerQuery);
+                        if (aPrefix !== bPrefix) return bPrefix - aPrefix;
+                        // Then by face count
+                        return (b.face_count || 0) - (a.face_count || 0) || a.name.localeCompare(b.name);
+                    });
             },
 
             /**
@@ -1194,107 +1339,116 @@ const AppState = (function() {
                 _thumbnailBust.set(personId, Date.now());
             },
 
-            // --- Mutations ---
-            async create(name) {
-                try {
+            // --- Mutations (wrapped in transactions) ---
+
+            /**
+             * Create a new person.
+             * Note: Usually called internally by faces.identify() via findOrCreate pattern.
+             * @param {string} name - Person name
+             * @returns {Promise<Object>} Created person
+             */
+            create(name) {
+                return queueTransaction(async () => {
                     const response = await App.apiPost('/people', { name });
-                    const person = response;
+                    _internal.add(response);
+                    return response;
+                });
+            },
 
-                    // Update cache
-                    if (_cache) {
-                        _cache.set(person.id, person);
+            /**
+             * Rename a person.
+             * @param {string} id - Person ID
+             * @param {string} name - New name
+             */
+            rename(id, name) {
+                return queueTransaction(async () => {
+                    const person = _cache?.get(id);
+                    if (!person) return;
+
+                    const oldName = person.name;
+
+                    // Optimistic update
+                    _internal.update(id, { name });
+
+                    try {
+                        await App.apiPatch(`/people/${id}`, { name });
+                    } catch (err) {
+                        // Rollback
+                        _internal.update(id, { name: oldName });
+                        broadcastError(err.message || 'Failed to rename person');
+                        throw err;
                     }
-                    broadcast({ type: 'changed', ids: [person.id] });
-
-                    return person;
-                } catch (err) {
-                    broadcastError(err.message || 'Failed to create person');
-                    throw err;
-                }
+                });
             },
 
-            async rename(id, name) {
-                const person = _cache?.get(id);
-                if (!person) return;
+            /**
+             * Delete a person.
+             * Note: Usually happens automatically when face_count reaches 0.
+             * @param {string} id - Person ID
+             */
+            delete(id) {
+                return queueTransaction(async () => {
+                    const person = _cache?.get(id);
+                    if (!person && _cache !== null) return;
 
-                // Optimistic update
-                const oldName = person.name;
-                person.name = name;
-                broadcast({ type: 'changed', ids: [id] });
+                    // Optimistic update
+                    _internal.remove(id);
 
-                try {
-                    await App.apiPatch(`/people/${id}`, { name });
-                } catch (err) {
-                    // Rollback
-                    person.name = oldName;
-                    broadcast({ type: 'changed', ids: [id] });
-                    broadcastError(err.message || 'Failed to rename person');
-                    throw err;
-                }
-            },
-
-            async delete(id) {
-                const person = _cache?.get(id);
-                if (!person && _cache !== null) return;
-
-                // Optimistic update
-                if (_cache) {
-                    _cache.delete(id);
-                }
-                broadcast({ type: 'changed', ids: [id] });
-
-                try {
-                    await App.apiDelete(`/people/${id}`);
-                } catch (err) {
-                    // Rollback
-                    if (person && _cache) {
-                        _cache.set(id, person);
+                    try {
+                        await App.apiDelete(`/people/${id}`);
+                    } catch (err) {
+                        // Rollback
+                        if (person) {
+                            _internal.add(person);
+                        }
+                        broadcastError(err.message || 'Failed to delete person');
+                        throw err;
                     }
-                    broadcast({ type: 'changed', ids: [id] });
-                    broadcastError(err.message || 'Failed to delete person');
-                    throw err;
-                }
+                });
             },
 
-            async setPreferredFace(personId, faceId) {
-                try {
-                    await App.apiPost(`/people/${personId}/set-preferred`, { face_id: faceId });
+            /**
+             * Set preferred face for a person.
+             * @param {string} personId - Person ID
+             * @param {string} faceId - Face ID to use as preferred
+             */
+            setPreferredFace(personId, faceId) {
+                return queueTransaction(async () => {
+                    try {
+                        await App.apiPost(`/people/${personId}/set-preferred`, { face_id: faceId });
+                        _internal.update(personId, { preferred_face_id: faceId });
+                        _internal.bustThumbnail(personId);
+                    } catch (err) {
+                        broadcastError(err.message || 'Failed to set preferred face');
+                        throw err;
+                    }
+                });
+            },
 
-                    // Update cache
+            /**
+             * Set recognition threshold for a person.
+             * @param {string} personId - Person ID
+             * @param {number} threshold - New threshold value
+             */
+            setThreshold(personId, threshold) {
+                return queueTransaction(async () => {
                     const person = _cache?.get(personId);
-                    if (person) {
-                        person.preferred_face_id = faceId;
+                    if (!person) return;
+
+                    const oldThreshold = person.threshold;
+
+                    // Optimistic update
+                    _internal.update(personId, { threshold });
+
+                    try {
+                        await App.apiPatch(`/people/${personId}`, { threshold });
+                    } catch (err) {
+                        // Rollback
+                        _internal.update(personId, { threshold: oldThreshold });
+                        broadcastError(err.message || 'Failed to update threshold');
+                        throw err;
                     }
-
-                    // Bust thumbnail cache
-                    _thumbnailBust.set(personId, Date.now());
-
-                    broadcast({ type: 'changed', ids: [personId] });
-                } catch (err) {
-                    broadcastError(err.message || 'Failed to set preferred face');
-                    throw err;
-                }
-            },
-
-            async setThreshold(personId, threshold) {
-                const person = _cache?.get(personId);
-                if (!person) return;
-
-                const oldThreshold = person.threshold;
-
-                // Optimistic update
-                person.threshold = threshold;
-                broadcast({ type: 'changed', ids: [personId] });
-
-                try {
-                    await App.apiPatch(`/people/${personId}`, { threshold });
-                } catch (err) {
-                    // Rollback
-                    person.threshold = oldThreshold;
-                    broadcast({ type: 'changed', ids: [personId] });
-                    broadcastError(err.message || 'Failed to update threshold');
-                    throw err;
-                }
+                });
             }
         };
     })();
