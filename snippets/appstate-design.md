@@ -833,15 +833,17 @@ AppState would address these by:
 
 Order domains by dependency (least dependencies first):
 
-- [ ] Implement `AppState.nav` - navigation state (currently in core.js)
-- [ ] Implement `AppState.view` - view settings, theme, thumbnail size (localStorage)
-- [ ] Implement `AppState.folders` - folder management, scan status
-- [ ] Implement `AppState.filter` - search/filter criteria
-- [ ] Implement `AppState.images` - image metadata, the core dataset
-- [ ] Implement `AppState.people` - people with cache-busted thumbnail URLs
-- [ ] Implement `AppState.faces` - faces with derived views (unknown, by-person, by-image)
-- [ ] Implement `AppState.duplicates` - duplicate groups by level
-- [ ] Implement `AppState.selection` - per-screen selection contexts
+- [x] Implement `AppState.nav` - navigation state (currently in core.js)
+- [x] Implement `AppState.view` - view settings, theme, thumbnail size (localStorage)
+- [x] Implement `AppState.folders` - folder management, scan status
+- [x] Implement `AppState.filter` - search/filter criteria
+- [x] Implement `AppState.images` - image metadata, the core dataset
+- [x] Implement `AppState.people` - people with cache-busted thumbnail URLs
+- [x] Implement `AppState.faces` - faces with derived views (unknown, by-person, by-image)
+- [x] Implement `AppState.duplicates` - duplicate groups by level
+- [x] Implement `AppState.selection` - per-screen selection contexts
+
+**Implementation complete**: See `static/appstate.js` for all nine domains.
 
 ### Migration Phase (per domain)
 
