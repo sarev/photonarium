@@ -533,27 +533,301 @@ AppState would address these by:
 
 ---
 
+## Audit Findings
+
+### core.js
+
+**State Variables (App.state):**
+- `screen`, `theme`, `thumbnailSize`, `sortBy`, `sortDirection` - View settings
+- `filter`, `selectedImages`, `currentImageId` - Session state
+- `scrollPositions` - Per-screen scroll positions
+- `imageCache`, `imageCacheEpoch` - Image data cache with delta sync
+- `fullscreenSourceScreen` - Navigation tracking
+
+**localStorage Keys (all prefixed `imaginary-`):**
+- `theme`, `thumbnailSize`, `sortBy`, `sortDirection`
+
+**Event Bus Events:**
+- `themeChanged`, `thumbnailSizeChanged`, `sortChanged`, `filterChanged`
+- `selectionChanged`, `screenChanged`, `similarityChanged`, `imageRotated`, `selectAll`
+
+**Critical Issues:**
+- Concurrent `getImages()` calls can corrupt cache (no pending promise tracking)
+- `reloadImages()` during delta update can cause TypeError (nulls cache mid-update)
+- Navigation doesn't abort in-flight API requests
+
+---
+
+### gallery.js
+
+**State Variables:**
+- `images[]`, `filteredImages[]` - Image data and filtered view
+- `contentSimilarities`, `contentReferenceId` - Sort-by-content cache
+- `peopleNames` - Sort-by-people cache (lazy-loaded)
+- `needsRefresh`, `pendingSelection` - Coordination flags
+
+**API Calls:**
+- `/images` (via App.getImages), `/similar/{id}`, `/images/people-names`
+- `/search` (semantic), `/images/{id}` (info panel), `/images/{id}/histogram`
+
+**Critical Issues:**
+- `_loadImages()` vs `_checkForNewImages()` can race (no mutual exclusion)
+- Filter mutated in-place during async operations
+- Background polling (30s) can interfere with user actions
+- People names cache never invalidated
+
+---
+
+### fullscreen.js
+
+**State Variables:**
+- `currentId`, `currentIndex` - Current image tracking
+- `imageList` - **Reference** to Gallery's filtered array (not a copy!)
+- `zoom`, `panX`, `panY`, `isPanning` - View transform state
+
+**Events Emitted:**
+- `fullscreenImageChanged` - Faces module listens for overlay updates
+- `fullscreenTransformChanged` - Faces module listens for box repositioning
+
+**Critical Issues:**
+- Takes reference snapshot of Gallery array - breaks if Gallery re-sorts/filters
+- No AbortController for single-image API fetch
+- No subscription to Gallery changes while fullscreen is open
+
+---
+
+### faces.js (Most Complex)
+
+**Cache Data Structures:**
+- `peopleCache[]` + `peopleCacheTime` - TTL-based (30s) people list
+- `allFaces[]`, `displayedFaces[]` - All faces and filtered view
+- `knownPeople[]` - Grouped by person for known section
+- `pickPreferredFaces[]` - Faces for one person in pick-preferred mode
+- `thumbnailCacheBust` Map - Force browser refetch on preferred change
+
+**Coordination Flags (3-tier system):**
+- `needsRefresh` - Full API reload needed
+- `needsRerender` - Local data updated, just redraw
+- `reloadPending` - Deferred reload waiting for selection clear
+
+**Critical Invariant:** "Set `reloadPending=false` BEFORE clearing selection" (5+ locations must follow this)
+
+**Polling Timers:**
+- `reassessmentPollTimer` (500ms) - Screen-scoped
+- `pickPreferredPollTimer` (500ms) - Mode-scoped
+
+**Critical Issues:**
+- 50+ state variables across 3 modes (fullscreen/faces/pick-preferred)
+- `peopleCacheTime = 0` scattered across 10+ locations
+- Search can run while `loadAllFaces()` in progress
+- VirtualGrid lifecycle order-dependent (unbind → destroy → clear DOM)
+
+---
+
+### duplicates.js
+
+**State Variables:**
+- `groupCache[level]`, `statusCache[level]`, `epochCache[level]` - Per-level caching
+- `groups[]`, `allGroups[]` - Current display (filtered) vs raw
+- `currentLevel`, `currentStatus` - Active similarity level
+- `sortMode`, `semanticQuery`, `minGroupSize` - View settings
+- `selectedGroups[]` - Selection persistence across navigation
+
+**Polling:**
+- 2-second status polling during computation
+- Visibility check prevents orphaned polls
+
+**Critical Issues:**
+- Semantic sort has no request cancellation (concurrent calls can race)
+- People sort makes sequential API calls per group (slow, can't cancel)
+- Level change race: poll checks `currentLevel !== level` but timing is fragile
+
+---
+
+### database.js
+
+**State Variables:**
+- `_pollTimer` - 1-second status polling timer
+- `_lastStatus` - Detect `updating → up_to_date` transitions
+- `_indexingHistory[]`, `_embeddingHistory[]`, `_faceHistory[]` - ETA calculation
+
+**Events Emitted:**
+- `databaseChanged` - When processing completes (Gallery, Duplicates, Faces listen)
+
+**Critical Issues:**
+- Poll response can arrive after `onLeave()` (no AbortController)
+- Total image count can mismatch between `/status` and `/stats`
+- No cross-tab synchronization
+
+---
+
+### search.js
+
+**State Variables:**
+- `_selectedPeople[]` - People filter selection
+- `_allPeople[]` - Cached people list (lazy-loaded, never invalidated)
+- `_faceDetectionEnabled` - Config flag
+
+**Filter Flow:**
+1. `_populateForm()` reads from `App.getFilter()`
+2. User modifies form
+3. `_applyFilter()` calls `App.setFilter()` which emits `filterChanged`
+
+**Critical Issues:**
+- Semantic search race: navigates to Gallery before search completes
+- People cache never invalidated (stale if people created elsewhere)
+- Form edits lost if user navigates without clicking Apply
+- Similarity slider sync is unidirectional (Search → Gallery only)
+
+---
+
+### thumbnails.js
+
+**ThumbnailLoader (Singleton):**
+- `_queue[]` - Pending requests with priority
+- `_inFlight` Map - Active fetches with AbortControllers
+- `_cacheBust` Map - Timestamps for cache invalidation
+- `_scrollState` - Current scroll position for prioritization
+
+**VirtualGrid (Instance per screen):**
+- `renderedItems` Map - `id → {el, blobUrl}` for visible items
+- `pendingItems` Set - IDs with requests in flight
+- `_bound` flag - Prevents RAF loops when container hidden
+
+**GridSelection (Instance per screen):**
+- `_selected` Set - Persists across unbind/bind
+- `_anchor` - For shift-click range selection
+- `_dragState` - Active drag-box selection
+
+**Critical Issues:**
+- Blob URL leak if thumbnail loaded but item scrolled out before callback
+- Document-level keyboard handler fires for ALL key presses
+- `render()` implicitly calls `bind()` - don't call both
+
+---
+
+### Cross-Cutting Analysis
+
+**Pattern: Scattered Cache Invalidation**
+| Cache | Invalidation Points | Risk |
+|-------|---------------------|------|
+| `peopleCacheTime` | 10+ locations in faces.js | Easy to miss one |
+| `thumbnailCacheBust` | 4+ locations | Less risky (additive) |
+| `_allPeople` (search.js) | Never | Stale data |
+| `contentSimilarities` | On sort change only | Stale if reference deleted |
+
+**Pattern: Coordination Flags**
+| Flag | Module | Purpose | Fragility |
+|------|--------|---------|-----------|
+| `needsRefresh` | faces.js, gallery.js, duplicates.js | Defer reload until screen enter | Medium |
+| `needsRerender` | faces.js | Local update, skip API | Low |
+| `reloadPending` | faces.js | Defer reload until selection clears | HIGH |
+| `isLoading` | faces.js | Prevent concurrent loads | Low |
+
+**Pattern: Missing Request Cancellation**
+- core.js: `getImages()` has no deduplication
+- fullscreen.js: Single-image fetch has no AbortController
+- search.js: Semantic search can't be cancelled
+- duplicates.js: Semantic/people sort can't be cancelled
+- database.js: Poll responses arrive after `onLeave()`
+
+**Pattern: Cross-Module State References**
+| Consumer | Accesses | Risk |
+|----------|----------|------|
+| fullscreen.js | `Gallery.state.filteredImages` (reference) | Breaks on re-sort |
+| gallery.js | Mutates `filter` object in-place | Shared mutation |
+| search.js | `Gallery._showLoading()` | Tight coupling |
+| duplicates.js | `Gallery` for navigation | Acceptable |
+
+**Multi-Consumer State (Candidates for AppState):**
+| State | Consumers | Current Location |
+|-------|-----------|------------------|
+| People list | faces.js, search.js, gallery.js (sort) | 3 separate caches |
+| Filter criteria | search.js, gallery.js, info panel | App.state.filter |
+| Image list | gallery.js, fullscreen.js, duplicates.js | App.state.imageCache |
+| Scan/indexing status | database.js, faces.js | Polled independently |
+| Selection | gallery.js, duplicates.js, faces.js | Per-screen + App.state |
+
+**Recommended Migration Order (by dependency):**
+1. **AppState.view** - Theme, thumbnailSize, sort (localStorage-backed, no deps)
+2. **AppState.nav** - Screen, history, fullscreenSourceScreen (no deps)
+3. **AppState.folders** - Folder list, scan status (isolated)
+4. **AppState.filter** - Filter criteria (search.js + gallery.js)
+5. **AppState.images** - Image cache with delta sync (core dependency)
+6. **AppState.people** - People list with cache invalidation (faces + search)
+7. **AppState.faces** - Faces with derived views (most complex, do last)
+8. **AppState.duplicates** - Duplicate groups by level
+9. **AppState.selection** - Per-screen selection contexts
+
+---
+
 ## Implementation Plan
 
 ### Audit Phase
 
-- [ ] Audit `core.js` - document state variables, localStorage usage, event bus
-- [ ] Audit `gallery.js` - document image data caching, selection state, view settings
-- [ ] Audit `fullscreen.js` - document navigation state, current image tracking
-- [ ] Audit `faces.js` - document all caches (peopleCache, allFaces, knownPeople, etc.), flags
-- [ ] Audit `duplicates.js` - document duplicate groups caching, computation status
-- [ ] Audit `database.js` - document folder state, scan status tracking
-- [ ] Audit `search.js` - document filter state management
-- [ ] Audit `thumbnails.js` - document ThumbnailLoader state, cache-busting
+- [x] Audit `core.js` - document state variables, localStorage usage, event bus
+- [x] Audit `gallery.js` - document image data caching, selection state, view settings
+- [x] Audit `fullscreen.js` - document navigation state, current image tracking
+- [x] Audit `faces.js` - document all caches (peopleCache, allFaces, knownPeople, etc.), flags
+- [x] Audit `duplicates.js` - document duplicate groups caching, computation status
+- [x] Audit `database.js` - document folder state, scan status tracking
+- [x] Audit `search.js` - document filter state management
+- [x] Audit `thumbnails.js` - document ThumbnailLoader state, cache-busting
 
 ### Analysis Phase
 
-- [ ] Compile audit results into single view
-- [ ] Identify multi-consumer state (see "Multi-Consumer State" table)
-- [ ] Identify consolidation candidates (see "Likely Consolidation Candidates")
-- [ ] Classify each state as: hot-path cached / pass-through / derived view
-- [ ] Resolve open questions (see "Open Questions" section)
-- [ ] Finalize domain boundaries (see domain sections above)
+- [x] Compile audit results into single view
+  - See "Audit Findings" section above with per-module summaries
+  - See "Cross-Cutting Analysis" for patterns across modules
+
+- [x] Identify multi-consumer state (see "Multi-Consumer State" table)
+  | State | Consumers | Consolidate Into |
+  |-------|-----------|------------------|
+  | People list | faces.js (peopleCache), search.js (_allPeople), gallery.js (sort) | AppState.people |
+  | Filter criteria | search.js (form), gallery.js (applies), core.js (stores) | AppState.filter |
+  | Image list | core.js (imageCache), gallery.js (filteredImages), fullscreen.js (imageList ref) | AppState.images |
+  | Scan status | database.js (polls), faces.js (triggers refresh) | AppState.folders |
+  | Theme/size/sort | core.js (App.state), all screens (read) | AppState.view |
+
+- [x] Identify consolidation candidates (see "Likely Consolidation Candidates")
+  | Current | Consolidate | Benefit |
+  |---------|-------------|---------|
+  | `peopleCache` + `_allPeople` + gallery people sort | `AppState.people.getAll()` | Single cache, single invalidation |
+  | `peopleCacheTime` (10+ invalidation points) | `AppState.people.invalidate()` | Centralized, can't miss |
+  | `thumbnailCacheBust` + faces.js bust logic | `AppState.people.getThumbnailUrl(id)` | Encapsulated cache-busting |
+  | `needsRefresh` / `needsRerender` / `reloadPending` | Subscription model | No flags needed |
+  | `allFaces` / `displayedFaces` / `knownPeople` | `AppState.faces` with derived views | Single source + computed views |
+  | `contentSimilarities` / `contentReferenceId` | `AppState.images.getSimilarities(refId)` | Cached per-reference |
+
+- [x] Classify each state as: hot-path cached / pass-through / derived view
+  | State | Classification | Rationale |
+  |-------|----------------|-----------|
+  | `imageCache` | **Hot-path cached** | Used by VirtualGrid getItems() on every scroll |
+  | `filteredImages` | **Derived view (cached)** | Recomputed on filter/sort change, used in scroll |
+  | `displayedFaces` | **Derived view (cached)** | Filter of allFaces, used in scroll |
+  | `knownPeople` | **Derived view (cached)** | Grouped from allFaces, rendered once |
+  | `peopleCache` | **Hot-path cached** | Used by autocomplete on every keystroke |
+  | `thumbnailCacheBust` | **Hot-path cached** | Appended to every thumbnail URL |
+  | `groupCache[level]` | **Pass-through** | Fetched per-level, epoch-based refresh |
+  | `filter` | **Pass-through** | Set by search, read by gallery |
+  | `scrollPositions` | **Pass-through** | Save/restore on screen transition |
+  | Folder list | **Pass-through** | Fetched fresh on screen enter |
+
+- [x] Resolve open questions (see "Open Questions" section)
+  - All 5 questions answered in Open Questions section above
+
+- [x] Finalize domain boundaries (see domain sections above)
+  | Domain | Responsibility | Persistence |
+  |--------|----------------|-------------|
+  | `AppState.nav` | Current screen, history stack, fullscreen tracking | Memory |
+  | `AppState.view` | Theme, thumbnailSize, sort, threshold | localStorage |
+  | `AppState.filter` | Active filter criteria | Memory |
+  | `AppState.folders` | Folder list, scan/indexing status | Backend |
+  | `AppState.images` | Image metadata cache with delta sync | Backend |
+  | `AppState.people` | People list with face counts, thumbnail URLs | Backend |
+  | `AppState.faces` | All faces + derived views (unknown, by-person) | Backend |
+  | `AppState.duplicates` | Duplicate groups by level with epoch caching | Backend |
+  | `AppState.selection` | Per-context selection (gallery, duplicates, faces) | Memory |
 
 ### Implementation Phase
 
