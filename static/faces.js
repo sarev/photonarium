@@ -1990,6 +1990,20 @@
             facesSelection.clear();
         }
 
+        // Save scroll positions before destroying
+        let savedUnknownScroll = 0;
+        let savedKnownScroll = 0;
+        if (unknownFacesGrid) {
+            const container = facesGrid.querySelector('.faces-unknown-container');
+            if (container) {
+                savedUnknownScroll = container.scrollTop;
+            }
+        }
+        const knownSection = facesGrid.querySelector('.faces-known-section');
+        if (knownSection) {
+            savedKnownScroll = knownSection.scrollTop;
+        }
+
         // Destroy existing VirtualGrid to avoid orphaned event listeners
         if (unknownFacesGrid) {
             unknownFacesGrid.unbind();
@@ -2063,6 +2077,24 @@
         if (facesSelection) {
             facesSelection.bind();
         }
+
+        // Restore scroll positions after grid is set up
+        // Use requestAnimationFrame to ensure DOM layout is complete
+        requestAnimationFrame(() => {
+            if (savedUnknownScroll > 0) {
+                const container = facesGrid.querySelector('.faces-unknown-container');
+                if (container) {
+                    // Setting scrollTop triggers scroll event which updates VirtualGrid
+                    container.scrollTop = savedUnknownScroll;
+                }
+            }
+            if (savedKnownScroll > 0) {
+                const newKnownSection = facesGrid.querySelector('.faces-known-section');
+                if (newKnownSection) {
+                    newKnownSection.scrollTop = savedKnownScroll;
+                }
+            }
+        });
     }
 
     /**
