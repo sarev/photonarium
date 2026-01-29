@@ -110,10 +110,8 @@ const Duplicates = {
 
     /**
      * Local state for the duplicates screen.
+     * Note: Group caching is handled by AppState.duplicates.
      * @type {Object}
-     * @property {Object<number, Array>} groupCache - Cached groups by similarity level
-     * @property {Object<number, string>} statusCache - Cached status by similarity level
-     * @property {Object<number, string>} epochCache - Cached epoch by similarity level
      * @property {number} currentLevel - Current similarity level (0-3)
      * @property {Array<Object>} groups - Current duplicate groups for display (filtered)
      * @property {Array<Object>} allGroups - All groups before min size filtering
@@ -126,12 +124,10 @@ const Duplicates = {
      * @property {Array<string>} selectedGroups - Currently selected group hashes
      */
     state: {
-        groupCache: {},
-        statusCache: {},
-        epochCache: {},
+        // Note: groupCache, statusCache, epochCache moved to AppState.duplicates
         currentLevel: 0,
-        groups: [],
-        allGroups: [],
+        groups: [],           // Filtered/sorted groups for display
+        allGroups: [],        // All groups from current level (before filtering)
         currentStatus: 'pending',
         scrollTop: 0,
         needsRefresh: true,
@@ -348,10 +344,25 @@ const Duplicates = {
         // Database changes require refresh
         App.on('databaseChanged', () => {
             this.state.needsRefresh = true;
-            this.state.groupCache = {};
-            this.state.epochCache = {};
+            AppState.duplicates.invalidate(this.state.currentLevel);
             this.state.allGroups = [];
             this.state.groups = [];
+        });
+
+        // Subscribe to AppState.duplicates for centralized state management
+        AppState.duplicates.onChanged((event) => {
+            if (App.getScreen() === 'duplicates') {
+                if (event.type === 'computationComplete') {
+                    // Computation finished - reload groups
+                    this._loadGroups();
+                } else if (event.type === 'progress') {
+                    // Update progress indicator if needed
+                    const status = AppState.duplicates.getStatus(this.state.currentLevel);
+                    if (status) {
+                        this.state.currentStatus = status.status;
+                    }
+                }
+            }
         });
     },
 
@@ -396,9 +407,10 @@ const Duplicates = {
      */
     markNeedsRefresh() {
         this.state.needsRefresh = true;
-        this.state.groupCache = {};
-        this.state.statusCache = {};
-        this.state.epochCache = {};
+        // Invalidate all levels in AppState cache
+        for (let level = 0; level <= 3; level++) {
+            AppState.duplicates.invalidate(level);
+        }
         this.state.allGroups = [];
         this.state.groups = [];
     }
@@ -440,50 +452,25 @@ Duplicates._loadGroups = async function() {
 
 /**
  * Gets duplicate groups for a given similarity level.
- * Uses epoch-based caching to avoid re-fetching unchanged data.
+ * Delegates to AppState.duplicates for centralized caching.
  * @param {number} level - Similarity level (0-3)
  * @returns {Promise<{groups: Array<Object>, status: string}>} Groups and computation status
  * @private
  */
 Duplicates._getGroupsForLevel = async function(level) {
-    // Check cache status
-    const cachedStatus = this.state.statusCache[level];
-    const cachedEpoch = this.state.epochCache[level];
-    const cachedGroups = this.state.groupCache[level];
+    // Load via AppState (handles caching internally)
+    await AppState.duplicates.loadLevel(level);
 
-    // If we have cached data with 'done' status, include epoch in request
-    let url = `/duplicates?level=${level}`;
-    if (cachedStatus === 'done' && cachedEpoch && cachedGroups) {
-        url += `&since=${encodeURIComponent(cachedEpoch)}`;
+    const groups = AppState.duplicates.getGroups(level);
+    const statusObj = AppState.duplicates.getStatus(level);
+    const status = statusObj?.status || 'done';
+
+    // Start polling if still computing
+    if (status === 'computing' || status === 'pending') {
+        AppState.duplicates.startPolling(level);
     }
 
-    // Fetch from backend
-    const response = await App.apiGet(url);
-
-    // If unchanged, return cached data with unchanged flag
-    if (response.unchanged && cachedGroups) {
-        return {
-            groups: cachedGroups,
-            status: response.status || 'done',
-            unchanged: true
-        };
-    }
-
-    // New data - the API now returns lightweight format with best_image already selected
-    const groups = response.groups || [];
-    const status = response.status || 'done';
-    const epoch = response.epoch || '';
-
-    // Groups are already sorted by count (largest first) from the API
-
-    // Only cache if computation is done
-    if (status === 'done') {
-        this.state.groupCache[level] = groups;
-        this.state.epochCache[level] = epoch;
-    }
-    this.state.statusCache[level] = status;
-
-    return { groups, status, unchanged: false };
+    return { groups, status };
 };
 
 /**
