@@ -2345,15 +2345,9 @@
 
         // Drag start - include this face and all other selected faces
         card.addEventListener('dragstart', (e) => {
-            // If dragging an unselected item, select it first so it's included in the batch
-            // (and so the selection state matches what's being dragged)
-            if (facesSelection && !facesSelection.isSelected(face.id)) {
-                facesSelection.select(face.id);
-            }
-
-            // Get all selected face IDs
+            // If this card isn't selected, select only this one
             let faceIds;
-            if (facesSelection) {
+            if (facesSelection && facesSelection.isSelected(face.id)) {
                 faceIds = facesSelection.getSelectedIds();
             } else {
                 faceIds = [face.id];
@@ -2511,8 +2505,8 @@
 
         // Drop target for unknown faces
         card.addEventListener('dragover', (e) => {
-            // Check if dragging faces (use Array.from because types is a DOMStringList)
-            if (Array.from(e.dataTransfer.types).includes('application/x-face-ids')) {
+            // Check if dragging faces
+            if (e.dataTransfer.types.includes('application/x-face-ids')) {
                 e.preventDefault();
                 e.dataTransfer.dropEffect = 'move';
                 card.classList.add('drop-target');
