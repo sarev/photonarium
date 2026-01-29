@@ -2343,35 +2343,19 @@
         card.dataset.id = face.id;
         card.draggable = true;
 
-        // Mousedown - select item if not already selected (before drag starts)
-        // This ensures dragging an unselected item will include it in the drag batch
-        card.addEventListener('mousedown', (e) => {
-            // Only handle left mouse button
-            if (e.button !== 0) return;
-            // Ignore clicks on input elements or buttons
-            if (e.target.tagName === 'INPUT' || e.target.tagName === 'BUTTON' ||
-                e.target.closest('button')) return;
-
-            if (facesSelection && !facesSelection.isSelected(face.id)) {
-                // Ctrl/Cmd+click should toggle, not replace
-                if (e.ctrlKey || e.metaKey) {
-                    facesSelection.toggle(face.id);
-                } else if (!e.shiftKey) {
-                    // Regular click - select only this item
-                    facesSelection.select(face.id);
-                }
-                // Shift+click is handled by GridSelection's click handler for range selection
-            }
-        });
-
         // Drag start - include this face and all other selected faces
         card.addEventListener('dragstart', (e) => {
-            // Get all selected face IDs (current face should already be selected from mousedown)
+            // If dragging an unselected item, select it first so it's included in the batch
+            // (and so the selection state matches what's being dragged)
+            if (facesSelection && !facesSelection.isSelected(face.id)) {
+                facesSelection.select(face.id);
+            }
+
+            // Get all selected face IDs
             let faceIds;
-            if (facesSelection && facesSelection.isSelected(face.id)) {
+            if (facesSelection) {
                 faceIds = facesSelection.getSelectedIds();
             } else {
-                // Fallback if somehow not selected (shouldn't happen with mousedown handler)
                 faceIds = [face.id];
             }
 
