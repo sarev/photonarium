@@ -1471,6 +1471,9 @@ const AppState = (function() {
         let _facesByPerson = null;      // Map<personId, face[]>
         let _facesByImage = null;       // Map<imageId, face[]>
 
+        // Domain reference for transaction system
+        const domainRef = { _name: 'faces', _notify: notify };
+
         /**
          * Invalidate derived view caches.
          */
@@ -1479,6 +1482,135 @@ const AppState = (function() {
             _facesByPerson = null;
             _facesByImage = null;
         }
+
+        // =====================================================================
+        // INTERNAL API
+        // =====================================================================
+        // Used by other domains (e.g., images for delete cascade) within transactions.
+        // These methods mutate state and call markDirty() but don't make API calls.
+
+        const _internal = {
+            /**
+             * Update a face in the cache.
+             * @param {string} id - Face ID
+             * @param {Object} changes - Properties to merge
+             */
+            update(id, changes) {
+                const face = _cache?.get(id);
+                if (face) {
+                    Object.assign(face, changes);
+                    invalidateDerived();
+                    markDirty(domainRef);
+                }
+            },
+
+            /**
+             * Remove a face from the cache.
+             * @param {string} id - Face ID
+             */
+            remove(id) {
+                if (_cache?.delete(id)) {
+                    invalidateDerived();
+                    markDirty(domainRef);
+                }
+            },
+
+            /**
+             * Get face by ID (sync read).
+             * @param {string} id - Face ID
+             * @returns {Object|null} Face or null
+             */
+            get(id) {
+                return _cache?.get(id) || null;
+            },
+
+            /**
+             * Get faces for a person (sync read).
+             * @param {string} personId - Person ID
+             * @returns {Array} Faces for the person
+             */
+            getForPerson(personId) {
+                if (!_cache) return [];
+                // Build lookup if needed
+                if (_facesByPerson === null) {
+                    _facesByPerson = new Map();
+                    for (const face of _cache.values()) {
+                        if (face.person_id) {
+                            const list = _facesByPerson.get(face.person_id) || [];
+                            list.push(face);
+                            _facesByPerson.set(face.person_id, list);
+                        }
+                    }
+                }
+                return _facesByPerson.get(personId) || [];
+            },
+
+            /**
+             * Get first face for a person (for setting preferred).
+             * @param {string} personId - Person ID
+             * @param {Object} options - {excludingImageId: imageId to skip}
+             * @returns {Object|null} First face or null
+             */
+            getFirstForPerson(personId, options = {}) {
+                const { excludingImageId = null } = options;
+                const faces = this.getForPerson(personId);
+                if (excludingImageId) {
+                    return faces.find(f => f.image_id !== excludingImageId) || null;
+                }
+                return faces[0] || null;
+            },
+
+            /**
+             * Link a face to a person (update cache only).
+             * @param {string} faceId - Face ID
+             * @param {string} personId - Person ID
+             * @param {string} personName - Person name
+             */
+            linkToPerson(faceId, personId, personName) {
+                const face = _cache?.get(faceId);
+                if (face) {
+                    face.person_id = personId;
+                    face.person_name = personName;
+                    invalidateDerived();
+                    markDirty(domainRef);
+                }
+            },
+
+            /**
+             * Unlink a face from its person (update cache only).
+             * @param {string} faceId - Face ID
+             * @returns {string|null} Previous person_id if any
+             */
+            unlinkFromPerson(faceId) {
+                const face = _cache?.get(faceId);
+                if (face && face.person_id) {
+                    const oldPersonId = face.person_id;
+                    face.person_id = null;
+                    face.person_name = null;
+                    invalidateDerived();
+                    markDirty(domainRef);
+                    return oldPersonId;
+                }
+                return null;
+            },
+
+            /**
+             * Mark a face as suppressed (update cache only).
+             * @param {string} faceId - Face ID
+             */
+            suppress(faceId) {
+                const face = _cache?.get(faceId);
+                if (face) {
+                    face.suppressed = true;
+                    invalidateDerived();
+                    markDirty(domainRef);
+                }
+            }
+        };
+
+        // =====================================================================
+        // LOAD / CACHE MANAGEMENT
+        // =====================================================================
 
         /**
          * Load all faces from backend.
@@ -1512,10 +1644,17 @@ const AppState = (function() {
             return _pendingLoad;
         }
 
+        // =====================================================================
+        // PUBLIC API
+        // =====================================================================
+
         return {
             // --- Transaction system metadata ---
             _name: 'faces',
             _notify: notify,
+
+            // --- Internal API (for cross-domain transactions) ---
+            _internal,
 
             // --- Subscriptions ---
             onChanged: subscribe,
@@ -1527,7 +1666,7 @@ const AppState = (function() {
                 return load(true);
             },
 
-            // --- Accessors ---
+            // --- Accessors (sync reads, no transaction needed) ---
             getAll() {
                 return _cache ? Array.from(_cache.values()) : [];
             },
@@ -1562,18 +1701,7 @@ const AppState = (function() {
              * Uses cached lookup table.
              */
             getForPerson(personId) {
-                if (!_cache) return [];
-                if (_facesByPerson === null) {
-                    _facesByPerson = new Map();
-                    for (const face of _cache.values()) {
-                        if (face.person_id) {
-                            const list = _facesByPerson.get(face.person_id) || [];
-                            list.push(face);
-                            _facesByPerson.set(face.person_id, list);
-                        }
-                    }
-                }
-                return _facesByPerson.get(personId) || [];
+                return _internal.getForPerson(personId);
             },
 
             /**
@@ -1623,164 +1751,246 @@ const AppState = (function() {
              * @param {string} query - Optional search query (empty returns all)
              * @returns {Promise<Array>} Matching faces sorted by similarity
              */
-            async search(query) {
+            search(query) {
                 const url = query ? `/faces?search=${encodeURIComponent(query)}` : '/faces';
-                return await App.apiGet(url) || [];
+                return App.apiGet(url).then(r => r || []);
             },
 
-            // --- Mutations ---
-            // Note: All mutation methods accept arrays for consistency.
-            // TODO: Some endpoints pending batch normalization (see api-batch-normalization.md)
+            // --- Mutations (wrapped in transactions) ---
 
             /**
              * Identify faces - assign to a person.
+             * Creates person if needed, updates face counts, sets preferred face.
              * @param {Array|string} faceIds - Single ID or array of IDs
              * @param {string} personName - Name for the person
              * @param {Object} options - {preferredFaceId, existingPersonId}
              */
-            async identify(faceIds, personName, options = {}) {
+            identify(faceIds, personName, options = {}) {
                 if (!Array.isArray(faceIds)) faceIds = [faceIds];
                 const { preferredFaceId = null, existingPersonId = null } = options;
 
-                // Determine person (create new or use existing)
-                let personId = existingPersonId;
-                if (!personId) {
-                    const existingPerson = people.getByName(personName);
-                    if (existingPerson) {
-                        personId = existingPerson.id;
-                    }
-                }
-
-                try {
-                    // Uses batch endpoint (already normalized)
-                    // TODO: Rename endpoint from /faces/identify-batch to /faces/identify
-                    const response = await App.apiPost('/faces/identify-batch', {
-                        face_ids: faceIds,
-                        name: personName,
-                        person_id: personId,
-                        preferred_face_id: preferredFaceId
-                    });
-
-                    // Update local cache
-                    const newPersonId = response.person_id;
+                return queueTransaction(async () => {
+                    // Track old person IDs for face count updates
+                    const oldPersonIds = new Map();
                     for (const faceId of faceIds) {
                         const face = _cache?.get(faceId);
-                        if (face) {
-                            face.person_id = newPersonId;
-                            face.person_name = personName;
+                        if (face?.person_id) {
+                            oldPersonIds.set(faceId, face.person_id);
                         }
                     }
 
-                    invalidateDerived();
+                    // Find or create target person
+                    let personId = existingPersonId;
+                    let isNewPerson = false;
+                    if (!personId) {
+                        const existingPerson = people._internal.findByName(personName);
+                        if (existingPerson) {
+                            personId = existingPerson.id;
+                        }
+                    }
 
-                    // Also invalidate people cache (face counts changed)
-                    people.invalidate();
+                    try {
+                        // API call
+                        const response = await App.apiPost('/faces/identify-batch', {
+                            face_ids: faceIds,
+                            name: personName,
+                            person_id: personId,
+                            preferred_face_id: preferredFaceId
+                        });
 
-                    broadcast({ type: 'changed', ids: faceIds });
+                        const newPersonId = response.person_id;
+                        isNewPerson = !personId && newPersonId;
 
-                    return { personId: newPersonId };
-                } catch (err) {
-                    broadcastError(err.message || 'Failed to identify faces');
-                    throw err;
-                }
+                        // Update faces cache
+                        for (const faceId of faceIds) {
+                            _internal.linkToPerson(faceId, newPersonId, personName);
+                        }
+
+                        // If new person was created, add to people cache
+                        if (isNewPerson && response.person) {
+                            people._internal.add(response.person);
+                        } else if (!isNewPerson) {
+                            // Increment face count for existing person
+                            for (const faceId of faceIds) {
+                                const oldPersonId = oldPersonIds.get(faceId);
+                                if (oldPersonId !== newPersonId) {
+                                    people._internal.incrementFaceCount(newPersonId);
+                                }
+                            }
+                        }
+
+                        // Decrement face counts for old persons
+                        const decrementedPersons = new Set();
+                        for (const [faceId, oldPersonId] of oldPersonIds) {
+                            if (oldPersonId !== newPersonId && !decrementedPersons.has(oldPersonId)) {
+                                const newCount = people._internal.decrementFaceCount(oldPersonId);
+                                decrementedPersons.add(oldPersonId);
+                                // Delete person if no more faces
+                                if (newCount === 0) {
+                                    people._internal.remove(oldPersonId);
+                                }
+                            }
+                        }
+
+                        // Set preferred face if needed
+                        const person = people._internal.get(newPersonId);
+                        if (person && !person.preferred_face_id) {
+                            people._internal.update(newPersonId, { preferred_face_id: preferredFaceId || faceIds[0] });
+                            people._internal.bustThumbnail(newPersonId);
+                        }
+
+                        return { personId: newPersonId };
+                    } catch (err) {
+                        broadcastError(err.message || 'Failed to identify faces');
+                        throw err;
+                    }
+                });
             },
 
             /**
              * Unassign faces - return to unknown pool.
+             * Decrements face counts, deletes person if count reaches 0.
              * @param {Array|string} faceIds - Single ID or array of IDs
              */
-            async unassign(faceIds) {
+            unassign(faceIds) {
                 if (!Array.isArray(faceIds)) faceIds = [faceIds];
 
-                // Backup for rollback
-                const backup = new Map();
-                for (const faceId of faceIds) {
-                    const face = _cache?.get(faceId);
-                    if (face) {
-                        backup.set(faceId, { person_id: face.person_id, person_name: face.person_name });
-                        face.person_id = null;
-                        face.person_name = null;
-                    }
-                }
+                return queueTransaction(async () => {
+                    // Track old person IDs for rollback and face count updates
+                    const backup = new Map();
+                    const personFaceCountChanges = new Map(); // personId → count change
 
-                invalidateDerived();
-                broadcast({ type: 'changed', ids: faceIds });
-
-                try {
-                    // Use batch endpoint for efficiency
-                    await App.apiPost('/faces/unassign-batch', { face_ids: faceIds });
-
-                    // Invalidate people cache (face counts changed)
-                    people.invalidate();
-                } catch (err) {
-                    // Rollback
-                    for (const [faceId, data] of backup) {
+                    for (const faceId of faceIds) {
                         const face = _cache?.get(faceId);
                         if (face) {
-                            face.person_id = data.person_id;
-                            face.person_name = data.person_name;
+                            backup.set(faceId, { person_id: face.person_id, person_name: face.person_name });
+                            if (face.person_id) {
+                                const current = personFaceCountChanges.get(face.person_id) || 0;
+                                personFaceCountChanges.set(face.person_id, current + 1);
+                            }
                         }
                     }
-                    invalidateDerived();
-                    broadcast({ type: 'changed', ids: faceIds });
-                    broadcastError(err.message || 'Failed to unassign faces');
-                    throw err;
-                }
+
+                    // Optimistic update - unlink faces
+                    for (const faceId of faceIds) {
+                        _internal.unlinkFromPerson(faceId);
+                    }
+
+                    try {
+                        // API call
+                        await App.apiPost('/faces/unassign-batch', { face_ids: faceIds });
+
+                        // Update people cache
+                        for (const [personId, decrementCount] of personFaceCountChanges) {
+                            for (let i = 0; i < decrementCount; i++) {
+                                const newCount = people._internal.decrementFaceCount(personId);
+                                // Delete person if no more faces (only on last decrement)
+                                if (newCount === 0 && i === decrementCount - 1) {
+                                    people._internal.remove(personId);
+                                }
+                            }
+                            // Update preferred face if needed
+                            const person = people._internal.get(personId);
+                            if (person) {
+                                const remainingFaces = _internal.getForPerson(personId);
+                                if (remainingFaces.length > 0 && !remainingFaces.some(f => f.id === person.preferred_face_id)) {
+                                    people._internal.update(personId, { preferred_face_id: remainingFaces[0].id });
+                                    people._internal.bustThumbnail(personId);
+                                }
+                            }
+                        }
+                    } catch (err) {
+                        // Rollback faces
+                        for (const [faceId, data] of backup) {
+                            if (data.person_id) {
+                                _internal.linkToPerson(faceId, data.person_id, data.person_name);
+                            }
+                        }
+                        broadcastError(err.message || 'Failed to unassign faces');
+                        throw err;
+                    }
+                });
             },
 
             /**
              * Suppress faces - mark as false positives.
+             * If face was identified, handles person cleanup.
              * @param {Array|string} faceIds - Single ID or array of IDs
              */
-            async suppress(faceIds) {
+            suppress(faceIds) {
                 if (!Array.isArray(faceIds)) faceIds = [faceIds];
 
-                // Backup for rollback
-                const backup = new Map();
-                for (const faceId of faceIds) {
-                    const face = _cache?.get(faceId);
-                    if (face) {
-                        backup.set(faceId, { suppressed: face.suppressed });
-                        face.suppressed = true;
-                    }
-                }
+                return queueTransaction(async () => {
+                    // Track faces for rollback
+                    const backup = new Map();
+                    const personFaceCountChanges = new Map();
 
-                invalidateDerived();
-                broadcast({ type: 'changed', ids: faceIds });
-
-                // Persist - currently uses singular endpoint per face
-                // TODO: Replace with POST /faces/suppress {ids: [...]}
-                try {
                     for (const faceId of faceIds) {
-                        await App.apiPost(`/faces/${faceId}/suppress`);
-                    }
-                } catch (err) {
-                    // Rollback
-                    for (const [faceId, data] of backup) {
                         const face = _cache?.get(faceId);
                         if (face) {
-                            face.suppressed = data.suppressed;
+                            backup.set(faceId, {
+                                suppressed: face.suppressed,
+                                person_id: face.person_id,
+                                person_name: face.person_name
+                            });
+                            if (face.person_id) {
+                                const current = personFaceCountChanges.get(face.person_id) || 0;
+                                personFaceCountChanges.set(face.person_id, current + 1);
+                            }
                         }
                     }
-                    invalidateDerived();
-                    broadcast({ type: 'changed', ids: faceIds });
-                    broadcastError(err.message || 'Failed to suppress faces');
-                    throw err;
-                }
-            },
 
-            /**
-             * Search faces by semantic query.
-             * Uses the /faces endpoint with search parameter (not a separate endpoint).
-             */
-            async search(query) {
-                try {
-                    const response = await App.apiGet(`/faces?search=${encodeURIComponent(query)}`);
-                    return response; // Returns unknown faces sorted by similarity
-                } catch (err) {
-                    broadcastError(err.message || 'Failed to search faces');
-                    throw err;
-                }
+                    // Optimistic update
+                    for (const faceId of faceIds) {
+                        const face = _cache?.get(faceId);
+                        if (face?.person_id) {
+                            _internal.unlinkFromPerson(faceId);
+                        }
+                        _internal.suppress(faceId);
+                    }
+
+                    try {
+                        // API calls (TODO: batch endpoint)
+                        for (const faceId of faceIds) {
+                            await App.apiPost(`/faces/${faceId}/suppress`);
+                        }
+
+                        // Update people cache
+                        for (const [personId, decrementCount] of personFaceCountChanges) {
+                            for (let i = 0; i < decrementCount; i++) {
+                                const newCount = people._internal.decrementFaceCount(personId);
+                                if (newCount === 0 && i === decrementCount - 1) {
+                                    people._internal.remove(personId);
+                                }
+                            }
+                            // Update preferred face if needed
+                            const person = people._internal.get(personId);
+                            if (person) {
+                                const remainingFaces = _internal.getForPerson(personId);
+                                if (remainingFaces.length > 0 && !remainingFaces.some(f => f.id === person.preferred_face_id)) {
+                                    people._internal.update(personId, { preferred_face_id: remainingFaces[0].id });
+                                    people._internal.bustThumbnail(personId);
+                                }
+                            }
+                        }
+                    } catch (err) {
+                        // Rollback
+                        for (const [faceId, data] of backup) {
+                            const face = _cache?.get(faceId);
+                            if (face) {
+                                face.suppressed = data.suppressed;
+                                if (data.person_id) {
+                                    face.person_id = data.person_id;
+                                    face.person_name = data.person_name;
+                                }
+                            }
+                        }
+                        invalidateDerived();
+                        markDirty(domainRef);
+                        broadcastError(err.message || 'Failed to suppress faces');
+                        throw err;
+                    }
+                });
             },
 
             // --- Cache management ---
