@@ -368,7 +368,9 @@ class FaceDetector:
                     norm_h = max(0.0, min(1.0 - norm_y, norm_h))
 
                     # Check minimum face size (in original pixels)
-                    face_pixels = box_size / scale if scale != 1.0 else box_size
+                    # Use smaller dimension - both edges must meet minimum
+                    min_box_dim = min(box_width, box_height)
+                    face_pixels = min_box_dim / scale if scale != 1.0 else min_box_dim
                     if face_pixels < self.min_face_size:
                         logger.debug(f'Skipping small face: {face_pixels:.0f}px')
                         continue
@@ -599,7 +601,10 @@ class FaceDetector:
                     norm_w = max(0.0, min(1.0 - norm_x, box_size / processed_width))
                     norm_h = max(0.0, min(1.0 - norm_y, box_size / processed_height))
 
-                    face_pixels = box_size / scale if scale != 1.0 else box_size
+                    # Check minimum face size (in original pixels)
+                    # Use smaller dimension - both edges must meet minimum
+                    min_box_dim = min(box_width, box_height)
+                    face_pixels = min_box_dim / scale if scale != 1.0 else min_box_dim
                     if face_pixels < self.min_face_size:
                         continue
 
@@ -1658,6 +1663,9 @@ def mark_no_faces_detected(
     face_id = str(uuid.uuid4())
     # Create a 512-dimensional zero vector as dummy embedding
     dummy_embedding = np.zeros(512, dtype=np.float32).tobytes()
+    # NOTE: The 0x0 bounding box is intentional - these are sentinel records
+    # marking "no faces found", not real faces. They appear in the database
+    # as suppressed faces with zero dimensions. Do not treat as a bug.
     conn.execute(
         '''INSERT INTO faces
            (id, image_id, box_x, box_y, box_w, box_h, confidence, embedding,
