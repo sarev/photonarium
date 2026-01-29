@@ -1461,6 +1461,22 @@ const AppState = (function() {
     })();
 
     // =========================================================================
+    // SPECULATIVE PRELOADING
+    // =========================================================================
+
+    /**
+     * Speculatively preload data that will likely be needed soon.
+     * Call this after initial page load completes to warm caches in background.
+     * Does not block - all loads happen in parallel without awaiting.
+     */
+    function preloadAll() {
+        // Load people and faces in background (commonly accessed screens)
+        // Don't await - let them load speculatively
+        people.load().catch(err => console.warn('Speculative people load failed:', err));
+        faces.load().catch(err => console.warn('Speculative faces load failed:', err));
+    }
+
+    // =========================================================================
     // PUBLIC API
     // =========================================================================
 
@@ -1473,7 +1489,10 @@ const AppState = (function() {
         people,
         faces,
         duplicates,
-        selection
+        selection,
+
+        // Utility functions
+        preloadAll
     };
 })();
 

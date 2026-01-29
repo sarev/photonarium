@@ -85,9 +85,6 @@ const App = {
         selectedImages: [],
         currentImageId: null,
         scrollPositions: {},
-        // Image cache for efficient incremental updates
-        imageCache: null,       // Map of id -> image object
-        imageCacheEpoch: null,  // Last sync timestamp
         // Track where fullscreen was entered from
         fullscreenSourceScreen: 'gallery',
     },
@@ -888,7 +885,7 @@ const App = {
     },
 
     /* ----------------------------------------------------------------------
-       Image Cache (for efficient incremental updates)
+       Image Cache (delegated to AppState.images)
        ---------------------------------------------------------------------- */
 
     /**
@@ -898,13 +895,8 @@ const App = {
      * @returns {Promise<Array<Object>>} Array of image objects
      */
     async getImages() {
-        if (this.state.imageCache === null) {
-            // First load - fetch all images
-            return this._loadAllImages();
-        } else {
-            // Incremental update - fetch only changes
-            return this._loadImagesDelta();
-        }
+        await AppState.images.load();
+        return AppState.images.getAll();
     },
 
     /**
@@ -913,51 +905,8 @@ const App = {
      * @returns {Promise<Array<Object>>} Array of image objects
      */
     async reloadImages() {
-        this.state.imageCache = null;
-        this.state.imageCacheEpoch = null;
-        return this._loadAllImages();
-    },
-
-    /**
-     * Loads all images and initializes the cache.
-     * @returns {Promise<Array<Object>>} Array of image objects
-     * @private
-     */
-    async _loadAllImages() {
-        const response = await this.apiGet('/images');
-
-        // Build cache map from response
-        this.state.imageCache = new Map();
-        for (const img of response.images) {
-            this.state.imageCache.set(img.id, img);
-        }
-        this.state.imageCacheEpoch = response.epoch;
-
-        return Array.from(this.state.imageCache.values());
-    },
-
-    /**
-     * Loads image changes since last sync and updates cache.
-     * @returns {Promise<Array<Object>>} Array of all cached image objects
-     * @private
-     */
-    async _loadImagesDelta() {
-        const response = await this.apiGet(`/images?since=${encodeURIComponent(this.state.imageCacheEpoch)}`);
-
-        // Apply updates to cache
-        for (const img of response.updated) {
-            this.state.imageCache.set(img.id, img);
-        }
-
-        // Remove deleted images from cache
-        for (const id of response.deleted_ids) {
-            this.state.imageCache.delete(id);
-        }
-
-        // Update epoch
-        this.state.imageCacheEpoch = response.epoch;
-
-        return Array.from(this.state.imageCache.values());
+        await AppState.images.reload();
+        return AppState.images.getAll();
     },
 
     /**
@@ -965,7 +914,7 @@ const App = {
      * @returns {number} Number of cached images, or 0 if cache not loaded
      */
     getCachedImageCount() {
-        return this.state.imageCache ? this.state.imageCache.size : 0;
+        return AppState.images.getCount();
     },
 
     /* ----------------------------------------------------------------------
@@ -1790,6 +1739,10 @@ const App = {
 
         // Determine initial screen
         this._determineInitialScreen();
+
+        // Speculatively preload data that will likely be needed soon
+        // (people and faces for the Faces screen and Search filter)
+        AppState.preloadAll();
 
         // Mark as ready and run callbacks
         this._isReady = true;

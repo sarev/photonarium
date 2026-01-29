@@ -1916,13 +1916,12 @@
         if (facesLoading) facesLoading.hidden = false;
 
         try {
-            // Pre-load people cache so autocomplete works immediately
-            // (load in parallel with faces for efficiency)
-            const [facesData] = await Promise.all([
-                App.api('/faces'),
+            // Load faces and people in parallel using AppState (cached)
+            await Promise.all([
+                AppState.faces.load(),
                 AppState.people.load()
             ]);
-            allFaces = facesData || [];
+            allFaces = AppState.faces.getAll();
             needsRefresh = false;
             needsRerender = false;
             renderFacesGrid();

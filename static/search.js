@@ -460,7 +460,7 @@ const Search = {
         item.draggable = true;
 
         const img = document.createElement('img');
-        img.src = `/api/people/${person.id}/thumbnail`;
+        img.src = AppState.people.getThumbnailUrl(person.id);
         img.alt = person.name;
         img.loading = 'lazy';
         item.appendChild(img);
