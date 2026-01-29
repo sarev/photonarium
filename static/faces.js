@@ -187,6 +187,9 @@
     /** @type {boolean} Grid re-render needed (data already updated locally) */
     let needsRerender = false;
 
+    /** @type {boolean} Suppress AppState subscription re-render during optimistic updates */
+    let suppressBroadcastRender = false;
+
     /** @type {number} Saved scroll position for unknown faces container */
     let savedScrollTop = 0;
 
@@ -393,6 +396,13 @@
             }
             // Skip if data isn't loaded yet
             if (!AppState.faces.isLoaded()) return;
+
+            // Skip re-render if we're in an optimistic update (we already rendered)
+            // This prevents a race condition where the subscription fires after our
+            // optimistic render, potentially replacing DOM elements mid-initialization
+            if (suppressBroadcastRender) {
+                return;
+            }
 
             // For external changes, sync and re-render
             // Our own optimistic updates already handle local state, but this catches
@@ -982,6 +992,9 @@
 
         const faceIdSet = new Set(faceIds);
 
+        // Suppress subscription-triggered re-renders during optimistic update
+        suppressBroadcastRender = true;
+
         // Optimistic update: Find or create destination person
         const destPerson = AppState.people.getByName(name);
         const destPersonId = destPerson?.id || `temp-${Date.now()}`;
@@ -1037,6 +1050,9 @@
         // Fire API in background
         callIdentifyBatchApi(faceIds, name, typedFaceId)
             .then(result => {
+                // Re-enable subscription renders now that API completed
+                suppressBroadcastRender = false;
+
                 if (result && result.success) {
                     // Update temp ID with real ID if it was a new person
                     if (destPersonId.startsWith('temp-') && result.data?.person?.id) {
@@ -1062,6 +1078,9 @@
                 }
             })
             .catch(error => {
+                // Re-enable subscription renders
+                suppressBroadcastRender = false;
+
                 console.error('Failed to reassign face:', error);
                 App.showError(`Failed to reassign ${faceIds.length > 1 ? 'faces' : 'face'}.`);
                 // Reload to get correct state
@@ -1123,6 +1142,10 @@
             facesSelection.clear();
         }
 
+        // Suppress subscription-triggered re-renders during optimistic update
+        // (prevents race condition where AppState broadcast fires mid-render)
+        suppressBroadcastRender = true;
+
         // Optimistic update: Find or create person, update face objects locally
         const existingPerson = AppState.people.getByName(name);
         const personId = existingPerson?.id || `temp-${Date.now()}`;  // Temp ID for new person
@@ -1144,6 +1167,9 @@
         // Don't await - let it complete asynchronously
         callIdentifyBatchApi(faceIds, name, options.preferredFaceId)
             .then(result => {
+                // Re-enable subscription renders now that API completed
+                suppressBroadcastRender = false;
+
                 if (result && result.success) {
                     // Update temp ID with real ID if it was a new person
                     if (personId.startsWith('temp-') && result.data?.person?.id) {
@@ -1172,6 +1198,9 @@
                 }
             })
             .catch(error => {
+                // Re-enable subscription renders
+                suppressBroadcastRender = false;
+
                 console.error('Failed to identify faces:', error);
                 // Reload to get correct state
                 needsRefresh = true;
@@ -1465,6 +1494,9 @@
         const confirmed = await App.confirm('Unassign Faces', message);
         if (!confirmed) return;
 
+        // Suppress subscription-triggered re-renders during optimistic update
+        suppressBroadcastRender = true;
+
         // Optimistic update - update local state immediately
         const faceIdSet = new Set(faceIds);
 
@@ -1497,13 +1529,18 @@
         }
 
         // Fire API in background
-        AppState.faces.unassign(faceIds).catch(error => {
-            console.error('Failed to unassign faces:', error);
-            App.showError('Failed to unassign faces');
-            // On failure, reload to get correct state
-            needsRefresh = true;
-            loadAllFaces();
-        });
+        AppState.faces.unassign(faceIds)
+            .then(() => {
+                suppressBroadcastRender = false;
+            })
+            .catch(error => {
+                suppressBroadcastRender = false;
+                console.error('Failed to unassign faces:', error);
+                App.showError('Failed to unassign faces');
+                // On failure, reload to get correct state
+                needsRefresh = true;
+                loadAllFaces();
+            });
     }
 
     /**
@@ -1645,16 +1682,24 @@
      * @param {string} faceId - Face ID to suppress
      */
     function suppressSingleFace(faceId) {
+        // Suppress subscription-triggered re-renders during optimistic update
+        suppressBroadcastRender = true;
+
         // Optimistic update - remove from UI immediately
         removeUnknownFacesLocally(faceId);
 
         // Fire API in background
-        AppState.faces.suppress(faceId).catch(error => {
-            console.error(`Failed to suppress face ${faceId}:`, error);
-            // On failure, reload to get correct state
-            needsRefresh = true;
-            loadAllFaces();
-        });
+        AppState.faces.suppress(faceId)
+            .then(() => {
+                suppressBroadcastRender = false;
+            })
+            .catch(error => {
+                suppressBroadcastRender = false;
+                console.error(`Failed to suppress face ${faceId}:`, error);
+                // On failure, reload to get correct state
+                needsRefresh = true;
+                loadAllFaces();
+            });
     }
 
     /**
@@ -1674,17 +1719,25 @@
         const confirmed = await App.confirm('Suppress Faces', message);
         if (!confirmed) return;
 
+        // Suppress subscription-triggered re-renders during optimistic update
+        suppressBroadcastRender = true;
+
         // Optimistic update - remove from UI immediately
         removeUnknownFacesLocally(faceIds);
 
         // Fire API in background
-        AppState.faces.suppress(faceIds).catch(error => {
-            console.error('Failed to suppress faces:', error);
-            // On failure, reload to get correct state
-            needsRefresh = true;
-            loadAllFaces();
-            App.showError('Failed to suppress faces.');
-        });
+        AppState.faces.suppress(faceIds)
+            .then(() => {
+                suppressBroadcastRender = false;
+            })
+            .catch(error => {
+                suppressBroadcastRender = false;
+                console.error('Failed to suppress faces:', error);
+                // On failure, reload to get correct state
+                needsRefresh = true;
+                loadAllFaces();
+                App.showError('Failed to suppress faces.');
+            });
     }
 
     /**
