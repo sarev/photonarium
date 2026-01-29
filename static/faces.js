@@ -2511,8 +2511,8 @@
 
         // Drop target for unknown faces
         card.addEventListener('dragover', (e) => {
-            // Check if dragging faces
-            if (e.dataTransfer.types.includes('application/x-face-ids')) {
+            // Check if dragging faces (use Array.from because types is a DOMStringList)
+            if (Array.from(e.dataTransfer.types).includes('application/x-face-ids')) {
                 e.preventDefault();
                 e.dataTransfer.dropEffect = 'move';
                 card.classList.add('drop-target');
