@@ -139,9 +139,27 @@ const AppState = (function() {
             _theme = window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
         }
 
+        /**
+         * Apply theme to DOM. Called on init and when theme changes.
+         */
+        function applyThemeToDOM(theme) {
+            const app = document.getElementById('app');
+            if (app) {
+                app.dataset.theme = theme;
+            }
+        }
+
         return {
             // --- Subscriptions ---
             onChanged: subscribe,
+
+            // --- Initialization ---
+            /**
+             * Apply initial state to DOM. Call once after DOM is ready.
+             */
+            init() {
+                applyThemeToDOM(_theme);
+            },
 
             // --- Theme ---
             getTheme() {
@@ -155,7 +173,11 @@ const AppState = (function() {
                 if (_theme === theme) return;
                 _theme = theme;
                 storage.set('theme', theme);
+                applyThemeToDOM(theme);
                 broadcast({ type: 'changed', property: 'theme' });
+            },
+            toggleTheme() {
+                this.setTheme(_theme === 'light' ? 'dark' : 'light');
             },
 
             // --- Thumbnail Size ---

@@ -156,9 +156,10 @@ const App = {
     /**
      * Gets the current theme.
      * @returns {string} The current theme ('light' or 'dark')
+     * @deprecated Use AppState.view.getTheme() instead
      */
     getTheme() {
-        return this.state.theme;
+        return AppState.view.getTheme();
     },
 
     /**
@@ -166,31 +167,28 @@ const App = {
      * Updates the data-theme attribute on the app container.
      * @param {string} theme - The theme to set ('light' or 'dark')
      * @fires App#themeChanged
+     * @deprecated Use AppState.view.setTheme() instead
      */
     setTheme(theme) {
-        if (theme !== 'light' && theme !== 'dark') {
-            console.warn(`Invalid theme: ${theme}. Using 'light'.`);
-            theme = 'light';
-        }
-        this.state.theme = theme;
-        localStorage.setItem('imaginary-theme', theme);
-        document.getElementById('app').dataset.theme = theme;
-        this.emit('themeChanged', theme);
+        AppState.view.setTheme(theme);
+        // Event bridging handled in _initAppStateBridge()
     },
 
     /**
      * Toggles between light and dark theme.
+     * @deprecated Use AppState.view.toggleTheme() instead
      */
     toggleTheme() {
-        this.setTheme(this.state.theme === 'light' ? 'dark' : 'light');
+        AppState.view.toggleTheme();
     },
 
     /**
      * Gets the current thumbnail size in pixels.
      * @returns {number} The thumbnail size
+     * @deprecated Use AppState.view.getThumbnailSize() instead
      */
     getThumbnailSize() {
-        return this.state.thumbnailSize;
+        return AppState.view.getThumbnailSize();
     },
 
     /**
@@ -198,62 +196,50 @@ const App = {
      * Clamps value between minimum and maximum allowed sizes.
      * @param {number} size - The thumbnail size in pixels
      * @fires App#thumbnailSizeChanged
+     * @deprecated Use AppState.view.setThumbnailSize() instead
      */
     setThumbnailSize(size) {
-        const MIN_SIZE = 100;
-        const MAX_SIZE = 400;
-        size = Math.max(MIN_SIZE, Math.min(MAX_SIZE, size));
-        this.state.thumbnailSize = size;
-        localStorage.setItem('imaginary-thumbnailSize', size.toString());
-        this.emit('thumbnailSizeChanged', size);
+        AppState.view.setThumbnailSize(size);
+        // Event bridging handled in _initAppStateBridge()
     },
 
     /**
      * Gets the current sort configuration.
      * @returns {{by: string, direction: string}} Sort configuration
+     * @deprecated Use AppState.view.getSort() instead
      */
     getSort() {
-        return {
-            by: this.state.sortBy,
-            direction: this.state.sortDirection
-        };
+        return AppState.view.getSort();
     },
 
     /**
      * Sets the sort field.
      * @param {string} sortBy - The field to sort by ('date', 'rating', 'content')
      * @fires App#sortChanged
+     * @deprecated Use AppState.view.setSortBy() instead
      */
     setSortBy(sortBy) {
-        if (!['date', 'rating', 'content', 'people'].includes(sortBy)) {
-            console.warn(`Invalid sortBy: ${sortBy}. Using 'date'.`);
-            sortBy = 'date';
-        }
-        this.state.sortBy = sortBy;
-        localStorage.setItem('imaginary-sortBy', sortBy);
-        this.emit('sortChanged', this.getSort());
+        AppState.view.setSortBy(sortBy);
+        // Event bridging handled in _initAppStateBridge()
     },
 
     /**
      * Sets the sort direction.
      * @param {string} direction - The sort direction ('asc' or 'desc')
      * @fires App#sortChanged
+     * @deprecated Use AppState.view.setSortDirection() instead
      */
     setSortDirection(direction) {
-        if (direction !== 'asc' && direction !== 'desc') {
-            console.warn(`Invalid sortDirection: ${direction}. Using 'desc'.`);
-            direction = 'desc';
-        }
-        this.state.sortDirection = direction;
-        localStorage.setItem('imaginary-sortDirection', direction);
-        this.emit('sortChanged', this.getSort());
+        AppState.view.setSortDirection(direction);
+        // Event bridging handled in _initAppStateBridge()
     },
 
     /**
      * Toggles the sort direction between ascending and descending.
+     * @deprecated Use AppState.view.toggleSortDirection() instead
      */
     toggleSortDirection() {
-        this.setSortDirection(this.state.sortDirection === 'asc' ? 'desc' : 'asc');
+        AppState.view.toggleSortDirection();
     },
 
     /**
@@ -415,45 +401,49 @@ const App = {
     },
 
     /* ----------------------------------------------------------------------
-       State Persistence
+       State Persistence & AppState Bridge
        ---------------------------------------------------------------------- */
 
     /**
-     * Loads persisted state from localStorage.
-     * Called during initialization.
+     * Syncs App.state with AppState for backward compatibility.
+     * View settings are now managed by AppState.view but we keep App.state
+     * in sync for any code that still reads from it directly.
      * @private
      */
-    _loadPersistedState() {
-        // Load theme
-        const savedTheme = localStorage.getItem('imaginary-theme');
-        if (savedTheme === 'light' || savedTheme === 'dark') {
-            this.state.theme = savedTheme;
-        } else {
-            // Check system preference
-            if (window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches) {
-                this.state.theme = 'dark';
+    _syncStateFromAppState() {
+        // Sync view settings from AppState.view to App.state
+        this.state.theme = AppState.view.getTheme();
+        this.state.thumbnailSize = AppState.view.getThumbnailSize();
+        this.state.sortBy = AppState.view.getSortBy();
+        this.state.sortDirection = AppState.view.getSortDirection();
+    },
+
+    /**
+     * Sets up event bridging from AppState to App events.
+     * This allows gradual migration - existing code using App.on('themeChanged')
+     * will continue to work while new code uses AppState.view.onChanged().
+     * @private
+     */
+    _initAppStateBridge() {
+        // Bridge AppState.view changes to App events
+        AppState.view.onChanged((event) => {
+            // Keep App.state in sync
+            this._syncStateFromAppState();
+
+            // Emit corresponding App events
+            switch (event.property) {
+                case 'theme':
+                    this.emit('themeChanged', AppState.view.getTheme());
+                    break;
+                case 'thumbnailSize':
+                    this.emit('thumbnailSizeChanged', AppState.view.getThumbnailSize());
+                    break;
+                case 'sortBy':
+                case 'sortDirection':
+                    this.emit('sortChanged', AppState.view.getSort());
+                    break;
             }
-        }
-
-        // Load thumbnail size
-        const savedSize = localStorage.getItem('imaginary-thumbnailSize');
-        if (savedSize) {
-            const size = parseInt(savedSize, 10);
-            if (!isNaN(size) && size >= 100 && size <= 400) {
-                this.state.thumbnailSize = size;
-            }
-        }
-
-        // Load sort preferences
-        const savedSortBy = localStorage.getItem('imaginary-sortBy');
-        if (['date', 'rating', 'content'].includes(savedSortBy)) {
-            this.state.sortBy = savedSortBy;
-        }
-
-        const savedSortDirection = localStorage.getItem('imaginary-sortDirection');
-        if (savedSortDirection === 'asc' || savedSortDirection === 'desc') {
-            this.state.sortDirection = savedSortDirection;
-        }
+        });
     },
 
     /* ----------------------------------------------------------------------
@@ -958,8 +948,8 @@ const App = {
         this._bindBtn('btn-back-gallery', () => this.showGallery());
 
         // Gallery controls
-        this._bindBtn('btn-thumb-smaller', () => this.setThumbnailSize(this.state.thumbnailSize - 50));
-        this._bindBtn('btn-thumb-larger', () => this.setThumbnailSize(this.state.thumbnailSize + 50));
+        this._bindBtn('btn-thumb-smaller', () => this.setThumbnailSize(AppState.view.getThumbnailSize() - 50));
+        this._bindBtn('btn-thumb-larger', () => this.setThumbnailSize(AppState.view.getThumbnailSize() + 50));
         this._bindBtn('btn-fullscreen', () => this._handleFullscreenClick());
         this._bindBtn('btn-reveal-folder', () => this._handleRevealFolderClick());
         this._bindBtn('btn-rotate-ccw', () => this._handleRotateClick('ccw'));
@@ -975,8 +965,8 @@ const App = {
         this._bindBtn('btn-sort-direction', () => this.toggleSortDirection());
 
         // Duplicates controls
-        this._bindBtn('btn-dup-thumb-smaller', () => this.setThumbnailSize(this.state.thumbnailSize - 50));
-        this._bindBtn('btn-dup-thumb-larger', () => this.setThumbnailSize(this.state.thumbnailSize + 50));
+        this._bindBtn('btn-dup-thumb-smaller', () => this.setThumbnailSize(AppState.view.getThumbnailSize() - 50));
+        this._bindBtn('btn-dup-thumb-larger', () => this.setThumbnailSize(AppState.view.getThumbnailSize() + 50));
 
         // Similarity slider
         const slider = document.getElementById('similarity-slider');
@@ -1169,8 +1159,8 @@ const App = {
      * @private
      */
     _updateSortButtons() {
-        const sortBy = this.state.sortBy;
-        const direction = this.state.sortDirection;
+        const sortBy = AppState.view.getSortBy();
+        const direction = AppState.view.getSortDirection();
 
         // Update active states
         ['date', 'rating', 'content', 'people'].forEach(type => {
@@ -1211,7 +1201,7 @@ const App = {
         if (btn) {
             const icon = btn.querySelector('.material-symbols-outlined');
             if (icon) {
-                icon.textContent = this.state.theme === 'light' ? 'dark_mode' : 'light_mode';
+                icon.textContent = AppState.view.getTheme() === 'light' ? 'dark_mode' : 'light_mode';
             }
         }
     },
@@ -1591,7 +1581,7 @@ const App = {
      * @returns {string} Thumbnail URL
      */
     thumbnailUrl(imageId, size) {
-        size = size || this.state.thumbnailSize;
+        size = size || AppState.view.getThumbnailSize();
         return `${this.apiBase}/images/${imageId}/thumbnail?size=${size}`;
     },
 
@@ -1721,14 +1711,17 @@ const App = {
      * @private
      */
     _init() {
-        // Load persisted state
-        this._loadPersistedState();
+        // Initialize AppState.view (applies theme to DOM, loads from localStorage)
+        AppState.view.init();
+
+        // Set up event bridge from AppState to App events (backward compatibility)
+        this._initAppStateBridge();
+
+        // Sync App.state from AppState for code that still reads directly
+        this._syncStateFromAppState();
 
         // Load thumbnail config from backend (async, uses defaults until loaded)
         this.loadThumbnailConfig();
-
-        // Apply initial theme
-        document.getElementById('app').dataset.theme = this.state.theme;
 
         // Initialise toolbar
         this._initToolbar();
