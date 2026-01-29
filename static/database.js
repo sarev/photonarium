@@ -69,6 +69,13 @@ const Database = {
     _lastStatus: null,
 
     /**
+     * AppState subscription cleanup function.
+     * @type {Function|null}
+     * @private
+     */
+    _foldersUnsubscribe: null,
+
+    /**
      * History of indexing queue samples for ETA calculation.
      * Each entry is {count, timestamp}.
      * @type {Array<{count: number, timestamp: number}>}
@@ -130,6 +137,21 @@ const Database = {
         };
 
         this._bindEvents();
+
+        // Subscribe to AppState.folders changes for auto-rendering
+        this._foldersUnsubscribe = AppState.folders.onChanged((event) => {
+            if (App.getScreen() === 'database') {
+                // Re-render folder list when folders change
+                if (event.type === 'changed' && !event.property) {
+                    this._renderFolders(AppState.folders.getAll());
+                }
+                // Handle databaseChanged event (processing completed)
+                if (event.type === 'databaseChanged') {
+                    this._refreshStats();
+                    App.emit('databaseChanged');
+                }
+            }
+        });
     },
 
     /**
@@ -206,13 +228,8 @@ const Database = {
         }
 
         try {
-            const resp = await App.apiPost('/folders', { path: picked.path });
-            if (resp && resp.success === false) {
-                App.showError(resp.error || 'Could not add folder.');
-                return;
-            }
-
-            await this._refresh();
+            await AppState.folders.add(picked.path);
+            // Folder list re-renders via onChanged subscription
             // No need to start scan - backend automatically queues new folder contents
         } catch (error) {
             console.error('Error adding folder:', error);
@@ -232,8 +249,8 @@ const Database = {
         }
 
         try {
-            await App.apiDelete(`/folders/${encodeURIComponent(path)}`);
-            await this._refresh();
+            await AppState.folders.remove(path);
+            // Folder list re-renders via onChanged subscription
         } catch (error) {
             console.error('Error removing folder:', error);
             App.showError('Could not remove folder.');
@@ -289,16 +306,27 @@ const Database = {
      */
     async _refresh() {
         try {
-            const [folders, stats] = await Promise.all([
-                App.apiGet('/folders'),
-                App.apiGet('/stats')
+            await Promise.all([
+                AppState.folders.load(),
+                this._refreshStats()
             ]);
-
-            this._renderFolders(Array.isArray(folders) ? folders : []);
-            this._els.statusTotal.textContent = stats && typeof stats.totalImages === 'number' ? String(stats.totalImages) : '0';
+            this._renderFolders(AppState.folders.getAll());
         } catch (error) {
             console.error('Error loading database status:', error);
             App.showError('Could not load database status.');
+        }
+    },
+
+    /**
+     * Refreshes just the stats from the backend.
+     * @private
+     */
+    async _refreshStats() {
+        try {
+            const stats = await App.apiGet('/stats');
+            this._els.statusTotal.textContent = stats && typeof stats.totalImages === 'number' ? String(stats.totalImages) : '0';
+        } catch (error) {
+            console.error('Error loading stats:', error);
         }
     },
 
@@ -308,11 +336,7 @@ const Database = {
      */
     async _rescanAll() {
         try {
-            const resp = await App.apiPost('/rescan');
-            if (resp && resp.success === false) {
-                App.showError(resp.error || 'Could not start rescan.');
-                return;
-            }
+            await AppState.folders.rescan();
             // Status polling will pick up the new queue items
         } catch (error) {
             console.error('Error initiating rescan:', error);
@@ -356,13 +380,13 @@ const Database = {
     async _pollStatus() {
         try {
             const status = await App.apiGet('/status');
-            this._updateStatusDisplay(status);
 
-            // If status changed to 'up_to_date', refresh the stats
-            if (status.status === 'up_to_date' && this._lastStatus === 'updating') {
-                await this._refresh();
-                App.emit('databaseChanged');
-            }
+            // Update AppState with status (triggers databaseChanged when processing completes)
+            // The subscription handler will call _refreshStats() and emit databaseChanged
+            AppState.folders.setStatus(status);
+
+            // Update local display
+            this._updateStatusDisplay(status);
 
             this._lastStatus = status.status;
         } catch (error) {

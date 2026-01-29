@@ -417,12 +417,12 @@ const AppState = (function() {
             async add(path) {
                 try {
                     const response = await App.apiPost('/folders', { path });
-                    // Add to local list
-                    if (response?.data) {
-                        _folders = [..._folders, response.data];
-                        broadcast({ type: 'changed' });
+                    // Backend returns {success: false, error} on failure
+                    if (response && response.success === false) {
+                        throw new Error(response.error || 'Failed to add folder');
                     }
-                    return response?.data;
+                    // Reload folder list to get accurate data from backend
+                    await load();
                 } catch (err) {
                     broadcastError(err.message || 'Failed to add folder');
                     throw err;
@@ -441,7 +441,11 @@ const AppState = (function() {
             },
             async rescan() {
                 try {
-                    await App.apiPost('/rescan');
+                    const response = await App.apiPost('/rescan');
+                    // Backend returns {success: false, error} on failure
+                    if (response && response.success === false) {
+                        throw new Error(response.error || 'Failed to start rescan');
+                    }
                     broadcast({ type: 'rescanStarted' });
                 } catch (err) {
                     broadcastError(err.message || 'Failed to start rescan');
