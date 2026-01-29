@@ -810,6 +810,19 @@ const App = {
         return this.api(endpoint, { method: 'DELETE' });
     },
 
+    /**
+     * PATCH request helper.
+     * @param {string} endpoint - API endpoint
+     * @param {Object} data - Request body
+     * @returns {Promise<*>} Response data
+     */
+    async apiPatch(endpoint, data) {
+        return this.api(endpoint, {
+            method: 'PATCH',
+            body: JSON.stringify(data)
+        });
+    },
+
     /* ----------------------------------------------------------------------
        Thumbnail Configuration
        ---------------------------------------------------------------------- */
