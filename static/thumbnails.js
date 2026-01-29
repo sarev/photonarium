@@ -6,7 +6,7 @@
  * - VirtualGrid: Virtual scrolling with absolute positioning
  * - GridSelection: Unified selection handling (click, keyboard, drag-box)
  *
- * Architecture:
+ * ARCHITECTURE:
  * - DOM elements are only created AFTER their thumbnail blob URL is ready
  * - Items are absolutely positioned based on their index (no insertion order dependency)
  * - One unified buffer zone: visible rows ± extraRows (from ThumbnailConfig)
@@ -14,6 +14,65 @@
  * - Priority is determined by absolute distance from the center of the visible area
  * - Re-prioritization happens each time a fetch slot becomes available
  * - A faint grid pattern shows placeholder positions during scroll
+ *
+ * INTEGRATION GUIDE:
+ * To integrate VirtualGrid into a screen:
+ *
+ * 1. Create VirtualGrid with config (container, getItems, createItem, etc.)
+ * 2. Call render() to populate the grid
+ * 3. Create GridSelection with the grid instance
+ * 4. Call grid.bind() and selection.bind() when screen becomes active
+ * 5. Call grid.unbind() and selection.unbind() when screen becomes inactive
+ * 6. Call grid.destroy() and selection.destroy() when recreating the grid
+ *
+ * CRITICAL GOTCHAS (learned from integration bugs):
+ *
+ * 1. UNBIND BEFORE DESTROYING DOM:
+ *    If you clear the container's innerHTML without calling unbind() first,
+ *    scroll listeners become orphaned and continue firing on the old container.
+ *    This causes errors and memory leaks. Always: unbind() → destroy() → clear DOM.
+ *
+ * 2. HIDDEN CONTAINERS HAVE ZERO DIMENSIONS:
+ *    When a screen is hidden (display:none or behind overlay like fullscreen),
+ *    the container has clientWidth/clientHeight of 0. Calling render() will
+ *    fail dimension calculation and defer via RAF. If the grid is unbound,
+ *    it won't retry. If bound but hidden indefinitely, it was causing an
+ *    infinite RAF loop (fixed with _bound checks). Best practice: don't call
+ *    render() on hidden containers - set a needsRefresh flag instead.
+ *
+ * 3. BIND TRIGGERS _updateVisibleItems:
+ *    bind() now calls _updateVisibleItems() to ensure thumbnails load.
+ *    Previously, returning to a screen would show a blank grid until scroll.
+ *
+ * 4. SCROLL CONTAINER MUST BE THE CONFIG.CONTAINER:
+ *    VirtualGrid attaches scroll listeners to config.container. If your
+ *    layout has nested scroll containers (e.g., outer page scroll + inner
+ *    grid scroll), ensure config.container is the actual scrolling element.
+ *    Faces screen had this issue: .faces-grid was scrolling but VirtualGrid
+ *    was listening on a different element.
+ *
+ * 5. BLOB URL MEMORY LEAK:
+ *    Each thumbnail fetch creates a blob URL via URL.createObjectURL().
+ *    These MUST be revoked when the item scrolls out of view or on destroy.
+ *    renderedItems Map stores {el, blobUrl} to track both. If you only
+ *    stored the element, blob URLs would leak and memory would grow
+ *    during long browsing sessions.
+ *
+ * 6. SELECTION STATE PERSISTS ACROSS UNBIND/BIND:
+ *    GridSelection keeps its _selected Set when unbound. This is intentional
+ *    so selection persists when switching screens. But if you recreate the
+ *    grid with new data, you may need to call selection.clear().
+ *
+ * 7. KEYBOARD HANDLER IS ON DOCUMENT:
+ *    GridSelection's keydown handler is attached to document, not the grid.
+ *    This means it captures keys even when focus is elsewhere. The handler
+ *    checks if the grid's screen is active before processing. If you have
+ *    multiple grids, ensure only the active one has selection bound.
+ *
+ * 8. O(n) LOOKUPS DURING SCROLL:
+ *    Early versions had O(r × n) scroll performance where r = rendered items
+ *    and n = total items. Fixed by building id→index Map once per scroll
+ *    update. If you modify _updateVisibleItems, maintain this optimization.
  *
  * @module thumbnails
  * @requires core
@@ -29,7 +88,7 @@
 /**
  * Thumbnail loader with scroll-aware prioritization.
  *
- * Features:
+ * FEATURES:
  * - Real-time prioritization: Sorts queue based on current scroll position
  * - Automatic pruning: Discards requests outside buffer zone
  * - Timeout protection: Aborts slow requests to free slots
@@ -37,45 +96,45 @@
  * - Cache busting: Support for rotated images
  * - Callback-based: Calls onReady callback with blob URL when fetch completes
  *
+ * HOW IT WORKS:
+ * 1. VirtualGrid calls request(imageId, index, onReady) for items entering buffer
+ * 2. Request is added to queue, sorted by distance from visible area center
+ * 3. Loader fetches up to N concurrent requests (from config)
+ * 4. On success: calls onReady(blobUrl), item creates DOM element
+ * 5. On scroll: items leaving buffer are pruned from queue, in-flight aborted
+ *
+ * SINGLETON: There's one global ThumbnailLoader shared by all grids.
+ * Call clear() when switching screens to cancel pending requests.
+ *
  * @namespace
  */
 const ThumbnailLoader = {
     /**
-     * Pending request queue.
-     * Each entry: { imageId, index, onReady }
-     * @type {Array<Object>}
-     * @private
+     * Pending request queue. Each entry: { imageId, index, onReady }
+     * Sorted by priority (distance from visible center) on each processQueue.
      */
     _queue: [],
 
     /**
-     * In-flight requests.
-     * Map of imageId -> { controller: AbortController, index: number }
-     * @type {Map<string, Object>}
-     * @private
+     * In-flight requests. Map of imageId → { controller: AbortController, index }
+     * Used for aborting requests when items scroll out of view.
      */
     _inFlight: new Map(),
 
     /**
-     * Cache-bust timestamps for rotated images.
-     * Map of imageId -> timestamp
-     * @type {Map<string, number>}
-     * @private
+     * Cache-bust timestamps. Map of imageId → timestamp.
+     * Set when image is rotated. Appended to URL as ?t=timestamp.
+     * Cleared never (small memory footprint, only for rotated images).
      */
     _cacheBust: new Map(),
 
-    /**
-     * Current number of active fetches.
-     * @type {number}
-     * @private
-     */
+    /** Current number of active fetches (for concurrency limiting). */
     _activeCount: 0,
 
     /**
      * Current scroll state for prioritization.
-     * Updated by updateScrollState().
-     * @type {Object}
-     * @private
+     * Updated by VirtualGrid on each scroll via updateScrollState().
+     * Used to calculate priority (distance from visible center).
      */
     _scrollState: {
         itemsPerRow: 1,
@@ -351,6 +410,32 @@ window.ThumbnailLoader = ThumbnailLoader;
    The grid container has a fixed total height based on total items.
    Each thumbnail is absolutely positioned at its calculated location.
    Elements don't depend on each other - they can load in any order.
+
+   LIFECYCLE:
+     create()  → Instance created, resize listener attached
+     render()  → Clears DOM, calculates layout, requests visible thumbnails
+     bind()    → Attaches scroll listener, triggers thumbnail loading
+     unbind()  → Detaches scroll listener, cancels pending RAF
+     destroy() → Full cleanup: listeners, blob URLs, DOM, state
+
+   TYPICAL USAGE:
+     // On screen enter:
+     grid = VirtualGrid.create({...});
+     grid.render();
+     grid.bind();
+
+     // On screen leave:
+     grid.unbind();
+
+     // When recreating with new data:
+     grid.unbind();
+     grid.destroy();
+     grid = VirtualGrid.create({...});
+     grid.render();
+     grid.bind();
+
+   GOTCHA: render() calls bind() internally if successful. If you call render()
+   then bind(), you'll double-attach scroll listeners. Check the flow carefully.
    ========================================================================== */
 
 /**
@@ -401,20 +486,36 @@ const VirtualGrid = {
                 getThumbnailUrl: config.getThumbnailUrl || null
             },
 
-            // Layout state
+            // ---------------------------------------------------------------
+            // LAYOUT STATE
+            // ---------------------------------------------------------------
+            // Recalculated on render() and resize. Used by position calculations
+            // and buffer zone determination.
             _state: {
-                itemHeight: 0,
-                itemWidth: 0,
-                itemsPerRow: 0,
-                visibleRows: 0,
-                totalHeight: 0,
-                renderedItems: new Map(),  // id -> {el: HTMLElement, blobUrl: string}
-                pendingItems: new Set(),   // ids with pending thumbnail requests
-                lastScrollProcess: 0       // Timestamp for scroll throttle
+                itemHeight: 0,          // Height including gap (for row calculations)
+                itemWidth: 0,           // Width of each item
+                itemsPerRow: 0,         // Number of columns
+                visibleRows: 0,         // Rows visible in viewport + 1
+                totalHeight: 0,         // Total scrollable height (for scroll indicator)
+
+                // RENDERED ITEMS MAP: id → {el: HTMLElement, blobUrl: string}
+                // Stores both element and blob URL for proper cleanup.
+                // CRITICAL: Blob URLs MUST be revoked when items are removed,
+                // otherwise they leak memory during long browsing sessions.
+                renderedItems: new Map(),
+
+                // PENDING ITEMS: IDs that have thumbnail requests in flight.
+                // Used to avoid duplicate requests for the same item.
+                pendingItems: new Set(),
+
+                lastScrollProcess: 0    // Timestamp for scroll throttle
             },
 
-            // Inner container for absolute positioning
+            // Inner container: positioned relative, contains all absolutely
+            // positioned items. Has background grid pattern as placeholder.
             _innerContainer: null,
+
+            // Event handlers (stored for cleanup)
             _scrollHandler: null,
             _resizeHandler: null,
             _trailingScrollTimeout: null,
@@ -790,21 +891,38 @@ const VirtualGrid = {
 
             /**
              * Performs a full render of the grid.
-             * Sets up container and requests thumbnails for visible items.
+             *
+             * WHAT IT DOES:
+             * 1. Saves scroll position (innerHTML='' can reset it in some browsers)
+             * 2. Revokes all blob URLs to prevent memory leaks
+             * 3. Clears container DOM and internal state
+             * 4. Calculates layout dimensions
+             * 5. Creates inner container with placeholder grid pattern
+             * 6. Restores scroll position (clamped to new max)
+             * 7. Requests thumbnails for visible items
+             * 8. Attaches scroll listener and sets _bound = true
+             *
+             * GOTCHA: If container has zero dimensions (hidden screen), dimension
+             * calculation fails. In this case, render() defers via RAF and will
+             * retry when container becomes visible. The RAF retry only happens if
+             * _bound is true, preventing infinite loops on permanently hidden grids.
+             *
+             * IMPORTANT: render() calls bind() internally. Don't call bind() after
+             * render() or you'll double-attach scroll listeners.
              */
             render() {
                 const container = this._config.container;
                 const items = this._config.getItems();
 
-                // Save scroll position before clearing (innerHTML = '' can reset scrollTop)
+                // Save scroll position (innerHTML='' resets scrollTop in some browsers)
                 const savedScrollTop = container.scrollTop;
 
-                // Revoke all blob URLs before clearing
+                // CRITICAL: Revoke blob URLs to prevent memory leak
                 for (const [, {blobUrl}] of this._state.renderedItems) {
                     URL.revokeObjectURL(blobUrl);
                 }
 
-                // Clear existing content and state
+                // Clear DOM and state
                 container.innerHTML = '';
                 this._state.renderedItems.clear();
                 this._state.pendingItems.clear();
@@ -940,7 +1058,19 @@ const VirtualGrid = {
             },
 
             /**
-             * Unbinds scroll listener (for screen leave).
+             * Unbinds scroll listener and cancels pending operations.
+             *
+             * Call when:
+             * - Screen becomes inactive (onLeave)
+             * - Before destroying the grid
+             * - Before clearing container DOM
+             *
+             * CRITICAL: Always call before clearing container innerHTML.
+             * Otherwise scroll listeners remain attached to orphaned elements.
+             *
+             * Does NOT clear rendered items or revoke blob URLs - those persist
+             * so returning to the screen shows cached content. Use destroy()
+             * for full cleanup.
              */
             unbind() {
                 this._detachScrollListener();
@@ -956,8 +1086,15 @@ const VirtualGrid = {
             },
 
             /**
-             * Rebinds scroll listener (for screen enter).
-             * Also triggers a visible items update to ensure thumbnails load.
+             * Rebinds scroll listener for screen enter.
+             *
+             * Call when:
+             * - Screen becomes active (onEnter)
+             * - ONLY if render() was NOT just called (render() binds internally)
+             *
+             * IMPORTANT: Also triggers _updateVisibleItems() to ensure thumbnails
+             * load. Without this, returning to a screen would show a blank grid
+             * until the user scrolled.
              */
             bind() {
                 this._attachScrollListener();
@@ -970,7 +1107,20 @@ const VirtualGrid = {
             },
 
             /**
-             * Cleans up all resources.
+             * Full cleanup - call when discarding the grid instance.
+             *
+             * WHAT IT DOES:
+             * - Removes scroll and resize listeners
+             * - Cancels pending timeouts and RAF
+             * - Revokes ALL blob URLs (prevents memory leak)
+             * - Clears rendered items and pending items
+             * - Clears container innerHTML
+             *
+             * Call when:
+             * - Recreating the grid with new data/config
+             * - Screen is being destroyed
+             *
+             * AFTER DESTROY: The instance is unusable. Create a new one.
              */
             destroy() {
                 this._detachScrollListener();
@@ -983,7 +1133,7 @@ const VirtualGrid = {
                     cancelAnimationFrame(this._pendingRenderFrame);
                     this._pendingRenderFrame = null;
                 }
-                // Revoke all blob URLs before clearing
+                // CRITICAL: Revoke blob URLs to prevent memory leak
                 for (const [, {blobUrl}] of this._state.renderedItems) {
                     URL.revokeObjectURL(blobUrl);
                 }
@@ -994,7 +1144,11 @@ const VirtualGrid = {
             },
 
             /**
-             * Removes a rendered item from tracking and revokes its blob URL.
+             * Removes a single rendered item and revokes its blob URL.
+             *
+             * Use case: When an item is deleted/rotated and you need to remove
+             * it from tracking without a full re-render.
+             *
              * @param {string} id - Item ID
              * @param {boolean} [removeFromDom=false] - Also remove element from DOM
              */
@@ -1026,6 +1180,54 @@ window.VirtualGrid = VirtualGrid;
 
    Unified selection handling for thumbnail grids.
    Supports click, keyboard, long-press, and drag-box selection.
+
+   FEATURES:
+   - Click: Select single item (clears previous selection)
+   - Ctrl+Click: Toggle item in selection
+   - Shift+Click: Select range from anchor to clicked item
+   - Right-Click: Add to selection if not already selected
+   - Drag-box: Draw rectangle to select multiple items
+   - Long-press: Toggle selection (touch device support)
+   - Arrow keys: Navigate and select (with Shift for extend)
+   - Ctrl+A: Select all
+   - Escape: Clear selection
+   - Enter: Activate selected item
+   - Delete: Request deletion of selected items
+
+   LIFECYCLE:
+   - create(config) → Instance created, handlers prepared but not attached
+   - bind() → Attach all event listeners
+   - unbind() → Detach all event listeners, cleanup in-progress operations
+   - destroy() → Full cleanup, clear selection state
+
+   GOTCHAS:
+
+   1. KEYBOARD HANDLER ON DOCUMENT:
+      The keydown handler is attached to document, not the grid element.
+      This allows keyboard navigation without explicit focus. BUT it means
+      the handler fires for ALL key presses. The handler should check if
+      the grid's screen is active. If multiple grids exist, only the
+      active one should have selection bound.
+
+   2. SELECTION PERSISTS ACROSS UNBIND:
+      Unlike VirtualGrid, GridSelection keeps its _selected Set when unbound.
+      This is intentional - selection should persist when switching screens.
+      Call clear() explicitly if you need to reset selection.
+
+   3. ANCHOR FOR SHIFT-CLICK:
+      _anchor tracks the last non-range-selected item. Shift+click selects
+      everything between anchor and clicked item. Anchor is set on single
+      clicks and arrow key navigation.
+
+   4. DRAG-BOX USES DOCUMENT EVENTS:
+      During drag, mousemove and mouseup are attached to document (not grid).
+      This allows dragging outside the grid boundaries. These handlers are
+      cleaned up in unbind() and when drag ends.
+
+   5. VIRTUAL ITEMS:
+      Selection works with item IDs, not DOM elements. When VirtualGrid
+      scrolls items out of view, they're removed from DOM but remain in
+      _selected. Selection visuals are reapplied via onItemCreated callback.
    ========================================================================== */
 
 /**
@@ -1855,14 +2057,23 @@ const GridSelection = {
             },
 
             /**
-             * Binds all event listeners.
+             * Binds all event listeners for selection handling.
+             *
+             * Call when:
+             * - Screen becomes active (after VirtualGrid.bind())
+             * - After creating a new GridSelection instance
+             *
+             * IMPORTANT: Only one GridSelection should be bound at a time if
+             * keyboard handling is enabled, since keydown is on document.
+             *
+             * NOTE: Does not clear selection - existing selection persists.
              */
             bind() {
                 if (this._bound) return;
 
                 const gridEl = this._getGridElement();
 
-                // Click handlers
+                // Click handlers (on grid element)
                 this._handlers.click = (e) => this._handleClick(e);
                 this._handlers.contextmenu = (e) => this._handleRightClick(e);
                 this._handlers.dblclick = (e) => this._handleDoubleClick(e);
@@ -1871,7 +2082,7 @@ const GridSelection = {
                 gridEl.addEventListener('contextmenu', this._handlers.contextmenu);
                 gridEl.addEventListener('dblclick', this._handlers.dblclick);
 
-                // Long-press handlers
+                // Long-press handlers (for touch devices)
                 if (this._config.enableLongPress) {
                     this._handlers.pointerdown = (e) => this._handlePointerDown(e);
                     this._handlers.pointerup = () => this._handlePointerUp();
@@ -1882,13 +2093,13 @@ const GridSelection = {
                     gridEl.addEventListener('pointerleave', this._handlers.pointerleave);
                 }
 
-                // Drag-box handler
+                // Drag-box handler (mousedown starts drag tracking)
                 if (this._config.enableDragBox) {
                     this._handlers.mousedown = (e) => this._handleDragStart(e);
                     gridEl.addEventListener('mousedown', this._handlers.mousedown);
                 }
 
-                // Keyboard handler
+                // Keyboard handler (on document - captures all key presses)
                 if (this._config.enableKeyboard) {
                     this._handlers.keydown = (e) => this._handleKeyDown(e);
                     document.addEventListener('keydown', this._handlers.keydown);
@@ -1898,13 +2109,28 @@ const GridSelection = {
             },
 
             /**
-             * Unbinds all event listeners.
+             * Unbinds all event listeners and cleans up in-progress operations.
+             *
+             * Call when:
+             * - Screen becomes inactive (before VirtualGrid.unbind())
+             * - Before destroying the selection instance
+             *
+             * NOTE: Selection state (_selected Set) is preserved. This allows
+             * selection to persist when switching screens. Call clear() first
+             * if you want to reset selection before unbinding.
+             *
+             * Cleans up:
+             * - All grid event listeners
+             * - Document keydown listener
+             * - In-progress drag-box (removes box element, document listeners)
+             * - Long-press timer
              */
             unbind() {
                 if (!this._bound) return;
 
                 const gridEl = this._getGridElement();
 
+                // Remove grid element listeners
                 gridEl.removeEventListener('click', this._handlers.click);
                 gridEl.removeEventListener('contextmenu', this._handlers.contextmenu);
                 gridEl.removeEventListener('dblclick', this._handlers.dblclick);
@@ -1919,11 +2145,12 @@ const GridSelection = {
                     gridEl.removeEventListener('mousedown', this._handlers.mousedown);
                 }
 
+                // Remove document keydown listener
                 if (this._config.enableKeyboard) {
                     document.removeEventListener('keydown', this._handlers.keydown);
                 }
 
-                // Cleanup any in-progress drag
+                // Cleanup in-progress drag (removes document listeners too)
                 if (this._dragState) {
                     document.removeEventListener('mousemove', this._handlers.dragMove);
                     document.removeEventListener('mouseup', this._handlers.dragEnd);
@@ -1944,7 +2171,10 @@ const GridSelection = {
             },
 
             /**
-             * Cleans up all resources.
+             * Full cleanup - call when discarding the selection instance.
+             *
+             * Unlike unbind(), this also clears selection state.
+             * Call when recreating selection with new VirtualGrid.
              */
             destroy() {
                 this.unbind();
