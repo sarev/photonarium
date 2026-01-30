@@ -277,6 +277,184 @@
     let unknownFacesSearchQuery = '';
 
     // =========================================================================
+    // FACES REFRESH - Centralized refresh handling with state preservation
+    // =========================================================================
+    //
+    // This object coordinates refresh operations across the three grid areas:
+    // 1. People grid (known faces section) - static DOM, no VirtualGrid
+    // 2. Unknown faces grid - VirtualGrid with selection
+    // 3. Pick-preferred grid - VirtualGrid with selection (separate mode)
+    //
+    // Key responsibilities:
+    // - Capture/restore input state (user typing in face label)
+    // - Capture/restore scroll position
+    // - Prune selection when items are removed by backend
+    // - Track active mode to only refresh relevant grids
+
+    const FacesRefresh = {
+        // --- State Capture Utilities ---
+
+        /**
+         * Capture input state from a grid container.
+         * Returns null if no input is focused.
+         */
+        captureInputState(gridContainer) {
+            if (!gridContainer) return null;
+
+            const activeInput = gridContainer.querySelector('input:focus, textarea:focus');
+            if (!activeInput) return null;
+
+            const faceCard = activeInput.closest('[data-face-id]');
+            if (!faceCard) return null;
+
+            return {
+                faceId: faceCard.dataset.faceId,
+                inputSelector: activeInput.tagName.toLowerCase() +
+                    (activeInput.className ? '.' + activeInput.className.split(' ').join('.') : ''),
+                value: activeInput.value,
+                selectionStart: activeInput.selectionStart,
+                selectionEnd: activeInput.selectionEnd,
+            };
+        },
+
+        /**
+         * Restore input state after refresh.
+         * Only restores if the face still exists in the grid.
+         */
+        restoreInputState(gridContainer, state) {
+            if (!gridContainer || !state) return;
+
+            // Find the face card (if it still exists)
+            const faceCard = gridContainer.querySelector(`[data-face-id="${state.faceId}"]`);
+            if (!faceCard) return;  // Face was removed by reassessment
+
+            // Find the input
+            const input = faceCard.querySelector(state.inputSelector);
+            if (!input) return;
+
+            // Restore value and selection
+            input.value = state.value;
+            input.focus();
+            if (input.setSelectionRange) {
+                input.setSelectionRange(state.selectionStart, state.selectionEnd);
+            }
+
+            // Ensure visible
+            faceCard.scrollIntoView({ block: 'nearest' });
+        },
+
+        // --- Refresh Handlers ---
+
+        /**
+         * Refresh the unknown faces grid with state preservation.
+         */
+        refreshUnknown() {
+            if (viewMode === 'pick-preferred') return;
+            if (!unknownFacesGrid) return;
+
+            const container = facesGrid?.querySelector('.faces-unknown-container');
+            const inputState = this.captureInputState(container);
+            const scrollOffset = unknownFacesGrid.getScrollOffset();
+
+            // Prune selection to valid IDs
+            if (facesSelection) {
+                facesSelection.pruneToValidIds();
+            }
+
+            // Re-render (the existing function handles the details)
+            renderFacesGrid();
+
+            // Restore state after render
+            requestAnimationFrame(() => {
+                const newContainer = facesGrid?.querySelector('.faces-unknown-container');
+                if (newContainer && scrollOffset > 0) {
+                    newContainer.scrollTop = scrollOffset;
+                }
+                this.restoreInputState(newContainer, inputState);
+            });
+        },
+
+        /**
+         * Refresh the people grid (known faces section).
+         */
+        refreshPeople() {
+            if (viewMode === 'pick-preferred') return;
+
+            // The people section is rebuilt as part of renderFacesGrid
+            // For now, we refresh via the full render
+            // TODO: Could optimize to only rebuild known section
+        },
+
+        /**
+         * Refresh the pick-preferred grid with state preservation.
+         */
+        refreshPicker() {
+            if (viewMode !== 'pick-preferred') return;
+            if (!pickPreferredGrid) return;
+
+            const container = pickPreferredGrid._config?.container || facesGrid;
+            const inputState = this.captureInputState(container);
+            const scrollOffset = pickPreferredGrid.getScrollOffset();
+
+            // Prune selection to valid IDs
+            if (facesSelection) {
+                facesSelection.pruneToValidIds();
+            }
+
+            // Re-render pick-preferred mode
+            renderPickPreferredMode();
+
+            // Restore state after render
+            requestAnimationFrame(() => {
+                const newContainer = pickPreferredGrid?._config?.container || facesGrid;
+                if (newContainer && scrollOffset > 0) {
+                    newContainer.scrollTop = scrollOffset;
+                }
+                this.restoreInputState(newContainer, inputState);
+            });
+        },
+
+        /**
+         * Handle AppState.faces change event.
+         */
+        onFacesChanged() {
+            if (viewMode === 'pick-preferred') {
+                this.refreshPicker();
+            } else {
+                // Both people and unknown grids need refresh
+                // renderFacesGrid handles both
+                this.refreshUnknown();
+            }
+        },
+
+        /**
+         * Handle AppState.people change event.
+         * People grid needs refresh when persons change.
+         */
+        onPeopleChanged() {
+            if (viewMode !== 'pick-preferred') {
+                // Refresh people grid (via full render for now)
+                // This handles: person added/removed, renamed, preferred face changed
+                renderFacesGrid();
+            }
+        },
+
+        /**
+         * Get the current search text for unknown faces.
+         */
+        getSearchText() {
+            return unknownFacesSearchQuery;
+        },
+
+        /**
+         * Set the search text for unknown faces.
+         */
+        setSearchText(text) {
+            unknownFacesSearchQuery = text;
+        },
+    };
+
+    // =========================================================================
     // INITIALIZATION
     // =========================================================================
 
@@ -327,7 +505,8 @@
 
         // Subscribe to AppState.faces for centralized state management
         // Note: We handle our own optimistic updates in faces.js, so this subscription
-        // is mainly for external changes (e.g., from fullscreen tagging mode).
+        // is mainly for external changes (e.g., from fullscreen tagging mode, backend
+        // reassessment completing).
         AppState.faces.onChanged((event) => {
             // Skip if we're not on the faces screen
             if (App.getScreen() !== 'faces') {
@@ -339,35 +518,39 @@
             if (!AppState.faces.isLoaded()) return;
 
             // Skip re-render if we're in an optimistic update (we already rendered)
-            // This prevents a race condition where the subscription fires after our
-            // optimistic render, potentially replacing DOM elements mid-initialization
             if (suppressBroadcastRender) {
                 return;
             }
 
-            // For external changes, sync and re-render
-            // Our own optimistic updates already handle local state, but this catches
-            // changes from other sources (fullscreen mode, background reassessment, etc.)
+            // Sync local state from AppState
             allFaces = AppState.faces.getAll();
-            needsRerender = true;
-            // Trigger re-render on next animation frame to batch multiple changes
+
+            // Use FacesRefresh to handle the update with state preservation
             requestAnimationFrame(() => {
-                if (needsRerender && App.getScreen() === 'faces') {
-                    needsRerender = false;
-                    // Preserve pick-preferred mode if active
-                    if (viewMode === 'pick-preferred' && pickPreferredGrid) {
-                        // Save scroll position
-                        const container = pickPreferredGrid._config?.container || facesGrid;
-                        const savedScroll = container?.scrollTop || 0;
-                        // Re-render pick-preferred mode
-                        renderPickPreferredMode();
-                        // Restore scroll position
-                        requestAnimationFrame(() => {
-                            if (container) container.scrollTop = savedScroll;
-                        });
-                    } else {
-                        renderFacesGrid();
-                    }
+                if (App.getScreen() === 'faces') {
+                    FacesRefresh.onFacesChanged();
+                }
+            });
+        });
+
+        // Subscribe to AppState.people for people grid updates
+        // Handles: person added/removed, renamed, preferred face changed
+        AppState.people.onChanged((event) => {
+            // Skip if we're not on the faces screen
+            if (App.getScreen() !== 'faces') {
+                needsRefresh = true;
+                return;
+            }
+
+            // Skip during optimistic updates
+            if (suppressBroadcastRender) {
+                return;
+            }
+
+            // Use FacesRefresh to handle the update
+            requestAnimationFrame(() => {
+                if (App.getScreen() === 'faces') {
+                    FacesRefresh.onPeopleChanged();
                 }
             });
         });
