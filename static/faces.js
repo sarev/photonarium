@@ -292,6 +292,10 @@
     // - Track active mode to only refresh relevant grids
 
     const FacesRefresh = {
+        // --- Saved state for mode transitions ---
+        _savedPeopleScroll: 0,
+        _savedUnknownScroll: 0,
+
         // --- State Capture Utilities ---
 
         /**
@@ -451,6 +455,50 @@
          */
         setSearchText(text) {
             unknownFacesSearchQuery = text;
+        },
+
+        // --- Mode Transition Helpers ---
+
+        /**
+         * Save normal mode scroll positions before entering pick-preferred.
+         * Call this BEFORE destroying the normal grids.
+         */
+        saveNormalModeState() {
+            // Save known section scroll
+            const knownSection = facesGrid?.querySelector('.faces-section.known');
+            if (knownSection) {
+                this._savedPeopleScroll = knownSection.scrollTop;
+            }
+
+            // Save unknown section scroll
+            if (unknownFacesGrid) {
+                this._savedUnknownScroll = unknownFacesGrid.getScrollOffset();
+            } else {
+                const unknownContainer = facesGrid?.querySelector('.faces-unknown-container');
+                if (unknownContainer) {
+                    this._savedUnknownScroll = unknownContainer.scrollTop;
+                }
+            }
+        },
+
+        /**
+         * Restore normal mode scroll positions after exiting pick-preferred.
+         * Call this AFTER renderFacesGrid() completes.
+         */
+        restoreNormalModeState() {
+            requestAnimationFrame(() => {
+                // Restore known section scroll
+                const knownSection = facesGrid?.querySelector('.faces-section.known');
+                if (knownSection && this._savedPeopleScroll > 0) {
+                    knownSection.scrollTop = this._savedPeopleScroll;
+                }
+
+                // Restore unknown section scroll
+                const unknownContainer = facesGrid?.querySelector('.faces-unknown-container');
+                if (unknownContainer && this._savedUnknownScroll > 0) {
+                    unknownContainer.scrollTop = this._savedUnknownScroll;
+                }
+            });
         },
     };
 
@@ -771,6 +819,9 @@
         const localPerson = knownPeople.find(p => p.id === personId);
         if (!localPerson) return;
 
+        // Save scroll positions before destroying normal grids
+        FacesRefresh.saveNormalModeState();
+
         // Set state before async load (enables UI update)
         viewMode = 'pick-preferred';
         pickPreferredPersonId = personId;
@@ -824,6 +875,9 @@
         // Re-render normal faces grid
         renderFacesGrid();
         updateFocusButtonState();
+
+        // Restore scroll positions that were saved when entering pick-preferred
+        FacesRefresh.restoreNormalModeState();
     }
 
     /**
