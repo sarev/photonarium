@@ -980,11 +980,11 @@
             thumbnailCacheBust.set(pickPreferredPersonId, Date.now());
         }
 
-        // If all faces removed, exit pick-preferred mode
+        // If all faces removed, exit pick-preferred mode and reload
         if (pickPreferredFaces.length === 0) {
             exitPickPreferredMode();
             AppState.people.invalidate();
-            renderFacesGrid();
+            loadAllFaces();  // Reload to get updated face assignments
         } else {
             // Re-render pick-preferred view
             displayedFaces = pickPreferredFaces;
@@ -1388,10 +1388,10 @@
         }
 
         if (pickPreferredFaces.length === 0) {
-            // No faces left - exit mode and refresh (person may be deleted by backend)
+            // No faces left - exit mode and reload (person may be deleted by backend)
             exitPickPreferredMode();
             AppState.people.invalidate();
-            renderFacesGrid();  // Re-render with unassigned faces back in unknown pool
+            loadAllFaces();  // Reload to get faces back in unknown pool
         } else {
             // Re-render with remaining faces
             displayedFaces = pickPreferredFaces;
@@ -1642,7 +1642,22 @@
                     // (fire-and-forget - will complete before user types)
                     AppState.people.load();
 
-                    // Restore scroll position to unknown container
+                    // Handle pick-preferred mode
+                    if (viewMode === 'pick-preferred' && pickPreferredGrid) {
+                        // Restore scroll position
+                        const container = pickPreferredGrid._config?.container || facesGrid;
+                        if (container) {
+                            container.scrollTop = savedScrollTop;
+                        }
+                        // Rebind grid and selection
+                        pickPreferredGrid.bind();
+                        if (facesSelection) {
+                            facesSelection.bind();
+                        }
+                        return;
+                    }
+
+                    // Normal mode: Restore scroll position to unknown container
                     const unknownContainer = facesGrid?.querySelector('.faces-unknown-container');
                     if (unknownContainer) {
                         unknownContainer.scrollTop = savedScrollTop;
@@ -1668,7 +1683,22 @@
             },
 
             onLeave() {
-                // Preserve scroll position for return
+                // Handle pick-preferred mode
+                if (viewMode === 'pick-preferred' && pickPreferredGrid) {
+                    // Save scroll position
+                    const container = pickPreferredGrid._config?.container || facesGrid;
+                    if (container) {
+                        savedScrollTop = container.scrollTop;
+                    }
+                    // Unbind grid and selection
+                    pickPreferredGrid.unbind();
+                    if (facesSelection) {
+                        facesSelection.unbind();
+                    }
+                    return;
+                }
+
+                // Normal mode: Preserve scroll position for return
                 const unknownContainer = facesGrid?.querySelector('.faces-unknown-container');
                 if (unknownContainer) {
                     savedScrollTop = unknownContainer.scrollTop;

@@ -1279,10 +1279,13 @@ const App = {
             titleEl.textContent = title;
             msgEl.textContent = message;
 
+            let onKeyDown; // Declared here so cleanup can reference it
+
             const cleanup = (result) => {
                 okBtn.removeEventListener('click', onOk);
                 cancelBtn.removeEventListener('click', onCancel);
                 dialog.removeEventListener('cancel', onCancel);
+                dialog.removeEventListener('keydown', onKeyDown);
                 dialog.close();
                 resolve(result);
             };
@@ -1290,9 +1293,22 @@ const App = {
             const onOk = () => cleanup(true);
             const onCancel = () => cleanup(false);
 
+            onKeyDown = (e) => {
+                if (e.key === 'ArrowLeft' || e.key === 'ArrowRight') {
+                    e.preventDefault();
+                    // Toggle focus between buttons
+                    if (document.activeElement === okBtn) {
+                        cancelBtn.focus();
+                    } else {
+                        okBtn.focus();
+                    }
+                }
+            };
+
             okBtn.addEventListener('click', onOk);
             cancelBtn.addEventListener('click', onCancel);
             dialog.addEventListener('cancel', onCancel); // Escape key
+            dialog.addEventListener('keydown', onKeyDown);
 
             dialog.showModal();
         });
@@ -1318,11 +1334,14 @@ const App = {
             msgEl.textContent = message;
             inputEl.value = defaultValue;
 
+            let onDialogKeyDown; // Declared here so cleanup can reference it
+
             const cleanup = (result) => {
                 okBtn.removeEventListener('click', onOk);
                 cancelBtn.removeEventListener('click', onCancel);
                 inputEl.removeEventListener('keydown', onKeydown);
                 dialog.removeEventListener('cancel', onCancel);
+                dialog.removeEventListener('keydown', onDialogKeyDown);
                 dialog.close();
                 resolve(result);
             };
@@ -1335,11 +1354,25 @@ const App = {
                     onOk();
                 }
             };
+            onDialogKeyDown = (e) => {
+                // Arrow keys toggle focus between buttons (only when a button has focus)
+                if (e.key === 'ArrowLeft' || e.key === 'ArrowRight') {
+                    if (document.activeElement === okBtn || document.activeElement === cancelBtn) {
+                        e.preventDefault();
+                        if (document.activeElement === okBtn) {
+                            cancelBtn.focus();
+                        } else {
+                            okBtn.focus();
+                        }
+                    }
+                }
+            };
 
             okBtn.addEventListener('click', onOk);
             cancelBtn.addEventListener('click', onCancel);
             inputEl.addEventListener('keydown', onKeydown);
             dialog.addEventListener('cancel', onCancel); // Escape key
+            dialog.addEventListener('keydown', onDialogKeyDown);
 
             dialog.showModal();
             inputEl.select(); // Select text for easy replacement

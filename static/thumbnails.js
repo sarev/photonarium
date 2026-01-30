@@ -1410,6 +1410,11 @@ const GridSelection = {
              * @private
              */
             _handleDoubleClick(e) {
+                // Ignore double-clicks on input elements (let native text selection work)
+                if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA') {
+                    return;
+                }
+
                 const id = this._getItemId(e.target);
                 if (id && this._config.onItemActivated) {
                     this._config.onItemActivated(id);
