@@ -173,7 +173,10 @@ def get_caption_generator() -> CaptionGenerator:
     if _caption_generator is None:
         config = get_db().config
         _caption_generator = CaptionGenerator(
-            temperature=config.caption_temperature,
+            model_name=config.caption_model,
+            max_length=config.caption_max_length,
+            min_length=config.caption_min_length,
+            num_beams=config.caption_num_beams,
             british_english=config.caption_british_english,
         )
     return _caption_generator
@@ -2250,7 +2253,29 @@ if __name__ == '__main__':
         action='store_true',
         help='Regenerate all face thumbnails with non-distorted rendering and exit'
     )
+    parser.add_argument(
+        '-m', '--list-models',
+        action='store_true',
+        help='Output required ML models as JSON and exit (for download_models.py)'
+    )
     args = parser.parse_args()
+
+    # Handle list-models command (outputs JSON for download_models.py)
+    if args.list_models:
+        import json
+        from config import load_config
+        config = load_config(CONFIG_PATH)
+        models = {
+            'openclip': {
+                'model': config.openclip_model,
+                'pretrained': config.openclip_pretrained,
+            },
+            'caption': {
+                'model': config.caption_model,
+            },
+        }
+        print(json.dumps(models))
+        sys.exit(0)
 
     # Handle thumbnail generation command
     if args.generate_thumbnails:

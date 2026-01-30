@@ -174,14 +174,31 @@ face_recognition_threshold: 0.65
 face_detection_batch_size: 32
 
 # ------------------------------------------------------------------------------
-# Image Captioning
+# Image Captioning (BLIP/BLIP-2)
 # ------------------------------------------------------------------------------
 
-# Temperature for caption generation (0.0-2.0).
-# Higher values produce more diverse/creative captions.
-# Lower values produce more deterministic/predictable captions.
-# Set to 0 for fully deterministic (greedy) decoding.
-caption_temperature: 1.0
+# BLIP model to use for caption generation. Options:
+#   - Salesforce/blip-image-captioning-base   (~1GB, fast)
+#   - Salesforce/blip-image-captioning-large  (~2GB, better quality)
+#   - Salesforce/blip2-opt-2.7b               (~5GB, BLIP-2, best quality)
+#   - Salesforce/blip2-flan-t5-xl             (~8GB, BLIP-2, most descriptive)
+caption_model: Salesforce/blip-image-captioning-large
+
+# Maximum length of generated captions in tokens.
+# Higher values allow longer, more detailed descriptions.
+# Range: 10-200, recommended: 30-75
+caption_max_length: 50
+
+# Minimum length of generated captions in tokens.
+# Higher values force more descriptive captions.
+# Range: 1-50, recommended: 5-20
+caption_min_length: 10
+
+# Number of beams for beam search during generation.
+# Higher values produce better quality but are slower.
+# Set to 1 for greedy decoding (fastest, lower quality).
+# Range: 1-10, recommended: 3-5
+caption_num_beams: 5
 
 # Convert American English spellings to British English in generated captions.
 # Handles common differences like color→colour, center→centre, gray→grey, etc.
@@ -218,7 +235,11 @@ class Config:
         face_detection_min_size: Minimum face size in pixels (20-200).
         face_recognition_threshold: Cosine similarity threshold for auto-matching (0.0-1.0).
         face_detection_batch_size: Batch size for face detection (1-64).
-        caption_temperature: Temperature for caption generation (0.0-2.0).
+        caption_model: BLIP/BLIP-2 model name for captioning.
+        caption_max_length: Maximum caption length in tokens (10-200).
+        caption_min_length: Minimum caption length in tokens (1-50).
+        caption_num_beams: Beam search width for generation (1-10).
+        caption_british_english: Convert US spellings to UK in captions.
     """
 
     image_extensions: set[str] = field(default_factory=lambda: {
@@ -245,7 +266,10 @@ class Config:
     face_detection_min_size: int = 40
     face_recognition_threshold: float = 0.65
     face_detection_batch_size: int = 32
-    caption_temperature: float = 1.0
+    caption_model: str = 'Salesforce/blip-image-captioning-large'
+    caption_max_length: int = 50
+    caption_min_length: int = 10
+    caption_num_beams: int = 5
     caption_british_english: bool = False
 
     def __post_init__(self) -> None:
@@ -331,8 +355,16 @@ class Config:
             raise ValueError(f'face_detection_batch_size must be 1-64, got {self.face_detection_batch_size}')
 
         # Validate caption settings
-        if not 0.0 <= self.caption_temperature <= 2.0:
-            raise ValueError(f'caption_temperature must be 0.0-2.0, got {self.caption_temperature}')
+        if not self.caption_model or not isinstance(self.caption_model, str):
+            raise ValueError('caption_model must be a non-empty string')
+        if not 10 <= self.caption_max_length <= 200:
+            raise ValueError(f'caption_max_length must be 10-200, got {self.caption_max_length}')
+        if not 1 <= self.caption_min_length <= 50:
+            raise ValueError(f'caption_min_length must be 1-50, got {self.caption_min_length}')
+        if self.caption_min_length > self.caption_max_length:
+            raise ValueError(f'caption_min_length ({self.caption_min_length}) cannot exceed caption_max_length ({self.caption_max_length})')
+        if not 1 <= self.caption_num_beams <= 10:
+            raise ValueError(f'caption_num_beams must be 1-10, got {self.caption_num_beams}')
         if not isinstance(self.caption_british_english, bool):
             raise ValueError('caption_british_english must be a boolean')
 
@@ -440,8 +472,17 @@ def load_config(config_path: Path | str | None = None) -> Config:
     if 'face_detection_batch_size' in config_data:
         kwargs['face_detection_batch_size'] = int(config_data['face_detection_batch_size'])
 
-    if 'caption_temperature' in config_data:
-        kwargs['caption_temperature'] = float(config_data['caption_temperature'])
+    if 'caption_model' in config_data:
+        kwargs['caption_model'] = str(config_data['caption_model'])
+
+    if 'caption_max_length' in config_data:
+        kwargs['caption_max_length'] = int(config_data['caption_max_length'])
+
+    if 'caption_min_length' in config_data:
+        kwargs['caption_min_length'] = int(config_data['caption_min_length'])
+
+    if 'caption_num_beams' in config_data:
+        kwargs['caption_num_beams'] = int(config_data['caption_num_beams'])
 
     if 'caption_british_english' in config_data:
         kwargs['caption_british_english'] = bool(config_data['caption_british_english'])

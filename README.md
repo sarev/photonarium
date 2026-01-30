@@ -216,10 +216,18 @@ Supported image types include: `.jpg`, `.jpeg`, `.png`, `.gif`, `.bmp`, `.tiff`,
    # Other dependencies (install facenet-pytorch with --no-deps to avoid replacing CUDA torch)
    pip install open_clip_torch
    pip install --no-deps facenet-pytorch
-   pip install opencv-python imagehash flask waitress requests orjson
+   pip install opencv-python imagehash flask waitress requests orjson transformers
    ```
 
    Note: you may see pip warnings about facenet-pytorch version conflicts with numpy, Pillow, and torch. These can usually be ignored.
+
+4. **Download ML models**
+
+   ```bash
+   python download_models.py
+   ```
+
+   This downloads the AI models required for image search and captioning. Models are cached locally and only need to be downloaded once (or when you change model settings).
 
 ## Running Imaginary
 
@@ -229,7 +237,7 @@ python app.py
 
 Then open **[http://localhost:5000](http://localhost:5000)**
 
-On first run, the AI models will download automatically. This only happens once.
+The app runs entirely offline after models are downloaded.
 
 ### Command line options
 
@@ -240,9 +248,24 @@ python app.py --scan                   # Run folder scan on startup
 python app.py --detect-faces           # Run face detection on startup
 python app.py --group-faces            # Run unknown face grouping on startup
 python app.py --scan --detect-faces    # Combine flags as needed
+python app.py --list-models            # Output required models as JSON (for scripting)
 ```
 
 By default, no processing runs at startup. Add flags to opt in to the phases you want.
+
+### Changing ML models
+
+If you change model settings in `.imaginary.yml`, run the model downloader again:
+
+```bash
+python download_models.py
+```
+
+Available caption models (from smallest to largest):
+* `Salesforce/blip-image-captioning-base` (~1GB, fastest)
+* `Salesforce/blip-image-captioning-large` (~2GB, default)
+* `Salesforce/blip2-opt-2.7b` (~5GB, better quality)
+* `Salesforce/blip2-flan-t5-xl` (~8GB, most descriptive)
 
 ## Configuration
 
@@ -255,6 +278,9 @@ Settings are stored in `.imaginary.yml` (created automatically on first run). Ex
 * `face_detection_min_confidence`: detection confidence threshold
 * `face_recognition_threshold`: default similarity threshold for auto-recognition
   (this can be overridden per person in pick preferred mode)
+* `caption_model`: BLIP model for image captioning (run `python download_models.py` after changing)
+* `caption_max_length`: maximum caption length in tokens
+* `caption_min_length`: minimum caption length (higher = more descriptive)
 
 ## Tips
 

@@ -163,11 +163,10 @@ Threading and safety notes
 
 from __future__ import annotations
 
-# Set HuggingFace Hub to offline mode BEFORE importing open_clip.
-# This prevents network calls to check for model updates when the model
-# is already cached locally. The model will still be downloaded on first run.
+# Set HuggingFace Hub to offline mode - models must be pre-downloaded.
+# Use download_models.py to download required models before first run.
 import os
-os.environ.setdefault('HF_HUB_OFFLINE', '1')
+os.environ['HF_HUB_OFFLINE'] = '1'
 
 from dataclasses import dataclass, field
 from datetime import datetime
@@ -2020,9 +2019,6 @@ class OpenCLIPModel:
         logger.info('=' * 60)
         logger.info(f'Loading OpenCLIP model: {self.model_name} ({self.pretrained})')
         logger.info(f'Device: {self.device}')
-        logger.info('-' * 60)
-        logger.info('If this is the first run, the model weights will be downloaded.')
-        logger.info('This may take several minutes depending on your connection...')
         logger.info('-' * 60)
 
         start_time = time.time()
