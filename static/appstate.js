@@ -2564,6 +2564,122 @@ const AppState = (function() {
     })();
 
     // =========================================================================
+    // LOADING OVERLAY DOMAIN
+    // =========================================================================
+
+    /**
+     * Global loading overlay with ownership tracking.
+     * When something shows the loading overlay, it becomes the "owner".
+     * When a new owner takes over, the previous owner is notified via the
+     * 'repurposed' event, so it doesn't need to worry about hiding it.
+     *
+     * Usage:
+     *   AppState.loading.show('gallery', 'Loading images…');
+     *   // ... later ...
+     *   AppState.loading.hide('gallery');  // Only hides if gallery is still owner
+     */
+    const loading = (function() {
+        const { subscribe, broadcast } = createSubscriberSystem();
+
+        let _owner = null;
+        let _message = 'Loading…';
+        let _visible = false;
+        let _el = null;
+        let _messageEl = null;
+
+        // Lazy init DOM references
+        function ensureElements() {
+            if (!_el) {
+                _el = document.getElementById('loading-overlay');
+                _messageEl = document.getElementById('loading-message');
+            }
+        }
+
+        return {
+            onChanged: subscribe,
+
+            /**
+             * Shows the loading overlay and takes ownership.
+             * If another owner already has it, that owner receives a 'repurposed' event.
+             * @param {string} owner - Identifier for the caller (e.g., 'gallery', 'faces')
+             * @param {string} [message='Loading…'] - Message to display
+             */
+            show(owner, message = 'Loading…') {
+                ensureElements();
+
+                const previousOwner = _owner;
+                _owner = owner;
+                _message = message;
+
+                // Update DOM
+                if (_messageEl) _messageEl.textContent = message;
+                if (_el && !_visible) {
+                    _el.classList.add('visible');
+                    _visible = true;
+                }
+
+                // Notify if ownership changed (previous owner was repurposed)
+                if (previousOwner && previousOwner !== owner) {
+                    broadcast({ type: 'repurposed', previousOwner, newOwner: owner });
+                }
+
+                broadcast({ type: 'changed', visible: true, owner, message });
+            },
+
+            /**
+             * Hides the loading overlay, but only if the caller is the current owner.
+             * @param {string} owner - Identifier for the caller
+             * @returns {boolean} True if hidden, false if caller wasn't owner
+             */
+            hide(owner) {
+                if (_owner !== owner) return false;
+
+                ensureElements();
+                _owner = null;
+                if (_el && _visible) {
+                    _el.classList.remove('visible');
+                    _visible = false;
+                }
+
+                broadcast({ type: 'changed', visible: false, owner: null });
+                return true;
+            },
+
+            /**
+             * Force hide regardless of owner. Use sparingly.
+             */
+            forceHide() {
+                ensureElements();
+                const previousOwner = _owner;
+                _owner = null;
+                if (_el && _visible) {
+                    _el.classList.remove('visible');
+                    _visible = false;
+                }
+
+                if (previousOwner) {
+                    broadcast({ type: 'repurposed', previousOwner, newOwner: null });
+                }
+                broadcast({ type: 'changed', visible: false, owner: null });
+            },
+
+            /**
+             * Update the message without changing ownership.
+             * @param {string} message - New message to display
+             */
+            setMessage(message) {
+                ensureElements();
+                _message = message;
+                if (_messageEl) _messageEl.textContent = message;
+            },
+
+            isVisible() { return _visible; },
+            getOwner() { return _owner; },
+            getMessage() { return _message; }
+        };
+    })();
+
+    // =========================================================================
     // SPECULATIVE PRELOADING
     // =========================================================================
 
@@ -2609,6 +2725,7 @@ const AppState = (function() {
         faces,
         duplicates,
         selection,
+        loading,
 
         // Utility functions
         preloadAll,

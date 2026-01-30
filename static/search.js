@@ -705,11 +705,9 @@ const Search = {
         // Navigate to gallery immediately for responsive UX
         App.showGallery();
 
-        // If there's a text query, perform semantic search with inline loading
+        // If there's a text query, perform semantic search with loading indicator
         if (filter && filter.text) {
-            if (typeof Gallery !== 'undefined' && Gallery._showLoading) {
-                Gallery._showLoading('Searching…');
-            }
+            AppState.loading.show('search', 'Searching…');
             try {
                 const response = await AppState.search.execute(filter.text, threshold, 500);
 
@@ -727,9 +725,7 @@ const Search = {
                 console.error('Semantic search failed:', error);
                 App.showError('Search failed. Please try again.');
             } finally {
-                if (typeof Gallery !== 'undefined' && Gallery._hideLoading) {
-                    Gallery._hideLoading();
-                }
+                AppState.loading.hide('search');
             }
         }
 

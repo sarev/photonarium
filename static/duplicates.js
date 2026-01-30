@@ -168,7 +168,6 @@ const Duplicates = {
             container: document.querySelector('.duplicates-container'),
             grid: App.$('duplicates-grid'),
             empty: App.$('duplicates-empty'),
-            loading: App.$('duplicates-loading'),
             slider: App.$('similarity-slider'),
             sliderLabel: App.$('similarity-label'),
             btnSmaller: App.$('btn-dup-thumb-smaller'),
@@ -850,25 +849,20 @@ Duplicates.navigateToGroup = function(hash) {
    ========================================================================== */
 
 /**
- * Shows the inline loading indicator with a message.
+ * Shows the global loading overlay with a message.
  * @param {string} message - The loading message to display
  * @private
  */
 Duplicates._showLoading = function(message) {
-    if (!this._els.loading) return;
-    const p = this._els.loading.querySelector('p');
-    if (p) p.textContent = message;
-    this._els.loading.hidden = false;
+    AppState.loading.show('duplicates', message);
 };
 
 /**
- * Hides the inline loading indicator.
+ * Hides the global loading overlay if duplicates is the owner.
  * @private
  */
 Duplicates._hideLoading = function() {
-    if (this._els.loading) {
-        this._els.loading.hidden = true;
-    }
+    AppState.loading.hide('duplicates');
 };
 
 // Register module with App

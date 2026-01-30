@@ -41,6 +41,7 @@
 
 /* Theme-independent colors (for overlays that may be outside themed containers) */
 :root {
+    --toolbar-height: 52px;
     --color-overlay-bg: rgba(0, 0, 0, 0.5);
     --color-overlay-bg-solid: #000000;
     --color-overlay-text: #ffffff;
@@ -707,30 +708,6 @@ a:hover {
     overflow-y: auto;
     position: relative;
     background-color: var(--color-bg-primary);
-}
-
-/* Gallery loading state - overlays the grid */
-#gallery-loading {
-    position: absolute;
-    inset: 0;
-    display: flex;
-    flex-direction: column;
-    align-items: center;
-    justify-content: center;
-    padding: 3rem;
-    color: var(--color-text-muted);
-    background: var(--color-bg-primary);
-    z-index: 10;
-}
-
-#gallery-loading[hidden] {
-    display: none;
-}
-
-#gallery-loading .material-symbols-outlined {
-    font-size: 64px;
-    margin-bottom: 1rem;
-    animation: spin 1s linear infinite;
 }
 
 /* Inner container for absolute positioning */
@@ -1977,8 +1954,7 @@ a:hover {
 }
 
 /* Faces empty state */
-#faces-empty,
-#faces-loading {
+#faces-empty {
     position: absolute;
     inset: 0;
     display: flex;
@@ -1991,23 +1967,14 @@ a:hover {
     z-index: 10;
 }
 
-#faces-empty[hidden],
-#faces-loading[hidden] {
+#faces-empty[hidden] {
     display: none;
 }
 
-#faces-empty .material-symbols-outlined,
-#faces-loading .material-symbols-outlined {
+#faces-empty .material-symbols-outlined {
     font-size: 64px;
     margin-bottom: 1rem;
-}
-
-#faces-empty .material-symbols-outlined {
     color: var(--color-face-unknown);
-}
-
-#faces-loading .material-symbols-outlined {
-    animation: spin 1s linear infinite;
 }
 
 .empty-state-hint {
@@ -2656,30 +2623,6 @@ a:hover {
     position: relative;
 }
 
-/* Duplicates loading state - overlays the grid */
-#duplicates-loading {
-    position: absolute;
-    inset: 0;
-    display: flex;
-    flex-direction: column;
-    align-items: center;
-    justify-content: center;
-    padding: 3rem;
-    color: var(--color-text-muted);
-    background: var(--color-bg-primary);
-    z-index: 10;
-}
-
-#duplicates-loading[hidden] {
-    display: none;
-}
-
-#duplicates-loading .material-symbols-outlined {
-    font-size: 64px;
-    margin-bottom: 1rem;
-    animation: spin 1s linear infinite;
-}
-
 /* Duplicate stack */
 .duplicate-stack {
     position: relative;
@@ -2773,39 +2716,38 @@ a:hover {
    Modals, buttons, and reusable UI elements.
    ========================================================================== */
 
-/* Loading overlay */
-.loading-overlay {
+/* Global loading overlay - sits above screens, below fullscreen */
+#loading-overlay {
     position: fixed;
-    inset: 0;
+    top: var(--toolbar-height);
+    left: 0;
+    right: 0;
+    bottom: 0;
     display: flex;
     flex-direction: column;
     align-items: center;
     justify-content: center;
     gap: 1rem;
-    background-color: var(--color-overlay-bg);
-    z-index: 9999;
+    background-color: var(--color-bg-primary);
+    z-index: 500;  /* Above screens, below fullscreen (1000) */
     opacity: 0;
     visibility: hidden;
-    transition: opacity 0.2s, visibility 0.2s;
+    transition: opacity 0.2s ease-out, visibility 0.2s ease-out;
 }
 
-.loading-overlay.visible {
+#loading-overlay.visible {
     opacity: 1;
     visibility: visible;
 }
 
-.loading-icon {
+#loading-overlay .material-symbols-outlined {
     font-size: 64px;
-    color: var(--color-overlay-text);
+    color: var(--color-text-muted);
     animation: spin 1s linear infinite;
 }
 
-@keyframes spin {
-    to { transform: rotate(360deg); }
-}
-
-.loading-message {
-    color: var(--color-overlay-text);
+#loading-message {
+    color: var(--color-text-muted);
     font-size: 1rem;
 }
 

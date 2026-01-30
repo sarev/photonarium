@@ -1181,33 +1181,19 @@ const App = {
        ---------------------------------------------------------------------- */
 
     /**
-     * Shows a loading indicator with optional message.
+     * Shows the global loading overlay with optional message.
+     * Uses AppState.loading with 'app' as the owner.
      * @param {string} [message='Loading…'] - Message to display
      */
     showLoading(message = 'Loading…') {
-        let overlay = document.getElementById('loading-overlay');
-        if (!overlay) {
-            overlay = document.createElement('div');
-            overlay.id = 'loading-overlay';
-            overlay.className = 'loading-overlay';
-            overlay.innerHTML = `
-                <span class="material-symbols-outlined loading-icon">hourglass_empty</span>
-                <div class="loading-message"></div>
-            `;
-            document.body.appendChild(overlay);
-        }
-        overlay.querySelector('.loading-message').textContent = message;
-        overlay.classList.add('visible');
+        AppState.loading.show('app', message);
     },
 
     /**
-     * Hides the loading indicator.
+     * Hides the global loading overlay if 'app' is the owner.
      */
     hideLoading() {
-        const overlay = document.getElementById('loading-overlay');
-        if (overlay) {
-            overlay.classList.remove('visible');
-        }
+        AppState.loading.hide('app');
     },
 
     /**

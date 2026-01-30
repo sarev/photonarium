@@ -280,11 +280,6 @@
                         <!-- Thumbnails are dynamically inserted here -->
                     </div>
 
-                    <!-- Loading state (positioned absolutely over grid) -->
-                    <div id="gallery-loading" hidden>
-                        <span class="material-symbols-outlined">hourglass_empty</span>
-                        <p>Loading images…</p>
-                    </div>
                 </div>
 
                 <!-- Info panel (right side) -->
@@ -464,11 +459,6 @@
                     <p class="empty-state-hint">Faces are detected automatically when images are indexed.</p>
                 </div>
 
-                <!-- Loading state -->
-                <div id="faces-loading" class="loading-state" hidden>
-                    <span class="material-symbols-outlined">hourglass_empty</span>
-                    <p>Loading faces…</p>
-                </div>
             </div>
         </main>
 
@@ -484,11 +474,6 @@
                         <!-- Duplicate stacks are dynamically inserted here -->
                     </div>
 
-                    <!-- Loading state (positioned absolutely over grid) -->
-                    <div id="duplicates-loading" hidden>
-                        <span class="material-symbols-outlined">hourglass_empty</span>
-                        <p>Loading duplicates…</p>
-                    </div>
 
                     <!-- Empty state message -->
                     <div id="duplicates-empty" hidden>
@@ -569,6 +554,16 @@
                 </div>
             </div>
         </dialog>
+
+        <!-- ============================================================
+             LOADING OVERLAY
+             Global loading indicator that sits above all screens.
+             Managed by AppState.loading with ownership tracking.
+             ============================================================ -->
+        <div id="loading-overlay">
+            <span class="material-symbols-outlined">hourglass_empty</span>
+            <p id="loading-message">Loading…</p>
+        </div>
 
     </div><!-- end #app -->
 

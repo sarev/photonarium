@@ -172,8 +172,6 @@
     /** @type {HTMLElement} */
     let facesEmpty;
 
-    /** @type {HTMLElement} */
-    let facesLoading;
 
     // Persistent view containers (created once, toggled via hidden attribute)
     /** @type {HTMLElement} Normal view wrapper (people + divider + unknown) */
@@ -799,7 +797,6 @@
         // Get DOM references - Faces screen
         facesGrid = document.getElementById('faces-grid');
         facesEmpty = document.getElementById('faces-empty');
-        facesLoading = document.getElementById('faces-loading');
         btnFacesThumbSmaller = document.getElementById('btn-faces-thumb-smaller');
         btnFacesThumbLarger = document.getElementById('btn-faces-thumb-larger');
         btnFacesOnlyUnknowns = document.getElementById('btn-faces-only-unknowns');
@@ -2477,7 +2474,7 @@
         }
 
         // Show loading banner - data needs to be fetched
-        if (facesLoading) facesLoading.hidden = false;
+        showFacesLoading('Loading faces…');
 
         // Trigger loads - subscription handlers will render when data arrives
         // and hide loading banner when both domains are ready
@@ -3157,28 +3154,18 @@
     }
 
     /**
-     * Show the loading overlay with a custom message.
+     * Show the global loading overlay with a custom message.
      * @param {string} message - Message to display
      */
     function showFacesLoading(message) {
-        if (facesLoading) {
-            const p = facesLoading.querySelector('p');
-            if (p) p.textContent = message;
-            facesLoading.hidden = false;
-        }
-        if (facesGrid) facesGrid.style.opacity = '0.5';
+        AppState.loading.show('faces', message);
     }
 
     /**
-     * Hide the loading overlay and reset to default message.
+     * Hide the global loading overlay if faces is the owner.
      */
     function hideFacesLoading() {
-        if (facesLoading) {
-            facesLoading.hidden = true;
-            const p = facesLoading.querySelector('p');
-            if (p) p.textContent = 'Loading faces…';
-        }
-        if (facesGrid) facesGrid.style.opacity = '';
+        AppState.loading.hide('faces');
         isLoading = false;
     }
 

@@ -133,7 +133,6 @@ const Gallery = {
             grid: App.$('gallery-grid'),
             infoPanel: App.$('info-panel'),
             infoContent: App.$('info-content'),
-            loading: App.$('gallery-loading'),
             similarityControl: App.$('gallery-similarity-control'),
             similaritySlider: App.$('gallery-similarity-slider'),
             similarityValue: App.$('gallery-similarity-value'),
@@ -1422,25 +1421,20 @@ const Gallery = {
        ---------------------------------------------------------------------- */
 
     /**
-     * Shows the inline loading indicator with a message.
+     * Shows the global loading overlay with a message.
      * @param {string} message - The loading message to display
      * @private
      */
     _showLoading(message) {
-        if (!this._els.loading) return;
-        const p = this._els.loading.querySelector('p');
-        if (p) p.textContent = message;
-        this._els.loading.hidden = false;
+        AppState.loading.show('gallery', message);
     },
 
     /**
-     * Hides the inline loading indicator.
+     * Hides the global loading overlay if gallery is the owner.
      * @private
      */
     _hideLoading() {
-        if (this._els.loading) {
-            this._els.loading.hidden = true;
-        }
+        AppState.loading.hide('gallery');
     }
 };
 
