@@ -3109,6 +3109,7 @@ EVENT_FOLDER_REMOVED = 'folder_removed'
 EVENT_IMAGE_INGESTED = 'image_ingested'
 EVENT_PROCESSING_COMPLETE = 'processing_complete'
 EVENT_ERROR = 'error'
+EVENT_FACES_REASSESSED = 'faces_reassessed'
 
 
 @dataclass
@@ -3299,6 +3300,24 @@ def emit_error(event_queue: EventQueue, message: str) -> None:
         message: Error message.
     """
     event_queue.emit(EVENT_ERROR, {'message': message})
+
+
+def emit_faces_reassessed(
+    event_queue: EventQueue,
+    matched_count: int,
+    person_id: str | None = None,
+) -> None:
+    """Emit a faces_reassessed event when async face reassessment completes.
+
+    Args:
+        event_queue: EventQueue instance.
+        matched_count: Number of faces that were auto-matched.
+        person_id: If reassessment was for a specific person, their ID.
+    """
+    event_queue.emit(EVENT_FACES_REASSESSED, {
+        'matched_count': matched_count,
+        'person_id': person_id,
+    })
 
 
 # =============================================================================

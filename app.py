@@ -1647,13 +1647,16 @@ def identify_faces_batch():
     Returns:
         JSON object with the person and list of updated face IDs.
     """
+    logger.info('[FacesFlow] identify-batch START')
     data = request.get_json()
     if not data:
+        logger.warning('[FacesFlow] identify-batch: No request body')
         return error_response('Request body is required')
 
     face_ids = data.get('face_ids', [])
     name = data.get('name', '').strip() if data.get('name') else None
     preferred_face_id = data.get('preferred_face_id')
+    logger.info(f'[FacesFlow] identify-batch: face_ids={face_ids}, name={name}, preferred={preferred_face_id}')
 
     if not face_ids:
         return error_response('face_ids is required')
@@ -1715,12 +1718,14 @@ def identify_faces_batch():
         person_id=result['person']['id'],
     )
 
-    return success_response({
+    response_data = {
         'person': result['person'],
         'identified_count': len(result['faces']),
         'face_ids': result['faces'],
         'reassessment_triggered': True,
-    })
+    }
+    logger.info(f'[FacesFlow] identify-batch SUCCESS: person_id={result["person"]["id"]}, identified={len(result["faces"])} faces')
+    return success_response(response_data)
 
 
 @app.route('/api/faces/reassess-status', methods=['GET'])

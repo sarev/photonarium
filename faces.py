@@ -2737,6 +2737,13 @@ def reassess_unknown_faces_async(
 
             logger.info(f'Async reassessment complete: {len(matched)} faces matched')
 
+            # Emit SSE event so frontend can update
+            if hasattr(db, 'event_queue') and db.event_queue:
+                db.event_queue.emit('faces_reassessed', {
+                    'matched_count': len(matched),
+                    'person_id': person_id,
+                })
+
             if callback:
                 callback(len(matched))
         except Exception as e:

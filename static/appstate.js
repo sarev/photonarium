@@ -172,8 +172,11 @@ const AppState = (function() {
         const domains = Array.from(_dirtyDomains);
         _dirtyDomains.clear();
 
+        console.log('[AppState.flushDirty] Flushing', domains.length, 'dirty domains:', domains.map(d => d._name));
+
         // Notify synchronously - keeps GUI single-threaded and predictable
         for (const domain of domains) {
+            console.log('[AppState.flushDirty] Notifying domain:', domain._name, 'epoch:', _txEpoch);
             domain._notify({ type: 'changed', epoch: _txEpoch });
         }
     }
@@ -190,12 +193,14 @@ const AppState = (function() {
     function transaction(fn) {
         // If already in a transaction, just run (nested)
         if (_inTransaction) {
+            console.log('[AppState.transaction] Nested call, epoch unchanged:', _txEpoch);
             return fn();
         }
 
         _inTransaction = true;
         _txEpoch++;
         _dirtyDomains.clear();
+        console.log('[AppState.transaction] START epoch:', _txEpoch);
 
         try {
             const result = fn();
@@ -204,11 +209,13 @@ const AppState = (function() {
             if (result && typeof result.then === 'function') {
                 return result
                     .then(value => {
+                        console.log('[AppState.transaction] END (async) epoch:', _txEpoch);
                         flushDirty();
                         _inTransaction = false;
                         return value;
                     })
                     .catch(err => {
+                        console.log('[AppState.transaction] END (async error) epoch:', _txEpoch, err.message);
                         flushDirty(); // Still notify on error - state may have partially changed
                         _inTransaction = false;
                         throw err;
@@ -216,11 +223,13 @@ const AppState = (function() {
             }
 
             // Sync
+            console.log('[AppState.transaction] END (sync) epoch:', _txEpoch);
             flushDirty();
             _inTransaction = false;
             return result;
 
         } catch (err) {
+            console.log('[AppState.transaction] END (sync error) epoch:', _txEpoch, err.message);
             flushDirty();
             _inTransaction = false;
             throw err;
@@ -258,6 +267,13 @@ const AppState = (function() {
     function getTransactionEpoch() {
         return _txEpoch;
     }
+
+    // Debug helper - expose transaction state to console
+    window._appStateDebug = {
+        getEpoch: () => _txEpoch,
+        isInTransaction: () => _inTransaction,
+        getDirtyDomains: () => Array.from(_dirtyDomains).map(d => d._name),
+    };
 
     // =========================================================================
     // VIEW DOMAIN
@@ -1727,12 +1743,15 @@ const AppState = (function() {
              */
             linkToPerson(faceId, personId, personName) {
                 const face = _cache?.get(faceId);
+                console.log('[AppState.faces._internal.linkToPerson]', faceId, '->', personId, personName, 'found in cache:', !!face);
                 if (face) {
                     face.person_id = personId;
                     face.person_name = personName;
                     face.manually_tagged = true;
                     invalidateDerived();
                     markDirty(domainRef);
+                } else {
+                    console.warn('[AppState.faces._internal.linkToPerson] Face not in cache!', faceId);
                 }
             },
 
@@ -1923,86 +1942,209 @@ const AppState = (function() {
             /**
              * Identify faces - assign to a person.
              * Creates person if needed, updates face counts, sets preferred face.
+             *
+             * OPTIMISTIC UPDATE DESIGN:
+             * All state changes (faces + people) happen immediately within one epoch:
+             * 1. If new person needed: create temp person in people cache
+             * 2. Link faces to person (faces cache)
+             * 3. Update face counts and preferred face (people cache)
+             * 4. Both domains marked dirty, subscribers notified together
+             * 5. API call in background
+             * 6. On success: replace temp IDs with real IDs
+             * 7. On failure: rollback both domains
+             *
              * @param {Array|string} faceIds - Single ID or array of IDs
              * @param {string} personName - Name for the person
              * @param {Object} options - {preferredFaceId, existingPersonId}
              */
             identify(faceIds, personName, options = {}) {
+                console.log('[AppState.faces.identify] START:', { faceIds, personName, options }, 'currentEpoch:', _txEpoch);
                 if (!Array.isArray(faceIds)) faceIds = [faceIds];
                 const { preferredFaceId = null, existingPersonId = null } = options;
 
                 return queueTransaction(async () => {
-                    // Track old person IDs for face count updates
-                    const oldPersonIds = new Map();
+                    console.log('[AppState.faces.identify] Transaction executing, epoch:', _txEpoch);
+
+                    // =========================================================
+                    // BACKUP STATE FOR ROLLBACK
+                    // =========================================================
+                    const faceBackup = new Map();
                     for (const faceId of faceIds) {
                         const face = _cache?.get(faceId);
-                        if (face?.person_id) {
-                            oldPersonIds.set(faceId, face.person_id);
+                        if (face) {
+                            faceBackup.set(faceId, {
+                                person_id: face.person_id,
+                                person_name: face.person_name,
+                                manually_tagged: face.manually_tagged
+                            });
                         }
                     }
 
-                    // Find or create target person
+                    // Track old person IDs for face count adjustments
+                    const oldPersonIds = new Map();
+                    for (const faceId of faceIds) {
+                        const data = faceBackup.get(faceId);
+                        if (data?.person_id) {
+                            oldPersonIds.set(faceId, data.person_id);
+                        }
+                    }
+
+                    // =========================================================
+                    // FIND OR CREATE TARGET PERSON (OPTIMISTIC)
+                    // =========================================================
                     let personId = existingPersonId;
-                    let isNewPerson = false;
+                    let tempPersonId = null;
+                    let createdTempPerson = false;
+
                     if (!personId) {
                         const existingPerson = people._internal.findByName(personName);
                         if (existingPerson) {
                             personId = existingPerson.id;
+                        } else {
+                            // New person - create temp person in people cache NOW (optimistic)
+                            tempPersonId = `temp-${Date.now()}`;
+                            personId = tempPersonId;
+
+                            // Create temp person with temp ID, face count, and preferred face
+                            const tempPerson = {
+                                id: tempPersonId,
+                                name: personName,
+                                face_count: faceIds.length,
+                                preferred_face_id: preferredFaceId || faceIds[0],
+                                threshold: null
+                            };
+                            people._internal.add(tempPerson);
+                            createdTempPerson = true;
+                            console.log('  Created temp person:', tempPerson);
+                        }
+                    }
+                    console.log('  Target person:', { personId, isExisting: !tempPersonId, isTemp: !!tempPersonId });
+
+                    // =========================================================
+                    // OPTIMISTIC UPDATE: FACES CACHE
+                    // =========================================================
+                    console.log('  Optimistic: linking', faceIds.length, 'faces to person', personId);
+                    for (const faceId of faceIds) {
+                        _internal.linkToPerson(faceId, personId, personName);
+                    }
+
+                    // =========================================================
+                    // OPTIMISTIC UPDATE: PEOPLE CACHE (face counts, preferred)
+                    // =========================================================
+                    if (!createdTempPerson) {
+                        // Existing person - increment face count
+                        for (const faceId of faceIds) {
+                            const oldPersonId = oldPersonIds.get(faceId);
+                            if (oldPersonId !== personId) {
+                                people._internal.incrementFaceCount(personId);
+                            }
+                        }
+
+                        // Set preferred face if person doesn't have one
+                        const person = people._internal.get(personId);
+                        if (person && !person.preferred_face_id) {
+                            people._internal.update(personId, {
+                                preferred_face_id: preferredFaceId || faceIds[0]
+                            });
+                            people._internal.bustThumbnail(personId);
                         }
                     }
 
+                    // Decrement face counts for old persons (optimistic)
+                    const decrementedPersons = new Set();
+                    for (const [faceId, oldPersonId] of oldPersonIds) {
+                        if (oldPersonId !== personId && !decrementedPersons.has(oldPersonId)) {
+                            const newCount = people._internal.decrementFaceCount(oldPersonId);
+                            decrementedPersons.add(oldPersonId);
+                            if (newCount === 0) {
+                                people._internal.remove(oldPersonId);
+                            }
+                        }
+                    }
+
+                    // Log state after optimistic updates
+                    const unknownCount = Array.from(_cache?.values() || []).filter(f => !f.person_id && !f.suppressed).length;
+                    console.log('  After optimistic: unknown faces:', unknownCount, 'people count:', people.getAll().length);
+
+                    // =========================================================
+                    // API CALL
+                    // =========================================================
                     try {
-                        // API call
+                        console.log('  Making API call to /faces/identify-batch');
                         const response = await App.apiPost('/faces/identify-batch', {
                             face_ids: faceIds,
                             name: personName,
-                            person_id: personId,
-                            preferred_face_id: preferredFaceId
+                            person_id: tempPersonId ? null : personId,
+                            preferred_face_id: preferredFaceId || faceIds[0]
                         });
+                        console.log('  API response:', response);
 
-                        const newPersonId = response.person_id;
-                        isNewPerson = !personId && newPersonId;
+                        const realPersonId = response.person_id;
 
-                        // Update faces cache
-                        for (const faceId of faceIds) {
-                            _internal.linkToPerson(faceId, newPersonId, personName);
+                        // =====================================================
+                        // RECONCILE: Replace temp IDs with real IDs
+                        // =====================================================
+                        if (tempPersonId && realPersonId !== tempPersonId) {
+                            console.log('  Reconciling temp ID', tempPersonId, '→ real ID', realPersonId);
+
+                            // Update faces to use real person ID
+                            for (const faceId of faceIds) {
+                                const face = _cache?.get(faceId);
+                                if (face && face.person_id === tempPersonId) {
+                                    face.person_id = realPersonId;
+                                }
+                            }
+                            invalidateDerived();
+                            markDirty(domainRef);
+
+                            // Replace temp person with real person data
+                            people._internal.remove(tempPersonId);
+                            if (response.person) {
+                                people._internal.add(response.person);
+                            }
                         }
 
-                        // If new person was created, add to people cache
-                        if (isNewPerson && response.person) {
-                            people._internal.add(response.person);
-                        } else if (!isNewPerson) {
-                            // Increment face count for existing person
+                        console.log('[AppState.faces.identify] Transaction complete, personId:', realPersonId);
+                        return { personId: realPersonId };
+
+                    } catch (err) {
+                        // =====================================================
+                        // ROLLBACK: Restore both faces and people caches
+                        // =====================================================
+                        console.error('[AppState.faces.identify] API ERROR, rolling back:', err);
+
+                        // Rollback faces
+                        for (const [faceId, data] of faceBackup) {
+                            const face = _cache?.get(faceId);
+                            if (face) {
+                                face.person_id = data.person_id;
+                                face.person_name = data.person_name;
+                                face.manually_tagged = data.manually_tagged;
+                            }
+                        }
+                        invalidateDerived();
+                        markDirty(domainRef);
+
+                        // Rollback people: remove temp person if created
+                        if (createdTempPerson) {
+                            people._internal.remove(tempPersonId);
+                        }
+
+                        // Rollback people: restore face counts
+                        for (const [faceId, oldPersonId] of oldPersonIds) {
+                            if (oldPersonId !== personId) {
+                                people._internal.incrementFaceCount(oldPersonId);
+                            }
+                        }
+                        if (!createdTempPerson) {
                             for (const faceId of faceIds) {
                                 const oldPersonId = oldPersonIds.get(faceId);
-                                if (oldPersonId !== newPersonId) {
-                                    people._internal.incrementFaceCount(newPersonId);
+                                if (oldPersonId !== personId) {
+                                    people._internal.decrementFaceCount(personId);
                                 }
                             }
                         }
 
-                        // Decrement face counts for old persons
-                        const decrementedPersons = new Set();
-                        for (const [faceId, oldPersonId] of oldPersonIds) {
-                            if (oldPersonId !== newPersonId && !decrementedPersons.has(oldPersonId)) {
-                                const newCount = people._internal.decrementFaceCount(oldPersonId);
-                                decrementedPersons.add(oldPersonId);
-                                // Delete person if no more faces
-                                if (newCount === 0) {
-                                    people._internal.remove(oldPersonId);
-                                }
-                            }
-                        }
-
-                        // Set preferred face if needed
-                        const person = people._internal.get(newPersonId);
-                        if (person && !person.preferred_face_id) {
-                            people._internal.update(newPersonId, { preferred_face_id: preferredFaceId || faceIds[0] });
-                            people._internal.bustThumbnail(newPersonId);
-                        }
-
-                        return { personId: newPersonId };
-                    } catch (err) {
                         broadcastError(err.message || 'Failed to identify faces');
                         throw err;
                     }
@@ -2680,6 +2822,145 @@ const AppState = (function() {
     })();
 
     // =========================================================================
+    // SERVER-SENT EVENTS (SSE) CONNECTION
+    // =========================================================================
+    // Real-time push notifications from backend.
+    // Handles automatic reconnection with exponential backoff.
+
+    const sse = (function() {
+        let _eventSource = null;
+        let _reconnectDelay = 1000;  // Start at 1 second
+        const MAX_RECONNECT_DELAY = 30000;  // Cap at 30 seconds
+        let _reconnectTimer = null;
+        let _connected = false;
+
+        /**
+         * Handle incoming SSE event.
+         */
+        function handleEvent(event) {
+            try {
+                const data = JSON.parse(event.data);
+                console.log('[SSE] Received event:', data.type, data.data);
+
+                switch (data.type) {
+                    case 'faces_reassessed':
+                        // Backend completed face reassessment - reload faces to get updated data
+                        console.log('[SSE] Face reassessment complete, matched:', data.data.matched_count);
+                        if (faces.isLoaded()) {
+                            faces.load();
+                        }
+                        break;
+
+                    case 'processing_complete':
+                        // Full processing cycle complete - reload status and potentially images
+                        status.load();
+                        break;
+
+                    case 'image_ingested':
+                        // New image added - may want to reload images if on gallery
+                        // (For now, just log - full reload would be expensive)
+                        console.log('[SSE] Image ingested:', data.data.id);
+                        break;
+
+                    case 'folder_added':
+                    case 'folder_removed':
+                        // Folder changes - reload folders
+                        folders.load();
+                        break;
+
+                    case 'error':
+                        console.error('[SSE] Server error:', data.data.message);
+                        break;
+
+                    default:
+                        console.log('[SSE] Unhandled event type:', data.type);
+                }
+            } catch (err) {
+                console.error('[SSE] Error parsing event:', err, event.data);
+            }
+        }
+
+        /**
+         * Connect to SSE endpoint.
+         */
+        function connect() {
+            // Skip in mock mode
+            if (typeof App !== 'undefined' && App.mockMode) {
+                console.log('[SSE] Skipping in mock mode');
+                return;
+            }
+
+            // Close existing connection if any
+            if (_eventSource) {
+                _eventSource.close();
+            }
+
+            console.log('[SSE] Connecting...');
+            _eventSource = new EventSource('/api/events');
+
+            _eventSource.onopen = function() {
+                console.log('[SSE] Connected');
+                _connected = true;
+                _reconnectDelay = 1000;  // Reset backoff on successful connect
+            };
+
+            _eventSource.onmessage = handleEvent;
+
+            // Also listen for specific event types
+            _eventSource.addEventListener('faces_reassessed', handleEvent);
+            _eventSource.addEventListener('processing_complete', handleEvent);
+            _eventSource.addEventListener('image_ingested', handleEvent);
+            _eventSource.addEventListener('folder_added', handleEvent);
+            _eventSource.addEventListener('folder_removed', handleEvent);
+            _eventSource.addEventListener('error', handleEvent);
+
+            _eventSource.onerror = function(err) {
+                console.warn('[SSE] Connection error, will reconnect');
+                _connected = false;
+                _eventSource.close();
+                scheduleReconnect();
+            };
+        }
+
+        /**
+         * Schedule reconnection with exponential backoff.
+         */
+        function scheduleReconnect() {
+            if (_reconnectTimer) return;
+
+            console.log(`[SSE] Reconnecting in ${_reconnectDelay}ms...`);
+            _reconnectTimer = setTimeout(() => {
+                _reconnectTimer = null;
+                connect();
+                // Exponential backoff
+                _reconnectDelay = Math.min(_reconnectDelay * 2, MAX_RECONNECT_DELAY);
+            }, _reconnectDelay);
+        }
+
+        /**
+         * Disconnect from SSE endpoint.
+         */
+        function disconnect() {
+            if (_reconnectTimer) {
+                clearTimeout(_reconnectTimer);
+                _reconnectTimer = null;
+            }
+            if (_eventSource) {
+                _eventSource.close();
+                _eventSource = null;
+            }
+            _connected = false;
+            console.log('[SSE] Disconnected');
+        }
+
+        return {
+            connect,
+            disconnect,
+            isConnected: () => _connected
+        };
+    })();
+
+    // =========================================================================
     // SPECULATIVE PRELOADING
     // =========================================================================
 
@@ -2688,10 +2969,15 @@ const AppState = (function() {
      * Call this after initial page load completes to warm caches in background.
      * Does not block - all loads happen sequentially without awaiting.
      *
+     * Also establishes SSE connection for real-time backend push notifications.
+     *
      * Loads are sequential to avoid SQLite connection contention
      * (Python's sqlite3 serializes access to a single connection).
      */
     function preloadAll() {
+        // Start SSE connection for real-time updates
+        sse.connect();
+
         console.time('preload /people');
         people.load()
             .then(() => {
@@ -2729,6 +3015,9 @@ const AppState = (function() {
 
         // Utility functions
         preloadAll,
+
+        // SSE connection for real-time updates
+        sse,
 
         // Transaction system (for internal use by domains)
         // These will be used in Phase 2+ to wrap external methods
