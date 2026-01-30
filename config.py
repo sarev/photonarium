@@ -182,6 +182,10 @@ face_detection_batch_size: 32
 # Lower values produce more deterministic/predictable captions.
 # Set to 0 for fully deterministic (greedy) decoding.
 caption_temperature: 1.0
+
+# Convert American English spellings to British English in generated captions.
+# Handles common differences like color→colour, center→centre, gray→grey, etc.
+caption_british_english: false
 """
 
 
@@ -242,6 +246,7 @@ class Config:
     face_recognition_threshold: float = 0.65
     face_detection_batch_size: int = 32
     caption_temperature: float = 1.0
+    caption_british_english: bool = False
 
     def __post_init__(self) -> None:
         """Validate configuration values after initialisation."""
@@ -328,6 +333,8 @@ class Config:
         # Validate caption settings
         if not 0.0 <= self.caption_temperature <= 2.0:
             raise ValueError(f'caption_temperature must be 0.0-2.0, got {self.caption_temperature}')
+        if not isinstance(self.caption_british_english, bool):
+            raise ValueError('caption_british_english must be a boolean')
 
 
 def load_config(config_path: Path | str | None = None) -> Config:
@@ -435,6 +442,9 @@ def load_config(config_path: Path | str | None = None) -> Config:
 
     if 'caption_temperature' in config_data:
         kwargs['caption_temperature'] = float(config_data['caption_temperature'])
+
+    if 'caption_british_english' in config_data:
+        kwargs['caption_british_english'] = bool(config_data['caption_british_english'])
 
     return Config(**kwargs)
 

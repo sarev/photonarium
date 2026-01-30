@@ -171,7 +171,10 @@ def get_caption_generator() -> CaptionGenerator:
     global _caption_generator
     if _caption_generator is None:
         config = get_db().config
-        _caption_generator = CaptionGenerator(temperature=config.caption_temperature)
+        _caption_generator = CaptionGenerator(
+            temperature=config.caption_temperature,
+            british_english=config.caption_british_english,
+        )
     return _caption_generator
 
 
