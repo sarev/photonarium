@@ -531,6 +531,7 @@ const AppState = (function() {
 
         // State
         let _status = null;     // {status, indexing_queue, embedding_queue, face_queue, total_images, face_detection_enabled, ...}
+        let _prevStatus = null; // Previous status for detecting transitions
         let _pollTimer = null;
         let _loading = false;
 
@@ -547,7 +548,27 @@ const AppState = (function() {
                 if (_loading) return _status;
                 _loading = true;
                 try {
+                    _prevStatus = _status;
                     _status = await App.apiGet('/status');
+
+                    // Check for face reassessment completion transition
+                    // When completed transitions from false to true, reload faces and ack
+                    const wasCompleted = _prevStatus?.face_reassessment?.completed;
+                    const isCompleted = _status?.face_reassessment?.completed;
+                    if (isCompleted && !wasCompleted) {
+                        // Acknowledge to clear the completed flag on backend
+                        App.apiPost('/faces/reassess-ack').catch(err => {
+                            console.warn('Failed to ack reassessment:', err);
+                        });
+                        // Reload faces to pick up newly matched faces
+                        // Use setTimeout to avoid blocking the status update
+                        setTimeout(() => {
+                            if (faces.isLoaded()) {
+                                faces.load();
+                            }
+                        }, 0);
+                    }
+
                     broadcast({ type: 'changed' });
                     return _status;
                 } catch (err) {
