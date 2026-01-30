@@ -163,6 +163,12 @@ Threading and safety notes
 
 from __future__ import annotations
 
+# Set HuggingFace Hub to offline mode BEFORE importing open_clip.
+# This prevents network calls to check for model updates when the model
+# is already cached locally. The model will still be downloaded on first run.
+import os
+os.environ.setdefault('HF_HUB_OFFLINE', '1')
+
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
@@ -178,7 +184,6 @@ import json
 import logging
 import numpy as np
 import open_clip
-import os
 import queue
 import random
 from collections import defaultdict

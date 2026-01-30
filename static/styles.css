@@ -300,6 +300,25 @@ a:hover {
     background: var(--color-text-muted);
 }
 
+/* ==========================================================================
+   ICONS
+
+   Unicode fallback icons shown by default. When Material Symbols font loads,
+   JavaScript replaces these with proper icon font spans.
+   ========================================================================== */
+
+.icon {
+    font-family: "Segoe UI Symbol", "Apple Symbols", "Noto Sans", sans-serif;
+    font-size: 18px;
+    font-style: normal;
+    line-height: 1;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 24px;
+    height: 24px;
+}
+
 
 /* ==========================================================================
    LAYOUT & TOOLBAR

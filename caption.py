@@ -27,6 +27,9 @@ from pathlib import Path
 # Must be set before transformers/tokenizers is imported.
 os.environ['TOKENIZERS_PARALLELISM'] = 'false'
 
+# Set HuggingFace Hub to offline mode to prevent network calls when cached.
+os.environ.setdefault('HF_HUB_OFFLINE', '1')
+
 # Import transformers BEFORE open_clip - open_clip checks for its availability
 import transformers
 import torch
