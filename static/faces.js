@@ -175,6 +175,45 @@
     /** @type {HTMLElement} */
     let facesLoading;
 
+    // Persistent view containers (created once, toggled via hidden attribute)
+    /** @type {HTMLElement} Normal view wrapper (people + divider + unknown) */
+    let normalView = null;
+
+    /** @type {HTMLElement} Pick-preferred view wrapper */
+    let pickerView = null;
+
+    /** @type {HTMLElement} Known people section container */
+    let peopleSection = null;
+
+    /** @type {HTMLElement} Unknown faces section container */
+    let unknownSection = null;
+
+    /** @type {HTMLElement} Unknown faces scroll container (inside unknownSection) */
+    let unknownContainer = null;
+
+    // Picker view persistent elements
+    /** @type {HTMLElement} Picker header (contains name, count, threshold) */
+    let pickerHeader = null;
+
+    /** @type {HTMLElement} Picker grid container (for VirtualGrid) */
+    let pickerGridContainer = null;
+
+    // Picker header element references (for updating without rebuilding)
+    /** @type {HTMLElement} Title element showing person name and face count */
+    let pickerTitleEl = null;
+
+    /** @type {HTMLInputElement} Threshold slider input */
+    let pickerThresholdSlider = null;
+
+    /** @type {HTMLElement} Threshold value display span */
+    let pickerThresholdValue = null;
+
+    /** @type {HTMLElement} Loading indicator in picker */
+    let pickerLoadingEl = null;
+
+    /** @type {Object|null} GridSelection for picker mode (separate from facesSelection) */
+    let pickerSelection = null;
+
     /** @type {HTMLButtonElement} */
     let btnFacesThumbSmaller;
 
@@ -292,11 +331,8 @@
     // - Track active mode to only refresh relevant grids
 
     const FacesRefresh = {
-        // --- Saved state for mode transitions ---
-        _savedPeopleScroll: 0,
-        _savedUnknownScroll: 0,
-
-        // --- State Capture Utilities ---
+        // --- Input State Utilities ---
+        // Used to preserve user input when a refresh happens mid-typing
 
         /**
          * Capture input state from a grid container.
@@ -308,11 +344,12 @@
             const activeInput = gridContainer.querySelector('input:focus, textarea:focus');
             if (!activeInput) return null;
 
-            const faceCard = activeInput.closest('[data-face-id]');
+            // Use data-id which is standard across all face cards
+            const faceCard = activeInput.closest('[data-id]');
             if (!faceCard) return null;
 
             return {
-                faceId: faceCard.dataset.faceId,
+                faceId: faceCard.dataset.id,
                 inputSelector: activeInput.tagName.toLowerCase() +
                     (activeInput.className ? '.' + activeInput.className.split(' ').join('.') : ''),
                 value: activeInput.value,
@@ -328,8 +365,8 @@
         restoreInputState(gridContainer, state) {
             if (!gridContainer || !state) return;
 
-            // Find the face card (if it still exists)
-            const faceCard = gridContainer.querySelector(`[data-face-id="${state.faceId}"]`);
+            // Find the face card by data-id (if it still exists)
+            const faceCard = gridContainer.querySelector(`[data-id="${state.faceId}"]`);
             if (!faceCard) return;  // Face was removed by reassessment
 
             // Find the input
@@ -348,86 +385,36 @@
         },
 
         // --- Refresh Handlers ---
-
-        /**
-         * Refresh the unknown faces grid with state preservation.
-         */
-        refreshUnknown() {
-            if (viewMode === 'pick-preferred') return;
-            if (!unknownFacesGrid) return;
-
-            const container = facesGrid?.querySelector('.faces-unknown-container');
-            const inputState = this.captureInputState(container);
-            const scrollOffset = unknownFacesGrid.getScrollOffset();
-
-            // Prune selection to valid IDs
-            if (facesSelection) {
-                facesSelection.pruneToValidIds();
-            }
-
-            // Re-render (the existing function handles the details)
-            renderFacesGrid();
-
-            // Restore state after render
-            requestAnimationFrame(() => {
-                const newContainer = facesGrid?.querySelector('.faces-unknown-container');
-                if (newContainer && scrollOffset > 0) {
-                    newContainer.scrollTop = scrollOffset;
-                }
-                this.restoreInputState(newContainer, inputState);
-            });
-        },
-
-        /**
-         * Refresh the people grid (known faces section).
-         */
-        refreshPeople() {
-            if (viewMode === 'pick-preferred') return;
-
-            // The people section is rebuilt as part of renderFacesGrid
-            // For now, we refresh via the full render
-            // TODO: Could optimize to only rebuild known section
-        },
-
-        /**
-         * Refresh the pick-preferred grid with state preservation.
-         */
-        refreshPicker() {
-            if (viewMode !== 'pick-preferred') return;
-            if (!pickPreferredGrid) return;
-
-            const container = pickPreferredGrid._config?.container || facesGrid;
-            const inputState = this.captureInputState(container);
-            const scrollOffset = pickPreferredGrid.getScrollOffset();
-
-            // Prune selection to valid IDs
-            if (facesSelection) {
-                facesSelection.pruneToValidIds();
-            }
-
-            // Re-render pick-preferred mode
-            renderPickPreferredMode();
-
-            // Restore state after render
-            requestAnimationFrame(() => {
-                const newContainer = pickPreferredGrid?._config?.container || facesGrid;
-                if (newContainer && scrollOffset > 0) {
-                    newContainer.scrollTop = scrollOffset;
-                }
-                this.restoreInputState(newContainer, inputState);
-            });
-        },
+        // With persistent containers, scroll positions are preserved automatically.
+        // We just need to capture/restore input state and prune selections.
 
         /**
          * Handle AppState.faces change event.
+         * Routes to appropriate handler based on current view mode.
          */
         onFacesChanged() {
-            if (viewMode === 'pick-preferred') {
-                this.refreshPicker();
+            if (viewMode === 'pick-preferred' && pickPreferredPersonId) {
+                // Picker shows faces for a specific person - reload that person's faces
+                const inputState = this.captureInputState(pickerGridContainer);
+                const personId = pickPreferredPersonId;
+
+                // Re-fetch the person's faces (backend may have added new ones)
+                AppState.faces.fetchForPerson(personId).then((faces) => {
+                    // Only update if still viewing the same person
+                    if (viewMode !== 'pick-preferred' || pickPreferredPersonId !== personId) return;
+
+                    pickPreferredFaces = faces || [];
+                    if (pickerSelection) pickerSelection.pruneToValidIds();
+                    renderPickerContent();
+                    requestAnimationFrame(() => this.restoreInputState(pickerGridContainer, inputState));
+                }).catch(error => {
+                    console.error('Failed to reload person faces:', error);
+                });
             } else {
-                // Both people and unknown grids need refresh
-                // renderFacesGrid handles both
-                this.refreshUnknown();
+                // Normal mode - update both sections
+                const inputState = this.captureInputState(unknownContainer);
+                renderFacesGrid();
+                requestAnimationFrame(() => this.restoreInputState(unknownContainer, inputState));
             }
         },
 
@@ -436,10 +423,17 @@
          * People grid needs refresh when persons change.
          */
         onPeopleChanged() {
-            if (viewMode !== 'pick-preferred') {
-                // Refresh people grid (via full render for now)
-                // This handles: person added/removed, renamed, preferred face changed
-                renderFacesGrid();
+            if (viewMode === 'pick-preferred' && pickPreferredPersonId) {
+                // Update picker header if person data changed (e.g., name change)
+                const people = AppState.people.getAll();
+                const person = people?.find(p => p.id === pickPreferredPersonId);
+                if (person && person.name !== pickPreferredPersonName) {
+                    pickPreferredPersonName = person.name;
+                    renderPickerContent();
+                }
+            } else {
+                // Normal mode - just update people section
+                updatePeopleSection();
             }
         },
 
@@ -456,51 +450,335 @@
         setSearchText(text) {
             unknownFacesSearchQuery = text;
         },
-
-        // --- Mode Transition Helpers ---
-
-        /**
-         * Save normal mode scroll positions before entering pick-preferred.
-         * Call this BEFORE destroying the normal grids.
-         */
-        saveNormalModeState() {
-            // Save known section scroll
-            const knownSection = facesGrid?.querySelector('.faces-section.known');
-            if (knownSection) {
-                this._savedPeopleScroll = knownSection.scrollTop;
-            }
-
-            // Save unknown section scroll
-            if (unknownFacesGrid) {
-                this._savedUnknownScroll = unknownFacesGrid.getScrollOffset();
-            } else {
-                const unknownContainer = facesGrid?.querySelector('.faces-unknown-container');
-                if (unknownContainer) {
-                    this._savedUnknownScroll = unknownContainer.scrollTop;
-                }
-            }
-        },
-
-        /**
-         * Restore normal mode scroll positions after exiting pick-preferred.
-         * Call this AFTER renderFacesGrid() completes.
-         */
-        restoreNormalModeState() {
-            requestAnimationFrame(() => {
-                // Restore known section scroll
-                const knownSection = facesGrid?.querySelector('.faces-section.known');
-                if (knownSection && this._savedPeopleScroll > 0) {
-                    knownSection.scrollTop = this._savedPeopleScroll;
-                }
-
-                // Restore unknown section scroll
-                const unknownContainer = facesGrid?.querySelector('.faces-unknown-container');
-                if (unknownContainer && this._savedUnknownScroll > 0) {
-                    unknownContainer.scrollTop = this._savedUnknownScroll;
-                }
-            });
-        },
     };
+
+    // =========================================================================
+    // PERSISTENT CONTAINER SETUP
+    // =========================================================================
+
+    /**
+     * Ensure persistent view containers exist.
+     *
+     * Creates two wrapper divs inside facesGrid:
+     * - normalView: contains people section, divider, unknown section
+     * - pickerView: contains pick-preferred header and grid
+     *
+     * These are created once and never destroyed. Mode switching just toggles
+     * the hidden attribute. This preserves scroll positions, selection state,
+     * and VirtualGrid instances across mode transitions.
+     */
+    function ensurePersistentContainers() {
+        if (!facesGrid) return;
+        if (normalView && pickerView) return; // Already created
+
+        // Clear any existing content
+        facesGrid.innerHTML = '';
+
+        // Create normal view wrapper
+        normalView = document.createElement('div');
+        normalView.id = 'faces-normal-view';
+        normalView.className = 'faces-view';
+
+        // Create people section (static DOM for known faces)
+        peopleSection = document.createElement('div');
+        peopleSection.className = 'faces-section known';
+        if (knownSectionHeight) {
+            peopleSection.style.height = `${knownSectionHeight}px`;
+        }
+        normalView.appendChild(peopleSection);
+
+        // Create divider (will be shown/hidden based on content)
+        const divider = document.createElement('div');
+        divider.className = 'faces-divider';
+        divider.innerHTML = '<div class="faces-divider-handle"></div>';
+        normalView.appendChild(divider);
+
+        // Set up divider drag behavior
+        setupDividerDrag(divider, peopleSection);
+
+        // Create unknown section wrapper
+        unknownSection = document.createElement('div');
+        unknownSection.className = 'faces-section unknown';
+
+        // Create unknown section header with search
+        const unknownHeader = document.createElement('div');
+        unknownHeader.className = 'faces-section-header';
+        unknownHeader.innerHTML = '<h3>Unknown Faces</h3>';
+
+        // Add search input
+        const searchInput = document.createElement('input');
+        searchInput.type = 'text';
+        searchInput.className = 'faces-search-input';
+        searchInput.placeholder = 'Search faces...';
+        searchInput.value = unknownFacesSearchQuery;
+        searchInput.addEventListener('blur', (e) => executeSearch(e.target));
+        searchInput.addEventListener('keydown', (e) => {
+            if (e.key === 'Enter') {
+                e.preventDefault();
+                executeSearch(e.target);
+                e.target.blur();
+            } else if (e.key === 'Escape') {
+                e.target.value = '';
+                unknownFacesSearchQuery = '';
+                searchUnknownFaces('');
+                e.target.blur();
+            }
+        });
+        unknownHeader.appendChild(searchInput);
+        unknownSection.appendChild(unknownHeader);
+
+        // Create unknown faces scroll container
+        unknownContainer = document.createElement('div');
+        unknownContainer.className = 'faces-unknown-container';
+        unknownSection.appendChild(unknownContainer);
+
+        normalView.appendChild(unknownSection);
+        facesGrid.appendChild(normalView);
+
+        // Create picker view wrapper (hidden by default)
+        pickerView = document.createElement('div');
+        pickerView.id = 'faces-picker-view';
+        pickerView.className = 'faces-view';
+        pickerView.hidden = true;
+
+        // Create picker header with full structure (persistent)
+        pickerHeader = document.createElement('div');
+        pickerHeader.className = 'faces-pick-preferred-header';
+
+        const titleRow = document.createElement('div');
+        titleRow.className = 'faces-pick-preferred-title-row';
+
+        // Left side: name, count, rename button
+        const titleLeft = document.createElement('div');
+        titleLeft.className = 'faces-pick-preferred-title-left';
+
+        pickerTitleEl = document.createElement('h3');
+        pickerTitleEl.innerHTML = '<span class="face-count"></span>';
+
+        const renameBtn = document.createElement('button');
+        renameBtn.className = 'faces-rename-btn';
+        renameBtn.title = 'Rename person';
+        renameBtn.innerHTML = '<span class="material-symbols-outlined">edit</span>';
+        renameBtn.addEventListener('click', handleRenamePersonClick);
+
+        titleLeft.appendChild(pickerTitleEl);
+        titleLeft.appendChild(renameBtn);
+        titleRow.appendChild(titleLeft);
+
+        // Right side: threshold slider
+        const thresholdControl = document.createElement('div');
+        thresholdControl.className = 'faces-threshold-control';
+
+        const thresholdLabel = document.createElement('label');
+        thresholdLabel.textContent = 'Match threshold:';
+        thresholdLabel.htmlFor = 'threshold-slider';
+
+        pickerThresholdSlider = document.createElement('input');
+        pickerThresholdSlider.type = 'range';
+        pickerThresholdSlider.id = 'threshold-slider';
+        pickerThresholdSlider.className = 'faces-threshold-slider';
+        pickerThresholdSlider.min = '60';
+        pickerThresholdSlider.max = '99';
+        pickerThresholdSlider.step = '1';
+        pickerThresholdSlider.value = '80';
+
+        pickerThresholdValue = document.createElement('span');
+        pickerThresholdValue.className = 'faces-threshold-value';
+        pickerThresholdValue.textContent = 'default';
+
+        // Update display on input
+        pickerThresholdSlider.addEventListener('input', () => {
+            pickerThresholdValue.textContent = `${pickerThresholdSlider.value}%`;
+        });
+
+        // Save on change (mouse release)
+        pickerThresholdSlider.addEventListener('change', () => handleThresholdChange(pickerThresholdSlider.value));
+
+        // Reset to default button
+        const resetBtn = document.createElement('button');
+        resetBtn.className = 'faces-threshold-reset';
+        resetBtn.title = 'Reset to default';
+        resetBtn.innerHTML = '<span class="material-symbols-outlined">restart_alt</span>';
+        resetBtn.addEventListener('click', () => handleThresholdReset(pickerThresholdSlider, pickerThresholdValue));
+
+        thresholdControl.appendChild(thresholdLabel);
+        thresholdControl.appendChild(pickerThresholdSlider);
+        thresholdControl.appendChild(pickerThresholdValue);
+        thresholdControl.appendChild(resetBtn);
+        titleRow.appendChild(thresholdControl);
+
+        pickerHeader.appendChild(titleRow);
+
+        const hint = document.createElement('span');
+        hint.className = 'hint';
+        hint.textContent = 'Click a star to set as preferred face. Press Delete to unassign faces.';
+        pickerHeader.appendChild(hint);
+
+        pickerView.appendChild(pickerHeader);
+
+        // Create loading indicator (sibling of grid container, not inside it)
+        // VirtualGrid.render() clears container.innerHTML, so loading must be outside
+        pickerLoadingEl = document.createElement('div');
+        pickerLoadingEl.className = 'faces-loading-inline';
+        pickerLoadingEl.innerHTML = '<div class="loading-spinner"></div><p>Loading faces...</p>';
+        pickerLoadingEl.hidden = true;
+        pickerView.appendChild(pickerLoadingEl);
+
+        // Create picker grid container (persistent)
+        pickerGridContainer = document.createElement('div');
+        pickerGridContainer.className = 'faces-pick-preferred-container';
+        pickerView.appendChild(pickerGridContainer);
+
+        facesGrid.appendChild(pickerView);
+
+        // Initialize VirtualGrid for unknown faces (created once, persists)
+        initUnknownFacesGrid();
+
+        // Initialize GridSelection for unknown faces
+        initFacesSelection();
+
+        // Initialize VirtualGrid for picker (created once, persists)
+        initPickerGrid();
+
+        // Initialize GridSelection for picker
+        initPickerSelection();
+    }
+
+    /**
+     * Set up divider drag behavior for resizing known section.
+     */
+    function setupDividerDrag(divider, section) {
+        let startY = 0;
+        let startHeight = 0;
+
+        const onMouseMove = (e) => {
+            const delta = e.clientY - startY;
+            const newHeight = Math.max(100, Math.min(startHeight + delta, window.innerHeight - 200));
+            section.style.height = `${newHeight}px`;
+        };
+
+        const onMouseUp = () => {
+            document.removeEventListener('mousemove', onMouseMove);
+            document.removeEventListener('mouseup', onMouseUp);
+            // Save the new height
+            knownSectionHeight = parseInt(section.style.height, 10);
+            try {
+                localStorage.setItem('faces-known-height', String(knownSectionHeight));
+            } catch (e) { /* ignore */ }
+        };
+
+        divider.addEventListener('mousedown', (e) => {
+            e.preventDefault();
+            startY = e.clientY;
+            startHeight = section.offsetHeight;
+            document.addEventListener('mousemove', onMouseMove);
+            document.addEventListener('mouseup', onMouseUp);
+        });
+    }
+
+    /**
+     * Initialize the VirtualGrid for unknown faces.
+     * Called once when containers are created.
+     */
+    function initUnknownFacesGrid() {
+        if (!unknownContainer) return;
+        if (unknownFacesGrid) return; // Already exists
+
+        unknownFacesGrid = VirtualGrid.create({
+            container: unknownContainer,
+            getItems: () => displayedFaces,
+            getItemId: (face) => face.id,
+            createItem: (face, index, blobUrl) => createUnknownFaceCard(face, blobUrl),
+            getThumbnailId: (face) => face.id,
+            getThumbnailUrl: (faceId) => `/api/faces/${faceId}/thumbnail`,
+            itemSelector: '.face-card',
+            getThumbSize: () => facesThumbnailSize,
+            getItemHeight: (thumbSize, itemWidth) => itemWidth + 50,
+            gap: 16,
+            padding: 16,
+            onItemCreated: (id, el) => {
+                if (facesSelection && facesSelection.isSelected(id)) {
+                    el.classList.add('selected');
+                }
+            }
+        });
+    }
+
+    /**
+     * Initialize GridSelection for unknown faces.
+     * Called once when containers are created.
+     */
+    function initFacesSelection() {
+        if (!unknownFacesGrid) return;
+        if (facesSelection) return; // Already exists
+
+        facesSelection = GridSelection.create({
+            grid: unknownFacesGrid,
+            getItems: () => displayedFaces,
+            getItemId: (face) => face.id,
+            itemSelector: '.face-card',
+            selectedClass: 'selected',
+            onSelectionChanged: handleFacesSelectionChanged,
+            onItemActivated: (id) => {
+                // Double-click or Enter on face - focus the name input
+                const card = unknownContainer?.querySelector(`[data-id="${id}"]`);
+                const input = card?.querySelector('.face-card-input');
+                if (input) input.focus();
+            },
+            onDeleteRequested: (ids) => handleDeleteFaces(ids),
+        });
+    }
+
+    /**
+     * Initialize the VirtualGrid for pick-preferred mode.
+     * Called once when containers are created.
+     */
+    function initPickerGrid() {
+        if (!pickerGridContainer) return;
+        if (pickPreferredGrid) return; // Already exists
+
+        pickPreferredGrid = VirtualGrid.create({
+            container: pickerGridContainer,
+            getItems: () => pickPreferredFaces,
+            getItemId: (face) => face.id,
+            createItem: (face, index, blobUrl) => createPickPreferredFaceCard(face, blobUrl),
+            getThumbnailId: (face) => face.id,
+            getThumbnailUrl: (faceId) => `/api/faces/${faceId}/thumbnail`,
+            itemSelector: '.face-card',
+            gap: 16,
+            padding: 16,
+            getThumbSize: () => facesThumbnailSize,
+            getItemHeight: (thumbSize, itemWidth) => itemWidth + 50,
+            onItemCreated: (id, el) => {
+                if (pickerSelection && pickerSelection.isSelected(id)) {
+                    el.classList.add('selected');
+                }
+            }
+        });
+    }
+
+    /**
+     * Initialize GridSelection for pick-preferred mode.
+     * Called once when containers are created.
+     */
+    function initPickerSelection() {
+        if (!pickPreferredGrid) return;
+        if (pickerSelection) return; // Already exists
+
+        pickerSelection = GridSelection.create({
+            grid: pickPreferredGrid,
+            getItems: () => pickPreferredFaces,
+            getItemId: (face) => face.id,
+            itemSelector: '.face-card',
+            selectedClass: 'selected',
+            onSelectionChanged: handlePickPreferredSelectionChanged,
+            onItemActivated: handlePickPreferredFaceActivated,
+            onDeleteRequested: handlePickPreferredDeleteRequested,
+            enableKeyboard: true,
+            enableDragBox: true,
+            enableLongPress: true
+        });
+    }
 
     // =========================================================================
     // INITIALIZATION
@@ -573,10 +851,16 @@
             // Sync local state from AppState
             allFaces = AppState.faces.getAll();
 
-            // Use FacesRefresh to handle the update with state preservation
+            // Render the grid
             requestAnimationFrame(() => {
                 if (App.getScreen() === 'faces') {
-                    FacesRefresh.onFacesChanged();
+                    // During initial load, always do full render
+                    if (isLoading) {
+                        renderFacesGrid();
+                    } else {
+                        FacesRefresh.onFacesChanged();
+                    }
+                    checkLoadingComplete();
                 }
             });
         });
@@ -595,10 +879,17 @@
                 return;
             }
 
-            // Use FacesRefresh to handle the update
+            // Render the people section
             requestAnimationFrame(() => {
                 if (App.getScreen() === 'faces') {
-                    FacesRefresh.onPeopleChanged();
+                    // During initial load, do full render (faces may have loaded from cache)
+                    if (isLoading) {
+                        allFaces = AppState.faces.getAll();
+                        renderFacesGrid();
+                    } else {
+                        FacesRefresh.onPeopleChanged();
+                    }
+                    checkLoadingComplete();
                 }
             });
         });
@@ -819,18 +1110,36 @@
         const localPerson = knownPeople.find(p => p.id === personId);
         if (!localPerson) return;
 
-        // Save scroll positions before destroying normal grids
-        FacesRefresh.saveNormalModeState();
+        // Check if switching to a different person
+        const isSamePerson = pickPreferredPersonId === personId && viewMode === 'pick-preferred';
 
-        // Set state before async load (enables UI update)
+        // Set state before switching views
         viewMode = 'pick-preferred';
         pickPreferredPersonId = personId;
         pickPreferredPersonName = localPerson.name;
         pickPreferredPersonThreshold = null;
         pickPreferredFaces = []; // Start empty, will populate when data loads
 
-        // Render immediately with loading state
-        renderPickPreferredMode();
+        // Toggle visibility: hide normal, show picker
+        if (normalView) normalView.hidden = true;
+        if (pickerView) pickerView.hidden = false;
+
+        // Unbind normal mode selection (keyboard shouldn't affect hidden grid)
+        if (facesSelection) facesSelection.unbind();
+        if (unknownFacesGrid) unknownFacesGrid.unbind();
+
+        // When switching to a different person, clear selection and reset scroll
+        if (!isSamePerson) {
+            if (pickerSelection) pickerSelection.clear();
+            if (pickerGridContainer) pickerGridContainer.scrollTop = 0;
+        }
+
+        // Bind picker grid and selection
+        if (pickPreferredGrid) pickPreferredGrid.bind();
+        if (pickerSelection) pickerSelection.bind();
+
+        // Render picker content (loading state initially)
+        renderPickerContent();
         updateFocusButtonState();
 
         // Load person details and faces in background
@@ -845,18 +1154,17 @@
             pickPreferredPersonThreshold = personResult?.recognition_threshold ?? null;
 
             // Re-render with actual data
-            renderPickPreferredMode();
+            renderPickerContent();
         }).catch(error => {
             console.error('Failed to load person data:', error);
-            // Still in loading state but with empty data - renderPickPreferredMode handles this
         });
     }
 
     /**
      * Exit pick-preferred mode and return to normal all/unknowns view.
      *
-     * Cleans up pick-preferred state and restores the standard two-section
-     * layout. Does NOT reload from API - uses existing allFaces/knownPeople.
+     * Just toggles visibility - the normal grids are still there with their
+     * scroll positions and selection state intact.
      */
     function exitPickPreferredMode() {
         viewMode = 'all';
@@ -865,180 +1173,82 @@
         pickPreferredFaces = [];
         pickPreferredPersonThreshold = null;
 
-        // Clean up pick-preferred grid
-        if (pickPreferredGrid) {
-            pickPreferredGrid.unbind();
-            pickPreferredGrid.destroy();
-            pickPreferredGrid = null;
-        }
+        // Toggle visibility: hide picker, show normal
+        if (pickerView) pickerView.hidden = true;
+        if (normalView) normalView.hidden = false;
 
-        // Re-render normal faces grid
-        renderFacesGrid();
+        // Unbind picker grid and selection
+        if (pickPreferredGrid) pickPreferredGrid.unbind();
+        if (pickerSelection) pickerSelection.unbind();
+
+        // Rebind normal grids and selection
+        if (unknownFacesGrid) unknownFacesGrid.bind();
+        if (facesSelection) facesSelection.bind();
+
         updateFocusButtonState();
-
-        // Restore scroll positions that were saved when entering pick-preferred
-        FacesRefresh.restoreNormalModeState();
     }
 
     /**
-     * Render the pick-preferred mode view.
+     * Render the pick-preferred mode content inside pickerView.
+     * The pickerView container is persistent; this just updates content.
+     * Preserves scroll position, selection state, and input focus.
      */
-    function renderPickPreferredMode() {
-        if (!facesGrid) return;
+    function renderPickerContent() {
+        if (!pickerView || !pickerTitleEl) return;
 
-        // Clear current grid and unbind
-        if (unknownFacesGrid) {
-            unknownFacesGrid.unbind();
-            unknownFacesGrid.destroy();
-            unknownFacesGrid = null;
-        }
-        if (facesSelection) {
-            facesSelection.unbind();
-            facesSelection = null;
-        }
-
-        facesGrid.innerHTML = '';
-
-        // Create header
-        const header = document.createElement('div');
-        header.className = 'faces-pick-preferred-header';
+        // Update title with name and count
         const faceCount = pickPreferredFaces.length;
         const countText = faceCount === 1 ? '1 image' : `${faceCount} images`;
+        pickerTitleEl.innerHTML = `${App.escapeHtml(pickPreferredPersonName || '')} <span class="face-count">(${countText})</span>`;
 
-        const titleRow = document.createElement('div');
-        titleRow.className = 'faces-pick-preferred-title-row';
-
-        // Left side: name, count, rename button
-        const titleLeft = document.createElement('div');
-        titleLeft.className = 'faces-pick-preferred-title-left';
-
-        const title = document.createElement('h3');
-        title.innerHTML = `${App.escapeHtml(pickPreferredPersonName)} <span class="face-count">(${countText})</span>`;
-
-        const renameBtn = document.createElement('button');
-        renameBtn.className = 'faces-rename-btn';
-        renameBtn.title = 'Rename person';
-        renameBtn.innerHTML = '<span class="material-symbols-outlined">edit</span>';
-        renameBtn.addEventListener('click', handleRenamePersonClick);
-
-        titleLeft.appendChild(title);
-        titleLeft.appendChild(renameBtn);
-        titleRow.appendChild(titleLeft);
-
-        // Right side: threshold slider
-        const thresholdControl = document.createElement('div');
-        thresholdControl.className = 'faces-threshold-control';
-
-        const thresholdLabel = document.createElement('label');
-        thresholdLabel.textContent = 'Match threshold:';
-        thresholdLabel.htmlFor = 'threshold-slider';
-
-        const thresholdSlider = document.createElement('input');
-        thresholdSlider.type = 'range';
-        thresholdSlider.id = 'threshold-slider';
-        thresholdSlider.className = 'faces-threshold-slider';
-        thresholdSlider.min = '60';
-        thresholdSlider.max = '99';
-        thresholdSlider.step = '1';
-        // Convert threshold (0.0-1.0) to percentage (60-99)
-        const currentPercent = pickPreferredPersonThreshold !== null
-            ? Math.round(pickPreferredPersonThreshold * 100)
-            : 80;  // Default display value
-        thresholdSlider.value = String(currentPercent);
-
-        const thresholdValue = document.createElement('span');
-        thresholdValue.className = 'faces-threshold-value';
-        thresholdValue.textContent = pickPreferredPersonThreshold !== null
-            ? `${currentPercent}%`
-            : 'default';
-
-        // Update display on input
-        thresholdSlider.addEventListener('input', () => {
-            thresholdValue.textContent = `${thresholdSlider.value}%`;
-        });
-
-        // Save on change (mouse release)
-        thresholdSlider.addEventListener('change', () => handleThresholdChange(thresholdSlider.value));
-
-        // Reset to default button
-        const resetBtn = document.createElement('button');
-        resetBtn.className = 'faces-threshold-reset';
-        resetBtn.title = 'Reset to default';
-        resetBtn.innerHTML = '<span class="material-symbols-outlined">restart_alt</span>';
-        resetBtn.addEventListener('click', () => handleThresholdReset(thresholdSlider, thresholdValue));
-
-        thresholdControl.appendChild(thresholdLabel);
-        thresholdControl.appendChild(thresholdSlider);
-        thresholdControl.appendChild(thresholdValue);
-        thresholdControl.appendChild(resetBtn);
-        titleRow.appendChild(thresholdControl);
-
-        header.appendChild(titleRow);
-
-        const hint = document.createElement('span');
-        hint.className = 'hint';
-        hint.textContent = 'Click a star to set as preferred face. Press Delete to unassign faces.';
-        header.appendChild(hint);
-
-        facesGrid.appendChild(header);
-
-        // Create container for the grid
-        const container = document.createElement('div');
-        container.className = 'faces-pick-preferred-container';
-        facesGrid.appendChild(container);
-
-        // Show loading state if no faces yet
-        if (pickPreferredFaces.length === 0) {
-            const loading = document.createElement('div');
-            loading.className = 'faces-loading-inline';
-            loading.innerHTML = '<div class="loading-spinner"></div><p>Loading faces…</p>';
-            container.appendChild(loading);
-            // Don't create the grid yet - will be created when data loads
-            return;
+        // Update threshold slider/value (preserve focus if user is interacting)
+        if (pickerThresholdSlider && document.activeElement !== pickerThresholdSlider) {
+            const currentPercent = pickPreferredPersonThreshold !== null
+                ? Math.round(pickPreferredPersonThreshold * 100)
+                : 80;
+            pickerThresholdSlider.value = String(currentPercent);
+            if (pickerThresholdValue) {
+                pickerThresholdValue.textContent = pickPreferredPersonThreshold !== null
+                    ? `${currentPercent}%`
+                    : 'default';
+            }
         }
 
-        // Set displayed faces for selection
-        displayedFaces = pickPreferredFaces;
+        // Show/hide loading state
+        const isLoading = pickPreferredFaces.length === 0;
+        if (pickerLoadingEl) {
+            pickerLoadingEl.hidden = !isLoading;
+        }
 
-        // Create VirtualGrid for pick-preferred mode
-        pickPreferredGrid = VirtualGrid.create({
-            container: container,
-            getItems: () => pickPreferredFaces,
-            getItemId: (face) => face.id,
-            createItem: (face, index, blobUrl) => createPickPreferredFaceCard(face, blobUrl),
-            getThumbnailId: (face) => face.id,
-            getThumbnailUrl: (faceId) => `/api/faces/${faceId}/thumbnail`,
-            itemSelector: '.face-card',
-            gap: 16,
-            padding: 16,
-            getThumbSize: () => facesThumbnailSize,
-            getItemHeight: (thumbSize, itemWidth) => itemWidth + 50,
-            onItemCreated: (id, el) => {
-                if (facesSelection && facesSelection.isSelected(id)) {
-                    el.classList.add('selected');
-                }
+        // Ensure grid and selection are initialized
+        if (!pickPreferredGrid) {
+            initPickerGrid();
+        }
+        if (!pickerSelection && pickPreferredGrid) {
+            initPickerSelection();
+        }
+
+        // Don't render grid if still loading
+        if (isLoading) return;
+
+        // Prune any stale selections (e.g., faces that were unassigned)
+        if (pickerSelection) {
+            pickerSelection.pruneToValidIds();
+        }
+
+        // Render the grid (VirtualGrid preserves scroll position)
+        if (pickPreferredGrid) {
+            pickPreferredGrid.render();
+            // Ensure grid is bound
+            if (!pickPreferredGrid._bound) {
+                pickPreferredGrid.bind();
             }
-        });
+        }
 
-        pickPreferredGrid.render();
-        pickPreferredGrid.bind();
-
-        // Initialize selection for pick-preferred mode
-        facesSelection = GridSelection.create({
-            grid: pickPreferredGrid,
-            getItems: () => pickPreferredFaces,
-            getItemId: (face) => face.id,
-            itemSelector: '.face-card',
-            selectedClass: 'selected',
-            onSelectionChanged: handlePickPreferredSelectionChanged,
-            onItemActivated: handlePickPreferredFaceActivated,
-            onDeleteRequested: handlePickPreferredDeleteRequested,
-            enableKeyboard: true,
-            enableDragBox: true,
-            enableLongPress: true
-        });
-
-        facesSelection.bind();
+        // Ensure selection is bound
+        if (pickerSelection && !pickerSelection._bound) {
+            pickerSelection.bind();
+        }
     }
 
     /**
@@ -1093,7 +1303,6 @@
         input.type = 'text';
         input.className = 'face-card-input';
         input.value = pickPreferredPersonName || '';
-        input.dataset.faceId = face.id;
 
         // Handle focus - pre-fetch cache for fast autocomplete
         input.addEventListener('focus', () => {
@@ -1535,12 +1744,11 @@
                 }
             }
 
-            // Update header display
-            const titleH3 = facesGrid.querySelector('.faces-pick-preferred-header h3');
-            if (titleH3) {
+            // Update header display using persistent reference
+            if (pickerTitleEl) {
                 const faceCount = pickPreferredFaces.length;
                 const countText = faceCount === 1 ? '1 image' : `${faceCount} images`;
-                titleH3.innerHTML = `${App.escapeHtml(trimmedName)} <span class="face-count">(${countText})</span>`;
+                pickerTitleEl.innerHTML = `${App.escapeHtml(trimmedName)} <span class="face-count">(${countText})</span>`;
             }
         } catch (error) {
             console.error('Failed to rename person:', error);
@@ -1951,46 +2159,30 @@
             onEnter() {
                 if (needsRefresh) {
                     // External change requires full reload from API
+                    // loadAllFaces() will create containers after clearing
                     loadAllFaces();
                 } else {
+                    // Ensure persistent containers exist (for re-entering without refresh)
+                    ensurePersistentContainers();
+
                     // Ensure people cache is loaded for autocomplete
-                    // (fire-and-forget - will complete before user types)
                     AppState.people.load();
 
                     // Handle pick-preferred mode
-                    if (viewMode === 'pick-preferred' && pickPreferredGrid) {
-                        // Restore scroll position
-                        const container = pickPreferredGrid._config?.container || facesGrid;
-                        if (container) {
-                            container.scrollTop = savedScrollTop;
-                        }
-                        // Rebind grid and selection
-                        pickPreferredGrid.bind();
-                        if (facesSelection) {
-                            facesSelection.bind();
-                        }
+                    if (viewMode === 'pick-preferred') {
+                        if (pickPreferredGrid) pickPreferredGrid.bind();
+                        if (pickerSelection) pickerSelection.bind();
                         return;
                     }
 
-                    // Normal mode: Restore scroll position to unknown container
-                    const unknownContainer = facesGrid?.querySelector('.faces-unknown-container');
-                    if (unknownContainer) {
-                        unknownContainer.scrollTop = savedScrollTop;
-                    } else if (facesGrid) {
-                        facesGrid.scrollTop = savedScrollTop;
-                    }
-
-                    // Rebind VirtualGrid (scroll listeners, thumbnail loading)
+                    // Normal mode: Rebind grids and selection
                     if (unknownFacesGrid) {
                         unknownFacesGrid.bind();
-                        // Handle deferred re-render (data changed while hidden)
                         if (needsRerender) {
                             unknownFacesGrid.render();
                             needsRerender = false;
                         }
                     }
-
-                    // Rebind selection (keyboard/mouse handlers)
                     if (facesSelection) {
                         facesSelection.bind();
                     }
@@ -1998,36 +2190,13 @@
             },
 
             onLeave() {
-                // Handle pick-preferred mode
-                if (viewMode === 'pick-preferred' && pickPreferredGrid) {
-                    // Save scroll position
-                    const container = pickPreferredGrid._config?.container || facesGrid;
-                    if (container) {
-                        savedScrollTop = container.scrollTop;
-                    }
-                    // Unbind grid and selection
-                    pickPreferredGrid.unbind();
-                    if (facesSelection) {
-                        facesSelection.unbind();
-                    }
-                    return;
-                }
-
-                // Normal mode: Preserve scroll position for return
-                const unknownContainer = facesGrid?.querySelector('.faces-unknown-container');
-                if (unknownContainer) {
-                    savedScrollTop = unknownContainer.scrollTop;
-                } else if (facesGrid) {
-                    savedScrollTop = facesGrid.scrollTop;
-                }
-
-                // Unbind VirtualGrid (critical - stops scroll events on hidden container)
-                if (unknownFacesGrid) {
-                    unknownFacesGrid.unbind();
-                }
-                // Unbind selection handlers
-                if (facesSelection) {
-                    facesSelection.unbind();
+                // Unbind all grids and selections (stops event handlers on hidden screen)
+                if (viewMode === 'pick-preferred') {
+                    if (pickPreferredGrid) pickPreferredGrid.unbind();
+                    if (pickerSelection) pickerSelection.unbind();
+                } else {
+                    if (unknownFacesGrid) unknownFacesGrid.unbind();
+                    if (facesSelection) facesSelection.unbind();
                 }
                 // Clear search state
                 unknownFacesSearchQuery = '';
@@ -2227,22 +2396,30 @@
 
     /**
      * Load all faces from the API.
+     *
+     * Shows loading banner, triggers AppState loads, then returns.
+     * The subscription handlers (onChanged) will render grids and hide
+     * the loading banner when all required domains are ready.
      */
-    async function loadAllFaces() {
+    function loadAllFaces() {
         if (isLoading) return;
         isLoading = true;
 
         // Save scroll position before reload
-        const unknownContainer = facesGrid?.querySelector('.faces-unknown-container');
-        const scrollTopBefore = unknownContainer ? unknownContainer.scrollTop : 0;
+        const container = facesGrid?.querySelector('.faces-unknown-container');
+        const scrollTopBefore = container ? container.scrollTop : 0;
+        savedScrollTop = scrollTopBefore;
 
-        // Unbind selection during reload
+        // Unbind and destroy grids and selections BEFORE clearing DOM
+        // (otherwise event listeners are orphaned when container is removed)
         if (facesSelection) {
             facesSelection.unbind();
+            facesSelection = null;
         }
-
-        // Unbind and destroy existing VirtualGrid BEFORE clearing DOM
-        // (otherwise scroll listeners are orphaned when container is removed)
+        if (pickerSelection) {
+            pickerSelection.unbind();
+            pickerSelection = null;
+        }
         if (unknownFacesGrid) {
             unknownFacesGrid.unbind();
             unknownFacesGrid.destroy();
@@ -2254,46 +2431,63 @@
             pickPreferredGrid = null;
         }
 
-        // Show loading state
+        // Clear grid and reset persistent container references
         if (facesGrid) facesGrid.innerHTML = '';
+        normalView = null;
+        pickerView = null;
+        peopleSection = null;
+        unknownSection = null;
+        unknownContainer = null;
+        pickerHeader = null;
+        pickerGridContainer = null;
+        pickerTitleEl = null;
+        pickerThresholdSlider = null;
+        pickerThresholdValue = null;
+        pickerLoadingEl = null;
         if (facesEmpty) facesEmpty.hidden = true;
-        if (facesLoading) facesLoading.hidden = false;
 
-        try {
-            // Load faces and people in parallel using AppState (cached)
-            await Promise.all([
-                AppState.faces.load(),
-                AppState.people.load()
-            ]);
+        // Check if data is already cached - if so, render immediately
+        const facesLoaded = AppState.faces.isLoaded();
+        const peopleLoaded = AppState.people.isLoaded();
+
+        if (facesLoaded && peopleLoaded) {
+            // Data already cached - render immediately, no loading banner needed
             allFaces = AppState.faces.getAll();
             needsRefresh = false;
             needsRerender = false;
+            isLoading = false;
             renderFacesGrid();
 
-            // Restore scroll position after render
-            const newUnknownContainer = facesGrid?.querySelector('.faces-unknown-container');
-            if (newUnknownContainer && scrollTopBefore > 0) {
-                newUnknownContainer.scrollTop = scrollTopBefore;
+            // Restore scroll position
+            const newContainer = facesGrid?.querySelector('.faces-unknown-container');
+            if (newContainer && savedScrollTop > 0) {
+                newContainer.scrollTop = savedScrollTop;
+                savedScrollTop = 0;
             }
 
-            // Bind selection after grid is rendered
+            // Bind selection
             if (facesSelection) {
                 facesSelection.bind();
             }
 
-            // If there's an active search query, re-run it to filter results
+            // Re-run search if active
             if (unknownFacesSearchQuery) {
-                // Don't await - let it run async to avoid blocking
                 searchUnknownFaces(unknownFacesSearchQuery);
             }
-        } catch (error) {
-            console.error('Failed to load faces:', error);
-            App.showError('Failed to load faces.');
-            if (facesEmpty) facesEmpty.hidden = false;
-        } finally {
-            isLoading = false;
-            hideFacesLoading();
+            return;
         }
+
+        // Show loading banner - data needs to be fetched
+        if (facesLoading) facesLoading.hidden = false;
+
+        // Trigger loads - subscription handlers will render when data arrives
+        // and hide loading banner when both domains are ready
+        AppState.faces.load();
+        AppState.people.load();
+
+        // Mark refresh complete - actual rendering happens in subscription handlers
+        needsRefresh = false;
+        needsRerender = false;
     }
 
     /**
@@ -2305,58 +2499,23 @@
     }
 
     /**
-     * Render the faces grid with known and unknown sections.
+     * Render/update the faces grid with known and unknown sections.
      *
      * ARCHITECTURE:
-     * - Known section: Static DOM cards (small count, no virtualization needed).
-     *   One card per person showing their preferred face thumbnail.
-     * - Unknown section: VirtualGrid (can have thousands of faces).
-     *   Face cards with name input for identification.
+     * Uses persistent containers (normalView) that are never destroyed.
+     * - People section: Updated in-place with new person cards
+     * - Unknown section: VirtualGrid.render() refreshes with new data
      *
-     * DATA FLOW:
-     *   allFaces → (filter showOnlyUnknowns) → split known/unknown
-     *   knownFaces → buildKnownPeopleList() → knownPeople[] → static DOM
-     *   unknownFaces → displayedFaces[] → VirtualGrid → lazy-rendered cards
-     *
-     * SIDE EFFECTS:
-     * - Clears reloadPending and selection
-     * - Rebuilds knownPeople[] and invalidates AppState.people cache
-     * - Creates new VirtualGrid instance (destroys previous)
-     * - Initializes GridSelection for unknown faces
+     * This preserves scroll positions and selection state across updates.
      */
     function renderFacesGrid() {
         if (!facesGrid) return;
 
-        // Clear pending flags - we're doing a complete render
+        // Ensure persistent containers exist
+        ensurePersistentContainers();
+
+        // Clear pending flags
         reloadPending = false;
-
-        // Clear selection (will be re-initialized after grid setup)
-        if (facesSelection) {
-            facesSelection.clear();
-        }
-
-        // Save scroll positions before destroying
-        let savedUnknownScroll = 0;
-        let savedKnownScroll = 0;
-        if (unknownFacesGrid) {
-            const container = facesGrid.querySelector('.faces-unknown-container');
-            if (container) {
-                savedUnknownScroll = container.scrollTop;
-            }
-        }
-        const knownSection = facesGrid.querySelector('.faces-section.known');
-        if (knownSection) {
-            savedKnownScroll = knownSection.scrollTop;
-        }
-
-        // Destroy existing VirtualGrid to avoid orphaned event listeners
-        if (unknownFacesGrid) {
-            unknownFacesGrid.unbind();
-            unknownFacesGrid.destroy();
-            unknownFacesGrid = null;
-        }
-
-        facesGrid.innerHTML = '';
 
         // Apply view filter
         let faces = [...allFaces];
@@ -2367,79 +2526,130 @@
         // Partition into known (has person_id) and unknown
         const knownFaces = faces.filter(f => f.person_id);
         const unknownFaces = faces.filter(f => !f.person_id);
-        // Note: unknownFaces already sorted by backend (group_size DESC, group_id, timestamp)
-        // This clusters similar faces together with largest groups first
 
         // Update displayedFaces - this is what VirtualGrid and GridSelection use
         displayedFaces = unknownFaces;
 
-        // Build known people list for static section
+        // Build known people list
         knownPeople = buildKnownPeopleList(knownFaces);
-
-        // Invalidate people cache - it will be refreshed on next autocomplete access
-        // (AppState.people now manages the cache)
-        AppState.people.invalidate();
 
         // Check for empty state
         if (faces.length === 0) {
             displayedFaces = [];
             knownPeople = [];
             if (facesEmpty) facesEmpty.hidden = false;
+            if (normalView) normalView.hidden = true;
             return;
         }
         if (facesEmpty) facesEmpty.hidden = true;
+        if (normalView) normalView.hidden = (viewMode === 'pick-preferred');
 
-        // Render known faces section (static DOM - one card per person)
-        if (knownPeople.length > 0 && !showOnlyUnknowns) {
-            const section = createKnownFacesSection(knownPeople);
-            // Apply stored height if available
-            if (knownSectionHeight) {
-                section.style.height = `${knownSectionHeight}px`;
-            }
-            facesGrid.appendChild(section);
+        // Update people section content (preserve scroll position)
+        updatePeopleSection();
 
-            // Add divider between known and unknown sections (only if both exist)
-            if (unknownFaces.length > 0) {
-                const divider = createFacesDivider(section);
-                facesGrid.appendChild(divider);
-            }
-        }
+        // Update unknown section - VirtualGrid.render() preserves scroll
+        updateUnknownSection();
 
-        // Render unknown faces section using VirtualGrid
-        if (unknownFaces.length > 0) {
-            const section = createUnknownFacesSection(unknownFaces.length);
-            facesGrid.appendChild(section);
-
-            // Initialize VirtualGrid in the unknown section container
-            const unknownContainer = section.querySelector('.faces-unknown-container');
-            if (unknownContainer) {
-                initUnknownFacesGridInContainer(unknownContainer);
-            }
-        }
-
-        // Initialize and bind selection after grid is set up
-        initFacesSelection();
+        // Prune selection to remove any IDs that no longer exist
         if (facesSelection) {
+            facesSelection.pruneToValidIds();
+        }
+    }
+
+    /**
+     * Update the people section content without destroying the container.
+     * Preserves scroll position.
+     */
+    function updatePeopleSection() {
+        if (!peopleSection) return;
+
+        // Save scroll position
+        const scrollTop = peopleSection.scrollTop;
+
+        // Find or create header and grid
+        let header = peopleSection.querySelector('.faces-section-header');
+        let grid = peopleSection.querySelector('.faces-section-grid');
+
+        if (!header) {
+            header = document.createElement('div');
+            header.className = 'faces-section-header';
+            header.innerHTML = '<h3 class="faces-section-title known">Known</h3><span class="faces-section-count"></span>';
+            peopleSection.insertBefore(header, peopleSection.firstChild);
+        }
+
+        if (!grid) {
+            grid = document.createElement('div');
+            grid.className = 'faces-section-grid';
+            peopleSection.appendChild(grid);
+        }
+
+        // Update count
+        const countEl = header.querySelector('.faces-section-count');
+        if (countEl) {
+            countEl.textContent = `(${knownPeople.length})`;
+        }
+
+        // Show/hide based on content and mode
+        const showPeople = knownPeople.length > 0 && !showOnlyUnknowns;
+        peopleSection.hidden = !showPeople;
+
+        // Update divider visibility
+        const divider = normalView?.querySelector('.faces-divider');
+        if (divider) {
+            divider.hidden = !showPeople || displayedFaces.length === 0;
+        }
+
+        if (!showPeople) return;
+
+        // Rebuild person cards
+        grid.innerHTML = '';
+        for (const person of knownPeople) {
+            const card = createPersonCard(person);
+            grid.appendChild(card);
+        }
+
+        // Restore scroll position
+        peopleSection.scrollTop = scrollTop;
+    }
+
+    /**
+     * Update the unknown faces section.
+     * VirtualGrid.render() automatically preserves scroll position.
+     */
+    function updateUnknownSection() {
+        if (!unknownSection || !unknownContainer) return;
+
+        // Update header count
+        const header = unknownSection.querySelector('.faces-section-header h3');
+        if (header) {
+            header.textContent = `Unknown Faces (${displayedFaces.length})`;
+        }
+
+        // Show/hide section
+        unknownSection.hidden = displayedFaces.length === 0;
+
+        if (displayedFaces.length === 0) return;
+
+        // Ensure VirtualGrid exists and render
+        if (!unknownFacesGrid) {
+            initUnknownFacesGrid();
+        }
+
+        if (unknownFacesGrid) {
+            unknownFacesGrid.render();
+            // Ensure bound for keyboard navigation
+            if (viewMode !== 'pick-preferred') {
+                unknownFacesGrid.bind();
+            }
+        }
+
+        // Ensure selection is initialized and bound
+        if (!facesSelection) {
+            initFacesSelection();
+        }
+        if (facesSelection && viewMode !== 'pick-preferred') {
             facesSelection.bind();
         }
-
-        // Restore scroll positions after grid is set up
-        // Use requestAnimationFrame to ensure DOM layout is complete
-        requestAnimationFrame(() => {
-            if (savedUnknownScroll > 0) {
-                const container = facesGrid.querySelector('.faces-unknown-container');
-                if (container) {
-                    // Setting scrollTop triggers scroll event which updates VirtualGrid
-                    container.scrollTop = savedUnknownScroll;
-                }
-            }
-            if (savedKnownScroll > 0) {
-                const newKnownSection = facesGrid.querySelector('.faces-section.known');
-                if (newKnownSection) {
-                    newKnownSection.scrollTop = savedKnownScroll;
-                }
-            }
-        });
     }
 
     /**
@@ -2745,7 +2955,6 @@
         input.className = 'face-card-input';
         input.placeholder = 'Enter name...';
         input.value = '';
-        input.dataset.faceId = face.id;
 
         // Handle focus - pre-fetch cache for fast autocomplete
         input.addEventListener('focus', () => {
@@ -2971,6 +3180,35 @@
             if (p) p.textContent = 'Loading faces…';
         }
         if (facesGrid) facesGrid.style.opacity = '';
+        isLoading = false;
+    }
+
+    /**
+     * Check if all required domains are loaded and hide loading banner if so.
+     * Called by subscription handlers after rendering.
+     */
+    function checkLoadingComplete() {
+        if (!isLoading) return;
+        if (AppState.faces.isLoaded() && AppState.people.isLoaded()) {
+            hideFacesLoading();
+
+            // Restore scroll position after both domains loaded
+            const container = facesGrid?.querySelector('.faces-unknown-container');
+            if (container && savedScrollTop > 0) {
+                container.scrollTop = savedScrollTop;
+                savedScrollTop = 0;
+            }
+
+            // Bind selection after grid is rendered
+            if (facesSelection) {
+                facesSelection.bind();
+            }
+
+            // If there's an active search query, re-run it to filter results
+            if (unknownFacesSearchQuery) {
+                searchUnknownFaces(unknownFacesSearchQuery);
+            }
+        }
     }
 
     /**
