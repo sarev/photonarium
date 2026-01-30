@@ -172,6 +172,16 @@ face_recognition_threshold: 0.65
 # Higher values improve GPU utilization but use more VRAM.
 # Reduce if you get out-of-memory errors. Range: 1-64, recommended: 16-32
 face_detection_batch_size: 32
+
+# ------------------------------------------------------------------------------
+# Image Captioning
+# ------------------------------------------------------------------------------
+
+# Temperature for caption generation (0.0-2.0).
+# Higher values produce more diverse/creative captions.
+# Lower values produce more deterministic/predictable captions.
+# Set to 0 for fully deterministic (greedy) decoding.
+caption_temperature: 1.0
 """
 
 
@@ -204,6 +214,7 @@ class Config:
         face_detection_min_size: Minimum face size in pixels (20-200).
         face_recognition_threshold: Cosine similarity threshold for auto-matching (0.0-1.0).
         face_detection_batch_size: Batch size for face detection (1-64).
+        caption_temperature: Temperature for caption generation (0.0-2.0).
     """
 
     image_extensions: set[str] = field(default_factory=lambda: {
@@ -230,6 +241,7 @@ class Config:
     face_detection_min_size: int = 40
     face_recognition_threshold: float = 0.65
     face_detection_batch_size: int = 32
+    caption_temperature: float = 1.0
 
     def __post_init__(self) -> None:
         """Validate configuration values after initialisation."""
@@ -312,6 +324,10 @@ class Config:
             raise ValueError(f'face_recognition_threshold must be 0.0-1.0, got {self.face_recognition_threshold}')
         if not 1 <= self.face_detection_batch_size <= 64:
             raise ValueError(f'face_detection_batch_size must be 1-64, got {self.face_detection_batch_size}')
+
+        # Validate caption settings
+        if not 0.0 <= self.caption_temperature <= 2.0:
+            raise ValueError(f'caption_temperature must be 0.0-2.0, got {self.caption_temperature}')
 
 
 def load_config(config_path: Path | str | None = None) -> Config:
@@ -416,6 +432,9 @@ def load_config(config_path: Path | str | None = None) -> Config:
 
     if 'face_detection_batch_size' in config_data:
         kwargs['face_detection_batch_size'] = int(config_data['face_detection_batch_size'])
+
+    if 'caption_temperature' in config_data:
+        kwargs['caption_temperature'] = float(config_data['caption_temperature'])
 
     return Config(**kwargs)
 

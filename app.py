@@ -20,12 +20,25 @@ Example:
     The server will start on http://localhost:5000 by default.
 """
 
+# Disable tokenizers parallelism before any imports.
+# Prevents Ctrl+C issues on Windows caused by Rust threads.
+import os
+os.environ['TOKENIZERS_PARALLELISM'] = 'false'
+
+import argparse
 import atexit
+import base64
+import io
 import logging
 import os
+import subprocess
 import sys
 import threading
+import time
+import traceback
 from pathlib import Path
+
+from PIL import Image, ImageDraw
 
 import orjson
 from flask import Flask, Response, request, send_file, abort
@@ -45,6 +58,7 @@ def jsonify(data):
     else:
         return flask_jsonify(data)
 
+from caption import CaptionGenerator
 from imagedb import ImageDatabase, register_signal_handlers
 from thumbnails import (
     get_thumbnail_cache_path,
@@ -128,6 +142,9 @@ _face_thumb_regen_lock = threading.Lock()
 _images_cache: dict | None = None
 _images_cache_lock = threading.Lock()
 
+# Caption generator (lazy-loaded to avoid startup delay)
+_caption_generator: CaptionGenerator | None = None
+
 
 def _get_images_cache():
     """Get cached images response if available."""
@@ -147,6 +164,15 @@ def invalidate_images_cache():
     global _images_cache
     with _images_cache_lock:
         _images_cache = None
+
+
+def get_caption_generator() -> CaptionGenerator:
+    """Get the caption generator, initializing if necessary."""
+    global _caption_generator
+    if _caption_generator is None:
+        config = get_db().config
+        _caption_generator = CaptionGenerator(temperature=config.caption_temperature)
+    return _caption_generator
 
 
 def get_db() -> ImageDatabase:
@@ -172,7 +198,6 @@ def get_db() -> ImageDatabase:
 
 def _prepopulate_images_cache(database: ImageDatabase):
     """Pre-populate the images cache during startup."""
-    import time
     t0 = time.perf_counter()
     images = database.get_all_images_lightweight()
     epoch = database.get_current_epoch()
@@ -402,6 +427,44 @@ def update_image(image_id):
     return jsonify(image)
 
 
+@app.route('/api/images/<image_id>/generate-caption', methods=['POST'])
+def generate_caption(image_id):
+    """Generate an AI caption for an image.
+
+    Uses the BLIP model to generate a natural language description
+    of the image. The temperature setting from config controls the
+    creativity/diversity of the generated text.
+
+    Args:
+        image_id: The unique identifier of the image.
+
+    Returns:
+        JSON object with:
+            - caption: The generated caption text
+        Or error if image not found or generation fails.
+    """
+    db = get_db()
+    image = db.get_image(image_id)
+    if image is None:
+        return error_response('Image not found', 404)
+
+    path = image.get('path')
+    if not path:
+        return error_response('Image path not found', 404)
+
+    try:
+        generator = get_caption_generator()
+        caption = generator.generate(path)
+    except Exception as e:
+        logger.exception(f'Failed to generate caption for image {image_id}')
+        return error_response(f'Caption generation failed: {e}', 500)
+
+    if caption is None:
+        return error_response('Failed to generate caption', 500)
+
+    return jsonify({'caption': caption})
+
+
 @app.route('/api/images/<image_id>', methods=['DELETE'])
 def delete_image(image_id):
     """Delete an image from the database and optionally from disk.
@@ -506,10 +569,6 @@ def get_histogram_images(image_id):
         JSON with {r: "data:image/png;base64,...", g: "...", b: "..."}
         or 404 if image not found.
     """
-    import io
-    import base64
-    from PIL import Image
-
     try:
         db = get_db()
         cache = get_thumbnail_cache()
@@ -555,7 +614,6 @@ def get_histogram_images(image_id):
         b_hist = histogram[512:768]
 
         # Generate histogram images
-        from PIL import ImageDraw
         hist_size = 1000
 
         def create_histogram_image(hist, color):
@@ -591,7 +649,6 @@ def get_histogram_images(image_id):
 
     except Exception as e:
         logger.error(f'Error generating histogram for {image_id}: {e}')
-        import traceback
         traceback.print_exc()
         abort(500)
 
@@ -635,9 +692,6 @@ def reveal_image(image_id):
     Returns:
         Success response, or 404 if image not found.
     """
-    import subprocess
-    import sys
-
     image = get_db().get_image(image_id)
     if image is None:
         return error_response('Image not found', 404)
@@ -1876,7 +1930,6 @@ def get_face_thumbnail(face_id):
                     _face_thumb_regenerating.discard(face_id)
         else:
             # Another request is handling it - wait for file to appear
-            import time
             for _ in range(20):  # Wait up to 2 seconds
                 time.sleep(0.1)
                 if thumb_path.exists():
@@ -2124,8 +2177,6 @@ def run_generate_thumbnails_cli():
 # =============================================================================
 
 if __name__ == '__main__':
-    import argparse
-
     parser = argparse.ArgumentParser(description='Imaginary - Image Catalogue Server')
     parser.add_argument(
         '-s', '--scan',
@@ -2179,7 +2230,6 @@ if __name__ == '__main__':
 
     # Handle duplicate rebuild command
     if args.rebuild_duplicates:
-        import time
         db = get_db()
         logger.info('Starting full duplicate group recomputation...')
         start_time = time.time()
@@ -2192,7 +2242,6 @@ if __name__ == '__main__':
 
     # Handle face embedding generation command
     if args.generate_face_embeddings:
-        import time
         db = get_db()
         logger.info('Starting face CLIP embedding generation (for text search)...')
         start_time = time.time()
@@ -2203,7 +2252,6 @@ if __name__ == '__main__':
 
     # Handle face thumbnail regeneration command
     if args.regenerate_face_thumbnails:
-        import time
         db = get_db()
         logger.info('Starting face thumbnail regeneration...')
         start_time = time.time()

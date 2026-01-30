@@ -181,7 +181,8 @@ import open_clip
 import os
 import queue
 import random
-from concurrent.futures import ThreadPoolExecutor, Future
+from collections import defaultdict
+from concurrent.futures import ThreadPoolExecutor, Future, as_completed
 import re
 import shutil
 import signal
@@ -2451,8 +2452,6 @@ class FaceDetectionThread(threading.Thread):
         Uses prefetching: while the GPU processes batch N, the CPU loads
         batch N+1's images in parallel for better throughput.
         """
-        from concurrent.futures import ThreadPoolExecutor, Future
-
         logger.info('Face detection thread started')
 
         # Don't do anything if face detection is disabled
@@ -3600,9 +3599,6 @@ class ImageDatabase:
         Returns:
             Number of thumbnails regenerated.
         """
-        from collections import defaultdict
-        from concurrent.futures import ThreadPoolExecutor, as_completed
-
         faces = get_all_faces_for_thumbnail_regen(self.conn)
 
         if not faces:

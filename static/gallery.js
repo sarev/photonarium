@@ -1119,7 +1119,12 @@ const Gallery = {
             </div>
 
             <div class="info-section info-editable">
-                <label class="info-label" for="info-description">Description</label>
+                <div class="info-label-row">
+                    <label class="info-label" for="info-description">Description</label>
+                    <button type="button" id="info-generate-caption-btn" class="toolbar-btn toolbar-btn-small" title="Generate AI caption">
+                        <span class="material-symbols-outlined">auto_awesome</span>
+                    </button>
+                </div>
                 <textarea id="info-description" class="info-input" rows="3">${App.escapeHtml(img.description || '')}</textarea>
             </div>
 
@@ -1193,6 +1198,28 @@ const Gallery = {
                     ratingField.value += emoji;
                     ratingField.focus();
                 });
+            });
+        }
+
+        const generateCaptionBtn = App.$('info-generate-caption-btn');
+        if (generateCaptionBtn && descField) {
+            generateCaptionBtn.addEventListener('click', async () => {
+                generateCaptionBtn.disabled = true;
+                generateCaptionBtn.classList.add('loading');
+                try {
+                    const response = await App.apiPost(`/images/${imageId}/generate-caption`);
+                    if (response.caption) {
+                        descField.value = response.caption;
+                        // Auto-save the generated caption
+                        await this._saveImageField(imageId, 'description', response.caption);
+                    }
+                } catch (error) {
+                    console.error('Failed to generate caption:', error);
+                    App.showError('Failed to generate caption.');
+                } finally {
+                    generateCaptionBtn.disabled = false;
+                    generateCaptionBtn.classList.remove('loading');
+                }
             });
         }
     },

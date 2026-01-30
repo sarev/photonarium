@@ -31,6 +31,8 @@ Usage:
 
 from __future__ import annotations
 
+from collections import defaultdict
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
 from pathlib import Path
 from PIL import Image, ImageOps, ImageFilter
@@ -41,7 +43,10 @@ import numpy as np
 import sqlite3
 import threading
 import time
+import torch
 import uuid
+
+from facenet_pytorch import MTCNN, InceptionResnetV1
 
 from duplicates import UnionFind
 
@@ -222,7 +227,6 @@ class FaceDetector:
     def device(self) -> str:
         """Get the PyTorch device, auto-detecting if not set."""
         if self._device is None:
-            import torch
             self._device = 'cuda' if torch.cuda.is_available() else 'cpu'
             logger.info(f'Face detector using device: {self._device}')
         return self._device
@@ -234,7 +238,6 @@ class FaceDetector:
             with self._lock:
                 if self._mtcnn is None:
                     logger.info('Loading MTCNN face detector...')
-                    from facenet_pytorch import MTCNN
                     self._mtcnn = MTCNN(
                         keep_all=True,
                         device=self.device,
@@ -252,7 +255,6 @@ class FaceDetector:
             with self._lock:
                 if self._resnet is None:
                     logger.info('Loading InceptionResnetV1 for face recognition embeddings...')
-                    from facenet_pytorch import InceptionResnetV1
                     self._resnet = InceptionResnetV1(
                         pretrained='vggface2',
                         device=self.device,
@@ -277,8 +279,6 @@ class FaceDetector:
             and embeddings. Returns empty list if no faces detected or
             on error.
         """
-        import torch
-
         image_path = Path(image_path)
 
         try:
@@ -446,8 +446,6 @@ class FaceDetector:
         Returns:
             List of (path, PIL.Image, scale) tuples for successfully loaded images.
         """
-        from concurrent.futures import ThreadPoolExecutor, as_completed
-
         if not image_paths:
             return []
 
@@ -505,9 +503,6 @@ class FaceDetector:
         Returns:
             Dict mapping each image path to its list of DetectedFace objects.
         """
-        import torch
-        from collections import defaultdict
-
         def should_stop():
             return stop_event is not None and stop_event.is_set()
 

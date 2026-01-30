@@ -952,6 +952,39 @@ a:hover {
     color: var(--color-text-amber);
 }
 
+/* Label row with button (e.g., Description with generate button) */
+.info-label-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin-bottom: 0.5rem;
+}
+
+.info-label-row .info-label {
+    margin-bottom: 0;
+}
+
+/* Small toolbar button variant */
+.toolbar-btn-small {
+    width: 24px;
+    height: 24px;
+    padding: 0;
+}
+
+.toolbar-btn-small .material-symbols-outlined {
+    font-size: 18px;
+}
+
+/* Loading state for buttons */
+.toolbar-btn.loading .material-symbols-outlined {
+    animation: spin 1s linear infinite;
+}
+
+@keyframes spin {
+    from { transform: rotate(0deg); }
+    to { transform: rotate(360deg); }
+}
+
 .info-input {
     width: 100%;
     padding: 0.5rem;
