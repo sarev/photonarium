@@ -1037,6 +1037,24 @@ const VirtualGrid = {
             },
 
             /**
+             * Gets the current scroll offset.
+             * @returns {number} Scroll offset in pixels
+             */
+            getScrollOffset() {
+                return this._config.container?.scrollTop ?? 0;
+            },
+
+            /**
+             * Sets the scroll offset.
+             * @param {number} offset - Scroll offset in pixels
+             */
+            setScrollOffset(offset) {
+                if (this._config.container) {
+                    this._config.container.scrollTop = offset;
+                }
+            },
+
+            /**
              * Gets the rendered item element for an ID.
              * @param {string} id - Item ID
              * @returns {HTMLElement|null} Element or null if not rendered
@@ -1935,6 +1953,41 @@ const GridSelection = {
                 }
 
                 this._notifySelectionChanged();
+            },
+
+            /**
+             * Removes IDs from selection that no longer exist in the data.
+             * Call this after data changes that may remove items (e.g., backend
+             * reassessment matching unknown faces to a person).
+             */
+            pruneToValidIds() {
+                const items = this._config.getItems();
+                const getItemId = this._config.getItemId;
+
+                // Build set of valid IDs
+                const validIds = new Set();
+                for (const item of items) {
+                    validIds.add(String(getItemId(item)));
+                }
+
+                // Remove any selected IDs that are no longer valid
+                let changed = false;
+                for (const id of this._selected) {
+                    if (!validIds.has(id)) {
+                        this._selected.delete(id);
+                        changed = true;
+                    }
+                }
+
+                // Update anchor if it was pruned
+                if (this._anchor && !validIds.has(this._anchor)) {
+                    this._anchor = null;
+                }
+
+                if (changed) {
+                    this.updateVisualState();
+                    this._notifySelectionChanged();
+                }
             },
 
             /**
