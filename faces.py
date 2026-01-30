@@ -2691,6 +2691,17 @@ def get_reassessment_status() -> dict:
         }
 
 
+def clear_reassessment_result() -> None:
+    """Clear the last reassessment result.
+
+    Called by frontend after acknowledging a completed reassessment,
+    to prevent stale 'completed' status on subsequent polls.
+    """
+    global _reassess_result
+    with _reassess_lock:
+        _reassess_result = None
+
+
 def reassess_unknown_faces_async(
     db: 'ImageDatabase',
     threshold: float = 0.65,

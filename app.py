@@ -90,6 +90,7 @@ from faces import (
     batch_identify_faces,
     reassess_unknown_faces_async,
     get_reassessment_status,
+    clear_reassessment_result,
     compute_unknown_face_groups_async,
     get_group_computation_status,
     revalidate_person_faces,
@@ -950,8 +951,20 @@ def get_status():
             - duplicates: (if computing) {status, level} for duplicate detection
             - face_grouping: (if computing) {status} for face grouping
             - face_embeddings: (if computing) {status, current, total} for face CLIP embeddings
+            - face_reassessment: {in_progress, completed, matched_count, person_id}
     """
     status = get_db().get_processing_status()
+
+    # Add face reassessment status
+    reassess = get_reassessment_status()
+    last_result = reassess.get('last_result')
+    status['face_reassessment'] = {
+        'in_progress': reassess['in_progress'],
+        'completed': last_result is not None and not reassess['in_progress'],
+        'matched_count': last_result.get('matched_count') if last_result else None,
+        'person_id': last_result.get('person_id') if last_result else None,
+    }
+
     return jsonify(status)
 
 
@@ -1716,6 +1729,21 @@ def get_faces_reassess_status():
     """
     status = get_reassessment_status()
     return success_response(status)
+
+
+@app.route('/api/faces/reassess-ack', methods=['POST'])
+def ack_reassessment():
+    """Acknowledge face reassessment completion.
+
+    Clears the 'completed' flag so subsequent status polls don't see
+    stale completion data. Called by frontend after processing a
+    reassessment result.
+
+    Returns:
+        Success message.
+    """
+    clear_reassessment_result()
+    return success_response(message='Reassessment acknowledged')
 
 
 @app.route('/api/faces/<face_id>/unidentify', methods=['POST'])
