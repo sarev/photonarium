@@ -172,13 +172,9 @@ const AppState = (function() {
         const domains = Array.from(_dirtyDomains);
         _dirtyDomains.clear();
 
-        // Schedule notifications via microtask (allows current call stack to complete)
-        if (domains.length > 0) {
-            queueMicrotask(() => {
-                for (const domain of domains) {
-                    domain._notify({ type: 'changed', epoch: _txEpoch });
-                }
-            });
+        // Notify synchronously - keeps GUI single-threaded and predictable
+        for (const domain of domains) {
+            domain._notify({ type: 'changed', epoch: _txEpoch });
         }
     }
 
@@ -1563,6 +1559,8 @@ const AppState = (function() {
                         await App.apiPost(`/people/${personId}/set-preferred`, { face_id: faceId });
                         _internal.update(personId, { preferred_face_id: faceId });
                         _internal.bustThumbnail(personId);
+                        // Preferred face is automatically padlocked (backend sets manually_tagged=1)
+                        faces._internal.update(faceId, { manually_tagged: true });
                     } catch (err) {
                         broadcastError(err.message || 'Failed to set preferred face');
                         throw err;
@@ -1707,6 +1705,7 @@ const AppState = (function() {
 
             /**
              * Link a face to a person (update cache only).
+             * Also marks the face as manually_tagged since this is a user action.
              * @param {string} faceId - Face ID
              * @param {string} personId - Person ID
              * @param {string} personName - Person name
@@ -1716,6 +1715,7 @@ const AppState = (function() {
                 if (face) {
                     face.person_id = personId;
                     face.person_name = personName;
+                    face.manually_tagged = true;
                     invalidateDerived();
                     markDirty(domainRef);
                 }
@@ -1723,6 +1723,7 @@ const AppState = (function() {
 
             /**
              * Unlink a face from its person (update cache only).
+             * Also clears the manually_tagged flag.
              * @param {string} faceId - Face ID
              * @returns {string|null} Previous person_id if any
              */
@@ -1732,6 +1733,7 @@ const AppState = (function() {
                     const oldPersonId = face.person_id;
                     face.person_id = null;
                     face.person_name = null;
+                    face.manually_tagged = false;
                     invalidateDerived();
                     markDirty(domainRef);
                     return oldPersonId;
@@ -2133,6 +2135,47 @@ const AppState = (function() {
                         invalidateDerived();
                         markDirty(domainRef);
                         broadcastError(err.message || 'Failed to suppress faces');
+                        throw err;
+                    }
+                });
+            },
+
+            /**
+             * Toggle the manually_tagged flag for a face.
+             * Manually tagged faces are used as reference for auto-matching.
+             * Auto-tagged faces are not used for matching (prevents snowball effect).
+             * @param {string} faceId - Face ID
+             * @returns {Promise<boolean>} The new manually_tagged value
+             */
+            toggleManualTag(faceId) {
+                return queueTransaction(async () => {
+                    const face = _cache?.get(faceId);
+                    const currentValue = face?.manually_tagged || false;
+                    const newValue = !currentValue;
+
+                    // Optimistic update
+                    if (face) {
+                        face.manually_tagged = newValue;
+                        markDirty(domainRef);
+                    }
+
+                    try {
+                        // API call
+                        const response = await App.apiPost(`/faces/${faceId}/toggle-manual`);
+                        // Server returns the actual new value (wrapped in data field)
+                        const serverValue = response.data.manually_tagged;
+                        if (face && serverValue !== newValue) {
+                            face.manually_tagged = serverValue;
+                            markDirty(domainRef);
+                        }
+                        return serverValue;
+                    } catch (err) {
+                        // Rollback
+                        if (face) {
+                            face.manually_tagged = currentValue;
+                            markDirty(domainRef);
+                        }
+                        broadcastError(err.message || 'Failed to toggle manual tag');
                         throw err;
                     }
                 });

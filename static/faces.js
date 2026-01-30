@@ -354,7 +354,20 @@
             requestAnimationFrame(() => {
                 if (needsRerender && App.getScreen() === 'faces') {
                     needsRerender = false;
-                    renderFacesGrid();
+                    // Preserve pick-preferred mode if active
+                    if (viewMode === 'pick-preferred' && pickPreferredGrid) {
+                        // Save scroll position
+                        const container = pickPreferredGrid._config?.container || facesGrid;
+                        const savedScroll = container?.scrollTop || 0;
+                        // Re-render pick-preferred mode
+                        renderPickPreferredMode();
+                        // Restore scroll position
+                        requestAnimationFrame(() => {
+                            if (container) container.scrollTop = savedScroll;
+                        });
+                    } else {
+                        renderFacesGrid();
+                    }
                 }
             });
         });
@@ -823,6 +836,21 @@
         });
         card.appendChild(star);
 
+        // Add padlock overlay for manual tag status
+        const padlock = document.createElement('div');
+        const isManuallyTagged = face.manually_tagged;
+        padlock.className = 'face-card-padlock' + (isManuallyTagged ? '' : ' unlocked');
+        padlock.dataset.faceId = face.id;
+        padlock.innerHTML = `<span class="material-symbols-outlined">${isManuallyTagged ? 'lock' : 'lock_open'}</span>`;
+        padlock.title = isManuallyTagged
+            ? 'Manually tagged - used for recognition'
+            : 'Auto-tagged - not used for recognition';
+        padlock.addEventListener('click', async (e) => {
+            e.stopPropagation();
+            await handlePadlockClick(face.id, padlock);
+        });
+        card.appendChild(padlock);
+
         // Editable name input (allows reassigning misclassified faces)
         const input = document.createElement('input');
         input.type = 'text';
@@ -892,12 +920,62 @@
                 star.classList.toggle('preferred', star.dataset.faceId === faceId);
             });
 
+            // Update padlock visual for the preferred face (it gets padlocked)
+            const padlock = facesGrid.querySelector(`.face-card-padlock[data-face-id="${faceId}"]`);
+            if (padlock) {
+                updatePadlockIcon(padlock, true);
+            }
+
             // Mark person thumbnail for cache busting when returning to grid
             thumbnailCacheBust.set(pickPreferredPersonId, Date.now());
         } catch (error) {
             console.error('Failed to set preferred face:', error);
             App.showError('Failed to set preferred face.');
         }
+    }
+
+    /**
+     * Handle padlock click to toggle manually_tagged status.
+     * @param {string} faceId - Face ID to toggle
+     * @param {HTMLElement} padlockElement - The padlock element for UI update
+     */
+    async function handlePadlockClick(faceId, padlockElement) {
+        // Suppress broadcast render to prevent race condition
+        suppressBroadcastRender = true;
+
+        try {
+            const newValue = await AppState.faces.toggleManualTag(faceId);
+
+            // Update local state
+            const face = pickPreferredFaces.find(f => f.id === faceId);
+            if (face) {
+                face.manually_tagged = newValue;
+            }
+
+            // Update padlock visual
+            updatePadlockIcon(padlockElement, newValue);
+        } catch (error) {
+            console.error('Failed to toggle manual tag:', error);
+            App.showError('Failed to toggle manual tag.');
+        } finally {
+            suppressBroadcastRender = false;
+        }
+    }
+
+    /**
+     * Update padlock icon and title based on manually_tagged value.
+     * @param {HTMLElement} padlockElement - The padlock element to update
+     * @param {boolean} isManuallyTagged - Whether the face is manually tagged
+     */
+    function updatePadlockIcon(padlockElement, isManuallyTagged) {
+        padlockElement.classList.toggle('unlocked', !isManuallyTagged);
+        const icon = padlockElement.querySelector('.material-symbols-outlined');
+        if (icon) {
+            icon.textContent = isManuallyTagged ? 'lock' : 'lock_open';
+        }
+        padlockElement.title = isManuallyTagged
+            ? 'Manually tagged - used for recognition'
+            : 'Auto-tagged - not used for recognition';
     }
 
     /**

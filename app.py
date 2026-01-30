@@ -65,6 +65,7 @@ from faces import (
     get_faces_for_image,
     get_faces_for_person,
     update_face_person,
+    toggle_face_manual_tag,
     suppress_face,
     delete_face,
     get_face_thumbnail_path,
@@ -1542,8 +1543,8 @@ def identify_face(face_id):
         else:
             return error_response('Either person_id or name is required')
 
-        # Update face with person_id
-        update_face_person(db.conn, face_id, person_id)
+        # Update face with person_id (manually tagged since user initiated)
+        update_face_person(db.conn, face_id, person_id, manually_tagged=True)
 
         # Get updated face
         face = get_face(db.conn, face_id)
@@ -1764,6 +1765,33 @@ def suppress_face_endpoint(face_id):
     )
 
 
+@app.route('/api/faces/<face_id>/toggle-manual', methods=['POST'])
+def toggle_face_manual_tag_endpoint(face_id):
+    """Toggle the manually_tagged flag for a face.
+
+    Manually tagged faces are used as reference for auto-matching.
+    Auto-tagged faces are not used for matching (prevents snowball effect).
+
+    Args:
+        face_id: Face's UUID.
+
+    Returns:
+        Success message with the new manually_tagged value.
+    """
+    db = get_db()
+
+    with db._db_lock:
+        new_value = toggle_face_manual_tag(db.conn, face_id)
+
+        if new_value is None:
+            return error_response('Face not found', 404)
+
+    return success_response(
+        message='Manual tag toggled',
+        data={'manually_tagged': new_value}
+    )
+
+
 @app.route('/api/faces/<face_id>', methods=['DELETE'])
 def delete_face_endpoint(face_id):
     """Delete a face detection entirely.
@@ -1891,8 +1919,8 @@ def unassign_face(face_id):
         # Get person details before unassigning
         person = get_person(db.conn, old_person_id)
 
-        # Unlink face from person
-        update_face_person(db.conn, face_id, None)
+        # Unlink face from person (clear manual flag since no longer assigned)
+        update_face_person(db.conn, face_id, None, manually_tagged=False)
 
         # If this was the preferred face, auto-select a new one
         if person and person.get('preferred_face_id') == face_id:
@@ -1958,8 +1986,8 @@ def unassign_faces_batch():
 
             affected_person_ids.add(old_person_id)
 
-            # Unlink face from person
-            update_face_person(db.conn, face_id, None)
+            # Unlink face from person (clear manual flag since no longer assigned)
+            update_face_person(db.conn, face_id, None, manually_tagged=False)
             unassigned_count += 1
 
         # Phase 2: Fix preferred faces for affected persons
@@ -2047,6 +2075,10 @@ def set_preferred_face(person_id):
 
         # Update the preferred face
         update_person(db.conn, person_id, preferred_face_id=face_id)
+
+        # Also mark the face as manually tagged (preferred implies manual selection)
+        db.conn.execute('UPDATE faces SET manually_tagged = 1 WHERE id = ?', (face_id,))
+        db.conn.commit()
 
         # Get updated person
         updated_person = get_person(db.conn, person_id)

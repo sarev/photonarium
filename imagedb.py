@@ -771,10 +771,10 @@ def get_all_images_lightweight(conn: sqlite3.Connection) -> list[dict[str, Any]]
 
     Returns:
         List of image dictionaries with minimal fields:
-        id, basename, width, height, timestamp, timestamp_confidence, rating, description.
+        id, basename, size, width, height, timestamp, timestamp_confidence, rating, description.
     """
     cursor = conn.execute("""
-        SELECT id, basename, width, height, timestamp, timestamp_confidence, rating, description
+        SELECT id, basename, size, width, height, timestamp, timestamp_confidence, rating, description
         FROM images
         WHERE deleted = 0
         ORDER BY timestamp DESC

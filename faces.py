@@ -103,8 +103,10 @@ _MIGRATIONS = [
     ("people", "recognition_threshold", "ALTER TABLE people ADD COLUMN recognition_threshold REAL"),
     # Add semantic embedding for text-based face search (OpenCLIP, distinct from face recognition embedding)
     ("faces", "semantic_embedding", "ALTER TABLE faces ADD COLUMN semantic_embedding BLOB"),
+    # Add manually_tagged flag to track user-tagged vs auto-matched faces
+    # 0 = auto-tagged (or not yet tagged), 1 = manually tagged by user
+    ("faces", "manually_tagged", "ALTER TABLE faces ADD COLUMN manually_tagged INTEGER DEFAULT 0"),
 ]
-
 
 def init_face_tables(conn: sqlite3.Connection) -> None:
     """Initialize the face recognition database tables.
@@ -138,6 +140,8 @@ def _run_migrations(conn: sqlite3.Connection) -> None:
     Args:
         conn: Database connection.
     """
+    newly_added_columns = set()
+
     for table, column, sql in _MIGRATIONS:
         # Check if column exists
         cursor = conn.execute(f"PRAGMA table_info({table})")
@@ -145,9 +149,11 @@ def _run_migrations(conn: sqlite3.Connection) -> None:
         if column not in columns:
             try:
                 conn.execute(sql)
+                newly_added_columns.add(column)
                 logger.info(f"Migration: added {table}.{column}")
             except sqlite3.OperationalError as e:
                 logger.warning(f"Migration failed for {table}.{column}: {e}")
+
 
 
 # =============================================================================
@@ -1578,10 +1584,15 @@ def get_all_faces(
 def get_all_known_face_embeddings(
     conn: sqlite3.Connection,
 ) -> list[tuple[str, str, np.ndarray]]:
-    """Get all face embeddings for known people.
+    """Get all face embeddings for known people (manually tagged only).
 
-    Returns embeddings for faces that have been identified (have a person_id)
-    and are not suppressed. Used for auto-recognition of new faces.
+    Returns embeddings for faces that have been manually identified by the user
+    (have a person_id, not suppressed, and manually_tagged=1).
+    Used for auto-recognition of new faces.
+
+    Only manually-tagged faces are used to prevent the "snowball effect"
+    where auto-matched faces are used to match more faces, potentially
+    propagating errors.
 
     Args:
         conn: Database connection.
@@ -1592,7 +1603,7 @@ def get_all_known_face_embeddings(
     cursor = conn.execute(
         '''SELECT id, person_id, embedding
            FROM faces
-           WHERE person_id IS NOT NULL AND suppressed = 0'''
+           WHERE person_id IS NOT NULL AND suppressed = 0 AND manually_tagged = 1'''
     )
 
     results = []
@@ -1606,6 +1617,7 @@ def update_face_person(
     conn: sqlite3.Connection,
     face_id: str,
     person_id: str | None,
+    manually_tagged: bool | None = None,
 ) -> bool:
     """Update the person associated with a face.
 
@@ -1613,16 +1625,62 @@ def update_face_person(
         conn: Database connection.
         face_id: Face's UUID.
         person_id: Person's UUID, or None to unlink.
+        manually_tagged: If True, mark as manually tagged. If False, mark as auto-tagged.
+            If None, don't change the manually_tagged flag.
 
     Returns:
         True if updated, False if face not found.
     """
-    cursor = conn.execute(
-        '''UPDATE faces SET person_id = ? WHERE id = ?''',
-        (person_id, face_id)
-    )
+    if manually_tagged is None:
+        cursor = conn.execute(
+            '''UPDATE faces SET person_id = ? WHERE id = ?''',
+            (person_id, face_id)
+        )
+    else:
+        cursor = conn.execute(
+            '''UPDATE faces SET person_id = ?, manually_tagged = ? WHERE id = ?''',
+            (person_id, 1 if manually_tagged else 0, face_id)
+        )
     conn.commit()
     return cursor.rowcount > 0
+
+
+def toggle_face_manual_tag(
+    conn: sqlite3.Connection,
+    face_id: str,
+) -> bool | None:
+    """Toggle the manually_tagged flag for a face.
+
+    Args:
+        conn: Database connection.
+        face_id: Face's UUID.
+
+    Returns:
+        The new manually_tagged value (True/False), or None if face not found.
+    """
+    # Get current value
+    cursor = conn.execute(
+        '''SELECT manually_tagged FROM faces WHERE id = ?''',
+        (face_id,)
+    )
+    row = cursor.fetchone()
+    if row is None:
+        return None
+
+    # Toggle the value
+    current = row['manually_tagged'] or 0
+    new_value = 0 if current else 1
+
+    conn.execute(
+        '''UPDATE faces SET manually_tagged = ? WHERE id = ?''',
+        (new_value, face_id)
+    )
+    conn.commit()
+
+    # Invalidate cache since manually_tagged affects which faces are used for matching
+    invalidate_embedding_cache()
+
+    return bool(new_value)
 
 
 def suppress_face(
@@ -2109,12 +2167,12 @@ def batch_identify_faces(
     else:
         person_id = person['id']
 
-    # Update all faces with person_id
+    # Update all faces with person_id (manually tagged since user initiated)
     updated_faces = []
     for face_id in face_ids:
         face = get_face(conn, face_id)
         if face is not None:
-            update_face_person(conn, face_id, person_id)
+            update_face_person(conn, face_id, person_id, manually_tagged=True)
             updated_faces.append(face_id)
 
     # Set preferred face if specified and person doesn't have one
@@ -2267,13 +2325,13 @@ def reassess_unknown_faces(
     else:
         logger.info(f'Reassessment found 0 matches out of {len(unknown_ids)} unknown faces')
 
-    # Apply matches
+    # Apply matches (auto-matched, not manually tagged)
     for face_id, matched_person_id, similarity in matched:
         logger.debug(
             f'Auto-matched face {face_id} to person {matched_person_id} '
             f'(similarity: {similarity:.3f})'
         )
-        update_face_person(conn, face_id, matched_person_id)
+        update_face_person(conn, face_id, matched_person_id, manually_tagged=False)
 
     # Invalidate cache if we made matches
     if matched:
