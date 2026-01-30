@@ -1999,7 +1999,7 @@
                 savedUnknownScroll = container.scrollTop;
             }
         }
-        const knownSection = facesGrid.querySelector('.faces-known-section');
+        const knownSection = facesGrid.querySelector('.faces-section.known');
         if (knownSection) {
             savedKnownScroll = knownSection.scrollTop;
         }
@@ -2089,7 +2089,7 @@
                 }
             }
             if (savedKnownScroll > 0) {
-                const newKnownSection = facesGrid.querySelector('.faces-known-section');
+                const newKnownSection = facesGrid.querySelector('.faces-section.known');
                 if (newKnownSection) {
                     newKnownSection.scrollTop = savedKnownScroll;
                 }
@@ -2348,7 +2348,7 @@
             // If this card isn't selected, select only this one
             let faceIds;
             if (facesSelection && facesSelection.isSelected(face.id)) {
-                faceIds = facesSelection.getSelectedIds();
+                faceIds = facesSelection.getSelected();
             } else {
                 faceIds = [face.id];
             }
