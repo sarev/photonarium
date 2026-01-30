@@ -321,7 +321,6 @@ a:hover {
 }
 
 #app[data-screen="gallery"] #screen-gallery,
-#app[data-screen="fullscreen"] #screen-fullscreen,
 #app[data-screen="database"] #screen-database,
 #app[data-screen="search"] #screen-search,
 #app[data-screen="duplicates"] #screen-duplicates,
@@ -1127,19 +1126,29 @@ a:hover {
 
 
 /* ==========================================================================
-   FULLSCREEN VIEW
+   FULLSCREEN OVERLAY
 
-   Full viewport image display with overlays.
+   Modal overlay for full-screen image viewing.
+   Not part of the screen navigation system - just shows/hides with transition.
    ========================================================================== */
 
-#screen-fullscreen {
+#fullscreen-overlay {
     position: fixed;
     inset: 0;
     background-color: var(--color-overlay-bg-solid);
     z-index: 1000;
+    display: flex;
     flex-direction: column;
     align-items: center;
     justify-content: center;
+    opacity: 0;
+    visibility: hidden;
+    transition: opacity 0.2s ease-out, visibility 0.2s ease-out;
+}
+
+#fullscreen-overlay.visible {
+    opacity: 1;
+    visibility: visible;
 }
 
 #fullscreen-container {

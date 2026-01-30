@@ -818,11 +818,10 @@
         // Listen for screen changes
         App.on('screenChanged', handleScreenChange);
 
-        // Listen for image changes in fullscreen
+        // Listen for fullscreen overlay events
         App.on('fullscreenImageChanged', handleFullscreenImageChange);
-
-        // Listen for transform changes (zoom/pan) in fullscreen
         App.on('fullscreenTransformChanged', handleFullscreenTransformChange);
+        App.on('fullscreenClosed', clearFaceOverlay);
 
         // Listen for database changes (e.g., after scan completes)
         App.on('databaseChanged', () => {
@@ -2287,8 +2286,8 @@
         }
 
         // Refresh faces if enabling
-        if (taggingMode && App.getScreen() === 'fullscreen') {
-            const imageId = App.getCurrentImageId();
+        if (taggingMode && Fullscreen.isOpen()) {
+            const imageId = Fullscreen.state.currentId;
             if (imageId) {
                 loadFacesForImage(imageId);
             }
@@ -3275,15 +3274,13 @@
 
     /**
      * Handle screen change events.
+     * Clear face overlay when changing screens (fullscreen handles its own faces via events).
      * @param {string} screen - New screen name
      */
     function handleScreenChange(screen) {
-        if (screen === 'fullscreen' && isTaggingModeActive()) {
-            const imageId = App.getCurrentImageId();
-            if (imageId) {
-                loadFacesForImage(imageId);
-            }
-        } else {
+        // Clear face overlay when changing screens
+        // (fullscreen overlay handles its own faces via fullscreenImageChanged event)
+        if (!Fullscreen.isOpen()) {
             clearFaceOverlay();
         }
     }
@@ -3690,7 +3687,7 @@
      */
     function handleKeyDown(e) {
         if (!isTaggingModeActive()) return;
-        if (App.getScreen() !== 'fullscreen') return;
+        if (!Fullscreen.isOpen()) return;
 
         // Tab to cycle through unknown face inputs
         if (e.key === 'Tab' && !e.ctrlKey && !e.altKey && !e.metaKey) {

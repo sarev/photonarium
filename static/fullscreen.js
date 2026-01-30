@@ -1,53 +1,43 @@
 /**
- * @fileoverview Full-screen image viewer module for the Imaginary application.
+ * @fileoverview Full-screen image viewer overlay for the Imaginary application.
  *
- * This module handles the full-screen image viewing experience, providing
- * zoom, pan, and navigation capabilities. It registers with the core App
- * module and takes over the entire viewport when active.
+ * This module provides a modal overlay for full-screen image viewing with
+ * zoom, pan, and navigation capabilities. It floats over whatever screen
+ * is currently active - the underlying screen continues running normally.
+ *
+ * ARCHITECTURE:
+ *   - True modal overlay (not part of screen navigation system)
+ *   - Opens with fade-in transition, closes with fade-out
+ *   - Underlying screen remains visible and active (just covered)
+ *   - No state saving/restoring needed - screens maintain their own state
  *
  * RESPONSIBILITIES:
  *
  * Image Display:
  *   - Loads and displays the full-resolution image
  *   - Initially scales image to fit screen while preserving aspect ratio
- *   - Sets screen background to black for optimal viewing
  *   - Shows overlays (close button and filename) that fade after 3 seconds
  *   - Overlays reappear on any user interaction (mouse, keyboard, zoom, pan)
  *
  * Zoom Controls:
  *   - Mouse scroll wheel zooms in/out centered on cursor position
  *   - Touch pinch gesture zooms in/out centered on pinch midpoint
- *   - Maintains zoom level and pan position during navigation
  *   - Double-tap/double-click toggles between fit-to-screen and 100% zoom
- *   - Respects minimum (fit-to-screen) and maximum zoom limits
  *
  * Pan Controls:
  *   - Click-and-drag to pan when zoomed in
  *   - Touch drag to pan when zoomed in
- *   - Constrains panning to keep image edges visible (no over-scroll)
- *   - Smooth momentum scrolling on touch devices
+ *   - Constrains panning to keep image edges visible
  *
  * Navigation:
  *   - Left/Right arrow keys navigate to previous/next image
  *   - Wraps from last image to first, and vice versa
- *   - Navigation respects current gallery sort order and filter
- *   - Resets zoom/pan state when navigating to new image
  *   - Swipe left/right on touch devices for navigation
  *
- * Exit Handling:
- *   - Escape key returns to Gallery view
- *   - Double-click/double-tap on image returns to Gallery view
- *   - Maintains gallery selection state (viewed image remains selected)
- *   - Restores gallery scroll position to show the viewed image
- *
- * Performance:
- *   - Preloads adjacent images for smooth navigation
- *   - Uses CSS transforms for zoom/pan (GPU accelerated)
- *   - Cancels pending image loads when navigating quickly
- *
- * LIFECYCLE HOOKS:
- *   - onEnter(imageId): Loads specified image, hides toolbar, shows viewer
- *   - onLeave(): Resets zoom/pan state, shows toolbar, cleans up event listeners
+ * API:
+ *   - open(imageId): Shows overlay with the specified image
+ *   - close(): Hides overlay with fade-out transition
+ *   - isOpen(): Returns whether overlay is currently visible
  *
  * @module fullscreen
  * @requires core
@@ -60,13 +50,14 @@
    ========================================================================== */
 
 /**
- * Fullscreen viewer module.
+ * Fullscreen viewer overlay module.
  * @namespace
  */
 const Fullscreen = {
     /**
      * Local state for the fullscreen viewer.
      * @type {Object}
+     * @property {boolean} isOpen - Whether the overlay is currently visible
      * @property {string|null} currentId - Currently displayed image ID
      * @property {Array<Object>} imageList - Reference to gallery's filtered/sorted images
      * @property {number} currentIndex - Index in imageList of current image
@@ -76,6 +67,7 @@ const Fullscreen = {
      * @property {boolean} isPanning - Whether user is currently panning
      */
     state: {
+        isOpen: false,
         currentId: null,
         imageList: [],
         currentIndex: -1,
@@ -113,7 +105,7 @@ const Fullscreen = {
     init() {
         // Cache DOM elements
         this._els = {
-            screen: App.$('screen-fullscreen'),
+            overlay: App.$('fullscreen-overlay'),
             container: App.$('fullscreen-container'),
             image: App.$('fullscreen-image'),
             filename: App.$('fullscreen-filename'),
@@ -124,7 +116,7 @@ const Fullscreen = {
 
         // Bind button clicks (permanent, not per-session)
         this._els.closeBtn.addEventListener('click', () => {
-            App.hideFullscreen();
+            this.close();
         });
         this._els.prevBtn.addEventListener('click', () => {
             this._navigatePrev();
@@ -135,13 +127,19 @@ const Fullscreen = {
     },
 
     /**
-     * Called when entering the fullscreen view.
+     * Opens the fullscreen overlay with the specified image.
      * @param {string} imageId - ID of the image to display
      */
-    onEnter(imageId) {
+    open(imageId) {
+        if (this.state.isOpen) {
+            // Already open - just navigate to the new image
+            this._navigateToImage(imageId);
+            return;
+        }
+
         // Get the current image list from Gallery's filtered/sorted state
         // Use filteredImages to respect both the active filter and sort order
-        this.state.imageList = Gallery.state.filteredImages;
+        this.state.imageList = Gallery.state.filteredImages || [];
         this.state.currentIndex = this.state.imageList.findIndex(img => img.id === imageId);
 
         // If image not in filtered list (e.g., coming from Faces screen with filter active),
@@ -165,6 +163,23 @@ const Fullscreen = {
 
         // Bind event listeners
         this._bindEvents();
+
+        // Show the overlay
+        this._show();
+    },
+
+    /**
+     * Navigate to a specific image (when already open).
+     * @param {string} imageId - ID of the image to navigate to
+     * @private
+     */
+    _navigateToImage(imageId) {
+        const index = this.state.imageList.findIndex(img => img.id === imageId);
+        if (index >= 0) {
+            this.state.currentIndex = index;
+            this._resetTransform();
+            this._loadImage(imageId);
+        }
     },
 
     /**
@@ -189,6 +204,9 @@ const Fullscreen = {
 
                 // Bind event listeners
                 this._bindEvents();
+
+                // Show the overlay
+                this._show();
             } else {
                 console.error('Image not found:', imageId);
             }
@@ -198,9 +216,11 @@ const Fullscreen = {
     },
 
     /**
-     * Called when leaving the fullscreen view.
+     * Closes the fullscreen overlay.
      */
-    onLeave() {
+    close() {
+        if (!this.state.isOpen) return;
+
         // Unbind event listeners
         this._unbindEvents();
 
@@ -210,9 +230,53 @@ const Fullscreen = {
             this._overlayTimeout = null;
         }
 
-        // Clear image source to free memory
-        this._els.image.src = '';
-        this.state.currentId = null;
+        // Hide the overlay
+        this._hide();
+
+        // Clear image source to free memory (after transition)
+        setTimeout(() => {
+            if (!this.state.isOpen) {
+                this._els.image.src = '';
+                this.state.currentId = null;
+            }
+        }, 300);
+    },
+
+    /**
+     * Returns whether the overlay is currently open.
+     * @returns {boolean}
+     */
+    isOpen() {
+        return this.state.isOpen;
+    },
+
+    /**
+     * Shows the overlay with fade-in transition.
+     * @private
+     */
+    _show() {
+        this.state.isOpen = true;
+        // Update AppState with current image ID
+        AppState.nav.setFullscreenImageId(this.state.currentId);
+        // Use requestAnimationFrame to ensure the class change triggers transition
+        requestAnimationFrame(() => {
+            this._els.overlay.classList.add('visible');
+        });
+        // Emit event for face tagging mode
+        App.emit('fullscreenImageChanged', this.state.currentId);
+    },
+
+    /**
+     * Hides the overlay with fade-out transition.
+     * @private
+     */
+    _hide() {
+        this.state.isOpen = false;
+        // Clear AppState image ID
+        AppState.nav.setFullscreenImageId(null);
+        this._els.overlay.classList.remove('visible');
+        // Emit event to clear face overlay
+        App.emit('fullscreenClosed');
     },
 
     /**
@@ -741,9 +805,13 @@ const Fullscreen = {
      * @private
      */
     _exit() {
-        App.exitFullscreen();
+        this.close();
     }
 };
 
-// Register module with App
-App.registerModule('fullscreen', Fullscreen);
+// Initialize module when DOM is ready
+if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', () => Fullscreen.init());
+} else {
+    Fullscreen.init();
+}

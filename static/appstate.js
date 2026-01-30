@@ -386,7 +386,6 @@ const AppState = (function() {
         let _screen = null;
         let _previousScreen = null;
         let _history = [];
-        let _fullscreenSourceScreen = 'gallery';
         let _fullscreenImageId = null;
         let _scrollPositions = {}; // screen → scrollTop
 
@@ -433,13 +432,8 @@ const AppState = (function() {
                 _history = [];
             },
 
-            // --- Fullscreen ---
-            getFullscreenSourceScreen() {
-                return _fullscreenSourceScreen;
-            },
-            setFullscreenSourceScreen(screen) {
-                _fullscreenSourceScreen = screen;
-            },
+            // --- Fullscreen Image ID ---
+            // Tracks which image is displayed in fullscreen overlay
             getFullscreenImageId() {
                 return _fullscreenImageId;
             },

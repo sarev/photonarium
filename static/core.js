@@ -83,10 +83,7 @@ const App = {
         sortDirection: 'desc',
         filter: null,
         selectedImages: [],
-        currentImageId: null,
         scrollPositions: {},
-        // Track where fullscreen was entered from
-        fullscreenSourceScreen: 'gallery',
     },
 
     /**
@@ -415,8 +412,6 @@ const App = {
         this.state.filter = AppState.filter.get();
         // Sync nav from AppState.nav to App.state
         this.state.screen = AppState.nav.getScreen();
-        this.state.currentImageId = AppState.nav.getFullscreenImageId();
-        this.state.fullscreenSourceScreen = AppState.nav.getFullscreenSourceScreen();
     },
 
     /**
@@ -478,7 +473,7 @@ const App = {
      * @type {Array<string>}
      * @constant
      */
-    SCREENS: ['gallery', 'fullscreen', 'database', 'search', 'duplicates', 'faces'],
+    SCREENS: ['gallery', 'database', 'search', 'duplicates', 'faces'],
 
     /**
      * Navigation history stack for back-button functionality.
@@ -505,9 +500,9 @@ const App = {
             return;
         }
 
-        // Don't navigate if already on this screen (unless fullscreen with different image)
+        // Don't navigate if already on this screen
         const currentScreen = AppState.nav.getScreen();
-        if (screen === currentScreen && screen !== 'fullscreen') {
+        if (screen === currentScreen) {
             return;
         }
 
@@ -519,8 +514,8 @@ const App = {
         // Save scroll position for scrollable screens
         this._saveScrollPosition(previousScreen);
 
-        // Push to history if enabled and not going to fullscreen
-        if (pushHistory && screen !== 'fullscreen' && previousScreen !== 'fullscreen') {
+        // Push to history if enabled
+        if (pushHistory && previousScreen) {
             this._navigationHistory.push({
                 screen: previousScreen,
                 data: null
@@ -624,12 +619,6 @@ const App = {
      */
     _updateToolbarVisibility(activeScreen) {
         const toolbar = document.getElementById('toolbar');
-
-        // Hide toolbar entirely in fullscreen mode
-        if (activeScreen === 'fullscreen') {
-            toolbar.hidden = true;
-            return;
-        }
         toolbar.hidden = false;
 
         // Show/hide toolbar groups based on data-for-screen attribute
@@ -703,28 +692,19 @@ const App = {
     },
 
     /**
-     * Navigates to fullscreen view for a specific image.
+     * Opens the fullscreen overlay for a specific image.
+     * The underlying screen remains visible underneath.
      * @param {string} imageId - The ID of the image to view
      */
     showFullscreen(imageId) {
-        // Remember where we came from (default to gallery if already in fullscreen)
-        const currentScreen = AppState.nav.getScreen();
-        if (currentScreen !== 'fullscreen') {
-            AppState.nav.setFullscreenSourceScreen(currentScreen || 'gallery');
-            this.state.fullscreenSourceScreen = currentScreen || 'gallery'; // Keep legacy sync
-        }
-        AppState.nav.setFullscreenImageId(imageId);
-        this.state.currentImageId = imageId; // Keep legacy sync
-        this.navigateTo('fullscreen', { data: imageId, pushHistory: false });
+        Fullscreen.open(imageId);
     },
 
     /**
-     * Exits fullscreen view and returns to the source screen.
-     * Convenience method.
+     * Closes the fullscreen overlay.
      */
     hideFullscreen() {
-        const returnTo = AppState.nav.getFullscreenSourceScreen() || 'gallery';
-        this.navigateTo(returnTo);
+        Fullscreen.close();
     },
 
     /**
@@ -760,14 +740,11 @@ const App = {
     },
 
     /**
-     * Exits fullscreen view and returns to the source screen.
-     * Ensures the viewed image remains visible in gallery.
+     * Closes the fullscreen overlay.
+     * Alias for hideFullscreen() for backward compatibility.
      */
     exitFullscreen() {
-        if (AppState.nav.getScreen() === 'fullscreen') {
-            const returnTo = AppState.nav.getFullscreenSourceScreen() || 'gallery';
-            this.navigateTo(returnTo, { pushHistory: false });
-        }
+        Fullscreen.close();
     },
 
     /* ----------------------------------------------------------------------
