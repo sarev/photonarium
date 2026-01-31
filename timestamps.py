@@ -396,11 +396,11 @@ def parse_timestamp_from_path(path: Path | str) -> datetime | None:
 # =============================================================================
 
 # Confidence levels for timestamp sources (lower = more reliable)
-CONFIDENCE_USER = 0       # User assigned (via info panel)
-CONFIDENCE_EXIF = 1       # From EXIF metadata
-CONFIDENCE_FILENAME = 2   # Parsed from filename/path
-CONFIDENCE_FILESYSTEM = 3 # From filesystem metadata
-CONFIDENCE_UNKNOWN = 4    # None/unknown
+CONFIDENCE_USER = 0        # User assigned (via info panel)
+CONFIDENCE_EXIF = 1        # From EXIF metadata
+CONFIDENCE_FILENAME = 2    # Parsed from filename/path
+CONFIDENCE_FILESYSTEM = 3  # From filesystem metadata
+CONFIDENCE_UNKNOWN = 4     # None/unknown
 
 
 def derive_timestamp(path: Path | str) -> datetime | None:

@@ -48,6 +48,7 @@ from flask import jsonify as flask_jsonify
 # Toggle between orjson and stdlib json for testing
 USE_ORJSON = True
 
+
 def jsonify(data):
     """JSON response - uses orjson when USE_ORJSON is True."""
     if USE_ORJSON:
@@ -57,6 +58,7 @@ def jsonify(data):
         )
     else:
         return flask_jsonify(data)
+
 
 from caption import CaptionGenerator
 from imagedb import ImageDatabase, register_signal_handlers
@@ -91,7 +93,6 @@ from faces import (
     reassess_unknown_faces_async,
     get_reassessment_status,
     clear_reassessment_result,
-    compute_unknown_face_groups_async,
     get_group_computation_status,
     revalidate_person_faces,
     search_unknown_faces_semantic,

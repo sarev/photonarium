@@ -597,8 +597,7 @@ def _find_matches_in_bucket_vectorized(
 
     # Find matches in upper triangle (i < j) within threshold
     i_indices, j_indices = np.where(
-        (distances <= threshold) &
-        (np.triu(np.ones((bucket_size, bucket_size), dtype=bool), k=1))
+        (distances <= threshold) & (np.triu(np.ones((bucket_size, bucket_size), dtype=bool), k=1))
     )
 
     # Convert bucket-local indices to global indices
@@ -636,8 +635,7 @@ def _compute_level1_brute_force(
 
     # Find matches in upper triangle
     i_indices, j_indices = np.where(
-        (distances <= threshold) &
-        (np.triu(np.ones((n, n), dtype=bool), k=1))
+        (distances <= threshold) & (np.triu(np.ones((n, n), dtype=bool), k=1))
     )
 
     # Union all matches
@@ -677,7 +675,7 @@ def _compute_level1_lsh(
     # Band configuration based on pigeonhole principle
     num_bands = threshold + 1
     bits_per_band = 64 // num_bands
-    leftover_bits = 64 - (bits_per_band * num_bands)
+    # leftover_bits = 64 - (bits_per_band * num_bands)
 
     # Build inverted index: band_value -> list of image indices
     band_indices: list[dict[int, list[int]]] = [{} for _ in range(num_bands)]

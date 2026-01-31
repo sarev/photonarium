@@ -929,6 +929,9 @@ const AppState = (function() {
                         const hasMatch = filterEmoji.some(e => img.rating && img.rating.includes(e));
                         if (!hasMatch) return false;
                     }
+                    if (currentFilter.people && currentFilter.peopleImageIds) {
+                        if (!currentFilter.peopleImageIds.has(String(img.id))) return false;
+                    }
                     return true;
                 });
 
@@ -2129,9 +2132,10 @@ const AppState = (function() {
              * @param {string} query - Optional search query (empty returns all)
              * @returns {Promise<Array>} Matching faces sorted by similarity
              */
-            search(query) {
+            async search(query) {
                 const url = query ? `/faces?search=${encodeURIComponent(query)}` : '/faces';
-                return App.apiGet(url).then(r => r || []);
+                const response = await App.apiGet(url);
+                return response.data || [];
             },
 
             // --- Mutations (wrapped in transactions) ---

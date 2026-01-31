@@ -2724,7 +2724,14 @@
         suppressBtn.addEventListener('click', async (e) => {
             e.stopPropagation();
             e.preventDefault();
-            await suppressSingleFace(face.id);
+            // If this face is part of a selection, suppress all selected faces
+            if (facesSelection && facesSelection.isSelected(face.id)) {
+                const selectedIds = facesSelection.getSelected();
+                await handleFacesDeleteRequested(selectedIds);
+            } else {
+                // Single face, no selection - suppress just this one
+                await handleFacesDeleteRequested([face.id]);
+            }
         });
 
         card.appendChild(thumb);

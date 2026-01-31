@@ -42,7 +42,6 @@ import logging
 import numpy as np
 import sqlite3
 import threading
-import time
 import torch
 import uuid
 
@@ -113,6 +112,7 @@ _MIGRATIONS = [
     ("faces", "manually_tagged", "ALTER TABLE faces ADD COLUMN manually_tagged INTEGER DEFAULT 0"),
 ]
 
+
 def init_face_tables(conn: sqlite3.Connection) -> None:
     """Initialize the face recognition database tables.
 
@@ -158,7 +158,6 @@ def _run_migrations(conn: sqlite3.Connection) -> None:
                 logger.info(f"Migration: added {table}.{column}")
             except sqlite3.OperationalError as e:
                 logger.warning(f"Migration failed for {table}.{column}: {e}")
-
 
 
 # =============================================================================
@@ -2230,9 +2229,9 @@ def reassess_unknown_faces(
         logger.debug(f'{name}: {len(embs)} embeddings, shape {emb_matrix.shape}')
 
         # Check for zeros/constants
-        mean_vals = np.mean(emb_matrix, axis=0)
         std_vals = np.std(emb_matrix, axis=0)
         overall_std = np.std(emb_matrix)
+        # mean_vals = np.mean(emb_matrix, axis=0)
 
         logger.debug(f'{name}: overall std={overall_std:.6f}, per-dim std range=[{std_vals.min():.6f}, {std_vals.max():.6f}]')
 

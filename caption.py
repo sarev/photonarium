@@ -44,6 +44,7 @@ def _is_blip2_model(model_name: str) -> bool:
     """Check if the model name refers to a BLIP-2 model."""
     return 'blip2' in model_name.lower() or 'blip-2' in model_name.lower()
 
+
 # Configure module logger
 logger = logging.getLogger(__name__)
 
@@ -256,6 +257,7 @@ class CaptionGenerator:
         # Whole-word replacements (need word boundaries)
         for us, uk in _US_TO_UK_WORDS:
             pattern = re.compile(r'\b' + re.escape(us) + r'\b', re.IGNORECASE)
+
             def replace_word(match, uk=uk):
                 original = match.group()
                 if original.isupper():

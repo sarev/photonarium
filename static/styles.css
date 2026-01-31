@@ -1882,7 +1882,7 @@ a:hover {
 }
 
 .faces-threshold-slider {
-    width: 100px;
+    width: 200px;
     height: 4px;
     cursor: pointer;
     accent-color: var(--color-action-primary);

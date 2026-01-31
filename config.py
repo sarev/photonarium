@@ -400,7 +400,7 @@ def load_config(config_path: Path | str | None = None) -> Config:
 
     if config_data is None:
         # Empty file, use defaults
-        logger.warning(f'Configuration file is empty, using defaults')
+        logger.warning('Configuration file is empty, using defaults')
         return Config()
 
     # Map YAML keys to Config fields

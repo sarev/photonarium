@@ -49,7 +49,7 @@ def download_openclip_model(model: str, pretrained: str) -> bool:
             pretrained=pretrained,
         )
         del model_obj  # Free memory
-        print(f'OpenCLIP model downloaded successfully')
+        print('OpenCLIP model downloaded successfully')
         return True
     except Exception as e:
         print(f'Error downloading OpenCLIP model: {e}', file=sys.stderr)
@@ -78,7 +78,7 @@ def download_caption_model(model_name: str) -> bool:
             print('Loading BLIP model (this may take a while)...')
             BlipForConditionalGeneration.from_pretrained(model_name)
 
-        print(f'Caption model downloaded successfully')
+        print('Caption model downloaded successfully')
         return True
     except Exception as e:
         print(f'Error downloading caption model: {e}', file=sys.stderr)

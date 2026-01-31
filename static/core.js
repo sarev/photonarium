@@ -1277,6 +1277,7 @@ const App = {
             dialog.addEventListener('keydown', onKeyDown);
 
             dialog.showModal();
+            cancelBtn.focus(); // Default to Cancel for safety
         });
     },
 

@@ -172,7 +172,6 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
 from PIL import Image, ImageOps
-from PIL.ExifTags import TAGS
 from typing import Any, Iterator
 
 import atexit
@@ -184,25 +183,18 @@ import logging
 import numpy as np
 import open_clip
 import queue
-import random
 from collections import defaultdict
 from concurrent.futures import ThreadPoolExecutor, Future, as_completed
-import re
-import shutil
 import signal
 import sqlite3
-import subprocess
-import tempfile
 import threading
 import time
 import torch
-import traceback
 import uuid
 import warnings
-import yaml
 
 # Local imports
-from config import Config, load_config, get_default_config, DEFAULT_CONFIG_PATH
+from config import Config, load_config, get_default_config
 from duplicates import DuplicateManager, embedding_to_numpy
 from thumbnails import (
     DEFAULT_THUMBNAIL_DIR,
@@ -210,22 +202,18 @@ from thumbnails import (
     generate_thumbnail,
     rotate_image_file,
     delete_thumbnails_for_checksum,
-    clear_thumbnail_cache,
 )
 from faces import (
     init_face_tables,
     FaceDetector,
-    DetectedFace,
     create_face,
     get_face,
     get_faces_for_image,
     has_faces_detected,
     mark_no_faces_detected,
-    delete_faces_for_image,
     rotate_faces_for_image,
     get_all_known_face_embeddings,
     find_best_match,
-    auto_recognize_face,
     generate_face_thumbnail,
     generate_face_thumbnails_for_image,
     get_face_thumbnail_path,
@@ -240,13 +228,6 @@ from faces import (
 from timestamps import (
     derive_timestamp,
     derive_timestamp_with_confidence,
-    extract_exif_timestamp,
-    extract_filesystem_timestamp,
-    parse_timestamp_from_path,
-    CONFIDENCE_USER,
-    CONFIDENCE_EXIF,
-    CONFIDENCE_FILENAME,
-    CONFIDENCE_FILESYSTEM,
     CONFIDENCE_UNKNOWN,
 )
 
@@ -2849,7 +2830,6 @@ def semantic_search(
         return []
 
     # Step 2: Build numpy arrays for vectorized computation
-    n = len(rows)
     embedding_dim = len(query_embedding)
     ids = []
     img_embeddings = []
@@ -2900,7 +2880,7 @@ def semantic_search(
     valid_scores = scores[valid_indices]
     sorted_order = np.argsort(-valid_scores)  # Descending
     top_indices = valid_indices[sorted_order[:limit]]
-    top_scores = valid_scores[sorted_order[:limit]]
+    # top_scores = valid_scores[sorted_order[:limit]]
 
     # Step 5: Fetch full metadata only for top results
     top_ids = [ids[i] for i in top_indices]
@@ -4526,11 +4506,11 @@ class ImageDatabase:
         logger.info(f'get_similar_images: id={reference_image_id}, deleted={row["deleted"]}, has_embedding={row["embedding"] is not None}')
 
         if row['deleted']:
-            logger.warning(f'get_similar_images: Image is deleted')
+            logger.warning('get_similar_images: Image is deleted')
             return None
 
         if row['embedding'] is None:
-            logger.warning(f'get_similar_images: Embedding is None')
+            logger.warning('get_similar_images: Embedding is None')
             return None
 
         reference_embedding = np.frombuffer(row['embedding'], dtype=np.float32)
