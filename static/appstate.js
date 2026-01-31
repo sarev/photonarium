@@ -3163,33 +3163,16 @@ const AppState = (function() {
     // =========================================================================
 
     /**
-     * Speculatively preload data that will likely be needed soon.
-     * Call this after initial page load completes to warm caches in background.
-     * Does not block - all loads happen sequentially without awaiting.
+     * Starts event polling for backend notifications.
      *
-     * Also starts event polling for backend notifications.
-     *
-     * Loads are sequential to avoid SQLite connection contention
-     * (Python's sqlite3 serializes access to a single connection).
+     * Note: Speculative data preloading (people, faces, duplicates) was disabled
+     * because it caused SQLite contention that blocked interactive requests,
+     * making fullscreen navigation unresponsive. Data is now loaded on-demand
+     * when screens that need it are visited.
      */
     function preloadAll() {
         // Start polling for backend events
         events.startPolling();
-
-        console.time('preload /people');
-        people.load()
-            .then(() => {
-                console.timeEnd('preload /people');
-                console.time('preload /faces');
-                return faces.load();
-            })
-            .then(() => {
-                console.timeEnd('preload /faces');
-                console.time('preload /duplicates');
-                return duplicates.loadLevel(2);
-            })
-            .then(() => console.timeEnd('preload /duplicates'))
-            .catch(err => console.warn('Speculative preload failed:', err));
     }
 
     // =========================================================================

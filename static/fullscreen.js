@@ -452,32 +452,9 @@ const Fullscreen = {
         const preloadNext = new Image();
         preloadNext.src = App.imageUrl(imageList[nextIndex].id);
 
-        // Preload faces for adjacent images (warms AppState cache)
-        this._preloadAdjacentFaces(prevIndex, nextIndex);
-    },
-
-    /**
-     * Preloads face data for adjacent images to reduce latency when navigating.
-     * Only preloads if face tagging mode is active.
-     * @param {number} prevIndex - Index of previous image
-     * @param {number} nextIndex - Index of next image
-     * @private
-     */
-    _preloadAdjacentFaces(prevIndex, nextIndex) {
-        // Only preload if tagging mode is active
-        if (typeof Faces === 'undefined' || !Faces.isTaggingModeActive()) {
-            return;
-        }
-
-        const { imageList } = this.state;
-
-        // Warm the AppState cache (no-op if already cached)
-        if (imageList[prevIndex]) {
-            AppState.faces.fetchForImage(imageList[prevIndex].id);
-        }
-        if (imageList[nextIndex]) {
-            AppState.faces.fetchForImage(imageList[nextIndex].id);
-        }
+        // Note: Adjacent face preloading disabled - was causing SQLite contention
+        // that made fullscreen navigation unresponsive. Faces are loaded on-demand
+        // when navigating (minimal latency since face data is small).
     },
 
     /**
