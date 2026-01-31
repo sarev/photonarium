@@ -216,7 +216,7 @@ Supported image types include: `.jpg`, `.jpeg`, `.png`, `.gif`, `.bmp`, `.tiff`,
    # Other dependencies (install facenet-pytorch with --no-deps to avoid replacing CUDA torch)
    pip install open_clip_torch
    pip install --no-deps facenet-pytorch
-   pip install pillow numpy pyyaml opencv-python imagehash flask waitress requests orjson transformers
+   pip install pillow numpy pyyaml opencv-python imagehash flask waitress requests orjson transformers==4.44.*
    ```
 
    Note: you may see pip warnings about facenet-pytorch version conflicts with numpy, Pillow, and torch. These can usually be ignored.

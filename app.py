@@ -36,6 +36,7 @@ import sys
 import threading
 import time
 import traceback
+from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeoutError
 from pathlib import Path
 
 from PIL import Image, ImageDraw
@@ -440,8 +441,8 @@ def generate_caption(image_id):
     """Generate an AI caption for an image.
 
     Uses the BLIP model to generate a natural language description
-    of the image. The temperature setting from config controls the
-    creativity/diversity of the generated text.
+    of the image. Runs in a daemon thread to allow graceful shutdown
+    during long-running PyTorch operations.
 
     Args:
         image_id: The unique identifier of the image.
@@ -451,8 +452,8 @@ def generate_caption(image_id):
             - caption: The generated caption text
         Or error if image not found or generation fails.
     """
-    db = get_db()
-    image = db.get_image(image_id)
+    database = get_db()
+    image = database.get_image(image_id)
     if image is None:
         return error_response('Image not found', 404)
 
@@ -462,7 +463,25 @@ def generate_caption(image_id):
 
     try:
         generator = get_caption_generator()
-        caption = generator.generate(path)
+
+        # Run caption generation in a daemon thread so it can be abandoned
+        # on shutdown (PyTorch CUDA operations block Python signal handlers)
+        with ThreadPoolExecutor(max_workers=1, thread_name_prefix='caption') as executor:
+            future = executor.submit(generator.generate, path)
+
+            # Poll for completion with short timeouts to allow shutdown checks
+            while True:
+                try:
+                    caption = future.result(timeout=0.5)
+                    break
+                except FuturesTimeoutError:
+                    # Check if shutdown was requested
+                    if database.is_closed:
+                        logger.info('Caption generation interrupted by shutdown')
+                        return error_response('Server shutting down', 503)
+                    # Continue waiting
+                    continue
+
     except Exception as e:
         logger.exception(f'Failed to generate caption for image {image_id}')
         return error_response(f'Caption generation failed: {e}', 500)

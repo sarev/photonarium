@@ -194,7 +194,10 @@ class CaptionGenerator:
             if self._is_blip2:
                 # BLIP-2 models (larger, more capable)
                 from transformers import Blip2Processor, Blip2ForConditionalGeneration
-                self._processor = Blip2Processor.from_pretrained(self.model_name)
+                self._processor = Blip2Processor.from_pretrained(
+                    self.model_name,
+                    clean_up_tokenization_spaces=False,
+                )
                 model = Blip2ForConditionalGeneration.from_pretrained(
                     self.model_name,
                     torch_dtype=torch.float16 if self.device == 'cuda' else torch.float32,
@@ -202,7 +205,10 @@ class CaptionGenerator:
             else:
                 # Standard BLIP models (smaller, faster)
                 from transformers import BlipProcessor, BlipForConditionalGeneration
-                self._processor = BlipProcessor.from_pretrained(self.model_name)
+                self._processor = BlipProcessor.from_pretrained(
+                    self.model_name,
+                    clean_up_tokenization_spaces=False,
+                )
                 model = BlipForConditionalGeneration.from_pretrained(
                     self.model_name,
                     torch_dtype=torch.float16 if self.device == 'cuda' else torch.float32,
