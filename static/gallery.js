@@ -63,17 +63,30 @@
 const Gallery = {
     /**
      * Local state for the gallery screen.
+     * Note: Image data comes from AppState.images (single source of truth).
+     * This state only tracks UI concerns and derived/sorted data.
      * @type {Object}
      */
     state: {
-        images: [],
-        filteredImages: [],
         needsRefresh: true,
-        contentSimilarities: null,
-        contentReferenceId: null,
         lastImageCount: 0,
         pendingSelection: null  // Selection to apply when item loads
     },
+
+    /**
+     * Cached sorted/filtered images for display.
+     * Recomputed from AppState.images on each render.
+     * @type {Array<Object>}
+     * @private
+     */
+    _displayImages: [],
+
+    /**
+     * AppState subscription cleanup functions.
+     * @type {Array<Function>}
+     * @private
+     */
+    _unsubs: [],
 
     /**
      * VirtualGrid instance.
@@ -155,7 +168,7 @@ const Gallery = {
         // Create VirtualGrid instance
         this._grid = VirtualGrid.create({
             container: this._els.grid,
-            getItems: () => this.state.filteredImages,
+            getItems: () => this._displayImages,
             getItemId: (img) => img.id,
             createItem: (img, index, blobUrl) => this._createThumbnailItem(img, blobUrl),
             getThumbnailId: (img) => img.id,
@@ -171,7 +184,7 @@ const Gallery = {
         // Create GridSelection instance
         this._selection = GridSelection.create({
             grid: this._grid,
-            getItems: () => this.state.filteredImages,
+            getItems: () => this._displayImages,
             getItemId: (img) => img.id,
             itemSelector: '.gallery-item',
             onSelectionChanged: (ids) => {
@@ -202,8 +215,8 @@ const Gallery = {
         App.on('selectAll', () => this._selection.selectAll());
         App.on('imageRotated', (imageId) => this._onImageRotated(imageId));
 
-        // Subscribe to database changes (indexing completed) - event-driven, no polling
-        App.on('databaseChanged', () => this._onDatabaseChanged());
+        // Subscribe to AppState for reactive updates
+        this._unsubs.push(AppState.images.onChanged(() => this._onImagesChanged()));
     },
 
     /**
@@ -254,7 +267,7 @@ const Gallery = {
        ---------------------------------------------------------------------- */
 
     /**
-     * Loads images from the API and renders the grid.
+     * Loads images from AppState and renders the grid.
      * @private
      */
     async _loadImages() {
@@ -268,9 +281,11 @@ const Gallery = {
 
         try {
             console.time('_loadImages fetch');
-            const images = await App.getImages();
+            // Load into AppState (single source of truth)
+            await AppState.images.load();
+            const imageCount = AppState.images.getCount();
             console.timeEnd('_loadImages fetch');
-            console.log(`_loadImages: fetched ${images.length} images`);
+            console.log(`_loadImages: ${imageCount} images in AppState`);
 
             // Check if we're still on gallery screen after async fetch
             if (App.getScreen() !== 'gallery') {
@@ -278,11 +293,7 @@ const Gallery = {
                 return;
             }
 
-            console.time('_loadImages sort');
-            this.state.images = this._sortImages(images);
-            console.timeEnd('_loadImages sort');
-
-            this.state.lastImageCount = images.length;
+            this.state.lastImageCount = imageCount;
             this._renderGrid();
             this.state.needsRefresh = false;
 
@@ -290,7 +301,7 @@ const Gallery = {
             this._applyInitialSelection();
         } catch (error) {
             console.error('Failed to load images:', error);
-            this.state.images = [];
+            this._displayImages = [];
             App.showError('Failed to load images');
         } finally {
             if (isFirstLoad) {
@@ -318,46 +329,39 @@ const Gallery = {
     },
 
     /**
-     * Handles database changes (indexing completed).
-     * Event-driven replacement for polling - reloads images when notified.
+     * Handles AppState.images changes.
+     * Reactive update when images are added, removed, or modified.
      * @private
      */
-    async _onDatabaseChanged() {
+    _onImagesChanged() {
         // Only refresh if we're on the gallery screen
         if (App.getScreen() !== 'gallery') {
             this.state.needsRefresh = true;
             return;
         }
 
-        try {
-            // Preserve state
-            const scrollTop = this._els.grid?.scrollTop || 0;
-            const currentSelection = App.getSelectedImages();
+        const imageCount = AppState.images.getCount();
+        if (imageCount === this.state.lastImageCount) return;
 
-            // Reload images
-            const images = await App.getImages();
-            if (images.length === this.state.lastImageCount) return;
+        // Preserve state
+        const scrollTop = this._els.grid?.scrollTop || 0;
+        const currentSelection = App.getSelectedImages();
 
-            // Update images
-            this.state.images = this._sortImages(images);
-            this.state.lastImageCount = images.length;
+        this.state.lastImageCount = imageCount;
 
-            // Re-render
-            this._renderGrid();
+        // Re-render (will recompute from AppState)
+        this._renderGrid();
 
-            // Restore scroll position
-            if (this._els.grid) {
-                this._els.grid.scrollTop = scrollTop;
-            }
+        // Restore scroll position
+        if (this._els.grid) {
+            this._els.grid.scrollTop = scrollTop;
+        }
 
-            // Restore selection (filter out deleted images)
-            const existingIds = new Set(this.state.images.map(img => img.id));
-            const validSelection = currentSelection.filter(id => existingIds.has(id));
-            if (validSelection.length > 0) {
-                App.setSelectedImages(validSelection);
-            }
-        } catch (error) {
-            console.debug('Database change refresh error:', error);
+        // Restore selection (filter out deleted images)
+        const existingIds = new Set(this._displayImages.map(img => img.id));
+        const validSelection = currentSelection.filter(id => existingIds.has(id));
+        if (validSelection.length > 0) {
+            App.setSelectedImages(validSelection);
         }
     },
 
@@ -367,6 +371,7 @@ const Gallery = {
 
     /**
      * Sorts images based on current sort settings.
+     * Uses AppState accessors for similarity and people name data.
      * @param {Array<Object>} images
      * @returns {Array<Object>}
      * @private
@@ -382,13 +387,14 @@ const Gallery = {
             } else if (by === 'rating') {
                 cmp = (a.rating || '').localeCompare(b.rating || '');
             } else if (by === 'content') {
-                const simA = this.state.contentSimilarities?.[a.id] ?? 0;
-                const simB = this.state.contentSimilarities?.[b.id] ?? 0;
+                // Use AppState for similarity data
+                const simA = AppState.images.getSimilarity(a.id);
+                const simB = AppState.images.getSimilarity(b.id);
                 cmp = simA - simB;
             } else if (by === 'people') {
-                // Sort by people names string (pre-computed in state.peopleNames)
-                const namesA = this.state.peopleNames?.[a.id] ?? '';
-                const namesB = this.state.peopleNames?.[b.id] ?? '';
+                // Use AppState for people names
+                const namesA = AppState.images.getPeopleNames(a.id);
+                const namesB = AppState.images.getPeopleNames(b.id);
                 cmp = namesA.localeCompare(namesB, undefined, { sensitivity: 'base' });
             }
             return direction === 'asc' ? cmp : -cmp;
@@ -399,6 +405,7 @@ const Gallery = {
 
     /**
      * Loads content similarity data for sorting.
+     * Data is stored in AppState.images, not locally.
      * @private
      */
     async _loadContentSimilarities() {
@@ -412,18 +419,10 @@ const Gallery = {
         const referenceId = selected[0];
 
         try {
-            const response = await AppState.images.loadSimilarities(referenceId);
-            if (response && response.results) {
-                this.state.contentSimilarities = {};
-                this.state.contentReferenceId = referenceId;
-                response.results.forEach(img => {
-                    this.state.contentSimilarities[img.id] = img.similarity;
-                });
-
-                this.state.images = this._sortImages(this.state.images);
-                this._renderGrid();
-                this._scrollToTop();
-            }
+            // Load into AppState (stores internally)
+            await AppState.images.loadSimilarities(referenceId);
+            this._renderGrid();
+            this._scrollToTop();
         } catch (error) {
             console.error('Failed to load content similarities:', error);
             if (error.message && error.message.includes('404')) {
@@ -524,7 +523,7 @@ const Gallery = {
         this._updateGridStyle();
         // Clear ThumbnailLoader and refresh grid
         ThumbnailLoader.clear();
-        if (this._grid && this.state.filteredImages.length > 0) {
+        if (this._grid && this._displayImages.length > 0) {
             this._grid.refresh();
         }
     },
@@ -543,47 +542,43 @@ const Gallery = {
 
         if (by === 'content') {
             if (isSemanticFilter) {
-                this.state.images = this._sortImages(this.state.images);
                 this._renderGrid();
                 return;
             }
 
             const selected = App.getSelectedImages();
             const referenceId = selected.length > 0 ? selected[0] : null;
+            const cachedReferenceId = AppState.images.getSimilarityReferenceId();
 
-            if (referenceId && this.state.contentReferenceId === referenceId) {
-                this.state.images = this._sortImages(this.state.images);
+            if (referenceId && cachedReferenceId === referenceId) {
+                // Already have similarities for this reference
                 this._renderGrid();
             } else {
                 this._loadContentSimilarities();
             }
         } else if (by === 'people') {
-            // Load people names if not cached
-            if (!this.state.peopleNames) {
+            // Load people names if not cached in AppState
+            if (!AppState.images.hasPeopleNames()) {
                 this._loadPeopleNames();
             } else {
-                this.state.images = this._sortImages(this.state.images);
                 this._renderGrid();
             }
         } else {
-            this.state.contentSimilarities = null;
-            this.state.contentReferenceId = null;
-            this.state.images = this._sortImages(this.state.images);
+            // Clear similarity data when switching away from content sort
+            AppState.images.clearSimilarities();
             this._renderGrid();
         }
     },
 
     /**
      * Loads people names for all images for sorting by people.
-     * Uses bulk endpoint for efficiency.
+     * Data is stored in AppState.images, not locally.
      * @private
      */
     async _loadPeopleNames() {
         try {
-            // Fetch all people names in a single bulk request via AppState
-            this.state.peopleNames = await AppState.images.loadPeopleNames();
-
-            this.state.images = this._sortImages(this.state.images);
+            // Load into AppState (stores internally)
+            await AppState.images.loadPeopleNames();
             this._renderGrid();
             this._scrollToTop();
         } catch (error) {
@@ -712,14 +707,16 @@ const Gallery = {
         console.time('_renderGrid total');
         const grid = this._els.grid;
 
-        // Apply filter
-        console.time('_renderGrid filter');
-        this.state.filteredImages = this._filterImages(this.state.images);
-        console.timeEnd('_renderGrid filter');
-        console.log(`_renderGrid: ${this.state.filteredImages.length} images`);
+        // Compute display images from AppState (single source of truth)
+        console.time('_renderGrid compute');
+        const allImages = AppState.images.getAll();
+        const sorted = this._sortImages(allImages);
+        this._displayImages = this._filterImages(sorted);
+        console.timeEnd('_renderGrid compute');
+        console.log(`_renderGrid: ${this._displayImages.length} images`);
 
         // Handle empty state
-        if (this.state.filteredImages.length === 0) {
+        if (this._displayImages.length === 0) {
             grid.innerHTML = '<div class="empty-state"><span class="material-symbols-outlined">photo_library</span><p>No images to display</p></div>';
             console.timeEnd('_renderGrid total');
             return;
@@ -844,7 +841,7 @@ const Gallery = {
             return;
         }
 
-        const filtered = this.state.filteredImages;
+        const filtered = this._displayImages;
         if (filtered.length === 0) return;
 
         // Calculate first visible image
@@ -1328,9 +1325,7 @@ const Gallery = {
         try {
             // Delete via AppState (handles optimistic update and rollback)
             await AppState.images.delete(ids);
-            // Update local state to match
-            const deletedSet = new Set(ids);
-            this.state.images = this.state.images.filter(img => !deletedSet.has(img.id));
+            // AppState updates its cache; _renderGrid will recompute from it
         } catch (error) {
             console.error('Failed to delete images:', error);
             // Error is already shown by AppState
@@ -1392,8 +1387,9 @@ const Gallery = {
         const filter = App.getFilter();
         if (!filter || filter.type !== 'duplicates' || !filter.groupHash) return;
 
-        // Get groups from Duplicates module
-        const groups = typeof Duplicates !== 'undefined' ? Duplicates.getGroups() : [];
+        // Get groups from AppState at the filter's source level
+        const level = filter.sourceLevel ?? AppState.duplicates.getCurrentLevel();
+        const groups = AppState.duplicates.getGroups(level);
         if (groups.length === 0) return;
 
         // Find current group index
@@ -1409,7 +1405,7 @@ const Gallery = {
             newIndex = 0; // Wrap to first
         }
 
-        // Navigate to new group
+        // Navigate to new group via Duplicates module (handles filter update)
         const newGroup = groups[newIndex];
         if (newGroup && typeof Duplicates !== 'undefined') {
             Duplicates.navigateToGroup(newGroup.group_hash);

@@ -337,28 +337,31 @@ const Duplicates = {
         // Thumbnail size sync
         App.on('thumbnailSizeChanged', (size) => this._onThumbnailSizeChanged(size));
 
-        // Database changes require refresh
-        App.on('databaseChanged', () => {
-            this.state.needsRefresh = true;
-            AppState.duplicates.invalidate(this.state.currentLevel);
-            this.state.allGroups = [];
-            this.state.groups = [];
-        });
-
         // Subscribe to AppState.duplicates for centralized state management
-        // Purely reactive: just re-render when data changes
+        // Reactive: refresh when data changes
         AppState.duplicates.onChanged((event) => {
             if (App.getScreen() === 'duplicates' && event.level === this.state.currentLevel) {
-                // Data changed - update local state from AppState and re-render
+                // Data changed in AppState - copy for sorting and re-render
+                // We copy because sorting mutates the array
                 const groups = AppState.duplicates.getGroups(this.state.currentLevel);
                 const statusObj = AppState.duplicates.getStatus(this.state.currentLevel);
 
-                this.state.allGroups = groups;
+                this.state.allGroups = [...groups];  // Copy for sorting
                 this.state.currentStatus = statusObj?.status || 'done';
 
                 // Apply current sort order and render
                 this._applySortOrder();
             }
+        });
+
+        // Subscribe to AppState.images for database changes
+        // When images change, duplicates may need to refresh
+        AppState.images.onChanged(() => {
+            if (App.getScreen() !== 'duplicates') {
+                this.state.needsRefresh = true;
+            }
+            // Note: AppState.duplicates._internal.removeImage is called by images.delete()
+            // so the duplicates cache is already updated
         });
     },
 
@@ -420,7 +423,7 @@ const Duplicates = {
 
 /**
  * Loads duplicate groups from the backend for the current level.
- * Uses cache if available, otherwise fetches from API.
+ * Uses AppState cache if available, otherwise fetches from API.
  * AppState handles polling internally if computation is in progress.
  * @private
  */
@@ -428,9 +431,15 @@ Duplicates._loadGroups = async function() {
     this._showLoading('Loading duplicates…');
 
     try {
-        const { groups, status } = await this._getGroupsForLevel(this.state.currentLevel);
-        this.state.allGroups = groups;
-        this.state.currentStatus = status;
+        // Load via AppState (handles caching and polling internally)
+        await AppState.duplicates.loadLevel(this.state.currentLevel);
+
+        // Copy from AppState for local sorting (sort mutates)
+        const groups = AppState.duplicates.getGroups(this.state.currentLevel);
+        const statusObj = AppState.duplicates.getStatus(this.state.currentLevel);
+
+        this.state.allGroups = [...groups];  // Copy for sorting
+        this.state.currentStatus = statusObj?.status || 'done';
         this.state.needsRefresh = false;
 
         // Apply current sort mode (also applies min group size filter)
@@ -440,25 +449,6 @@ Duplicates._loadGroups = async function() {
     } finally {
         this._hideLoading();
     }
-};
-
-/**
- * Gets duplicate groups for a given similarity level.
- * Delegates to AppState.duplicates for centralized caching.
- * AppState automatically handles polling if computation is in progress.
- * @param {number} level - Similarity level (0-3)
- * @returns {Promise<{groups: Array<Object>, status: string}>} Groups and computation status
- * @private
- */
-Duplicates._getGroupsForLevel = async function(level) {
-    // Load via AppState (handles caching and polling internally)
-    await AppState.duplicates.loadLevel(level);
-
-    const groups = AppState.duplicates.getGroups(level);
-    const statusObj = AppState.duplicates.getStatus(level);
-    const status = statusObj?.status || 'done';
-
-    return { groups, status };
 };
 
 /**
@@ -472,6 +462,7 @@ Duplicates._setLevel = async function(level) {
     }
 
     this.state.currentLevel = level;
+    AppState.duplicates.setCurrentLevel(level);
 
     // Clear selection when changing level
     this._selection.clear();
@@ -479,9 +470,15 @@ Duplicates._setLevel = async function(level) {
     this._showLoading('Loading duplicates…');
 
     try {
-        const { groups, status } = await this._getGroupsForLevel(level);
-        this.state.allGroups = groups;
-        this.state.currentStatus = status;
+        // Load via AppState (handles caching and polling internally)
+        await AppState.duplicates.loadLevel(level);
+
+        // Copy from AppState for local sorting (sort mutates)
+        const groups = AppState.duplicates.getGroups(level);
+        const statusObj = AppState.duplicates.getStatus(level);
+
+        this.state.allGroups = [...groups];  // Copy for sorting
+        this.state.currentStatus = statusObj?.status || 'done';
 
         // Apply current sort mode (also applies min group size filter)
         await this._applySortOrder();
@@ -805,11 +802,13 @@ Duplicates._openGroupInGallery = function(hash) {
 };
 
 /**
- * Gets the current list of duplicate groups (after filtering).
+ * Gets the current list of duplicate groups (after filtering/sorting).
  * Used by Gallery for prev/next group navigation.
  * @returns {Array<Object>} Array of duplicate groups
  */
 Duplicates.getGroups = function() {
+    // Return the locally sorted/filtered groups for display
+    // This is derived from AppState.duplicates.getGroups() with sorting applied
     return this.state.groups;
 };
 

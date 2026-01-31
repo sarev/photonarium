@@ -838,9 +838,14 @@
         App.on('fullscreenTransformChanged', handleFullscreenTransformChange);
         App.on('fullscreenClosed', clearFaceOverlay);
 
-        // Listen for database changes (e.g., after scan completes)
-        App.on('databaseChanged', () => {
-            needsRefresh = true;
+        // Listen for image changes (e.g., after scan completes, images deleted)
+        // New images may have new faces; deleted images remove faces
+        AppState.images.onChanged(() => {
+            if (App.getScreen() !== 'faces') {
+                needsRefresh = true;
+            }
+            // Note: When faces are detected for new images, AppState.faces.onChanged
+            // will fire separately and handle the actual refresh
         });
 
         // Subscribe to AppState.faces for centralized state management
