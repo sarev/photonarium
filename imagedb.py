@@ -3141,109 +3141,60 @@ class Event:
 
 
 class EventQueue:
-    """Thread-safe event queue for SSE broadcasting.
+    """Thread-safe event queue for frontend polling.
 
-    Supports multiple subscribers (SSE connections). Each subscriber
-    gets their own queue of events.
+    Accumulates events in a single queue. Frontend polls periodically
+    to fetch pending events. This replaces SSE which blocked threads.
 
     Attributes:
-        subscribers: Set of subscriber queues.
+        _events: List of pending events.
+        _lock: Threading lock for thread safety.
     """
+
+    # Maximum events to accumulate (prevents unbounded growth if frontend stops polling)
+    MAX_EVENTS = 100
 
     def __init__(self):
         """Initialise the event queue."""
-        self._subscribers: list[queue.Queue[Event]] = []
+        self._events: list[Event] = []
         self._lock = threading.Lock()
 
-    def subscribe(self) -> queue.Queue[Event]:
-        """Create a new subscriber queue.
-
-        Returns:
-            Queue that will receive all future events.
-        """
-        subscriber_queue: queue.Queue[Event] = queue.Queue()
-        with self._lock:
-            self._subscribers.append(subscriber_queue)
-        logger.debug(f'New SSE subscriber (total: {len(self._subscribers)})')
-        return subscriber_queue
-
-    def unsubscribe(self, subscriber_queue: queue.Queue[Event]) -> None:
-        """Remove a subscriber queue.
-
-        Args:
-            subscriber_queue: Queue to remove.
-        """
-        with self._lock:
-            if subscriber_queue in self._subscribers:
-                self._subscribers.remove(subscriber_queue)
-        logger.debug(f'SSE subscriber removed (total: {len(self._subscribers)})')
-
-    def publish(self, event: Event) -> None:
-        """Publish an event to all subscribers.
-
-        Args:
-            event: Event to broadcast.
-        """
-        with self._lock:
-            for subscriber_queue in self._subscribers:
-                try:
-                    subscriber_queue.put_nowait(event)
-                except queue.Full:
-                    logger.warning('Subscriber queue full, event dropped')
-
     def emit(self, event_type: str, data: dict[str, Any] | None = None) -> None:
-        """Create and publish an event.
+        """Create and queue an event.
 
         Args:
             event_type: Type of event.
             data: Event payload (default empty dict).
         """
         event = Event(event_type=event_type, data=data or {})
-        self.publish(event)
-        logger.debug(f'Event emitted: {event_type}')
-
-    @property
-    def subscriber_count(self) -> int:
-        """Number of active subscribers."""
         with self._lock:
-            return len(self._subscribers)
+            self._events.append(event)
+            # Trim oldest events if queue is too large
+            if len(self._events) > self.MAX_EVENTS:
+                self._events = self._events[-self.MAX_EVENTS:]
+        logger.debug(f'Event queued: {event_type} (pending: {len(self._events)})')
 
+    def get_pending_count(self) -> int:
+        """Get number of pending events.
 
-def create_sse_generator(
-    event_queue: EventQueue,
-    timeout: float = 30.0,
-) -> Iterator[str]:
-    """Create a generator for SSE streaming.
+        Returns:
+            Number of events waiting to be fetched.
+        """
+        with self._lock:
+            return len(self._events)
 
-    This generator yields SSE-formatted strings and should be used
-    as the response body for an SSE endpoint.
+    def get_pending(self) -> list[Event]:
+        """Fetch and clear all pending events.
 
-    Args:
-        event_queue: EventQueue instance to subscribe to.
-        timeout: Timeout in seconds for waiting on events. A keepalive
-            comment is sent if no events arrive within this time.
-
-    Yields:
-        SSE-formatted strings (events or keepalive comments).
-    """
-    subscriber_queue = event_queue.subscribe()
-
-    try:
-        # Send initial connection message
-        yield ': connected\n\n'
-
-        while True:
-            try:
-                event = subscriber_queue.get(timeout=timeout)
-                yield event.to_sse()
-            except queue.Empty:
-                # Send keepalive comment to prevent connection timeout
-                yield ': keepalive\n\n'
-    except GeneratorExit:
-        # Client disconnected
-        pass
-    finally:
-        event_queue.unsubscribe(subscriber_queue)
+        Returns:
+            List of pending events (oldest first). Queue is cleared.
+        """
+        with self._lock:
+            events = self._events
+            self._events = []
+        if events:
+            logger.debug(f'Fetched {len(events)} pending events')
+        return events
 
 
 # Convenience functions for emitting specific events
@@ -4802,16 +4753,22 @@ class ImageDatabase:
     # Public API - Events (SSE)
     # =========================================================================
 
-    def get_event_stream(self, timeout: float = 30.0) -> Iterator[str]:
-        """Get an SSE event stream generator.
-
-        Args:
-            timeout: Keepalive timeout in seconds.
+    def get_pending_events(self) -> list[dict[str, Any]]:
+        """Get all pending events and clear the queue.
 
         Returns:
-            Generator yielding SSE-formatted strings.
+            List of event dicts with 'type' and 'data' keys.
         """
-        return create_sse_generator(self.event_queue, timeout)
+        events = self.event_queue.get_pending()
+        return [{'type': e.event_type, 'data': e.data} for e in events]
+
+    def get_pending_event_count(self) -> int:
+        """Get number of pending events without fetching them.
+
+        Returns:
+            Number of events in queue.
+        """
+        return self.event_queue.get_pending_count()
 
     # -------------------------------------------------------------------------
     # Face Recognition Methods

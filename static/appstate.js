@@ -3033,160 +3033,128 @@ const AppState = (function() {
     // Real-time push notifications from backend.
     // Handles automatic reconnection with exponential backoff.
 
-    const sse = (function() {
-        let _eventSource = null;
-        let _reconnectDelay = 1000;  // Start at 1 second
-        const MAX_RECONNECT_DELAY = 30000;  // Cap at 30 seconds
-        let _reconnectTimer = null;
-        let _connected = false;
+    // =========================================================================
+    // EVENT POLLING
+    // =========================================================================
+    // Polls backend for events instead of using SSE (which blocks server threads).
+
+    const events = (function() {
+        const POLL_INTERVAL = 2000;  // Poll every 2 seconds
+        let _pollTimer = null;
+        let _polling = false;
 
         /**
-         * Handle incoming SSE event.
+         * Process a single event from the backend.
+         * @param {Object} event - Event with 'type' and 'data' properties
          */
-        function handleEvent(event) {
-            // Skip if no data (keepalive comments, etc.)
-            if (!event.data) {
-                return;
-            }
+        function processEvent(event) {
+            console.log('[Events] Processing:', event.type, event.data);
 
-            try {
-                const data = JSON.parse(event.data);
-                console.log('[SSE] Received event:', data.type, data.data);
+            switch (event.type) {
+                case 'faces_reassessed':
+                    // Backend completed face reassessment - apply updates to cache directly
+                    console.log('[Events] Face reassessment complete, matched:', event.data.matched_count);
+                    if (faces.isLoaded() && event.data.updated_faces?.length > 0) {
+                        // Use transaction to batch the state updates
+                        transaction(() => {
+                            // Apply incremental updates (much faster than reloading all faces)
+                            const applied = faces._internal.applyAutoMatches(event.data.updated_faces);
+                            console.log('[Events] Applied', applied.length, 'face updates to cache');
 
-                switch (data.type) {
-                    case 'faces_reassessed':
-                        // Backend completed face reassessment - apply updates to cache directly
-                        console.log('[SSE] Face reassessment complete, matched:', data.data.matched_count);
-                        if (faces.isLoaded() && data.data.updated_faces?.length > 0) {
-                            // Use transaction to batch the state updates
-                            transaction(() => {
-                                // Apply incremental updates (much faster than reloading all faces)
-                                const applied = faces._internal.applyAutoMatches(data.data.updated_faces);
-                                console.log('[SSE] Applied', applied.length, 'face updates to cache');
-
-                                // Also update people face counts if people cache is loaded
-                                if (people.isLoaded() && applied.length > 0) {
-                                    // Count how many faces were assigned to each person
-                                    const personCounts = new Map();
-                                    for (const { person_id } of applied) {
-                                        personCounts.set(person_id, (personCounts.get(person_id) || 0) + 1);
-                                    }
-                                    for (const [personId, count] of personCounts) {
-                                        for (let i = 0; i < count; i++) {
-                                            people._internal.incrementFaceCount(personId);
-                                        }
+                            // Also update people face counts if people cache is loaded
+                            if (people.isLoaded() && applied.length > 0) {
+                                // Count how many faces were assigned to each person
+                                const personCounts = new Map();
+                                for (const { person_id } of applied) {
+                                    personCounts.set(person_id, (personCounts.get(person_id) || 0) + 1);
+                                }
+                                for (const [personId, count] of personCounts) {
+                                    for (let i = 0; i < count; i++) {
+                                        people._internal.incrementFaceCount(personId);
                                     }
                                 }
-                            });
-                        }
-                        break;
+                            }
+                        });
+                    }
+                    break;
 
-                    case 'processing_complete':
-                        // Full processing cycle complete - reload status and potentially images
-                        status.load();
-                        break;
+                case 'processing_complete':
+                    // Full processing cycle complete - reload status and potentially images
+                    status.load();
+                    break;
 
-                    case 'image_ingested':
-                        // New image added - may want to reload images if on gallery
-                        // (For now, just log - full reload would be expensive)
-                        console.log('[SSE] Image ingested:', data.data.id);
-                        break;
+                case 'image_ingested':
+                    // New image added - may want to reload images if on gallery
+                    // (For now, just log - full reload would be expensive)
+                    console.log('[Events] Image ingested:', event.data.id);
+                    break;
 
-                    case 'folder_added':
-                    case 'folder_removed':
-                        // Folder changes - reload folders
-                        folders.load();
-                        break;
+                case 'folder_added':
+                case 'folder_removed':
+                    // Folder changes - reload folders
+                    folders.load();
+                    break;
 
-                    case 'error':
-                        console.error('[SSE] Server error:', data.data.message);
-                        break;
+                case 'error':
+                    console.error('[Events] Server error:', event.data.message);
+                    break;
 
-                    default:
-                        console.log('[SSE] Unhandled event type:', data.type);
-                }
-            } catch (err) {
-                console.error('[SSE] Error parsing event:', err, event.data);
+                default:
+                    console.log('[Events] Unhandled event type:', event.type);
             }
         }
 
         /**
-         * Connect to SSE endpoint.
+         * Poll backend for pending events.
          */
-        function connect() {
+        async function poll() {
+            try {
+                const response = await App.apiGet('/events');
+                const eventList = response.data?.events || [];
+                for (const event of eventList) {
+                    processEvent(event);
+                }
+            } catch (err) {
+                // Silently ignore poll errors (backend might be restarting)
+                console.debug('[Events] Poll error:', err.message);
+            }
+        }
+
+        /**
+         * Start polling for events.
+         */
+        function startPolling() {
             // Skip in mock mode
             if (typeof App !== 'undefined' && App.mockMode) {
-                console.log('[SSE] Skipping in mock mode');
+                console.log('[Events] Skipping in mock mode');
                 return;
             }
 
-            // Close existing connection if any
-            if (_eventSource) {
-                _eventSource.close();
-            }
+            if (_polling) return;
+            _polling = true;
 
-            console.log('[SSE] Connecting...');
-            _eventSource = new EventSource('/api/events');
-
-            _eventSource.onopen = function() {
-                console.log('[SSE] Connected');
-                _connected = true;
-                _reconnectDelay = 1000;  // Reset backoff on successful connect
-            };
-
-            _eventSource.onmessage = handleEvent;
-
-            // Also listen for specific event types
-            _eventSource.addEventListener('faces_reassessed', handleEvent);
-            _eventSource.addEventListener('processing_complete', handleEvent);
-            _eventSource.addEventListener('image_ingested', handleEvent);
-            _eventSource.addEventListener('folder_added', handleEvent);
-            _eventSource.addEventListener('folder_removed', handleEvent);
-            _eventSource.addEventListener('error', handleEvent);
-
-            _eventSource.onerror = function(err) {
-                console.warn('[SSE] Connection error, will reconnect');
-                _connected = false;
-                _eventSource.close();
-                scheduleReconnect();
-            };
+            console.log('[Events] Starting polling');
+            // Poll immediately, then on interval
+            poll();
+            _pollTimer = setInterval(poll, POLL_INTERVAL);
         }
 
         /**
-         * Schedule reconnection with exponential backoff.
+         * Stop polling for events.
          */
-        function scheduleReconnect() {
-            if (_reconnectTimer) return;
-
-            console.log(`[SSE] Reconnecting in ${_reconnectDelay}ms...`);
-            _reconnectTimer = setTimeout(() => {
-                _reconnectTimer = null;
-                connect();
-                // Exponential backoff
-                _reconnectDelay = Math.min(_reconnectDelay * 2, MAX_RECONNECT_DELAY);
-            }, _reconnectDelay);
-        }
-
-        /**
-         * Disconnect from SSE endpoint.
-         */
-        function disconnect() {
-            if (_reconnectTimer) {
-                clearTimeout(_reconnectTimer);
-                _reconnectTimer = null;
+        function stopPolling() {
+            if (_pollTimer) {
+                clearInterval(_pollTimer);
+                _pollTimer = null;
             }
-            if (_eventSource) {
-                _eventSource.close();
-                _eventSource = null;
-            }
-            _connected = false;
-            console.log('[SSE] Disconnected');
+            _polling = false;
+            console.log('[Events] Stopped polling');
         }
 
         return {
-            connect,
-            disconnect,
-            isConnected: () => _connected
+            startPolling,
+            stopPolling,
+            isPolling: () => _polling
         };
     })();
 
@@ -3199,14 +3167,14 @@ const AppState = (function() {
      * Call this after initial page load completes to warm caches in background.
      * Does not block - all loads happen sequentially without awaiting.
      *
-     * Also establishes SSE connection for real-time backend push notifications.
+     * Also starts event polling for backend notifications.
      *
      * Loads are sequential to avoid SQLite connection contention
      * (Python's sqlite3 serializes access to a single connection).
      */
     function preloadAll() {
-        // Start SSE connection for real-time updates
-        sse.connect();
+        // Start polling for backend events
+        events.startPolling();
 
         console.time('preload /people');
         people.load()
@@ -3246,8 +3214,8 @@ const AppState = (function() {
         // Utility functions
         preloadAll,
 
-        // SSE connection for real-time updates
-        sse,
+        // Event polling for backend notifications
+        events,
 
         // Transaction system (for internal use by domains)
         // These will be used in Phase 2+ to wrap external methods

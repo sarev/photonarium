@@ -1216,34 +1216,35 @@ def get_cache_stats():
 
 
 # =============================================================================
-# SSE Events Endpoint (Optional)
+# Events Polling Endpoint
 # =============================================================================
 
 @app.route('/api/events', methods=['GET'])
-def event_stream():
-    """Server-Sent Events endpoint for real-time updates.
+def get_events():
+    """Poll for pending events.
 
-    Clients can connect to this endpoint to receive real-time
+    Returns all queued events and clears the queue. Frontend should
+    poll this endpoint periodically (e.g., every 2 seconds) to receive
     notifications about processing status, folder changes, etc.
 
     Returns:
-        SSE event stream.
+        JSON with 'events' array containing event objects with 'type' and 'data'.
     """
-    def generate():
-        # Short timeout so threads are released frequently (SSE blocks threads)
-        for event in get_db().get_event_stream(timeout=5.0):
-            yield event
+    events = get_db().get_pending_events()
+    return success_response({'events': events})
 
-    return Response(
-        generate(),
-        mimetype='text/event-stream',
-        headers={
-            'Cache-Control': 'no-cache',
-            'X-Accel-Buffering': 'no',  # Disable nginx buffering
-            # Note: Connection header removed - it's a hop-by-hop header
-            # that Waitress (WSGI server) manages automatically
-        }
-    )
+
+@app.route('/api/events/count', methods=['GET'])
+def get_event_count():
+    """Get number of pending events without fetching them.
+
+    Lightweight endpoint for checking if there are events to fetch.
+
+    Returns:
+        JSON with 'count' of pending events.
+    """
+    count = get_db().get_pending_event_count()
+    return success_response({'count': count})
 
 
 # =============================================================================
@@ -2352,9 +2353,7 @@ if __name__ == '__main__':
     try:
         from waitress import serve
         logger.info('Using waitress WSGI server')
-        # Need enough threads to handle SSE connections (which block) plus regular requests
-        # SSE connections hold threads for keepalive duration, so we need headroom
-        serve(app, host='127.0.0.1', port=args.port, threads=32)
+        serve(app, host='127.0.0.1', port=args.port, threads=8)
     except ImportError:
         logger.warning('waitress not installed, using Flask dev server (slow!)')
         logger.warning('Install with: pip install waitress')
