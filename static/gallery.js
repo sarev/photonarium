@@ -1052,6 +1052,13 @@ const Gallery = {
             descField.addEventListener('blur', () => {
                 this._saveImageField(imageId, 'description', descField.value);
             });
+            descField.addEventListener('keydown', (e) => {
+                // Enter commits and blurs, Shift+Enter inserts newline
+                if (e.key === 'Enter' && !e.shiftKey) {
+                    e.preventDefault();
+                    descField.blur();
+                }
+            });
         }
 
         if (ratingField) {
