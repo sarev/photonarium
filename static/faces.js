@@ -62,6 +62,9 @@
     /** @type {boolean} Whether face detection is enabled in config */
     let faceDetectionEnabled = true;
 
+    /** @type {string|null} Image ID currently being rendered in overlay (prevents stale renders) */
+    let currentOverlayImageId = null;
+
     // -------------------------------------------------------------------------
     // -------------------------------------------------------------------------
     // AUTOCOMPLETE STATE - Tracks active dropdown
@@ -1587,7 +1590,11 @@
     function handlePickPreferredFaceActivated(faceId) {
         const face = pickPreferredFaces.find(f => f.id === faceId);
         if (face && face.image_id) {
-            App.showFullscreen(face.image_id);
+            // Build image list from picker faces for navigation context
+            const imageList = pickPreferredFaces
+                .filter(f => f.image_id)
+                .map(f => ({ id: f.image_id }));
+            App.showFullscreen(face.image_id, { imageList });
             setTaggingMode(true);
         }
     }
@@ -1857,7 +1864,11 @@
 
         const face = displayedFaces.find(f => f.id === faceId);
         if (face && face.image_id) {
-            App.showFullscreen(face.image_id);
+            // Build image list from displayed faces for navigation context
+            const imageList = displayedFaces
+                .filter(f => f.image_id)
+                .map(f => ({ id: f.image_id }));
+            App.showFullscreen(face.image_id, { imageList });
             setTaggingMode(true);
         }
     }
@@ -3092,21 +3103,34 @@
     async function loadFacesForImage(imageId) {
         if (!faceOverlay) return;
 
+        // Track which image we're loading faces for
+        currentOverlayImageId = imageId;
+
         try {
             const faces = await AppState.faces.fetchForImage(imageId);
-            renderFaces(faces || []);
+
+            // Skip if we've navigated away during the async call
+            if (currentOverlayImageId !== imageId) return;
+
+            renderFaces(faces || [], imageId);
         } catch (error) {
             console.error('Failed to load faces:', error);
-            clearFaceOverlay();
+            if (currentOverlayImageId === imageId) {
+                clearFaceOverlay();
+            }
         }
     }
 
     /**
      * Clear the face overlay.
+     * @param {boolean} [resetTracking=true] - Whether to reset the image tracking variable
      */
-    function clearFaceOverlay() {
+    function clearFaceOverlay(resetTracking = true) {
         if (faceOverlay) {
             faceOverlay.innerHTML = '';
+        }
+        if (resetTracking) {
+            currentOverlayImageId = null;
         }
         focusedInput = null;
         closeAutocomplete();
@@ -3115,17 +3139,28 @@
     /**
      * Render faces on the overlay.
      * @param {Array<Object>} faces - Array of face objects
+     * @param {string} forImageId - Image ID these faces belong to (for stale check)
      */
-    function renderFaces(faces) {
+    function renderFaces(faces, forImageId) {
         if (!faceOverlay || !fullscreenImage || !fullscreenContainer) {
             return;
         }
 
-        clearFaceOverlay();
+        // Skip if we've navigated to a different image
+        if (forImageId && currentOverlayImageId !== forImageId) {
+            return;
+        }
+
+        // Clear overlay content but preserve tracking variable (we're about to render)
+        clearFaceOverlay(false);
 
         // Wait for image to be loaded to get dimensions
         if (!fullscreenImage.complete) {
-            fullscreenImage.addEventListener('load', () => renderFaces(faces), { once: true });
+            fullscreenImage.addEventListener('load', () => {
+                // Check again after load - user may have navigated away
+                if (forImageId && currentOverlayImageId !== forImageId) return;
+                renderFaces(faces, forImageId);
+            }, { once: true });
             return;
         }
 
@@ -3343,12 +3378,6 @@
         });
 
         label.appendChild(input);
-
-        // Focus the input if this is a new unknown face
-        if (!face.person_id) {
-            // Delay focus to ensure DOM is ready
-            setTimeout(() => input.focus(), 50);
-        }
     }
 
     // =========================================================================
@@ -3566,13 +3595,11 @@
     async function commitNameChange(faceId, name, label, face) {
         try {
             if (name) {
-                // Use shared API helper
+                // Use shared API helper - AppState.faces.identify() updates the cache
                 const result = await callIdentifyBatchApi([faceId], name, faceId);
 
                 if (result && result.success) {
-                    // Update face object and re-render label
-                    face.person_id = result.data.person.id;
-                    face.person_name = result.data.person.name;
+                    const personName = result.data.person.name;
 
                     // Update box class
                     const faceBox = label.closest('.face-box');
@@ -3585,7 +3612,7 @@
                     label.innerHTML = '';
                     const nameSpan = document.createElement('span');
                     nameSpan.className = 'face-name';
-                    nameSpan.textContent = face.person_name;
+                    nameSpan.textContent = personName;
                     nameSpan.addEventListener('click', () => {
                         showNameInput(label, face);
                     });
@@ -3596,11 +3623,8 @@
                     needsRefresh = true;
                 }
             } else if (face.person_id) {
-                // Unidentify face using AppState
+                // Unidentify face using AppState - this updates the cache
                 await AppState.faces.unassign(faceId);
-
-                face.person_id = null;
-                face.person_name = null;
 
                 // Update box class
                 const faceBox = label.closest('.face-box');

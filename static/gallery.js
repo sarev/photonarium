@@ -74,14 +74,6 @@ const Gallery = {
     },
 
     /**
-     * Cached sorted/filtered images for display.
-     * Recomputed from AppState.images on each render.
-     * @type {Array<Object>}
-     * @private
-     */
-    _displayImages: [],
-
-    /**
      * AppState subscription cleanup functions.
      * @type {Array<Function>}
      * @private
@@ -168,7 +160,7 @@ const Gallery = {
         // Create VirtualGrid instance
         this._grid = VirtualGrid.create({
             container: this._els.grid,
-            getItems: () => this._displayImages,
+            getItems: () => AppState.images.getDisplayList(),
             getItemId: (img) => img.id,
             createItem: (img, index, blobUrl) => this._createThumbnailItem(img, blobUrl),
             getThumbnailId: (img) => img.id,
@@ -184,7 +176,7 @@ const Gallery = {
         // Create GridSelection instance
         this._selection = GridSelection.create({
             grid: this._grid,
-            getItems: () => this._displayImages,
+            getItems: () => AppState.images.getDisplayList(),
             getItemId: (img) => img.id,
             itemSelector: '.gallery-item',
             onSelectionChanged: (ids) => {
@@ -301,7 +293,6 @@ const Gallery = {
             this._applyInitialSelection();
         } catch (error) {
             console.error('Failed to load images:', error);
-            this._displayImages = [];
             App.showError('Failed to load images');
         } finally {
             if (isFirstLoad) {
@@ -358,7 +349,8 @@ const Gallery = {
         }
 
         // Restore selection (filter out deleted images)
-        const existingIds = new Set(this._displayImages.map(img => img.id));
+        const displayList = AppState.images.getDisplayList();
+        const existingIds = new Set(displayList.map(img => img.id));
         const validSelection = currentSelection.filter(id => existingIds.has(id));
         if (validSelection.length > 0) {
             App.setSelectedImages(validSelection);
@@ -368,40 +360,6 @@ const Gallery = {
     /* ----------------------------------------------------------------------
        SORTING & FILTERING
        ---------------------------------------------------------------------- */
-
-    /**
-     * Sorts images based on current sort settings.
-     * Uses AppState accessors for similarity and people name data.
-     * @param {Array<Object>} images
-     * @returns {Array<Object>}
-     * @private
-     */
-    _sortImages(images) {
-        const { by, direction } = App.getSort();
-        const sorted = [...images];
-
-        sorted.sort((a, b) => {
-            let cmp = 0;
-            if (by === 'date') {
-                cmp = new Date(a.timestamp) - new Date(b.timestamp);
-            } else if (by === 'rating') {
-                cmp = (a.rating || '').localeCompare(b.rating || '');
-            } else if (by === 'content') {
-                // Use AppState for similarity data
-                const simA = AppState.images.getSimilarity(a.id);
-                const simB = AppState.images.getSimilarity(b.id);
-                cmp = simA - simB;
-            } else if (by === 'people') {
-                // Use AppState for people names
-                const namesA = AppState.images.getPeopleNames(a.id);
-                const namesB = AppState.images.getPeopleNames(b.id);
-                cmp = namesA.localeCompare(namesB, undefined, { sensitivity: 'base' });
-            }
-            return direction === 'asc' ? cmp : -cmp;
-        });
-
-        return sorted;
-    },
 
     /**
      * Loads content similarity data for sorting.
@@ -434,80 +392,6 @@ const Gallery = {
         }
     },
 
-    /**
-     * Filters images based on current filter settings.
-     * @param {Array<Object>} images
-     * @returns {Array<Object>}
-     * @private
-     */
-    _filterImages(images) {
-        const filter = App.getFilter();
-        if (!filter) return images;
-
-        // Duplicates filter
-        if (filter.type === 'duplicates' && Array.isArray(filter.imageIds)) {
-            const idSet = new Set(filter.imageIds.map(String));
-            return images.filter(img => idSet.has(String(img.id)));
-        }
-
-        // Semantic search filter
-        if (filter.type === 'semantic' && Array.isArray(filter.imageIds)) {
-            const idSet = new Set(filter.imageIds.map(String));
-            const scores = filter.scores || {};
-
-            let filtered = images.filter(img => idSet.has(String(img.id)));
-
-            // Apply additional filters
-            filtered = filtered.filter(img => {
-                if (filter.dateStart) {
-                    const imgDate = new Date(img.timestamp);
-                    if (imgDate < new Date(filter.dateStart)) return false;
-                }
-                if (filter.dateEnd) {
-                    const imgDate = new Date(img.timestamp);
-                    const endDate = new Date(filter.dateEnd);
-                    endDate.setHours(23, 59, 59, 999);
-                    if (imgDate > endDate) return false;
-                }
-                if (filter.rating) {
-                    const filterEmoji = [...filter.rating];
-                    const hasMatch = filterEmoji.some(e => img.rating && img.rating.includes(e));
-                    if (!hasMatch) return false;
-                }
-                return true;
-            });
-
-            // Sort by score
-            filtered.sort((a, b) => (scores[b.id] || 0) - (scores[a.id] || 0));
-            return filtered;
-        }
-
-        // Standard filters
-        return images.filter(img => {
-            if (filter.text && !(img.description || '').toLowerCase().includes(filter.text.toLowerCase())) {
-                return false;
-            }
-            if (filter.dateStart && new Date(img.timestamp) < new Date(filter.dateStart)) {
-                return false;
-            }
-            if (filter.dateEnd) {
-                const endDate = new Date(filter.dateEnd);
-                endDate.setHours(23, 59, 59, 999);
-                if (new Date(img.timestamp) > endDate) return false;
-            }
-            if (filter.rating) {
-                const filterEmoji = [...filter.rating];
-                const hasMatch = filterEmoji.some(e => img.rating && img.rating.includes(e));
-                if (!hasMatch) return false;
-            }
-            // People filter (AND logic - image must contain ALL selected people)
-            if (filter.peopleImageIds && !filter.peopleImageIds.has(String(img.id))) {
-                return false;
-            }
-            return true;
-        });
-    },
-
     /* ----------------------------------------------------------------------
        EVENT HANDLERS
        ---------------------------------------------------------------------- */
@@ -523,7 +407,7 @@ const Gallery = {
         this._updateGridStyle();
         // Clear ThumbnailLoader and refresh grid
         ThumbnailLoader.clear();
-        if (this._grid && this._displayImages.length > 0) {
+        if (this._grid && AppState.images.getDisplayList().length > 0) {
             this._grid.refresh();
         }
     },
@@ -707,16 +591,14 @@ const Gallery = {
         console.time('_renderGrid total');
         const grid = this._els.grid;
 
-        // Compute display images from AppState (single source of truth)
+        // Get display images from AppState (single source of truth)
         console.time('_renderGrid compute');
-        const allImages = AppState.images.getAll();
-        const sorted = this._sortImages(allImages);
-        this._displayImages = this._filterImages(sorted);
+        const displayList = AppState.images.getDisplayList();
         console.timeEnd('_renderGrid compute');
-        console.log(`_renderGrid: ${this._displayImages.length} images`);
+        console.log(`_renderGrid: ${displayList.length} images`);
 
         // Handle empty state
-        if (this._displayImages.length === 0) {
+        if (displayList.length === 0) {
             grid.innerHTML = '<div class="empty-state"><span class="material-symbols-outlined">photo_library</span><p>No images to display</p></div>';
             console.timeEnd('_renderGrid total');
             return;
@@ -841,8 +723,8 @@ const Gallery = {
             return;
         }
 
-        const filtered = this._displayImages;
-        if (filtered.length === 0) return;
+        const displayList = AppState.images.getDisplayList();
+        if (displayList.length === 0) return;
 
         // Calculate first visible image
         const itemHeight = this._grid.getItemHeight();
@@ -852,9 +734,9 @@ const Gallery = {
         const firstVisibleRow = Math.floor(scrollTop / itemHeight);
         const firstVisibleIndex = firstVisibleRow * itemsPerRow;
 
-        if (firstVisibleIndex < 0 || firstVisibleIndex >= filtered.length) return;
+        if (firstVisibleIndex < 0 || firstVisibleIndex >= displayList.length) return;
 
-        const img = filtered[firstVisibleIndex];
+        const img = displayList[firstVisibleIndex];
         if (!img) return;
 
         if (by === 'date' && img.timestamp) {

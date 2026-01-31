@@ -2203,7 +2203,7 @@ def reassess_unknown_faces(
     Returns:
         List of (face_id, person_id, similarity) for matched faces.
     """
-    logger.info(f'Reassessing unknown faces with default threshold={threshold:.3f}, person_id={person_id}')
+    logger.debug(f'Reassessing unknown faces with default threshold={threshold:.3f}, person_id={person_id}')
 
     # Load per-person thresholds (person_id -> threshold, None means use default)
     person_thresholds: dict[str, float | None] = {}
@@ -2211,11 +2211,11 @@ def reassess_unknown_faces(
     for row in cursor.fetchall():
         person_thresholds[row['id']] = row['recognition_threshold']
 
-    # Diagnostic: check embedding health
+    # Diagnostic: check embedding health (DEBUG level)
     def diagnose_embeddings(name, embeddings_list):
         """Check if embeddings are valid and diverse."""
         if not embeddings_list:
-            logger.warning(f'{name}: no embeddings')
+            logger.debug(f'{name}: no embeddings')
             return
 
         # Get just the embedding arrays
@@ -2227,14 +2227,14 @@ def reassess_unknown_faces(
         emb_matrix = np.vstack(embs)
 
         # Check shape
-        logger.info(f'{name}: {len(embs)} embeddings, shape {emb_matrix.shape}')
+        logger.debug(f'{name}: {len(embs)} embeddings, shape {emb_matrix.shape}')
 
         # Check for zeros/constants
         mean_vals = np.mean(emb_matrix, axis=0)
         std_vals = np.std(emb_matrix, axis=0)
         overall_std = np.std(emb_matrix)
 
-        logger.info(f'{name}: overall std={overall_std:.6f}, per-dim std range=[{std_vals.min():.6f}, {std_vals.max():.6f}]')
+        logger.debug(f'{name}: overall std={overall_std:.6f}, per-dim std range=[{std_vals.min():.6f}, {std_vals.max():.6f}]')
 
         # Check pairwise similarity of first few
         if len(embs) >= 2:
@@ -2243,7 +2243,7 @@ def reassess_unknown_faces(
             pairwise = sample @ sample.T
             # Get off-diagonal similarities
             off_diag = pairwise[np.triu_indices(sample_size, k=1)]
-            logger.info(f'{name}: sample pairwise similarities (should vary): {off_diag}')
+            logger.debug(f'{name}: sample pairwise similarities (should vary): {off_diag}')
 
     # Get embeddings (from cache if available)
     if person_id:
@@ -2310,15 +2310,15 @@ def reassess_unknown_faces(
         if best_similarity >= effective_threshold:
             matched.append((unknown_face_id, matched_person_id, float(best_similarity)))
 
-    # Log summary with similarity distribution
+    # Log summary (single INFO line)
     if matched:
         sims = [m[2] for m in matched]
         logger.info(
-            f'Reassessment found {len(matched)} matches out of {len(unknown_ids)} unknown faces '
-            f'(min={min(sims):.3f}, max={max(sims):.3f}, threshold={threshold:.3f})'
+            f'Face reassessment: auto-matched {len(matched)} of {len(unknown_ids)} unknown faces '
+            f'(similarity {min(sims):.2f}-{max(sims):.2f}, threshold={threshold:.2f})'
         )
     else:
-        logger.info(f'Reassessment found 0 matches out of {len(unknown_ids)} unknown faces')
+        logger.debug(f'Face reassessment: no matches from {len(unknown_ids)} unknown faces')
 
     # Apply matches (auto-matched, not manually tagged)
     for face_id, matched_person_id, similarity in matched:
@@ -2755,7 +2755,7 @@ def reassess_unknown_faces_async(
                     'person_id': person_id,
                 }
 
-            logger.info(f'Async reassessment complete: {len(matched)} faces matched')
+            logger.debug(f'Async reassessment complete: {len(matched)} faces matched')
 
             # Emit SSE event so frontend can update
             if hasattr(db, 'event_queue') and db.event_queue:
@@ -2781,6 +2781,6 @@ def reassess_unknown_faces_async(
             _reassess_result = None  # Clear previous result
             _reassess_thread = threading.Thread(target=_worker, daemon=True)
             _reassess_thread.start()
-            logger.info('Started async face reassessment')
+            logger.debug('Started async face reassessment')
         else:
             logger.debug('Reassessment already in progress, skipping')

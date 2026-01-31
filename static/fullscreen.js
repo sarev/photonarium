@@ -129,23 +129,23 @@ const Fullscreen = {
     /**
      * Opens the fullscreen overlay with the specified image.
      * @param {string} imageId - ID of the image to display
+     * @param {Object} [options] - Optional settings
+     * @param {Array<Object>} [options.imageList] - Custom image list for navigation context
      */
-    open(imageId) {
+    open(imageId, options = {}) {
         if (this.state.isOpen) {
             // Already open - just navigate to the new image
             this._navigateToImage(imageId);
             return;
         }
 
-        // Get the current image list from Gallery's filtered/sorted state
-        // Use filteredImages to respect both the active filter and sort order
-        this.state.imageList = Gallery.state.filteredImages || [];
-        this.state.currentIndex = this.state.imageList.findIndex(img => img.id === imageId);
-
-        // If image not in filtered list (e.g., coming from Faces screen with filter active),
-        // fall back to all loaded images
-        if (this.state.currentIndex < 0 && Gallery.state.images) {
-            this.state.imageList = Gallery.state.images;
+        // Use provided image list if available, otherwise fall back to AppState
+        if (options.imageList && options.imageList.length > 0) {
+            this.state.imageList = options.imageList;
+            this.state.currentIndex = this.state.imageList.findIndex(img => img.id === imageId);
+        } else {
+            // Get the current display list from AppState (sorted/filtered per current settings)
+            this.state.imageList = AppState.images.getDisplayList();
             this.state.currentIndex = this.state.imageList.findIndex(img => img.id === imageId);
         }
 
@@ -261,6 +261,8 @@ const Fullscreen = {
         // Use requestAnimationFrame to ensure the class change triggers transition
         requestAnimationFrame(() => {
             this._els.overlay.classList.add('visible');
+            // Focus overlay so keyboard events (arrows, escape) go here, not the underlying grid
+            this._els.overlay.focus();
         });
         // Emit event for face tagging mode
         App.emit('fullscreenImageChanged', this.state.currentId);
@@ -449,6 +451,33 @@ const Fullscreen = {
 
         const preloadNext = new Image();
         preloadNext.src = App.imageUrl(imageList[nextIndex].id);
+
+        // Preload faces for adjacent images (warms AppState cache)
+        this._preloadAdjacentFaces(prevIndex, nextIndex);
+    },
+
+    /**
+     * Preloads face data for adjacent images to reduce latency when navigating.
+     * Only preloads if face tagging mode is active.
+     * @param {number} prevIndex - Index of previous image
+     * @param {number} nextIndex - Index of next image
+     * @private
+     */
+    _preloadAdjacentFaces(prevIndex, nextIndex) {
+        // Only preload if tagging mode is active
+        if (typeof Faces === 'undefined' || !Faces.isTaggingModeActive()) {
+            return;
+        }
+
+        const { imageList } = this.state;
+
+        // Warm the AppState cache (no-op if already cached)
+        if (imageList[prevIndex]) {
+            AppState.faces.fetchForImage(imageList[prevIndex].id);
+        }
+        if (imageList[nextIndex]) {
+            AppState.faces.fetchForImage(imageList[nextIndex].id);
+        }
     },
 
     /**

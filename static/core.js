@@ -695,9 +695,11 @@ const App = {
      * Opens the fullscreen overlay for a specific image.
      * The underlying screen remains visible underneath.
      * @param {string} imageId - The ID of the image to view
+     * @param {Object} [options] - Optional settings
+     * @param {Array<Object>} [options.imageList] - Custom image list for navigation context
      */
-    showFullscreen(imageId) {
-        Fullscreen.open(imageId);
+    showFullscreen(imageId, options) {
+        Fullscreen.open(imageId, options);
     },
 
     /**

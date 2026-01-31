@@ -1230,7 +1230,8 @@ def event_stream():
         SSE event stream.
     """
     def generate():
-        for event in get_db().get_event_stream(timeout=30.0):
+        # Short timeout so threads are released frequently (SSE blocks threads)
+        for event in get_db().get_event_stream(timeout=5.0):
             yield event
 
     return Response(
@@ -1707,6 +1708,8 @@ def identify_faces_batch():
                 # Select newest face (last in list, sorted by timestamp ASC)
                 new_preferred = remaining_faces[-1]['id']
                 update_person(db.conn, source_id, preferred_face_id=new_preferred)
+                # Lock the new preferred face (prevents auto-reassignment)
+                db.conn.execute('UPDATE faces SET manually_tagged = 1 WHERE id = ?', (new_preferred,))
 
         # Delete source persons with no more faces
         delete_people_without_faces(db.conn)
@@ -1843,10 +1846,13 @@ def suppress_face_endpoint(face_id):
                 person_deleted = True
             elif was_preferred:
                 # Person still has faces but lost their preferred - select new one
+                new_preferred_id = remaining_faces['id']
                 db.conn.execute(
                     'UPDATE people SET preferred_face_id = ? WHERE id = ?',
-                    (remaining_faces['id'], old_person_id)
+                    (new_preferred_id, old_person_id)
                 )
+                # Lock the new preferred face (prevents auto-reassignment)
+                db.conn.execute('UPDATE faces SET manually_tagged = 1 WHERE id = ?', (new_preferred_id,))
                 db.conn.commit()
                 new_preferred_selected = True
 
@@ -2022,6 +2028,8 @@ def unassign_face(face_id):
                 # Select newest face (last in list, sorted by timestamp ASC)
                 new_preferred = remaining_faces[-1]['id']
                 update_person(db.conn, old_person_id, preferred_face_id=new_preferred)
+                # Lock the new preferred face (prevents auto-reassignment)
+                db.conn.execute('UPDATE faces SET manually_tagged = 1 WHERE id = ?', (new_preferred,))
 
         # Delete person if they have no more faces
         delete_people_without_faces(db.conn)
@@ -2102,6 +2110,8 @@ def unassign_faces_batch():
                 # Select newest face (last in list, sorted by timestamp ASC)
                 new_preferred = remaining_faces[-1]['id']
                 update_person(db.conn, person_id, preferred_face_id=new_preferred)
+                # Lock the new preferred face (prevents auto-reassignment)
+                db.conn.execute('UPDATE faces SET manually_tagged = 1 WHERE id = ?', (new_preferred,))
 
         # Phase 3: Delete people with no more faces
         delete_people_without_faces(db.conn)
@@ -2342,7 +2352,9 @@ if __name__ == '__main__':
     try:
         from waitress import serve
         logger.info('Using waitress WSGI server')
-        serve(app, host='127.0.0.1', port=args.port, threads=8)
+        # Need enough threads to handle SSE connections (which block) plus regular requests
+        # SSE connections hold threads for keepalive duration, so we need headroom
+        serve(app, host='127.0.0.1', port=args.port, threads=32)
     except ImportError:
         logger.warning('waitress not installed, using Flask dev server (slow!)')
         logger.warning('Install with: pip install waitress')

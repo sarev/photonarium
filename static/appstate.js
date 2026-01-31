@@ -831,8 +831,150 @@ const AppState = (function() {
         let _loading = false;
         let _pendingLoad = null;    // Prevent concurrent loads
 
+        // Display list state (sorted/filtered view of images)
+        let _displayList = [];      // The actual state - read directly by GUI
+        let _displayListDirty = true; // Lazy recomputation flag
+
+        // Sort data (loaded on demand for content/people sorts)
+        let _similarities = null;   // {referenceId, scores: Map<id, similarity>}
+        let _peopleNames = null;    // {imageId: 'name1, name2'}
+
         // Domain reference for transaction system
         const domainRef = { _name: 'images', _notify: notify };
+
+        /**
+         * Mark display list as needing recomputation.
+         * Called when images, sort settings, or filter changes.
+         */
+        function _markDisplayListDirty() {
+            _displayListDirty = true;
+        }
+
+        /**
+         * Recompute display list if dirty. Called lazily on access.
+         */
+        function _ensureDisplayList() {
+            if (!_displayListDirty) return;
+
+            if (!_cache) {
+                _displayList = [];
+            } else {
+                const all = Array.from(_cache.values());
+                _displayList = _filterImages(_sortImages(all));
+            }
+            _displayListDirty = false;
+        }
+
+        /**
+         * Sort images based on current view settings.
+         */
+        function _sortImages(images) {
+            const { by, direction } = view.getSort();
+            const sorted = [...images];
+
+            sorted.sort((a, b) => {
+                let cmp = 0;
+                if (by === 'date') {
+                    cmp = new Date(a.timestamp) - new Date(b.timestamp);
+                } else if (by === 'rating') {
+                    cmp = (a.rating || '').localeCompare(b.rating || '');
+                } else if (by === 'content') {
+                    const simA = _similarities?.scores.get(a.id) || 0;
+                    const simB = _similarities?.scores.get(b.id) || 0;
+                    cmp = simA - simB;
+                } else if (by === 'people') {
+                    const namesA = _peopleNames?.[a.id] || '';
+                    const namesB = _peopleNames?.[b.id] || '';
+                    cmp = namesA.localeCompare(namesB, undefined, { sensitivity: 'base' });
+                }
+                return direction === 'asc' ? cmp : -cmp;
+            });
+
+            return sorted;
+        }
+
+        /**
+         * Filter images based on current filter settings.
+         */
+        function _filterImages(images) {
+            const currentFilter = filter.get();
+            if (!currentFilter) return images;
+
+            // Duplicates filter
+            if (currentFilter.type === 'duplicates' && Array.isArray(currentFilter.imageIds)) {
+                const idSet = new Set(currentFilter.imageIds.map(String));
+                return images.filter(img => idSet.has(String(img.id)));
+            }
+
+            // Semantic search filter
+            if (currentFilter.type === 'semantic' && Array.isArray(currentFilter.imageIds)) {
+                const idSet = new Set(currentFilter.imageIds.map(String));
+                const scores = currentFilter.scores || {};
+
+                let filtered = images.filter(img => idSet.has(String(img.id)));
+
+                filtered = filtered.filter(img => {
+                    if (currentFilter.dateStart) {
+                        const imgDate = new Date(img.timestamp);
+                        if (imgDate < new Date(currentFilter.dateStart)) return false;
+                    }
+                    if (currentFilter.dateEnd) {
+                        const imgDate = new Date(img.timestamp);
+                        const endDate = new Date(currentFilter.dateEnd);
+                        endDate.setHours(23, 59, 59, 999);
+                        if (imgDate > endDate) return false;
+                    }
+                    if (currentFilter.rating) {
+                        const filterEmoji = [...currentFilter.rating];
+                        const hasMatch = filterEmoji.some(e => img.rating && img.rating.includes(e));
+                        if (!hasMatch) return false;
+                    }
+                    return true;
+                });
+
+                filtered.sort((a, b) => (scores[b.id] || 0) - (scores[a.id] || 0));
+                return filtered;
+            }
+
+            // Standard filters
+            return images.filter(img => {
+                if (currentFilter.text && !(img.description || '').toLowerCase().includes(currentFilter.text.toLowerCase())) {
+                    return false;
+                }
+                if (currentFilter.dateStart && new Date(img.timestamp) < new Date(currentFilter.dateStart)) {
+                    return false;
+                }
+                if (currentFilter.dateEnd) {
+                    const endDate = new Date(currentFilter.dateEnd);
+                    endDate.setHours(23, 59, 59, 999);
+                    if (new Date(img.timestamp) > endDate) return false;
+                }
+                if (currentFilter.rating) {
+                    const filterEmoji = [...currentFilter.rating];
+                    const hasMatch = filterEmoji.some(e => img.rating && img.rating.includes(e));
+                    if (!hasMatch) return false;
+                }
+                if (currentFilter.people && currentFilter.peopleImageIds) {
+                    if (!currentFilter.peopleImageIds.has(String(img.id))) {
+                        return false;
+                    }
+                }
+                return true;
+            });
+        }
+
+        // Subscribe to view and filter changes to invalidate display list
+        view.onChanged((event) => {
+            if (event.property === 'sortBy' || event.property === 'sortDirection') {
+                _markDisplayListDirty();
+                broadcast({ type: 'changed', property: 'displayList' });
+            }
+        });
+
+        filter.onChanged(() => {
+            _markDisplayListDirty();
+            broadcast({ type: 'changed', property: 'displayList' });
+        });
 
         // =====================================================================
         // INTERNAL API
@@ -849,6 +991,7 @@ const AppState = (function() {
                 const image = _cache?.get(id);
                 if (image) {
                     Object.assign(image, changes);
+                    _markDisplayListDirty();
                     markDirty(domainRef);
                 }
             },
@@ -859,6 +1002,7 @@ const AppState = (function() {
              */
             remove(id) {
                 if (_cache?.delete(id)) {
+                    _markDisplayListDirty();
                     markDirty(domainRef);
                 }
             },
@@ -911,6 +1055,7 @@ const AppState = (function() {
                         }
                         _cacheEpoch = data.epoch;
                     }
+                    _markDisplayListDirty();
                     broadcast({ type: 'changed' });
                 } catch (err) {
                     console.error('AppState.images load error:', err);
@@ -967,10 +1112,12 @@ const AppState = (function() {
                 // Update preferred face if needed
                 const person = people._internal.get(personId);
                 if (person && updates.wasPreferred) {
-                    const remainingFaces = faces._internal.getFirstForPerson(personId, { excludingImageId: imageId });
-                    if (remainingFaces) {
-                        people._internal.update(personId, { preferred_face_id: remainingFaces.id });
+                    const remainingFace = faces._internal.getFirstForPerson(personId, { excludingImageId: imageId });
+                    if (remainingFace) {
+                        people._internal.update(personId, { preferred_face_id: remainingFace.id });
                         people._internal.bustThumbnail(personId);
+                        // Lock the new preferred face (backend does this too)
+                        faces._internal.update(remainingFace.id, { manually_tagged: true });
                     }
                 }
             }
@@ -1013,6 +1160,19 @@ const AppState = (function() {
             },
             isLoading() {
                 return _loading;
+            },
+
+            // --- Display List (sorted and filtered) ---
+
+            /**
+             * Get the display list: all images sorted and filtered per current settings.
+             * This is the single source of truth for what images should be displayed.
+             * Returns the actual state array - do not mutate directly.
+             * @returns {Array<Object>} Sorted and filtered images
+             */
+            getDisplayList() {
+                _ensureDisplayList();
+                return _displayList;
             },
 
             // --- Mutations (wrapped in transactions) ---
@@ -1154,50 +1314,52 @@ const AppState = (function() {
             },
 
             // --- Similarity data for sort-by-similarity ---
-            _similarities: null,
 
             async loadSimilarities(referenceId) {
                 const response = await App.apiGet(`/similar/${referenceId}`);
-                this._similarities = {
+                _similarities = {
                     referenceId,
                     scores: new Map(response.data.results.map(r => [r.id, r.similarity]))
                 };
+                _markDisplayListDirty();
                 broadcast({ type: 'changed', property: 'similarities' });
                 return response;
             },
 
             getSimilarity(imageId) {
-                return this._similarities?.scores.get(imageId) || 0;
+                return _similarities?.scores.get(imageId) || 0;
             },
 
             getSimilarityReferenceId() {
-                return this._similarities?.referenceId || null;
+                return _similarities?.referenceId || null;
             },
 
             clearSimilarities() {
-                this._similarities = null;
+                _similarities = null;
+                _markDisplayListDirty();
             },
 
             // --- People names for sort-by-people ---
-            _peopleNames: null,
 
             async loadPeopleNames() {
                 const response = await App.apiGet('/images/people-names');
-                this._peopleNames = response.data;
+                _peopleNames = response.data;
+                _markDisplayListDirty();
                 broadcast({ type: 'changed', property: 'peopleNames' });
                 return response.data;
             },
 
             getPeopleNames(imageId) {
-                return this._peopleNames?.[imageId] || '';
+                return _peopleNames?.[imageId] || '';
             },
 
             hasPeopleNames() {
-                return this._peopleNames !== null;
+                return _peopleNames !== null;
             },
 
             clearPeopleNames() {
-                this._peopleNames = null;
+                _peopleNames = null;
+                _markDisplayListDirty();
             },
 
             // --- Filter by people ---
@@ -2234,8 +2396,11 @@ const AppState = (function() {
                             if (person) {
                                 const remainingFaces = _internal.getForPerson(personId);
                                 if (remainingFaces.length > 0 && !remainingFaces.some(f => f.id === person.preferred_face_id)) {
-                                    people._internal.update(personId, { preferred_face_id: remainingFaces[0].id });
+                                    const newPreferredId = remainingFaces[0].id;
+                                    people._internal.update(personId, { preferred_face_id: newPreferredId });
                                     people._internal.bustThumbnail(personId);
+                                    // Lock the new preferred face (backend does this too)
+                                    _internal.update(newPreferredId, { manually_tagged: true });
                                 }
                             }
                         }
@@ -2308,8 +2473,11 @@ const AppState = (function() {
                             if (person) {
                                 const remainingFaces = _internal.getForPerson(personId);
                                 if (remainingFaces.length > 0 && !remainingFaces.some(f => f.id === person.preferred_face_id)) {
-                                    people._internal.update(personId, { preferred_face_id: remainingFaces[0].id });
+                                    const newPreferredId = remainingFaces[0].id;
+                                    people._internal.update(personId, { preferred_face_id: newPreferredId });
                                     people._internal.bustThumbnail(personId);
+                                    // Lock the new preferred face (backend does this too)
+                                    _internal.update(newPreferredId, { manually_tagged: true });
                                 }
                             }
                         }
