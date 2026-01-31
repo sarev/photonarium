@@ -208,7 +208,7 @@ def _prepopulate_images_cache(database: ImageDatabase):
     t0 = time.perf_counter()
     images = database.get_all_images_lightweight()
     epoch = database.get_current_epoch()
-    data = {'epoch': epoch, 'images': images}
+    data = {'success': True, 'data': {'epoch': epoch, 'images': images}}
     json_bytes = orjson.dumps(data)
     _set_images_cache(epoch, json_bytes)
     elapsed = time.perf_counter() - t0
@@ -349,7 +349,7 @@ def get_images():
                     if img['id'] in matching_image_ids
                 ]
 
-        return jsonify(delta)
+        return success_response(delta)
     else:
         # Full load - use cached response if available
         db = get_db()
@@ -360,7 +360,7 @@ def get_images():
             all_images = db.get_all_images_lightweight()
             images = [img for img in all_images if img['id'] in matching_image_ids]
             epoch = db.get_current_epoch()
-            return jsonify({'epoch': epoch, 'images': images})
+            return success_response({'epoch': epoch, 'images': images})
         else:
             # Use cached JSON bytes if epoch matches
             epoch = db.get_current_epoch()
@@ -368,9 +368,9 @@ def get_images():
             if cached and cached['epoch'] == epoch:
                 return Response(cached['bytes'], mimetype='application/json')
 
-            # Cache miss - build and cache response
+            # Cache miss - build and cache response (with success wrapper for consistency)
             images = db.get_all_images_lightweight()
-            data = {'epoch': epoch, 'images': images}
+            data = {'success': True, 'data': {'epoch': epoch, 'images': images}}
             json_bytes = orjson.dumps(data)
             _set_images_cache(epoch, json_bytes)
             return Response(json_bytes, mimetype='application/json')
@@ -389,7 +389,7 @@ def get_image(image_id):
     image = get_db().get_image(image_id)
     if image is None:
         return error_response('Image not found', 404)
-    return jsonify(image)
+    return success_response(image)
 
 
 @app.route('/api/images/<image_id>', methods=['POST'])
@@ -431,7 +431,7 @@ def update_image(image_id):
     image = get_db().update_image(image_id, allowed_updates)
     if image is None:
         return error_response('Image not found', 404)
-    return jsonify(image)
+    return success_response(image)
 
 
 @app.route('/api/images/<image_id>/generate-caption', methods=['POST'])
@@ -469,7 +469,7 @@ def generate_caption(image_id):
     if caption is None:
         return error_response('Failed to generate caption', 500)
 
-    return jsonify({'caption': caption})
+    return success_response({'caption': caption})
 
 
 @app.route('/api/images/<image_id>', methods=['DELETE'])
@@ -648,7 +648,7 @@ def get_histogram_images(image_id):
             b64 = base64.b64encode(buffer.getvalue()).decode('ascii')
             return f'data:image/png;base64,{b64}'
 
-        return jsonify({
+        return success_response({
             'r': img_to_data_url(red_img),
             'g': img_to_data_url(green_img),
             'b': img_to_data_url(blue_img),
@@ -771,7 +771,7 @@ def rotate_images():
         for checksum in old_checksums:
             cache.remove(checksum)
 
-    return jsonify(results)
+    return success_response(results)
 
 
 @app.route('/api/images/people-names', methods=['GET'])
@@ -786,7 +786,7 @@ def get_images_people_names():
     """
     db = get_db()
     names = get_people_names_bulk(db.conn)
-    return jsonify(names)
+    return success_response(names)
 
 
 # =============================================================================
@@ -806,7 +806,7 @@ def get_folders():
             - count: Number of images from this folder
     """
     folders = get_db().get_folders()
-    return jsonify(folders)
+    return success_response(folders)
 
 
 @app.route('/api/pick-folder', methods=['POST'])
@@ -867,7 +867,7 @@ def pick_folder():
     dialog_thread.start()
     dialog_thread.join(timeout=300)  # 5 minute timeout
 
-    return jsonify({'path': selected_path})
+    return success_response({'path': selected_path})
 
 
 @app.route('/api/folders', methods=['POST'])
@@ -968,7 +968,7 @@ def get_status():
         'person_id': last_result.get('person_id') if last_result else None,
     }
 
-    return jsonify(status)
+    return success_response(status)
 
 
 @app.route('/api/config', methods=['GET'])
@@ -986,7 +986,7 @@ def get_config():
             - thumbnail_scroll_throttle_ms: Scroll throttle in milliseconds
     """
     config = get_db().config
-    return jsonify({
+    return success_response({
         'thumbnail_concurrent_requests': config.thumbnail_concurrent_requests,
         'thumbnail_extra_rows': config.thumbnail_extra_rows,
         'thumbnail_timeout_ms': config.thumbnail_timeout_ms,
@@ -1055,7 +1055,7 @@ def get_duplicates():
 
     # If client has current data, return minimal response
     if since and since == epoch and status == 'done':
-        return jsonify({
+        return success_response({
             'groups': [],
             'status': status,
             'epoch': epoch,
@@ -1064,7 +1064,7 @@ def get_duplicates():
 
     # Return lightweight group data
     groups = db.get_duplicate_groups_lightweight(level)
-    return jsonify({
+    return success_response({
         'groups': groups,
         'status': status,
         'epoch': epoch,
@@ -1101,7 +1101,7 @@ def sort_duplicates_semantic():
 
     try:
         scores = get_db().get_semantic_scores_for_images(query, image_ids)
-        return jsonify({'scores': scores})
+        return success_response({'scores': scores})
     except Exception as e:
         logger.exception('Semantic sort failed')
         return error_response(f'Semantic sort failed: {str(e)}', 500)
@@ -1142,7 +1142,7 @@ def search_images():
 
     try:
         results = get_db().search_images(query, threshold=threshold, limit=limit)
-        return jsonify({'results': results})
+        return success_response({'results': results})
     except Exception as e:
         logger.exception('Search failed')
         return error_response(f'Search failed: {str(e)}', 500)
@@ -1171,7 +1171,7 @@ def get_similar_images(image_id):
         results = get_db().get_similar_images(image_id)
         if results is None:
             return error_response('Image embedding not yet computed. Please wait for processing to complete.', 404)
-        return jsonify({'results': results})
+        return success_response({'results': results})
     except Exception as e:
         logger.exception('Similarity search failed')
         return error_response(f'Similarity search failed: {str(e)}', 500)
@@ -1193,7 +1193,7 @@ def get_stats():
             - totalFolders: Number of registered folders
     """
     stats = get_db().get_stats()
-    return jsonify(stats)
+    return success_response(stats)
 
 
 @app.route('/api/stats/cache', methods=['GET'])
@@ -1212,7 +1212,7 @@ def get_cache_stats():
             - count: Number of cached thumbnails
             - max_size_mb: Maximum cache size in megabytes
     """
-    return jsonify(get_thumbnail_cache().stats())
+    return success_response(get_thumbnail_cache().stats())
 
 
 # =============================================================================
@@ -1238,8 +1238,9 @@ def event_stream():
         mimetype='text/event-stream',
         headers={
             'Cache-Control': 'no-cache',
-            'Connection': 'keep-alive',
             'X-Accel-Buffering': 'no',  # Disable nginx buffering
+            # Note: Connection header removed - it's a hop-by-hop header
+            # that Waitress (WSGI server) manages automatically
         }
     )
 
@@ -1266,7 +1267,7 @@ def get_people():
     else:
         people = get_all_people(db.conn)
 
-    return jsonify(people)
+    return success_response(people)
 
 
 @app.route('/api/people', methods=['POST'])
@@ -1463,7 +1464,7 @@ def get_person_faces(person_id):
         face.pop('embedding', None)
         face.pop('semantic_embedding', None)
 
-    return jsonify(faces)
+    return success_response(faces)
 
 
 @app.route('/api/people/<person_id>/thumbnail', methods=['GET'])
@@ -1532,7 +1533,7 @@ def get_image_faces(image_id):
         face.pop('embedding', None)
         face.pop('semantic_embedding', None)
 
-    return jsonify(faces)
+    return success_response(faces)
 
 
 @app.route('/api/faces', methods=['GET'])
@@ -1561,13 +1562,13 @@ def get_faces_list():
             query_embedding = db._get_clip_model().encode_text(search_query)
             # Search unknown faces by semantic similarity
             faces = search_unknown_faces_semantic(db.conn, query_embedding)
-            return jsonify(faces)
+            return success_response(faces)
         except Exception as e:
             logger.error(f'Failed to encode search query: {e}')
             return error_response('Failed to encode search query', 500)
 
     faces = get_all_faces(db.conn, unknown_only=unknown_only)
-    return jsonify(faces)
+    return success_response(faces)
 
 
 @app.route('/api/faces/<face_id>/identify', methods=['POST'])

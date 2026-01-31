@@ -848,11 +848,12 @@ const App = {
     async loadThumbnailConfig() {
         try {
             const response = await this.apiGet('/config');
+            const data = response.data;
             this._thumbnailConfig = {
-                concurrentRequests: response.thumbnail_concurrent_requests,
-                extraRows: response.thumbnail_extra_rows,
-                timeoutMs: response.thumbnail_timeout_ms,
-                scrollThrottleMs: response.thumbnail_scroll_throttle_ms
+                concurrentRequests: data.thumbnail_concurrent_requests,
+                extraRows: data.thumbnail_extra_rows,
+                timeoutMs: data.thumbnail_timeout_ms,
+                scrollThrottleMs: data.thumbnail_scroll_throttle_ms
             };
             console.log('Thumbnail config loaded:', this._thumbnailConfig);
         } catch (error) {
@@ -1768,7 +1769,8 @@ const App = {
         this._hideLoadingSplash();
 
         // Check stats in background and redirect if database is empty
-        this.apiGet('/stats').then(stats => {
+        this.apiGet('/stats').then(response => {
+            const stats = response.data;
             if (stats.totalImages === 0 && this.getScreen() === 'gallery') {
                 this.navigateTo('database', { pushHistory: false });
             }

@@ -1204,10 +1204,11 @@ const Gallery = {
                 generateCaptionBtn.classList.add('loading');
                 try {
                     const response = await App.apiPost(`/images/${imageId}/generate-caption`);
-                    if (response.caption) {
-                        descField.value = response.caption;
+                    const caption = response.data?.caption;
+                    if (caption) {
+                        descField.value = caption;
                         // Auto-save the generated caption
-                        await this._saveImageField(imageId, 'description', response.caption);
+                        await this._saveImageField(imageId, 'description', caption);
                     }
                 } catch (error) {
                     console.error('Failed to generate caption:', error);
@@ -1281,16 +1282,17 @@ const Gallery = {
             const loading = container?.querySelector('.histogram-loading');
 
             try {
-                const data = await App.apiGet(`/images/${imageId}/histogram`);
+                const response = await App.apiGet(`/images/${imageId}/histogram`);
+                const histogramData = response.data;
 
                 // Set image sources from data URLs
                 const rImg = App.$('histogram-r');
                 const gImg = App.$('histogram-g');
                 const bImg = App.$('histogram-b');
 
-                if (rImg) rImg.src = data.r;
-                if (gImg) gImg.src = data.g;
-                if (bImg) bImg.src = data.b;
+                if (rImg) rImg.src = histogramData.r;
+                if (gImg) gImg.src = histogramData.g;
+                if (bImg) bImg.src = histogramData.b;
 
                 // Hide loading indicator
                 if (loading) loading.style.display = 'none';

@@ -221,7 +221,8 @@ const Database = {
      */
     async _pickFolder() {
         try {
-            const result = await App.apiPost('/pick-folder', {});
+            const response = await App.apiPost('/pick-folder', {});
+            const result = response.data;
             if (result && result.path) {
                 return { path: result.path };
             }

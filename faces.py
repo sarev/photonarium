@@ -2728,6 +2728,26 @@ def reassess_unknown_faces_async(
             with db._db_lock:
                 matched = reassess_unknown_faces(db.conn, threshold, person_id)
 
+                # Build list of updated faces with person names for SSE event
+                # matched is list of (face_id, person_id, similarity)
+                updated_faces = []
+                if matched:
+                    # Get unique person_ids and look up their names
+                    person_ids = list(set(m[1] for m in matched))
+                    placeholders = ','.join('?' * len(person_ids))
+                    cursor = db.conn.execute(
+                        f'SELECT id, name FROM people WHERE id IN ({placeholders})',
+                        person_ids
+                    )
+                    person_names = {row['id']: row['name'] for row in cursor.fetchall()}
+
+                    for face_id, pid, similarity in matched:
+                        updated_faces.append({
+                            'face_id': face_id,
+                            'person_id': pid,
+                            'person_name': person_names.get(pid, ''),
+                        })
+
             # Store result
             with _reassess_lock:
                 _reassess_result = {
@@ -2742,6 +2762,7 @@ def reassess_unknown_faces_async(
                 db.event_queue.emit('faces_reassessed', {
                     'matched_count': len(matched),
                     'person_id': person_id,
+                    'updated_faces': updated_faces,
                 })
 
             if callback:

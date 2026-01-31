@@ -1175,8 +1175,8 @@
     /**
      * Exit pick-preferred mode and return to normal all/unknowns view.
      *
-     * Just toggles visibility - the normal grids are still there with their
-     * scroll positions and selection state intact.
+     * Toggles visibility (normal grids keep their scroll positions and selection
+     * state) and refreshes the people section to pick up any thumbnail changes.
      */
     function exitPickPreferredMode() {
         viewMode = 'all';
@@ -1196,6 +1196,9 @@
         // Rebind normal grids and selection
         if (unknownFacesGrid) unknownFacesGrid.bind();
         if (facesSelection) facesSelection.bind();
+
+        // Refresh people section to pick up any thumbnail changes (e.g., preferred face change)
+        updatePeopleSection();
 
         updateFocusButtonState();
     }
@@ -1289,6 +1292,7 @@
         star.className = 'face-card-star' + (face.is_preferred ? ' preferred' : '');
         star.dataset.faceId = face.id;
         star.innerHTML = '<span class="material-symbols-outlined">star</span>';
+        star.title = face.is_preferred ? 'Preferred face' : 'Set as preferred face';
         star.addEventListener('click', (e) => {
             e.stopPropagation();
             handleStarClick(face.id);
@@ -1375,7 +1379,9 @@
             // Update star visuals
             const allStars = facesGrid.querySelectorAll('.face-card-star');
             allStars.forEach(star => {
-                star.classList.toggle('preferred', star.dataset.faceId === faceId);
+                const isPreferred = star.dataset.faceId === faceId;
+                star.classList.toggle('preferred', isPreferred);
+                star.title = isPreferred ? 'Preferred face' : 'Set as preferred face';
             });
 
             // Update padlock visual for the preferred face (it gets padlocked)
@@ -1399,6 +1405,13 @@
      * @param {HTMLElement} padlockElement - The padlock element for UI update
      */
     async function handlePadlockClick(faceId, padlockElement) {
+        // Don't allow unlocking the preferred face
+        const face = pickPreferredFaces.find(f => f.id === faceId);
+        if (face?.is_preferred && face?.manually_tagged) {
+            App.showError('Cannot unlock the preferred face.');
+            return;
+        }
+
         try {
             const newValue = await AppState.faces.toggleManualTag(faceId);
             // Update padlock visual immediately (AppState subscription will refresh anyway)
@@ -1663,7 +1676,6 @@
                     try {
                         const faces = await AppState.faces.fetchForPerson(pickPreferredPersonId);
                         pickPreferredFaces = faces || [];
-                        displayedFaces = pickPreferredFaces;
 
                         // Clear any pending reload flag (we're handling the update ourselves)
                         reloadPending = false;

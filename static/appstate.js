@@ -559,7 +559,7 @@ const AppState = (function() {
                 _loading = true;
                 try {
                     _prevStatus = _status;
-                    _status = await App.apiGet('/status');
+                    _status = (await App.apiGet('/status')).data;
 
                     // Check for face reassessment completion transition
                     // When completed transitions from false to true, reload faces and ack
@@ -570,11 +570,11 @@ const AppState = (function() {
                         App.apiPost('/faces/reassess-ack').catch(err => {
                             console.warn('Failed to ack reassessment:', err);
                         });
-                        // Reload faces to pick up newly matched faces
+                        // Force reload faces to pick up newly matched faces
                         // Use setTimeout to avoid blocking the status update
                         setTimeout(() => {
                             if (faces.isLoaded()) {
-                                faces.load();
+                                faces.load(true);
                             }
                         }, 0);
                     }
@@ -653,7 +653,7 @@ const AppState = (function() {
                 broadcast({ type: 'loading' });
                 try {
                     const response = await App.apiPost('/search', { query, threshold, limit });
-                    _results = response;
+                    _results = response.data;
                     _loading = false;
                     broadcast({ type: 'changed' });
                     return _results;
@@ -706,7 +706,7 @@ const AppState = (function() {
             _loading = true;
             try {
                 const foldersResponse = await App.apiGet('/folders');
-                _folders = foldersResponse || [];
+                _folders = foldersResponse.data || [];
                 broadcast({ type: 'changed' });
             } catch (err) {
                 console.error('AppState.folders load error:', err);
@@ -774,7 +774,7 @@ const AppState = (function() {
             // --- Stats ---
             async loadStats() {
                 try {
-                    _stats = await App.apiGet('/stats');
+                    _stats = (await App.apiGet('/stats')).data;
                     broadcast({ type: 'changed', property: 'stats' });
                     return _stats;
                 } catch (err) {
@@ -892,22 +892,24 @@ const AppState = (function() {
                     if (_cache === null || forceFullReload) {
                         // Full load
                         const response = await App.apiGet('/images');
-                        _cache = new Map(response.images.map(img => [img.id, img]));
-                        _cacheEpoch = response.epoch;
+                        const data = response.data;
+                        _cache = new Map(data.images.map(img => [img.id, img]));
+                        _cacheEpoch = data.epoch;
                     } else {
                         // Delta load
                         const response = await App.apiGet(`/images?since=${_cacheEpoch}`);
-                        if (response.updated) {
-                            for (const img of response.updated) {
+                        const data = response.data;
+                        if (data.updated) {
+                            for (const img of data.updated) {
                                 _cache.set(img.id, img);
                             }
                         }
-                        if (response.deleted_ids) {
-                            for (const id of response.deleted_ids) {
+                        if (data.deleted_ids) {
+                            for (const id of data.deleted_ids) {
                                 _cache.delete(id);
                             }
                         }
-                        _cacheEpoch = response.epoch;
+                        _cacheEpoch = data.epoch;
                     }
                     broadcast({ type: 'changed' });
                 } catch (err) {
@@ -1142,7 +1144,8 @@ const AppState = (function() {
                     return _cache.get(id);
                 }
                 // Fetch from backend
-                const image = await App.apiGet(`/images/${id}`);
+                const response = await App.apiGet(`/images/${id}`);
+                const image = response.data;
                 // Store in cache if cache exists
                 if (_cache && image) {
                     _cache.set(image.id, image);
@@ -1157,7 +1160,7 @@ const AppState = (function() {
                 const response = await App.apiGet(`/similar/${referenceId}`);
                 this._similarities = {
                     referenceId,
-                    scores: new Map(response.results.map(r => [r.id, r.similarity]))
+                    scores: new Map(response.data.results.map(r => [r.id, r.similarity]))
                 };
                 broadcast({ type: 'changed', property: 'similarities' });
                 return response;
@@ -1180,9 +1183,9 @@ const AppState = (function() {
 
             async loadPeopleNames() {
                 const response = await App.apiGet('/images/people-names');
-                this._peopleNames = response;
+                this._peopleNames = response.data;
                 broadcast({ type: 'changed', property: 'peopleNames' });
-                return response;
+                return response.data;
             },
 
             getPeopleNames(imageId) {
@@ -1205,7 +1208,7 @@ const AppState = (function() {
              */
             async getFilteredByPeople(peopleIds) {
                 const response = await App.apiGet(`/images?people=${encodeURIComponent(peopleIds.join(','))}`);
-                const images = response.images || response;
+                const images = response.data.images || [];
                 return new Set(images.map(img => String(img.id)));
             },
 
@@ -1364,7 +1367,7 @@ const AppState = (function() {
             _pendingLoad = (async () => {
                 try {
                     const response = await App.apiGet('/people');
-                    _cache = new Map(response.map(p => [p.id, p]));
+                    _cache = new Map(response.data.map(p => [p.id, p]));
                     _cacheTime = Date.now();
                     broadcast({ type: 'changed' });
                 } catch (err) {
@@ -1478,11 +1481,13 @@ const AppState = (function() {
              */
             async fetchById(id) {
                 const response = await App.apiGet(`/people/${id}`);
+                // Unwrap the response (API returns {success, data})
+                const person = response?.data;
                 // Update cache if loaded
-                if (_cache && response) {
-                    _cache.set(response.id, response);
+                if (_cache && person) {
+                    _cache.set(person.id, person);
                 }
-                return response;
+                return person;
             },
 
             getCount() {
@@ -1522,8 +1527,9 @@ const AppState = (function() {
             create(name) {
                 return queueTransaction(async () => {
                     const response = await App.apiPost('/people', { name });
-                    _internal.add(response);
-                    return response;
+                    const person = response.data;
+                    _internal.add(person);
+                    return person;
                 });
             },
 
@@ -1609,16 +1615,17 @@ const AppState = (function() {
                     const person = _cache?.get(personId);
                     if (!person) return;
 
-                    const oldThreshold = person.threshold;
+                    const oldThreshold = person.recognition_threshold;
 
                     // Optimistic update
-                    _internal.update(personId, { threshold });
+                    _internal.update(personId, { recognition_threshold: threshold });
 
                     try {
-                        await App.apiPatch(`/people/${personId}`, { threshold });
+                        const result = await App.apiPatch(`/people/${personId}`, { recognition_threshold: threshold });
+                        return result;
                     } catch (err) {
                         // Rollback
-                        _internal.update(personId, { threshold: oldThreshold });
+                        _internal.update(personId, { recognition_threshold: oldThreshold });
                         broadcastError(err.message || 'Failed to update threshold');
                         throw err;
                     }
@@ -1786,6 +1793,34 @@ const AppState = (function() {
                     invalidateDerived();
                     markDirty(domainRef);
                 }
+            },
+
+            /**
+             * Apply auto-matched face updates from backend reassessment.
+             * Unlike linkToPerson, this does NOT set manually_tagged since these are auto-matches.
+             * @param {Array<{face_id: string, person_id: string, person_name: string}>} updates
+             * @returns {Array<{face_id: string, person_id: string}>} Actually updated faces (for people count updates)
+             */
+            applyAutoMatches(updates) {
+                if (!_cache || !updates || updates.length === 0) return [];
+
+                const applied = [];
+                for (const { face_id, person_id, person_name } of updates) {
+                    const face = _cache.get(face_id);
+                    if (face && !face.person_id) {
+                        // Only update if face is still unassigned (wasn't manually tagged in the meantime)
+                        face.person_id = person_id;
+                        face.person_name = person_name;
+                        // Don't set manually_tagged - these are auto-matches
+                        applied.push({ face_id, person_id });
+                    }
+                }
+
+                if (applied.length > 0) {
+                    invalidateDerived();
+                    markDirty(domainRef);
+                }
+                return applied;
             }
         };
 
@@ -1809,7 +1844,7 @@ const AppState = (function() {
             _pendingLoad = (async () => {
                 try {
                     const response = await App.apiGet('/faces');
-                    _cache = new Map(response.map(f => [f.id, f]));
+                    _cache = new Map(response.data.map(f => [f.id, f]));
                     invalidateDerived();
                     broadcast({ type: 'changed' });
                 } catch (err) {
@@ -1914,7 +1949,7 @@ const AppState = (function() {
                     return this.getForImage(imageId);
                 }
                 // Otherwise fetch from backend
-                return await App.apiGet(`/images/${imageId}/faces`);
+                return (await App.apiGet(`/images/${imageId}/faces`)).data;
             },
 
             /**
@@ -1924,7 +1959,7 @@ const AppState = (function() {
              * @returns {Promise<Array>} Faces for the person
              */
             async fetchForPerson(personId) {
-                return await App.apiGet(`/people/${personId}/faces`);
+                return (await App.apiGet(`/people/${personId}/faces`)).data;
             },
 
             /**
@@ -2077,9 +2112,10 @@ const AppState = (function() {
                             person_id: tempPersonId ? null : personId,
                             preferred_face_id: preferredFaceId || faceIds[0]
                         });
-                        console.log('  API response:', response);
+                        const responseData = response.data;
+                        console.log('  API response:', responseData);
 
-                        const realPersonId = response.person_id;
+                        const realPersonId = responseData.person_id;
 
                         // =====================================================
                         // RECONCILE: Replace temp IDs with real IDs
@@ -2099,8 +2135,8 @@ const AppState = (function() {
 
                             // Replace temp person with real person data
                             people._internal.remove(tempPersonId);
-                            if (response.person) {
-                                people._internal.add(response.person);
+                            if (responseData.person) {
+                                people._internal.add(responseData.person);
                             }
                         }
 
@@ -2424,19 +2460,20 @@ const AppState = (function() {
             _pollTimer = setInterval(async () => {
                 try {
                     const response = await App.apiGet(`/duplicates?level=${level}`);
-                    const newStatus = response.status;
+                    const data = response.data;
+                    const newStatus = data.status;
 
                     _statusCache[level] = {
                         status: newStatus,
-                        progress: response.progress,
-                        total: response.total
+                        progress: data.progress,
+                        total: data.total
                     };
 
                     // Check if computation finished
                     if (newStatus !== 'computing' && newStatus !== 'pending') {
                         _stopPolling();
                         _computing = false;
-                        _groupCache[level] = response.groups || [];
+                        _groupCache[level] = data.groups || [];
                         _epochCache[level] = Date.now();
                         broadcast({ type: 'changed', level });
                     }
@@ -2470,16 +2507,17 @@ const AppState = (function() {
 
             try {
                 const response = await App.apiGet(`/duplicates?level=${level}`);
-                _groupCache[level] = response.groups || [];
+                const data = response.data;
+                _groupCache[level] = data.groups || [];
                 _statusCache[level] = {
-                    status: response.status,
-                    progress: response.progress,
-                    total: response.total
+                    status: data.status,
+                    progress: data.progress,
+                    total: data.total
                 };
                 _epochCache[level] = Date.now();
 
                 // Update computing flag
-                const status = response.status;
+                const status = data.status;
                 _computing = status === 'computing' || status === 'pending';
 
                 // Automatically start polling if computation in progress
@@ -2552,7 +2590,7 @@ const AppState = (function() {
                     query,
                     image_ids: imageIds
                 });
-                return response.scores || [];
+                return response.data?.scores || [];
             },
 
             // --- Lifecycle ---
@@ -2838,16 +2876,40 @@ const AppState = (function() {
          * Handle incoming SSE event.
          */
         function handleEvent(event) {
+            // Skip if no data (keepalive comments, etc.)
+            if (!event.data) {
+                return;
+            }
+
             try {
                 const data = JSON.parse(event.data);
                 console.log('[SSE] Received event:', data.type, data.data);
 
                 switch (data.type) {
                     case 'faces_reassessed':
-                        // Backend completed face reassessment - reload faces to get updated data
+                        // Backend completed face reassessment - apply updates to cache directly
                         console.log('[SSE] Face reassessment complete, matched:', data.data.matched_count);
-                        if (faces.isLoaded()) {
-                            faces.load();
+                        if (faces.isLoaded() && data.data.updated_faces?.length > 0) {
+                            // Use transaction to batch the state updates
+                            transaction(() => {
+                                // Apply incremental updates (much faster than reloading all faces)
+                                const applied = faces._internal.applyAutoMatches(data.data.updated_faces);
+                                console.log('[SSE] Applied', applied.length, 'face updates to cache');
+
+                                // Also update people face counts if people cache is loaded
+                                if (people.isLoaded() && applied.length > 0) {
+                                    // Count how many faces were assigned to each person
+                                    const personCounts = new Map();
+                                    for (const { person_id } of applied) {
+                                        personCounts.set(person_id, (personCounts.get(person_id) || 0) + 1);
+                                    }
+                                    for (const [personId, count] of personCounts) {
+                                        for (let i = 0; i < count; i++) {
+                                            people._internal.incrementFaceCount(personId);
+                                        }
+                                    }
+                                }
+                            });
                         }
                         break;
 
