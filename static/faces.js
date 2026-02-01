@@ -271,6 +271,9 @@
     /** @type {Function|null} Fullscreen event subscription cleanup function */
     let fullscreenUnsub = null;
 
+    /** @type {boolean} Suppress face overlay reload during identify operation */
+    let suppressOverlayReload = false;
+
     /** @type {Array<Object>} Known people with faces, for static known section */
     let knownPeople = [];
 
@@ -898,18 +901,25 @@
 
             // If fullscreen is open with tagging mode, reload face overlay
             if (Fullscreen.isOpen() && taggingMode) {
-                const imageId = Fullscreen.state.currentId;
-                if (imageId) {
-                    facesLog('  -> Reloading fullscreen face overlay');
-                    loadFacesForImage(imageId);
+                // Skip reload if we're in the middle of an identify operation
+                // (commitNameChange updates the UI directly, no need to re-render)
+                if (suppressOverlayReload) {
+                    facesLog('  -> Skipping fullscreen reload (suppressOverlayReload)');
+                } else {
+                    const imageId = Fullscreen.state.currentId;
+                    if (imageId) {
+                        facesLog('  -> Reloading fullscreen face overlay');
+                        loadFacesForImage(imageId);
+                    }
                 }
             }
 
             // Skip if we're not on the faces screen
             if (App.getScreen() !== 'faces') {
                 facesLog('  -> Skipping: not on faces screen');
-                // Mark for refresh when we return to faces screen
-                needsRefresh = true;
+                // Mark for re-render when we return to faces screen
+                // (cache is already updated via synchronous optimistic updates)
+                needsRerender = true;
                 return;
             }
             // Skip if data isn't loaded yet
@@ -939,7 +949,8 @@
         AppState.people.onChanged((event) => {
             // Skip if we're not on the faces screen
             if (App.getScreen() !== 'faces') {
-                needsRefresh = true;
+                // Mark for re-render when we return (cache is already updated)
+                needsRerender = true;
                 return;
             }
 
@@ -1326,8 +1337,9 @@
         if (unknownFacesGrid) unknownFacesGrid.bind();
         if (facesSelection) facesSelection.bind();
 
-        // Refresh people section to pick up any thumbnail changes (e.g., preferred face change)
-        updatePeopleSection();
+        // Full re-render to rebuild knownPeople from updated faces cache
+        // (picks up name changes, new/removed people, preferred face changes)
+        renderFacesGrid();
 
         updateFocusButtonState();
 
@@ -1793,17 +1805,100 @@
 
     /**
      * Handle rename button click in pick-preferred mode.
+     * Shows inline edit input with autocomplete.
      */
-    async function handleRenamePersonClick() {
+    function handleRenamePersonClick() {
         if (!pickPreferredPersonId || !pickPreferredPersonName) return;
+        if (!pickerTitleEl) return;
 
-        const newName = await App.prompt('Rename Person', 'Enter new name:', pickPreferredPersonName);
-        if (!newName || newName.trim() === '' || newName.trim() === pickPreferredPersonName) return;
+        // Already editing?
+        if (pickerTitleEl.querySelector('.picker-rename-input')) return;
 
-        const trimmedName = newName.trim();
+        // Store original content for restore on cancel
+        const originalHTML = pickerTitleEl.innerHTML;
+        const titleLeft = pickerTitleEl.parentElement;
+
+        // Hide rename button while editing
+        const renameBtn = titleLeft?.querySelector('.faces-rename-btn');
+        if (renameBtn) renameBtn.hidden = true;
+
+        // Create editable container
+        const editContainer = document.createElement('div');
+        editContainer.className = 'picker-rename-container';
+
+        const input = document.createElement('input');
+        input.type = 'text';
+        input.className = 'picker-rename-input';
+        input.value = pickPreferredPersonName;
+        input.placeholder = 'Enter name...';
+
+        editContainer.appendChild(input);
+
+        // Replace title content with input
+        pickerTitleEl.innerHTML = '';
+        pickerTitleEl.appendChild(editContainer);
+
+        // Pre-fetch people for autocomplete
+        AppState.people.load();
+
+        // Handle input for autocomplete
+        input.addEventListener('input', () => {
+            showNameAutocomplete(input, input.value, editContainer, {
+                excludePersonId: pickPreferredPersonId,
+                className: 'picker-rename-autocomplete'
+            });
+        });
+
+        // Commit on blur
+        input.addEventListener('blur', () => {
+            // Delay to allow autocomplete click
+            setTimeout(() => {
+                const autocomplete = editContainer.querySelector('.picker-rename-autocomplete');
+                if (autocomplete) autocomplete.remove();
+                commitPickerRename(input.value.trim(), originalHTML, renameBtn);
+            }, 150);
+        });
+
+        // Handle keyboard
+        input.addEventListener('keydown', (e) => {
+            if (e.key === 'Enter') {
+                e.preventDefault();
+                input.blur();
+            } else if (e.key === 'Escape') {
+                e.preventDefault();
+                e.stopPropagation();
+                // Cancel - restore original
+                pickerTitleEl.innerHTML = originalHTML;
+                if (renameBtn) renameBtn.hidden = false;
+            }
+        });
+
+        // Focus and select all
+        input.focus();
+        input.select();
+    }
+
+    /**
+     * Commit the picker rename input value.
+     * Handles merge, dissolve, and simple rename cases.
+     *
+     * Cases:
+     * - B: Same name → no-op
+     * - C: to_name exists → merge faces into existing person, delete original
+     * - D: Empty to_name → unidentify all faces, delete person
+     * - E: New name → simple rename (preserves locked/preferred state)
+     */
+    async function commitPickerRename(trimmedName, originalHTML, renameBtn) {
+        // Restore button visibility
+        if (renameBtn) renameBtn.hidden = false;
+
+        // Case B: Same name - restore and no-op
+        if (trimmedName.toLowerCase() === pickPreferredPersonName.toLowerCase()) {
+            pickerTitleEl.innerHTML = originalHTML;
+            return;
+        }
 
         try {
-            // Check for collision with existing person via AppState.people
             await AppState.people.load();
             const existingPeople = AppState.people.getAll();
             const collision = existingPeople.find(p =>
@@ -1811,19 +1906,41 @@
             );
 
             if (collision) {
-                App.showError(`A person named "${trimmedName}" already exists.`);
-                return;
-            }
+                // Case C: Merge - move all faces to existing person, delete original
+                const confirmed = await App.confirm(
+                    'Merge People',
+                    `Merge "${pickPreferredPersonName}" into "${collision.name}"? All faces will be moved to "${collision.name}".`
+                );
+                if (!confirmed) {
+                    pickerTitleEl.innerHTML = originalHTML;
+                    return;
+                }
 
-            // Update the person name via AppState.people.rename()
-            // AppState handles the cache update and broadcasts the change
-            await AppState.people.rename(pickPreferredPersonId, trimmedName);
+                await AppState.people.merge(pickPreferredPersonId, collision.id);
+                exitPickPreferredMode();
 
-            // Update local picker state for immediate display
-            pickPreferredPersonName = trimmedName;
+            } else if (trimmedName === '') {
+                // Case D: Dissolve - unidentify all faces, delete person
+                const confirmed = await App.confirm(
+                    'Remove Person',
+                    `Remove "${pickPreferredPersonName}"? All faces will return to the unknown pool.`
+                );
+                if (!confirmed) {
+                    pickerTitleEl.innerHTML = originalHTML;
+                    return;
+                }
 
-            // Update header display using persistent reference
-            if (pickerTitleEl) {
+                await AppState.people.dissolve(pickPreferredPersonId);
+                exitPickPreferredMode();
+
+            } else {
+                // Case E: Simple rename - preserves locked/preferred state
+                await AppState.people.rename(pickPreferredPersonId, trimmedName);
+
+                // Update local picker state for immediate display
+                pickPreferredPersonName = trimmedName;
+
+                // Update header display
                 const faceCount = pickPreferredFaces.length;
                 const countText = faceCount === 1 ? '1 image' : `${faceCount} images`;
                 pickerTitleEl.innerHTML = `${App.escapeHtml(trimmedName)} <span class="face-count">(${countText})</span>`;
@@ -1831,6 +1948,7 @@
         } catch (error) {
             console.error('Failed to rename person:', error);
             App.showError('Failed to rename person.');
+            pickerTitleEl.innerHTML = originalHTML;
         }
     }
 
@@ -2158,15 +2276,18 @@
                     }
 
                     // Normal mode: Rebind grids and selection
-                    if (unknownFacesGrid) {
-                        unknownFacesGrid.bind();
-                        if (needsRerender) {
-                            unknownFacesGrid.render();
-                            needsRerender = false;
+                    if (needsRerender) {
+                        // Data changed while away - re-render both people and unknown sections
+                        needsRerender = false;
+                        renderFacesGrid();
+                    } else {
+                        // Just rebind existing grids
+                        if (unknownFacesGrid) {
+                            unknownFacesGrid.bind();
                         }
-                    }
-                    if (facesSelection) {
-                        facesSelection.bind();
+                        if (facesSelection) {
+                            facesSelection.bind();
+                        }
                     }
 
                     // Focus appropriate section
@@ -2425,10 +2546,12 @@
         if (facesEmpty) facesEmpty.hidden = true;
 
         // Check if data is already cached - if so, render immediately
+        // But if needsRefresh was true, force reload to get fresh data
         const facesLoaded = AppState.faces.isLoaded();
         const peopleLoaded = AppState.people.isLoaded();
+        const wasRefreshNeeded = needsRefresh;
 
-        if (facesLoaded && peopleLoaded) {
+        if (facesLoaded && peopleLoaded && !wasRefreshNeeded) {
             // Data already cached - render immediately, no loading banner needed
             needsRefresh = false;
             needsRerender = false;
@@ -3127,36 +3250,45 @@
 
 
     /**
-     * Show autocomplete for face card input.
+     * Show autocomplete dropdown for a name input.
+     * Reusable for face cards and picker rename input.
      * @param {HTMLInputElement} input - Input element
      * @param {string} query - Search query
-     * @param {HTMLElement} card - Parent card element
+     * @param {HTMLElement} container - Parent element to append autocomplete to
+     * @param {Object} options - {excludePersonId: string, className: string}
      */
-    function showCardAutocomplete(input, query, card) {
+    function showNameAutocomplete(input, query, container, options = {}) {
+        const { excludePersonId = null, className = 'face-card-autocomplete' } = options;
+
         // Trigger background refresh if cache is stale (don't await - use current data)
-        // AppState.people.load() handles TTL internally
         AppState.people.load();
 
         // Remove existing autocomplete
-        const existing = card.querySelector('.face-card-autocomplete');
+        const existing = container.querySelector('.' + className.split(' ')[0]);
         if (existing) existing.remove();
 
         // Use AppState for fuzzy search with proper sorting
         const q = query.trim();
         if (!q) return;
 
-        const matches = AppState.people.search(q);
+        let matches = AppState.people.search(q);
+
+        // Optionally exclude current person (for rename)
+        if (excludePersonId) {
+            matches = matches.filter(p => p.id !== excludePersonId);
+        }
+
         if (matches.length === 0) return;
 
         // Create autocomplete dropdown
         const autocomplete = document.createElement('div');
-        autocomplete.className = 'face-card-autocomplete';
+        autocomplete.className = className;
 
         const maxResults = 5;
         for (let i = 0; i < Math.min(matches.length, maxResults); i++) {
             const person = matches[i];
             const item = document.createElement('div');
-            item.className = 'face-card-autocomplete-item';
+            item.className = className.split(' ')[0] + '-item';
 
             const img = document.createElement('img');
             // Use cache bust timestamp if available (in case preferred face changed)
@@ -3181,9 +3313,17 @@
             autocomplete.appendChild(item);
         }
 
-        // Append to card (card is already position:absolute from VirtualGrid,
-        // so the autocomplete's position:absolute will work correctly)
-        card.appendChild(autocomplete);
+        container.appendChild(autocomplete);
+    }
+
+    /**
+     * Show autocomplete for face card input.
+     * @param {HTMLInputElement} input - Input element
+     * @param {string} query - Search query
+     * @param {HTMLElement} card - Parent card element
+     */
+    function showCardAutocomplete(input, query, card) {
+        showNameAutocomplete(input, query, card, { className: 'face-card-autocomplete' });
     }
 
     /**
@@ -3713,8 +3853,8 @@
             nameSpan.textContent = person.name;
             item.appendChild(nameSpan);
 
-            // Handle click - set name and blur to commit
-            item.addEventListener('click', (e) => {
+            // Handle mousedown - fires BEFORE blur, so we can update input value first
+            item.addEventListener('mousedown', (e) => {
                 e.preventDefault();
                 e.stopPropagation();
                 input.value = person.name;
@@ -3869,58 +4009,99 @@
      * @param {Object} face - Original face object
      */
     async function commitNameChange(faceId, name, label, face) {
-        try {
-            if (name) {
-                // Use shared API helper - AppState.faces.identify() updates the cache
-                const result = await callIdentifyBatchApi([faceId], name, faceId);
+        // Suppress overlay reload during identify - we update the DOM directly
+        suppressOverlayReload = true;
 
-                if (result && result.success) {
-                    const personName = result.data.person.name;
+        const faceBox = label.closest('.face-box');
+        const originalPersonId = face.person_id;
+        const originalPersonName = face.person_name;
+        const originalClasses = faceBox ? [...faceBox.classList] : [];
 
-                    // Update box class
-                    const faceBox = label.closest('.face-box');
+        if (name) {
+            // =========================================================
+            // OPTIMISTIC UI: Update DOM immediately, before API call
+            // =========================================================
+            face.person_id = 'pending';
+            face.person_name = name;
+
+            if (faceBox) {
+                faceBox.classList.remove('unknown', 'ignored');
+                faceBox.classList.add('known');
+            }
+
+            // Show name span instead of input
+            label.innerHTML = '';
+            const nameSpan = document.createElement('span');
+            nameSpan.className = 'face-name';
+            nameSpan.textContent = name;
+            nameSpan.addEventListener('click', () => {
+                showNameInput(label, face);
+            });
+            label.appendChild(nameSpan);
+
+            // =========================================================
+            // API CALL: Fire and handle result/error
+            // AppState.faces.identify() does synchronous optimistic updates
+            // and broadcasts immediately, so UI updates before this returns.
+            // =========================================================
+            callIdentifyBatchApi([faceId], name, faceId)
+                .then(result => {
+                    // AppState handles cache updates; nothing to do here on success
+                })
+                .catch(error => {
+                    console.error('Failed to update face:', error);
+                    App.showError('Failed to update face.');
+
+                    // ROLLBACK: Restore original state
+                    face.person_id = originalPersonId;
+                    face.person_name = originalPersonName;
+
                     if (faceBox) {
-                        faceBox.classList.remove('unknown');
-                        faceBox.classList.add('known');
+                        faceBox.className = '';
+                        for (const cls of originalClasses) {
+                            faceBox.classList.add(cls);
+                        }
                     }
 
-                    // Show name span instead of input
-                    label.innerHTML = '';
-                    const nameSpan = document.createElement('span');
-                    nameSpan.className = 'face-name';
-                    nameSpan.textContent = personName;
-                    nameSpan.addEventListener('click', () => {
-                        showNameInput(label, face);
-                    });
-                    label.appendChild(nameSpan);
+                    // Restore input field
+                    showNameInput(label, face);
+                })
+                .finally(() => {
+                    suppressOverlayReload = false;
+                });
 
-                    // Invalidate people cache and mark faces screen for refresh
-                    AppState.people.invalidate();
-                    needsRefresh = true;
-                }
-            } else if (face.person_id) {
-                // Unidentify face using AppState - this updates the cache
-                await AppState.faces.unassign(faceId);
-
-                // Update box class
-                const faceBox = label.closest('.face-box');
-                if (faceBox) {
-                    faceBox.classList.remove('known');
-                    faceBox.classList.add('unknown');
-                }
-
-                // Invalidate people cache and mark faces screen for refresh
-                AppState.people.invalidate();
-                needsRefresh = true;
+        } else if (face.person_id) {
+            // =========================================================
+            // UNIDENTIFY: Update DOM, let AppState handle cache
+            // =========================================================
+            if (faceBox) {
+                faceBox.classList.remove('known');
+                faceBox.classList.add('unknown');
             }
-        } catch (error) {
-            console.error('Failed to update face:', error);
-            App.showError('Failed to update face.');
-            // Revert input to original value
-            const input = label.querySelector('.face-input');
-            if (input) {
-                input.value = input.dataset.originalName || '';
-            }
+
+            // AppState.faces.unassign() does synchronous optimistic updates
+            AppState.faces.unassign(faceId)
+                .then(() => {
+                    // Success - AppState handled cache updates
+                })
+                .catch(error => {
+                    console.error('Failed to unidentify face:', error);
+                    App.showError('Failed to update face.');
+
+                    // ROLLBACK DOM (AppState already rolled back cache)
+                    if (faceBox) {
+                        faceBox.className = '';
+                        for (const cls of originalClasses) {
+                            faceBox.classList.add(cls);
+                        }
+                    }
+                })
+                .finally(() => {
+                    suppressOverlayReload = false;
+                });
+        } else {
+            // No name and no existing person - nothing to do
+            suppressOverlayReload = false;
         }
     }
 

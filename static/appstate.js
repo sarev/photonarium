@@ -1729,14 +1729,24 @@ const AppState = (function() {
 
                     const oldName = person.name;
 
-                    // Optimistic update
+                    // Optimistic update - people cache
                     _internal.update(id, { name });
+
+                    // Optimistic update - faces cache (denormalized person_name)
+                    const personFaces = faces.getForPerson(id);
+                    for (const face of personFaces) {
+                        faces._internal.updateName(face.id, name);
+                    }
 
                     try {
                         await App.apiPatch(`/people/${id}`, { name });
                     } catch (err) {
-                        // Rollback
+                        // Rollback people cache
                         _internal.update(id, { name: oldName });
+                        // Rollback faces cache
+                        for (const face of personFaces) {
+                            faces._internal.updateName(face.id, oldName);
+                        }
                         broadcastError(err.message || 'Failed to rename person');
                         throw err;
                     }
@@ -1811,6 +1821,73 @@ const AppState = (function() {
                         // Rollback
                         _internal.update(personId, { recognition_threshold: oldThreshold });
                         broadcastError(err.message || 'Failed to update threshold');
+                        throw err;
+                    }
+                });
+            },
+
+            /**
+             * Merge one person into another.
+             * All faces from fromPersonId are moved to toPersonId, then fromPerson is deleted.
+             * Preserves locked/preferred state on the target person.
+             * @param {string} fromPersonId - Person to merge from (will be deleted)
+             * @param {string} toPersonId - Person to merge into (will receive faces)
+             */
+            merge(fromPersonId, toPersonId) {
+                return queueTransaction(async () => {
+                    const fromPerson = _cache?.get(fromPersonId);
+                    const toPerson = _cache?.get(toPersonId);
+                    if (!fromPerson || !toPerson) return;
+
+                    try {
+                        // Backend handles: move faces, update counts, delete fromPerson
+                        await App.apiPost(`/people/${fromPersonId}/merge`, { into: toPersonId });
+
+                        // Optimistic cache updates:
+                        // 1. Update all faces from fromPerson to point to toPerson
+                        const facesToMove = faces.getForPerson(fromPersonId);
+                        for (const face of facesToMove) {
+                            faces._internal.linkToPerson(face.id, toPersonId, toPerson.name);
+                        }
+
+                        // 2. Update target person's face count
+                        const newCount = (toPerson.face_count || 0) + facesToMove.length;
+                        _internal.update(toPersonId, { face_count: newCount });
+
+                        // 3. Remove the merged person
+                        _internal.remove(fromPersonId);
+                    } catch (err) {
+                        broadcastError(err.message || 'Failed to merge people');
+                        throw err;
+                    }
+                });
+            },
+
+            /**
+             * Dissolve a person - unidentify all their faces and delete the person.
+             * All faces return to the unknown pool.
+             * @param {string} personId - Person to dissolve
+             */
+            dissolve(personId) {
+                return queueTransaction(async () => {
+                    const person = _cache?.get(personId);
+                    if (!person) return;
+
+                    try {
+                        // Backend handles: unidentify all faces, delete person
+                        await App.apiPost(`/people/${personId}/dissolve`);
+
+                        // Optimistic cache updates:
+                        // 1. Unlink all faces from this person
+                        const facesToRelease = faces.getForPerson(personId);
+                        for (const face of facesToRelease) {
+                            faces._internal.unlinkFromPerson(face.id);
+                        }
+
+                        // 2. Remove the person
+                        _internal.remove(personId);
+                    } catch (err) {
+                        broadcastError(err.message || 'Failed to dissolve person');
                         throw err;
                     }
                 });
@@ -1974,6 +2051,20 @@ const AppState = (function() {
                 const face = _cache?.get(faceId);
                 if (face) {
                     face.suppressed = true;
+                    invalidateDerived();
+                    markDirty(domainRef);
+                }
+            },
+
+            /**
+             * Update the person_name on a face (used when person is renamed).
+             * @param {string} faceId - Face ID
+             * @param {string} newName - New person name
+             */
+            updateName(faceId, newName) {
+                const face = _cache?.get(faceId);
+                if (face && face.person_id) {
+                    face.person_name = newName;
                     invalidateDerived();
                     markDirty(domainRef);
                 }
@@ -2178,81 +2269,79 @@ const AppState = (function() {
              * @param {Object} options - {preferredFaceId, existingPersonId}
              */
             identify(faceIds, personName, options = {}) {
-                console.log('[AppState.faces.identify] START:', { faceIds, personName, options }, 'currentEpoch:', _txEpoch);
+                console.log('[AppState.faces.identify] START:', { faceIds, personName, options });
                 if (!Array.isArray(faceIds)) faceIds = [faceIds];
                 const { preferredFaceId = null, existingPersonId = null } = options;
 
-                return queueTransaction(async () => {
-                    console.log('[AppState.faces.identify] Transaction executing, epoch:', _txEpoch);
+                // =========================================================
+                // PHASE 1: SYNCHRONOUS OPTIMISTIC UPDATES
+                // All cache updates happen immediately and broadcast before
+                // the API call, so UI updates instantly.
+                // =========================================================
 
-                    // =========================================================
-                    // BACKUP STATE FOR ROLLBACK
-                    // =========================================================
-                    const faceBackup = new Map();
-                    for (const faceId of faceIds) {
-                        const face = _cache?.get(faceId);
-                        if (face) {
-                            faceBackup.set(faceId, {
-                                person_id: face.person_id,
-                                person_name: face.person_name,
-                                manually_tagged: face.manually_tagged
-                            });
-                        }
+                // Backup state for rollback
+                const faceBackup = new Map();
+                for (const faceId of faceIds) {
+                    const face = _cache?.get(faceId);
+                    if (face) {
+                        faceBackup.set(faceId, {
+                            person_id: face.person_id,
+                            person_name: face.person_name,
+                            manually_tagged: face.manually_tagged
+                        });
+                    }
+                }
+
+                // Track old person IDs for face count adjustments
+                const oldPersonIds = new Map();
+                for (const faceId of faceIds) {
+                    const data = faceBackup.get(faceId);
+                    if (data?.person_id) {
+                        oldPersonIds.set(faceId, data.person_id);
+                    }
+                }
+
+                // Find or create target person
+                let personId = existingPersonId;
+                let tempPersonId = null;
+                let createdTempPerson = false;
+
+                if (!personId) {
+                    const existingPerson = people._internal.findByName(personName);
+                    if (existingPerson) {
+                        personId = existingPerson.id;
+                    } else {
+                        // New person - create temp person in people cache NOW
+                        tempPersonId = `temp-${Date.now()}`;
+                        personId = tempPersonId;
+                        createdTempPerson = true;
+                    }
+                }
+
+                // Use synchronous transaction to batch all optimistic updates
+                // and broadcast once at the end
+                transaction(() => {
+                    // Create temp person if needed
+                    if (createdTempPerson) {
+                        const tempPerson = {
+                            id: tempPersonId,
+                            name: personName,
+                            face_count: faceIds.length,
+                            preferred_face_id: preferredFaceId || faceIds[0],
+                            threshold: null
+                        };
+                        people._internal.add(tempPerson);
+                        console.log('  Created temp person:', tempPerson);
                     }
 
-                    // Track old person IDs for face count adjustments
-                    const oldPersonIds = new Map();
-                    for (const faceId of faceIds) {
-                        const data = faceBackup.get(faceId);
-                        if (data?.person_id) {
-                            oldPersonIds.set(faceId, data.person_id);
-                        }
-                    }
-
-                    // =========================================================
-                    // FIND OR CREATE TARGET PERSON (OPTIMISTIC)
-                    // =========================================================
-                    let personId = existingPersonId;
-                    let tempPersonId = null;
-                    let createdTempPerson = false;
-
-                    if (!personId) {
-                        const existingPerson = people._internal.findByName(personName);
-                        if (existingPerson) {
-                            personId = existingPerson.id;
-                        } else {
-                            // New person - create temp person in people cache NOW (optimistic)
-                            tempPersonId = `temp-${Date.now()}`;
-                            personId = tempPersonId;
-
-                            // Create temp person with temp ID, face count, and preferred face
-                            const tempPerson = {
-                                id: tempPersonId,
-                                name: personName,
-                                face_count: faceIds.length,
-                                preferred_face_id: preferredFaceId || faceIds[0],
-                                threshold: null
-                            };
-                            people._internal.add(tempPerson);
-                            createdTempPerson = true;
-                            console.log('  Created temp person:', tempPerson);
-                        }
-                    }
-                    console.log('  Target person:', { personId, isExisting: !tempPersonId, isTemp: !!tempPersonId });
-
-                    // =========================================================
-                    // OPTIMISTIC UPDATE: FACES CACHE
-                    // =========================================================
+                    // Link faces to person
                     console.log('  Optimistic: linking', faceIds.length, 'faces to person', personId);
                     for (const faceId of faceIds) {
                         _internal.linkToPerson(faceId, personId, personName);
                     }
 
-                    // =========================================================
-                    // OPTIMISTIC UPDATE: PEOPLE CACHE (face counts, preferred)
-                    // =========================================================
+                    // Update face counts for existing person
                     if (!createdTempPerson) {
-                        // Existing person - increment face count
                         for (const faceId of faceIds) {
                             const oldPersonId = oldPersonIds.get(faceId);
                             if (oldPersonId !== personId) {
@@ -2270,7 +2359,7 @@ const AppState = (function() {
                         }
                     }
 
-                    // Decrement face counts for old persons (optimistic)
+                    // Decrement face counts for old persons
                     const decrementedPersons = new Set();
                     for (const [faceId, oldPersonId] of oldPersonIds) {
                         if (oldPersonId !== personId && !decrementedPersons.has(oldPersonId)) {
@@ -2282,13 +2371,20 @@ const AppState = (function() {
                         }
                     }
 
-                    // Log state after optimistic updates
-                    const unknownCount = Array.from(_cache?.values() || []).filter(f => !f.person_id && !f.suppressed).length;
-                    console.log('  After optimistic: unknown faces:', unknownCount, 'people count:', people.getAll().length);
+                    console.log('  Optimistic updates complete, broadcasting...');
+                });
+                // Transaction ends here - flushDirty() is called, subscribers notified
 
-                    // =========================================================
-                    // API CALL
-                    // =========================================================
+                // Log state after optimistic updates
+                const unknownCount = Array.from(_cache?.values() || []).filter(f => !f.person_id && !f.suppressed).length;
+                console.log('  After broadcast: unknown faces:', unknownCount, 'people count:', people.getAll().length);
+
+                // =========================================================
+                // PHASE 2: ASYNC API CALL
+                // Fire the API call and handle reconciliation/rollback.
+                // This runs in background - UI already updated above.
+                // =========================================================
+                return queueTransaction(async () => {
                     try {
                         console.log('  Making API call to /faces/identify-batch');
                         const response = await App.apiPost('/faces/identify-batch', {
@@ -2302,9 +2398,7 @@ const AppState = (function() {
 
                         const realPersonId = responseData.person_id;
 
-                        // =====================================================
-                        // RECONCILE: Replace temp IDs with real IDs
-                        // =====================================================
+                        // Reconcile: Replace temp IDs with real IDs
                         if (tempPersonId && realPersonId !== tempPersonId) {
                             console.log('  Reconciling temp ID', tempPersonId, '→ real ID', realPersonId);
 
@@ -2325,13 +2419,11 @@ const AppState = (function() {
                             }
                         }
 
-                        console.log('[AppState.faces.identify] Transaction complete, personId:', realPersonId);
+                        console.log('[AppState.faces.identify] Complete, personId:', realPersonId);
                         return { personId: realPersonId };
 
                     } catch (err) {
-                        // =====================================================
                         // ROLLBACK: Restore both faces and people caches
-                        // =====================================================
                         console.error('[AppState.faces.identify] API ERROR, rolling back:', err);
 
                         // Rollback faces
@@ -2380,41 +2472,53 @@ const AppState = (function() {
             unassign(faceIds) {
                 if (!Array.isArray(faceIds)) faceIds = [faceIds];
 
-                return queueTransaction(async () => {
-                    // Track old person IDs for rollback and face count updates
-                    const backup = new Map();
-                    const personFaceCountChanges = new Map(); // personId → count change
+                // =========================================================
+                // PHASE 1: SYNCHRONOUS OPTIMISTIC UPDATES
+                // =========================================================
 
-                    for (const faceId of faceIds) {
-                        const face = _cache?.get(faceId);
-                        if (face) {
-                            backup.set(faceId, { person_id: face.person_id, person_name: face.person_name });
-                            if (face.person_id) {
-                                const current = personFaceCountChanges.get(face.person_id) || 0;
-                                personFaceCountChanges.set(face.person_id, current + 1);
-                            }
+                // Track old person IDs for rollback and face count updates
+                const backup = new Map();
+                const personFaceCountChanges = new Map();
+
+                for (const faceId of faceIds) {
+                    const face = _cache?.get(faceId);
+                    if (face) {
+                        backup.set(faceId, { person_id: face.person_id, person_name: face.person_name });
+                        if (face.person_id) {
+                            const current = personFaceCountChanges.get(face.person_id) || 0;
+                            personFaceCountChanges.set(face.person_id, current + 1);
                         }
                     }
+                }
 
-                    // Optimistic update - unlink faces
+                // Synchronous transaction: unlink faces and update people counts
+                transaction(() => {
+                    // Unlink faces from their persons
                     for (const faceId of faceIds) {
                         _internal.unlinkFromPerson(faceId);
                     }
 
+                    // Decrement face counts and remove empty persons
+                    for (const [personId, decrementCount] of personFaceCountChanges) {
+                        for (let i = 0; i < decrementCount; i++) {
+                            const newCount = people._internal.decrementFaceCount(personId);
+                            if (newCount === 0 && i === decrementCount - 1) {
+                                people._internal.remove(personId);
+                            }
+                        }
+                    }
+                });
+                // Transaction ends - broadcast happens immediately
+
+                // =========================================================
+                // PHASE 2: ASYNC API CALL
+                // =========================================================
+                return queueTransaction(async () => {
                     try {
-                        // API call
                         await App.apiPost('/faces/unassign-batch', { face_ids: faceIds });
 
-                        // Update people cache
-                        for (const [personId, decrementCount] of personFaceCountChanges) {
-                            for (let i = 0; i < decrementCount; i++) {
-                                const newCount = people._internal.decrementFaceCount(personId);
-                                // Delete person if no more faces (only on last decrement)
-                                if (newCount === 0 && i === decrementCount - 1) {
-                                    people._internal.remove(personId);
-                                }
-                            }
-                            // Update preferred face if needed
+                        // Update preferred faces if needed (after API confirms success)
+                        for (const [personId] of personFaceCountChanges) {
                             const person = people._internal.get(personId);
                             if (person) {
                                 const remainingFaces = _internal.getForPerson(personId);
@@ -2422,16 +2526,20 @@ const AppState = (function() {
                                     const newPreferredId = remainingFaces[0].id;
                                     people._internal.update(personId, { preferred_face_id: newPreferredId });
                                     people._internal.bustThumbnail(personId);
-                                    // Lock the new preferred face (backend does this too)
                                     _internal.update(newPreferredId, { manually_tagged: true });
                                 }
                             }
                         }
                     } catch (err) {
-                        // Rollback faces
+                        // ROLLBACK: restore faces and face counts
                         for (const [faceId, data] of backup) {
                             if (data.person_id) {
                                 _internal.linkToPerson(faceId, data.person_id, data.person_name);
+                            }
+                        }
+                        for (const [personId, incrementCount] of personFaceCountChanges) {
+                            for (let i = 0; i < incrementCount; i++) {
+                                people._internal.incrementFaceCount(personId);
                             }
                         }
                         broadcastError(err.message || 'Failed to unassign faces');
@@ -2448,27 +2556,31 @@ const AppState = (function() {
             suppress(faceIds) {
                 if (!Array.isArray(faceIds)) faceIds = [faceIds];
 
-                return queueTransaction(async () => {
-                    // Track faces for rollback
-                    const backup = new Map();
-                    const personFaceCountChanges = new Map();
+                // =========================================================
+                // PHASE 1: SYNCHRONOUS OPTIMISTIC UPDATES
+                // =========================================================
 
-                    for (const faceId of faceIds) {
-                        const face = _cache?.get(faceId);
-                        if (face) {
-                            backup.set(faceId, {
-                                suppressed: face.suppressed,
-                                person_id: face.person_id,
-                                person_name: face.person_name
-                            });
-                            if (face.person_id) {
-                                const current = personFaceCountChanges.get(face.person_id) || 0;
-                                personFaceCountChanges.set(face.person_id, current + 1);
-                            }
+                // Track faces for rollback
+                const backup = new Map();
+                const personFaceCountChanges = new Map();
+
+                for (const faceId of faceIds) {
+                    const face = _cache?.get(faceId);
+                    if (face) {
+                        backup.set(faceId, {
+                            suppressed: face.suppressed,
+                            person_id: face.person_id,
+                            person_name: face.person_name
+                        });
+                        if (face.person_id) {
+                            const current = personFaceCountChanges.get(face.person_id) || 0;
+                            personFaceCountChanges.set(face.person_id, current + 1);
                         }
                     }
+                }
 
-                    // Optimistic update
+                // Synchronous transaction: suppress faces and update people counts
+                transaction(() => {
                     for (const faceId of faceIds) {
                         const face = _cache?.get(faceId);
                         if (face?.person_id) {
@@ -2477,21 +2589,30 @@ const AppState = (function() {
                         _internal.suppress(faceId);
                     }
 
+                    // Decrement face counts and remove empty persons
+                    for (const [personId, decrementCount] of personFaceCountChanges) {
+                        for (let i = 0; i < decrementCount; i++) {
+                            const newCount = people._internal.decrementFaceCount(personId);
+                            if (newCount === 0 && i === decrementCount - 1) {
+                                people._internal.remove(personId);
+                            }
+                        }
+                    }
+                });
+                // Transaction ends - broadcast happens immediately
+
+                // =========================================================
+                // PHASE 2: ASYNC API CALL
+                // =========================================================
+                return queueTransaction(async () => {
                     try {
                         // API calls (TODO: batch endpoint)
                         for (const faceId of faceIds) {
                             await App.apiPost(`/faces/${faceId}/suppress`);
                         }
 
-                        // Update people cache
-                        for (const [personId, decrementCount] of personFaceCountChanges) {
-                            for (let i = 0; i < decrementCount; i++) {
-                                const newCount = people._internal.decrementFaceCount(personId);
-                                if (newCount === 0 && i === decrementCount - 1) {
-                                    people._internal.remove(personId);
-                                }
-                            }
-                            // Update preferred face if needed
+                        // Update preferred faces if needed
+                        for (const [personId] of personFaceCountChanges) {
                             const person = people._internal.get(personId);
                             if (person) {
                                 const remainingFaces = _internal.getForPerson(personId);
@@ -2499,13 +2620,12 @@ const AppState = (function() {
                                     const newPreferredId = remainingFaces[0].id;
                                     people._internal.update(personId, { preferred_face_id: newPreferredId });
                                     people._internal.bustThumbnail(personId);
-                                    // Lock the new preferred face (backend does this too)
                                     _internal.update(newPreferredId, { manually_tagged: true });
                                 }
                             }
                         }
                     } catch (err) {
-                        // Rollback
+                        // ROLLBACK
                         for (const [faceId, data] of backup) {
                             const face = _cache?.get(faceId);
                             if (face) {
@@ -2514,6 +2634,11 @@ const AppState = (function() {
                                     face.person_id = data.person_id;
                                     face.person_name = data.person_name;
                                 }
+                            }
+                        }
+                        for (const [personId, incrementCount] of personFaceCountChanges) {
+                            for (let i = 0; i < incrementCount; i++) {
+                                people._internal.incrementFaceCount(personId);
                             }
                         }
                         invalidateDerived();
