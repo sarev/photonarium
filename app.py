@@ -2210,6 +2210,107 @@ def set_preferred_face(person_id):
     return success_response(updated_person)
 
 
+@app.route('/api/people/<person_id>/merge', methods=['POST'])
+def merge_person(person_id):
+    """Merge one person into another.
+
+    All faces from this person are moved to the target person, then this
+    person is deleted. Preserves locked/preferred state on the target person.
+
+    Args:
+        person_id: Person's UUID (the person being merged/deleted).
+
+    Request Body:
+        JSON object with:
+            - into: UUID of the target person to merge into
+
+    Returns:
+        Success message with updated target person.
+    """
+    data = request.get_json()
+    if not data:
+        return error_response('Request body is required')
+
+    target_id = data.get('into')
+    if not target_id:
+        return error_response('into (target person ID) is required')
+
+    if person_id == target_id:
+        return error_response('Cannot merge a person into themselves')
+
+    db = get_db()
+
+    with db._db_lock:
+        # Verify both persons exist
+        from_person = get_person(db.conn, person_id)
+        if from_person is None:
+            return error_response('Source person not found', 404)
+
+        to_person = get_person(db.conn, target_id)
+        if to_person is None:
+            return error_response('Target person not found', 404)
+
+        # Move all faces from source to target
+        db.conn.execute(
+            '''UPDATE faces SET person_id = ? WHERE person_id = ?''',
+            (target_id, person_id)
+        )
+
+        # Delete the source person (face_count is computed dynamically via JOIN)
+        delete_person(db.conn, person_id)
+        db.conn.commit()
+
+        # Get updated target person
+        updated_person = get_person(db.conn, target_id)
+
+    return success_response({
+        'message': f'Merged "{from_person["name"]}" into "{to_person["name"]}"',
+        'person': updated_person
+    })
+
+
+@app.route('/api/people/<person_id>/dissolve', methods=['POST'])
+def dissolve_person(person_id):
+    """Dissolve a person - unidentify all their faces and delete the person.
+
+    All faces return to the unknown pool (person_id set to NULL).
+
+    Args:
+        person_id: Person's UUID.
+
+    Returns:
+        Success message with count of affected faces.
+    """
+    db = get_db()
+
+    with db._db_lock:
+        # Verify person exists
+        person = get_person(db.conn, person_id)
+        if person is None:
+            return error_response('Person not found', 404)
+
+        # Count faces before dissolving
+        face_count = db.conn.execute(
+            'SELECT COUNT(*) FROM faces WHERE person_id = ? AND suppressed = 0',
+            (person_id,)
+        ).fetchone()[0]
+
+        # Unidentify all faces (set person_id to NULL)
+        db.conn.execute(
+            '''UPDATE faces SET person_id = NULL, manually_tagged = 0 WHERE person_id = ?''',
+            (person_id,)
+        )
+
+        # Delete the person
+        delete_person(db.conn, person_id)
+        db.conn.commit()
+
+    return success_response({
+        'message': f'Dissolved "{person["name"]}"',
+        'faces_released': face_count
+    })
+
+
 # =============================================================================
 # Error Handlers
 # =============================================================================

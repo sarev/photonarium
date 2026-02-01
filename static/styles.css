@@ -2171,6 +2171,66 @@ a:hover {
     object-fit: cover;
 }
 
+/* Picker rename input (inline edit in pick-preferred mode header) */
+.picker-rename-container {
+    position: relative;
+    display: inline-block;
+}
+
+.picker-rename-input {
+    font-size: 1.17em;
+    font-weight: bold;
+    padding: 4px 8px;
+    border: 1px solid var(--color-border);
+    border-radius: 4px;
+    background: var(--color-bg-primary);
+    color: var(--color-text-primary);
+    width: 200px;
+}
+
+.picker-rename-input:focus {
+    outline: none;
+    border-color: var(--color-accent);
+}
+
+/* Picker rename autocomplete dropdown */
+.picker-rename-autocomplete {
+    position: absolute;
+    top: 100%;
+    left: 0;
+    width: 100%;
+    min-width: 200px;
+    background: var(--color-bg-elevated);
+    border: 1px solid var(--color-border);
+    border-radius: 4px;
+    box-shadow: var(--shadow-lg);
+    z-index: 100;
+    max-height: 200px;
+    overflow-y: auto;
+}
+
+.picker-rename-autocomplete-item {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 8px 12px;
+    cursor: pointer;
+    transition: background-color 0.1s;
+    color: var(--color-text-primary);
+}
+
+.picker-rename-autocomplete-item:hover,
+.picker-rename-autocomplete-item.selected {
+    background-color: var(--color-bg-tertiary);
+}
+
+.picker-rename-autocomplete-item img {
+    width: 24px;
+    height: 24px;
+    border-radius: 50%;
+    object-fit: cover;
+}
+
 
 /* ==========================================================================
    DATABASE SCREEN
