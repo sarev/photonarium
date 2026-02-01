@@ -3028,6 +3028,21 @@
             card.appendChild(badge);
         }
 
+        // Add filter badge (left side) - click to filter gallery by this person
+        const filterBadge = document.createElement('div');
+        filterBadge.className = 'face-card-filter-badge';
+        filterBadge.innerHTML = `<span class="material-symbols-outlined">filter_alt</span>`;
+        filterBadge.title = `Show all images with ${person.name}`;
+        filterBadge.addEventListener('click', (e) => {
+            e.stopPropagation(); // Don't trigger card selection
+            // Set filter to show only this person's images and navigate to gallery
+            App.setFilter({
+                people: [{ id: person.id, name: person.name }]
+            });
+            App.navigateTo('gallery');
+        });
+        card.appendChild(filterBadge);
+
         const name = document.createElement('div');
         name.className = 'face-card-name';
         name.textContent = person.name;

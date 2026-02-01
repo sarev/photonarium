@@ -1796,6 +1796,33 @@ a:hover {
     color: var(--color-text-amber);
 }
 
+/* Filter badge for person cards (left side, opposite to star badge) */
+.face-card-filter-badge {
+    position: absolute;
+    bottom: calc(0.5rem + 24px);  /* Above the name label, same as star badge */
+    left: 4px;
+    width: 20px;
+    height: 20px;
+    background: var(--color-bg-elevated);
+    border-radius: 50%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    box-shadow: var(--shadow-sm);
+    cursor: pointer;
+    transition: background-color 0.15s, transform 0.15s;
+}
+
+.face-card-filter-badge:hover {
+    background: var(--color-pastel-teal-bg);
+    transform: scale(1.1);
+}
+
+.face-card-filter-badge .material-symbols-outlined {
+    font-size: 14px;
+    color: var(--color-pastel-teal-fg);
+}
+
 /* Clickable star overlay for pick-preferred mode */
 .face-card-star {
     position: absolute;

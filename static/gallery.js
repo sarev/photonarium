@@ -221,9 +221,22 @@ const Gallery = {
     /**
      * Called when entering the gallery screen.
      */
-    onEnter() {
+    async onEnter() {
         if (this.state.needsRefresh) {
-            this._loadImages();
+            // Check if there's a people filter - need to load filtered IDs first
+            const filter = App.getFilter();
+            const hasPeopleFilter = filter && filter.people && filter.people.length > 0;
+            if (hasPeopleFilter) {
+                this._showLoading('Filtering by people…');
+                // Ensure people filter is loaded before rendering
+                if (!filter.peopleImageIds) {
+                    await this._loadPeopleFilteredImages(filter);
+                }
+            }
+            await this._loadImages();
+            if (hasPeopleFilter) {
+                this._hideLoading();
+            }
         } else {
             // Re-bind grid and selection
             this._grid.bind();
