@@ -3172,8 +3172,8 @@
             autocomplete.appendChild(item);
         }
 
-        // Position relative to card
-        card.style.position = 'relative';
+        // Append to card (card is already position:absolute from VirtualGrid,
+        // so the autocomplete's position:absolute will work correctly)
         card.appendChild(autocomplete);
     }
 
