@@ -72,8 +72,8 @@
     --color-accent-hover: #695b4a;
     --color-accent-light: rgba(121, 106, 87, 0.15);
 
-    --color-selection: rgba(121, 106, 87, 0.25);
-    --color-selection-border: #796a57;
+    --color-selection: rgba(121, 106, 87, 0.35);
+    --color-selection-border: #5d5040;
 
     --color-danger: #a25151;
     --color-danger-hover: #8b4444;
@@ -134,8 +134,21 @@
 
     /* Face tagging colors (pastel tones) */
     --color-face-known: #66bb6a;
+    --color-face-known-light: rgba(102, 187, 106, 0.3);
     --color-face-unknown: #ef5350;
+    --color-face-unknown-light: rgba(239, 83, 80, 0.1);
     --color-face-focused: #ffa726;
+
+    /* Grid placeholder pattern (subtle, for loading state) */
+    --color-grid-placeholder-fill: rgba(0, 0, 0, 0.04);
+    --color-grid-placeholder-stroke: rgba(0, 0, 0, 0.06);
+
+    /* Focus indicator for keyboard navigation */
+    --color-section-focus: rgba(255, 96, 192, 0.08);
+
+    /* Chip/tag button backgrounds (on dark chip backgrounds) */
+    --color-chip-button: rgba(255, 255, 255, 0.3);
+    --color-chip-button-hover: rgba(255, 255, 255, 0.5);
 }
 
 /* Dark theme (warm grey) */
@@ -219,8 +232,21 @@
 
     /* Face tagging colors (pastel tones for dark theme) */
     --color-face-known: #81c784;
+    --color-face-known-light: rgba(129, 199, 132, 0.3);
     --color-face-unknown: #e57373;
+    --color-face-unknown-light: rgba(229, 115, 115, 0.15);
     --color-face-focused: #ffb74d;
+
+    /* Grid placeholder pattern (subtle, for loading state) */
+    --color-grid-placeholder-fill: rgba(255, 255, 255, 0.03);
+    --color-grid-placeholder-stroke: rgba(255, 255, 255, 0.06);
+
+    /* Focus indicator for keyboard navigation */
+    --color-section-focus: rgba(255, 96, 192, 0.04);
+
+    /* Chip/tag button backgrounds (on dark chip backgrounds) */
+    --color-chip-button: rgba(255, 255, 255, 0.3);
+    --color-chip-button-hover: rgba(255, 255, 255, 0.5);
 }
 
 /* Base reset */
@@ -461,7 +487,7 @@ a:hover {
 
 .toolbar-checkbox:has(input:checked) {
     color: var(--color-face-unknown);
-    background-color: rgba(239, 83, 80, 0.1);
+    background-color: var(--color-face-unknown-light);
 }
 
 .toolbar-checkbox input {
@@ -1619,6 +1645,33 @@ a:hover {
     min-height: 0;
 }
 
+/* Focus states for keyboard navigation routing */
+/* Use :focus-within so highlight appears when any child (e.g., input) has focus */
+.faces-section:focus,
+.faces-section:focus-within,
+.faces-view:focus,
+.faces-view:focus-within {
+    outline: none;
+}
+
+.faces-section.known:focus,
+.faces-section.known:focus-within {
+    background-color: var(--color-section-focus);
+    border-radius: 8px;
+}
+
+.faces-section.unknown:focus,
+.faces-section.unknown:focus-within {
+    background-color: var(--color-section-focus);
+    border-radius: 8px;
+}
+
+#faces-picker-view:focus,
+#faces-picker-view:focus-within {
+    background-color: var(--color-section-focus);
+    border-radius: 8px;
+}
+
 /* Face card */
 .face-card {
     position: relative;
@@ -1650,7 +1703,7 @@ a:hover {
 
 .face-card.drop-target {
     border-color: var(--color-text-green);
-    box-shadow: 0 0 0 3px var(--color-text-green-light, rgba(76, 175, 80, 0.3));
+    box-shadow: 0 0 0 3px var(--color-face-known-light);
     transform: scale(1.05);
     transition: transform 0.15s, box-shadow 0.15s;
 }
@@ -2451,17 +2504,17 @@ a:hover {
     width: 16px;
     height: 16px;
     border-radius: 50%;
-    background: rgba(255, 255, 255, 0.3);
+    background: var(--color-chip-button);
     border: none;
     cursor: pointer;
     padding: 0;
-    color: white;
+    color: var(--color-overlay-text);
     font-size: 12px;
     line-height: 1;
 }
 
 .people-chip-remove:hover {
-    background: rgba(255, 255, 255, 0.5);
+    background: var(--color-chip-button-hover);
 }
 
 /* Disabled people filter */

@@ -268,6 +268,9 @@
     /** @type {Object|null} VirtualGrid instance for unknown faces section */
     let unknownFacesGrid = null;
 
+    /** @type {Function|null} Fullscreen event subscription cleanup function */
+    let fullscreenUnsub = null;
+
     /** @type {Array<Object>} Known people with faces, for static known section */
     let knownPeople = [];
 
@@ -501,6 +504,13 @@
         // Create people section (static DOM for known faces)
         peopleSection = document.createElement('div');
         peopleSection.className = 'faces-section known';
+        peopleSection.setAttribute('tabindex', '0');
+        // Focus this section when clicked (for keyboard event routing)
+        peopleSection.addEventListener('click', () => {
+            if (document.activeElement !== peopleSection) {
+                peopleSection.focus({ preventScroll: true });
+            }
+        });
         if (knownSectionHeight) {
             peopleSection.style.height = `${knownSectionHeight}px`;
         }
@@ -518,6 +528,15 @@
         // Create unknown section wrapper
         unknownSection = document.createElement('div');
         unknownSection.className = 'faces-section unknown';
+        unknownSection.setAttribute('tabindex', '0');
+        // Focus this section when clicked (for keyboard event routing)
+        unknownSection.addEventListener('click', (e) => {
+            // Don't steal focus from search input
+            if (e.target.tagName === 'INPUT') return;
+            if (document.activeElement !== unknownSection) {
+                unknownSection.focus({ preventScroll: true });
+            }
+        });
 
         // Create unknown section header with search
         const unknownHeader = document.createElement('div');
@@ -559,6 +578,15 @@
         pickerView.id = 'faces-picker-view';
         pickerView.className = 'faces-view';
         pickerView.hidden = true;
+        pickerView.setAttribute('tabindex', '0');
+        // Focus this view when clicked (for keyboard event routing)
+        pickerView.addEventListener('click', (e) => {
+            // Don't steal focus from inputs
+            if (e.target.tagName === 'INPUT') return;
+            if (document.activeElement !== pickerView) {
+                pickerView.focus({ preventScroll: true });
+            }
+        });
 
         // Create picker header with full structure (persistent)
         pickerHeader = document.createElement('div');
@@ -737,6 +765,7 @@
             getItemId: (face) => face.id,
             itemSelector: '.face-card',
             selectedClass: 'selected',
+            focusContainer: unknownSection,
             onSelectionChanged: handleFacesSelectionChanged,
             onItemActivated: (id) => {
                 // Double-click or Enter on face - focus the name input
@@ -790,6 +819,7 @@
             getItemId: (face) => face.id,
             itemSelector: '.face-card',
             selectedClass: 'selected',
+            focusContainer: pickerView,
             onSelectionChanged: handlePickPreferredSelectionChanged,
             onItemActivated: handlePickPreferredFaceActivated,
             onDeleteRequested: handlePickPreferredDeleteRequested,
@@ -836,10 +866,19 @@
         // Listen for screen changes
         App.on('screenChanged', handleScreenChange);
 
-        // Listen for fullscreen overlay events
-        App.on('fullscreenImageChanged', handleFullscreenImageChange);
+        // Listen for fullscreen overlay events via AppState
+        AppState.nav.onChanged((event) => {
+            if (event.property === 'fullscreenImageId') {
+                const imageId = AppState.nav.getFullscreenImageId();
+                if (imageId) {
+                    handleFullscreenImageChange(imageId);
+                }
+            } else if (event.property === 'fullscreenClosing') {
+                clearFaceOverlay();
+            }
+        });
+        // Transform changes (zoom/pan) still use App.emit (high-frequency UI updates)
         App.on('fullscreenTransformChanged', handleFullscreenTransformChange);
-        App.on('fullscreenClosed', clearFaceOverlay);
 
         // Listen for image changes (e.g., after scan completes, images deleted)
         // New images may have new faces; deleted images remove faces
@@ -1023,7 +1062,7 @@
             });
         }
 
-        // Keyboard handler for known section (Enter to enter pick-preferred)
+        // Keyboard handler for known people section
         document.addEventListener('keydown', (e) => {
             // Only handle when on faces screen and not in pick-preferred mode
             if (App.getScreen() !== 'faces') return;
@@ -1032,12 +1071,84 @@
             // Don't intercept if focus is in an input field
             if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA') return;
 
-            if (e.key === 'Enter') {
-                const selectedPersonId = getSelectedKnownPersonId();
-                if (selectedPersonId) {
-                    e.preventDefault();
-                    enterPickPreferredMode(selectedPersonId);
+            // Only handle keys when people section has focus
+            if (document.activeElement !== peopleSection) return;
+
+            const grid = peopleSection?.querySelector('.faces-section-grid');
+            if (!grid) return;
+
+            const cards = Array.from(grid.querySelectorAll('.person-card'));
+            if (cards.length === 0) return;
+
+            // Find currently selected card
+            const selectedCard = grid.querySelector('.person-card.selected');
+            const currentIndex = selectedCard ? cards.indexOf(selectedCard) : -1;
+
+            // Calculate items per row for vertical navigation
+            const getItemsPerRow = () => {
+                if (cards.length < 2) return 1;
+                const firstTop = cards[0].getBoundingClientRect().top;
+                let count = 1;
+                for (let i = 1; i < cards.length; i++) {
+                    if (cards[i].getBoundingClientRect().top === firstTop) {
+                        count++;
+                    } else {
+                        break;
+                    }
                 }
+                return count;
+            };
+
+            let newIndex = currentIndex;
+
+            switch (e.key) {
+                case 'ArrowLeft':
+                    e.preventDefault();
+                    newIndex = currentIndex > 0 ? currentIndex - 1 : cards.length - 1;
+                    break;
+                case 'ArrowRight':
+                    e.preventDefault();
+                    newIndex = currentIndex < cards.length - 1 ? currentIndex + 1 : 0;
+                    break;
+                case 'ArrowUp': {
+                    e.preventDefault();
+                    const perRow = getItemsPerRow();
+                    newIndex = currentIndex >= perRow ? currentIndex - perRow : currentIndex;
+                    break;
+                }
+                case 'ArrowDown': {
+                    e.preventDefault();
+                    const perRow = getItemsPerRow();
+                    newIndex = currentIndex + perRow < cards.length ? currentIndex + perRow : currentIndex;
+                    break;
+                }
+                case 'Enter':
+                    if (selectedCard) {
+                        e.preventDefault();
+                        enterPickPreferredMode(selectedCard.dataset.personId);
+                    }
+                    return;
+                case 'Escape':
+                    e.preventDefault();
+                    // Deselect all
+                    cards.forEach(c => c.classList.remove('selected'));
+                    updateFocusButtonState();
+                    return;
+                default:
+                    return;
+            }
+
+            // Update selection
+            if (newIndex !== currentIndex && newIndex >= 0 && newIndex < cards.length) {
+                cards.forEach(c => c.classList.remove('selected'));
+                cards[newIndex].classList.add('selected');
+                cards[newIndex].scrollIntoView({ block: 'nearest' });
+                updateFocusButtonState();
+            } else if (currentIndex === -1 && cards.length > 0) {
+                // No selection, select first
+                cards[0].classList.add('selected');
+                cards[0].scrollIntoView({ block: 'nearest' });
+                updateFocusButtonState();
             }
         });
     }
@@ -1157,6 +1268,9 @@
         renderPickerContent();
         updateFocusButtonState();
 
+        // Focus picker view for keyboard navigation
+        if (pickerView) pickerView.focus({ preventScroll: true });
+
         // Load person details and faces in background
         Promise.all([
             AppState.people.fetchById(personId),       // For recognition_threshold
@@ -1182,6 +1296,9 @@
      * state) and refreshes the people section to pick up any thumbnail changes.
      */
     function exitPickPreferredMode() {
+        // Remember the person we were focused on (for reselecting after exit)
+        const lastPersonId = pickPreferredPersonId;
+
         viewMode = 'all';
         pickPreferredPersonId = null;
         pickPreferredPersonName = null;
@@ -1204,6 +1321,21 @@
         updatePeopleSection();
 
         updateFocusButtonState();
+
+        // Focus people section and reselect the person we were viewing
+        if (peopleSection) {
+            peopleSection.focus({ preventScroll: true });
+            if (lastPersonId) {
+                const personCard = peopleSection.querySelector(`.person-card[data-person-id="${lastPersonId}"]`);
+                if (personCard) {
+                    // Deselect all, then select the one we were viewing
+                    peopleSection.querySelectorAll('.person-card.selected').forEach(c => c.classList.remove('selected'));
+                    personCard.classList.add('selected');
+                    personCard.scrollIntoView({ block: 'nearest' });
+                    updateFocusButtonState();
+                }
+            }
+        }
     }
 
     /**
@@ -1584,18 +1716,69 @@
     }
 
     /**
+     * Opens fullscreen viewer with selection sync for faces screen.
+     * Subscribes to fullscreen events to update face selection as user navigates.
+     * @param {string} imageId - Image ID to open
+     * @param {Array<Object>} faces - Array of face objects for navigation context
+     * @param {Object} selection - GridSelection instance to update
+     * @param {Object} grid - VirtualGrid instance for scrolling
+     */
+    function openFullscreenWithSync(imageId, faces, selection, grid) {
+        // Clear any existing subscription
+        if (fullscreenUnsub) {
+            fullscreenUnsub();
+            fullscreenUnsub = null;
+        }
+
+        // Subscribe to fullscreen navigation events
+        fullscreenUnsub = AppState.nav.onChanged((event) => {
+            if (event.property === 'fullscreenImageId') {
+                // Fullscreen navigated to a new image - find matching face and select
+                const newImageId = AppState.nav.getFullscreenImageId();
+                if (newImageId && selection) {
+                    const face = faces.find(f => f.image_id === newImageId);
+                    if (face) {
+                        selection.select(face.id);
+                    }
+                }
+            } else if (event.property === 'fullscreenClosing') {
+                // Fullscreen is closing - scroll to the last viewed face
+                if (event.imageId && grid) {
+                    const face = faces.find(f => f.image_id === event.imageId);
+                    if (face) {
+                        grid.scrollToId(face.id);
+                    }
+                }
+                // Unsubscribe
+                if (fullscreenUnsub) {
+                    fullscreenUnsub();
+                    fullscreenUnsub = null;
+                }
+            }
+        });
+
+        // Clear multi-selection and select only the target face
+        const targetFace = faces.find(f => f.image_id === imageId);
+        if (targetFace && selection) {
+            selection.select(targetFace.id);
+        }
+
+        // Build image list and open fullscreen
+        const imageList = faces
+            .filter(f => f.image_id)
+            .map(f => ({ id: f.image_id }));
+        App.showFullscreen(imageId, { imageList });
+        setTaggingMode(true);
+    }
+
+    /**
      * Handle face activation in pick-preferred mode (Enter/double-click).
      * Opens fullscreen view for the corresponding image.
      */
     function handlePickPreferredFaceActivated(faceId) {
         const face = pickPreferredFaces.find(f => f.id === faceId);
         if (face && face.image_id) {
-            // Build image list from picker faces for navigation context
-            const imageList = pickPreferredFaces
-                .filter(f => f.image_id)
-                .map(f => ({ id: f.image_id }));
-            App.showFullscreen(face.image_id, { imageList });
-            setTaggingMode(true);
+            openFullscreenWithSync(face.image_id, pickPreferredFaces, pickerSelection, pickPreferredGrid);
         }
     }
 
@@ -1809,6 +1992,7 @@
             getItemId: (face) => face.id,
             itemSelector: '.face-card',
             selectedClass: 'selected',
+            focusContainer: unknownSection,
             onSelectionChanged: handleFacesSelectionChanged,
             onItemActivated: handleFaceActivated,
             onDeleteRequested: handleFacesDeleteRequested,
@@ -1864,7 +2048,10 @@
 
         const face = displayedFaces.find(f => f.id === faceId);
         if (face && face.image_id) {
-            // Build image list from displayed faces for navigation context
+            // Open fullscreen WITHOUT selection sync for unknown faces.
+            // Multiple faces can share the same image_id (different people in same photo),
+            // so syncing by image_id would select the wrong face when returning.
+            // The user's original selection is preserved instead.
             const imageList = displayedFaces
                 .filter(f => f.image_id)
                 .map(f => ({ id: f.image_id }));
@@ -1944,6 +2131,7 @@
                     // External change requires full reload from API
                     // loadAllFaces() will create containers after clearing
                     loadAllFaces();
+                    // Focus will be set after load completes
                 } else {
                     // Ensure persistent containers exist (for re-entering without refresh)
                     ensurePersistentContainers();
@@ -1955,6 +2143,8 @@
                     if (viewMode === 'pick-preferred') {
                         if (pickPreferredGrid) pickPreferredGrid.bind();
                         if (pickerSelection) pickerSelection.bind();
+                        // Focus picker view
+                        if (pickerView) pickerView.focus({ preventScroll: true });
                         return;
                     }
 
@@ -1968,6 +2158,13 @@
                     }
                     if (facesSelection) {
                         facesSelection.bind();
+                    }
+
+                    // Focus appropriate section
+                    if (knownPeople.length > 0 && peopleSection) {
+                        peopleSection.focus({ preventScroll: true });
+                    } else if (unknownSection) {
+                        unknownSection.focus({ preventScroll: true });
                     }
                 }
             },
@@ -2244,6 +2441,15 @@
             // Re-run search if active
             if (unknownFacesSearchQuery) {
                 searchUnknownFaces(unknownFacesSearchQuery);
+            }
+
+            // Focus appropriate section for keyboard navigation
+            if (viewMode === 'pick-preferred' && pickerView) {
+                pickerView.focus({ preventScroll: true });
+            } else if (knownPeople.length > 0 && peopleSection) {
+                peopleSection.focus({ preventScroll: true });
+            } else if (unknownSection) {
+                unknownSection.focus({ preventScroll: true });
             }
             return;
         }
@@ -2980,6 +3186,7 @@
         if (!isLoading) return;
         if (AppState.faces.isLoaded() && AppState.people.isLoaded()) {
             hideFacesLoading();
+            isLoading = false;
 
             // Restore scroll position after both domains loaded
             const container = facesGrid?.querySelector('.faces-unknown-container');
@@ -2996,6 +3203,15 @@
             // If there's an active search query, re-run it to filter results
             if (unknownFacesSearchQuery) {
                 searchUnknownFaces(unknownFacesSearchQuery);
+            }
+
+            // Focus appropriate section for keyboard navigation
+            if (viewMode === 'pick-preferred' && pickerView) {
+                pickerView.focus({ preventScroll: true });
+            } else if (knownPeople.length > 0 && peopleSection) {
+                peopleSection.focus({ preventScroll: true });
+            } else if (unknownSection) {
+                unknownSection.focus({ preventScroll: true });
             }
         }
     }

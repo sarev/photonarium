@@ -964,6 +964,10 @@ const App = {
             // Ignore if no modifier key (we only handle Ctrl/Cmd shortcuts here)
             if (!e.ctrlKey && !e.metaKey) return;
 
+            // Ignore navigation shortcuts while fullscreen is open
+            // (don't change screen underneath the fullscreen overlay)
+            if (AppState.nav.isFullscreenOpen()) return;
+
             switch (e.key.toLowerCase()) {
                 case 'g':
                     e.preventDefault();

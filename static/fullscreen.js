@@ -256,16 +256,13 @@ const Fullscreen = {
      */
     _show() {
         this.state.isOpen = true;
-        // Update AppState with current image ID
-        AppState.nav.setFullscreenImageId(this.state.currentId);
+        // AppState already notified by _loadImage() which runs before this
         // Use requestAnimationFrame to ensure the class change triggers transition
         requestAnimationFrame(() => {
             this._els.overlay.classList.add('visible');
             // Focus overlay so keyboard events (arrows, escape) go here, not the underlying grid
             this._els.overlay.focus();
         });
-        // Emit event for face tagging mode
-        App.emit('fullscreenImageChanged', this.state.currentId);
     },
 
     /**
@@ -274,11 +271,9 @@ const Fullscreen = {
      */
     _hide() {
         this.state.isOpen = false;
-        // Clear AppState image ID
-        AppState.nav.setFullscreenImageId(null);
+        // Broadcast closing event (for GUI sync) then clear AppState
+        AppState.nav.closeFullscreen();
         this._els.overlay.classList.remove('visible');
-        // Emit event to clear face overlay
-        App.emit('fullscreenClosed');
     },
 
     /**
@@ -382,8 +377,8 @@ const Fullscreen = {
         // Preload adjacent images
         this._preloadAdjacent();
 
-        // Emit event for face tagging
-        App.emit('fullscreenImageChanged', imageId);
+        // Notify AppState (triggers face overlay load, selection sync, etc.)
+        AppState.nav.setFullscreenImageId(imageId);
     },
 
     /**

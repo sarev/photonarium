@@ -95,6 +95,13 @@ const Gallery = {
     _selection: null,
 
     /**
+     * Fullscreen event subscription cleanup function.
+     * @type {Function|null}
+     * @private
+     */
+    _fullscreenUnsub: null,
+
+    /**
      * Scroll indicator overlay element.
      * @type {HTMLElement|null}
      * @private
@@ -183,7 +190,7 @@ const Gallery = {
                 App.setSelectedImages(ids);
             },
             onItemActivated: (id) => {
-                App.showFullscreen(id);
+                this._openFullscreen(id);
             },
             onDeleteRequested: (ids) => {
                 this._deleteImages(ids);
@@ -1191,6 +1198,53 @@ const Gallery = {
                 if (loading) loading.textContent = 'Failed to load';
             }
         }, 200);
+    },
+
+    /* ----------------------------------------------------------------------
+       FULLSCREEN INTEGRATION
+       ---------------------------------------------------------------------- */
+
+    /**
+     * Opens fullscreen viewer and subscribes to navigation events.
+     * Updates gallery selection to match fullscreen navigation.
+     * @param {string} imageId - Image ID to open
+     * @private
+     */
+    _openFullscreen(imageId) {
+        // Clear any existing subscription (shouldn't happen, but be safe)
+        if (this._fullscreenUnsub) {
+            this._fullscreenUnsub();
+            this._fullscreenUnsub = null;
+        }
+
+        // Subscribe to fullscreen navigation events
+        this._fullscreenUnsub = AppState.nav.onChanged((event) => {
+            if (event.property === 'fullscreenImageId') {
+                // Fullscreen navigated to a new image - update our selection
+                const newId = AppState.nav.getFullscreenImageId();
+                if (newId && this._selection) {
+                    this._selection.select(newId);
+                }
+            } else if (event.property === 'fullscreenClosing') {
+                // Fullscreen is closing - scroll to the last viewed image
+                if (event.imageId && this._grid) {
+                    this._grid.scrollToId(event.imageId);
+                }
+                // Unsubscribe
+                if (this._fullscreenUnsub) {
+                    this._fullscreenUnsub();
+                    this._fullscreenUnsub = null;
+                }
+            }
+        });
+
+        // Clear multi-selection and select only the target image
+        if (this._selection) {
+            this._selection.select(imageId);
+        }
+
+        // Open fullscreen
+        App.showFullscreen(imageId);
     },
 
     /* ----------------------------------------------------------------------

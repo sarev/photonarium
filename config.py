@@ -91,7 +91,7 @@ perceptual_hash_threshold: 4
 
 # Cosine similarity threshold for "similar" images (level 2)
 # Range: 0.0-1.0, higher = stricter matching. Recommended: 0.93-0.97
-similarity_threshold_level2: 0.95
+similarity_threshold_level2: 0.93
 
 # Cosine similarity threshold for "related" images (level 3)
 # Range: 0.0-1.0, higher = stricter matching. Recommended: 0.80-0.90
@@ -104,7 +104,7 @@ similarity_threshold_level3: 0.85
 # Number of threads for parallel image indexing (1-16)
 # Higher values speed up initial scanning but use more CPU/disk I/O.
 # Recommended: 4-8 for HDD, 8-16 for SSD
-indexing_threads: 4
+indexing_threads: 8
 
 # Maximum number of new/modified images to process incrementally for duplicates.
 # If more images need checking, falls back to full recomputation which is faster
@@ -161,12 +161,12 @@ face_detection_min_confidence: 0.95
 
 # Minimum face size in pixels (width/height of bounding box).
 # Faces smaller than this are ignored. Range: 20-200, recommended: 40-80
-face_detection_min_size: 40
+face_detection_min_size: 60
 
 # Cosine similarity threshold for auto-matching faces to known people.
 # Higher values = stricter matching (fewer false matches, more unknowns).
-# Range: 0.0-1.0, recommended: 0.55-0.75
-face_recognition_threshold: 0.65
+# Range: 0.0-1.0, recommended: 0.65-0.90
+face_recognition_threshold: 0.90
 
 # Batch size for face detection (number of images processed together).
 # Higher values improve GPU utilization but use more VRAM.

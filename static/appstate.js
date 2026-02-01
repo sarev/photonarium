@@ -448,15 +448,34 @@ const AppState = (function() {
                 _history = [];
             },
 
-            // --- Fullscreen Image ID ---
-            // Tracks which image is displayed in fullscreen overlay
+            // --- Fullscreen State ---
+            // Tracks fullscreen overlay state and broadcasts events for GUI sync
+            isFullscreenOpen() {
+                return _fullscreenImageId !== null;
+            },
             getFullscreenImageId() {
                 return _fullscreenImageId;
             },
+            /**
+             * Called when fullscreen opens or navigates to an image.
+             * GUI components should subscribe to onChanged and listen for
+             * property: 'fullscreenImageId' to sync selection/scroll.
+             */
             setFullscreenImageId(imageId) {
                 if (_fullscreenImageId === imageId) return;
                 _fullscreenImageId = imageId;
                 broadcast({ type: 'changed', property: 'fullscreenImageId' });
+            },
+            /**
+             * Called when fullscreen is about to close.
+             * GUI components should listen for property: 'fullscreenClosing'
+             * to perform final sync (scroll into view) and unsubscribe.
+             */
+            closeFullscreen() {
+                if (_fullscreenImageId === null) return;
+                const lastImageId = _fullscreenImageId;
+                broadcast({ type: 'changed', property: 'fullscreenClosing', imageId: lastImageId });
+                _fullscreenImageId = null;
             },
 
             // --- Scroll Positions ---

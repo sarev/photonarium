@@ -626,10 +626,10 @@ const VirtualGrid = {
                 const tileWidth = itemWidth + gap;
                 const tileHeight = itemHeight;
 
-                // Get colors from CSS custom properties
+                // Get colors from CSS custom properties (use dedicated placeholder vars for subtlety)
                 const style = getComputedStyle(document.documentElement);
-                const fillColor = style.getPropertyValue('--color-bg-tertiary').trim() || 'rgba(128,128,128,0.08)';
-                const strokeColor = style.getPropertyValue('--color-border').trim() || 'rgba(128,128,128,0.15)';
+                const fillColor = style.getPropertyValue('--color-grid-placeholder-fill').trim() || 'rgba(128,128,128,0.04)';
+                const strokeColor = style.getPropertyValue('--color-grid-placeholder-stroke').trim() || 'rgba(128,128,128,0.06)';
 
                 // Create SVG pattern for one cell - a faint rounded rectangle
                 const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="${tileWidth}" height="${tileHeight}">
@@ -1310,7 +1310,8 @@ const GridSelection = {
                 onGroupNavigate: config.onGroupNavigate || null,
                 enableKeyboard: config.enableKeyboard !== false,
                 enableDragBox: config.enableDragBox !== false,
-                enableLongPress: config.enableLongPress !== false
+                enableLongPress: config.enableLongPress !== false,
+                focusContainer: config.focusContainer || null
             },
 
             // Selection state
@@ -1694,8 +1695,16 @@ const GridSelection = {
                 // Ignore if modal dialog is open
                 if (document.querySelector('dialog[open]')) return;
 
+                // Ignore if fullscreen overlay is open (it has its own keyboard handling)
+                if (AppState.nav.isFullscreenOpen()) return;
+
                 // Ignore if typing in an input field
                 if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA') return;
+
+                // If focusContainer is specified, only handle keys when it has focus
+                if (this._config.focusContainer && document.activeElement !== this._config.focusContainer) {
+                    return;
+                }
 
                 switch (e.key) {
                     case 'ArrowLeft':
