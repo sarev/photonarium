@@ -138,6 +138,8 @@
     --color-face-unknown: #ef5350;
     --color-face-unknown-light: rgba(239, 83, 80, 0.1);
     --color-face-focused: #ffa726;
+    --color-face-ignored: #9e9e9e;
+    --color-face-ignored-bg: rgba(158, 158, 158, 0.3);
 
     /* Grid placeholder pattern (subtle, for loading state) */
     --color-grid-placeholder-fill: rgba(0, 0, 0, 0.04);
@@ -236,6 +238,8 @@
     --color-face-unknown: #e57373;
     --color-face-unknown-light: rgba(229, 115, 115, 0.15);
     --color-face-focused: #ffb74d;
+    --color-face-ignored: #9e9e9e;
+    --color-face-ignored-bg: rgba(158, 158, 158, 0.25);
 
     /* Grid placeholder pattern (subtle, for loading state) */
     --color-grid-placeholder-fill: rgba(255, 255, 255, 0.03);
@@ -1322,6 +1326,29 @@ a:hover {
     border-color: var(--color-face-unknown);
 }
 
+/* Ignored face (consciously not named, marked with '-') */
+.face-box.ignored {
+    border-color: var(--color-face-ignored);
+    background: var(--color-face-ignored-bg);
+}
+
+/* Hide label on ignored faces unless focused */
+.face-box.ignored .face-label {
+    display: none;
+}
+
+.face-box.ignored.focused .face-label,
+.face-box.ignored:focus-within .face-label {
+    display: flex;
+}
+
+/* Highlight when editing an ignored face */
+.face-box.ignored.focused,
+.face-box.ignored:focus-within {
+    border-color: var(--color-face-focused);
+    background: transparent;
+}
+
 /* Focused face (input field has focus) */
 .face-box.focused {
     border-color: var(--color-face-focused);
@@ -1415,6 +1442,12 @@ a:hover {
 .face-delete-btn:focus {
     opacity: 1;
 }
+
+/* Green variant for unidentify (known faces) */
+.face-delete-btn.unidentify {
+    background: var(--color-face-known);
+}
+
 
 .face-delete-btn .material-symbols-outlined {
     font-size: 14px;

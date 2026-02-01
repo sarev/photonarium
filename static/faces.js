@@ -896,6 +896,15 @@
         AppState.faces.onChanged((event) => {
             facesLog('AppState.faces.onChanged received:', event?.type);
 
+            // If fullscreen is open with tagging mode, reload face overlay
+            if (Fullscreen.isOpen() && taggingMode) {
+                const imageId = Fullscreen.state.currentId;
+                if (imageId) {
+                    facesLog('  -> Reloading fullscreen face overlay');
+                    loadFacesForImage(imageId);
+                }
+            }
+
             // Skip if we're not on the faces screen
             if (App.getScreen() !== 'faces') {
                 facesLog('  -> Skipping: not on faces screen');
@@ -3460,6 +3469,12 @@
         // Set known/unknown class
         if (face.person_id) {
             box.classList.add('known');
+            // Ignored faces (named '-') get an extra class for different styling
+            // Note: translucency is handled purely via CSS colors, not element opacity,
+            // so child elements (like the action button) aren't affected
+            if (face.person_name === '-') {
+                box.classList.add('ignored');
+            }
         } else {
             box.classList.add('unknown');
         }
@@ -3476,16 +3491,34 @@
         box.style.width = `${width}px`;
         box.style.height = `${height}px`;
 
-        // Create delete button
-        const deleteBtn = document.createElement('button');
-        deleteBtn.className = 'face-delete-btn';
-        deleteBtn.title = 'Remove face detection (not a real face)';
-        deleteBtn.innerHTML = '<span class="material-symbols-outlined">close</span>';
-        deleteBtn.addEventListener('click', (e) => {
-            e.stopPropagation();
-            suppressFace(face.id, box);
-        });
-        box.appendChild(deleteBtn);
+        // Create action button (unidentify for known faces, suppress for unknown)
+        const actionBtn = document.createElement('button');
+        actionBtn.className = 'face-delete-btn';
+        actionBtn.innerHTML = '<span class="material-symbols-outlined">close</span>';
+
+        if (face.person_id) {
+            // Known face: green button to unidentify
+            actionBtn.classList.add('unidentify');
+            actionBtn.title = 'Remove identification (return to unknown)';
+            actionBtn.addEventListener('click', async (e) => {
+                e.stopPropagation();
+                try {
+                    await AppState.faces.unassign([face.id]);
+                } catch (error) {
+                    console.error('Failed to unidentify face:', error);
+                    App.showError('Failed to unidentify face');
+                }
+            });
+        } else {
+            // Unknown face: red button to suppress
+            actionBtn.title = 'Remove face detection (not a real face)';
+            actionBtn.addEventListener('click', (e) => {
+                e.stopPropagation();
+                suppressFace(face.id, box);
+            });
+        }
+
+        box.appendChild(actionBtn);
 
         // Create label
         const label = createFaceLabel(face, top, imgHeight);
@@ -3499,6 +3532,10 @@
             }
 
             // For known faces, click the name span to show input (same as clicking label)
+            // Add focused class first - needed for ignored faces where label is
+            // display:none until focused (can't focus elements inside hidden containers)
+            box.classList.add('focused');
+
             const nameSpan = label.querySelector('.face-name');
             if (nameSpan) {
                 nameSpan.click();
@@ -3755,9 +3792,10 @@
      * @param {HTMLElement} label
      */
     function handleInputKeyDown(e, input, face, label) {
-        // Escape to cancel editing
+        // Escape to cancel editing (stopPropagation prevents fullscreen from closing)
         if (e.key === 'Escape') {
             e.preventDefault();
+            e.stopPropagation();
             input.value = input.dataset.originalName || '';
             input.blur();
             closeAutocomplete();

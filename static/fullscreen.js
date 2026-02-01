@@ -353,9 +353,12 @@ const Fullscreen = {
     /**
      * Loads and displays an image.
      * @param {string} imageId - ID of the image to load
+     * @param {number} [knownIndex] - If provided, use this index instead of searching.
+     *                                This is needed when imageList has duplicate image IDs
+     *                                (e.g., multiple faces on the same photo).
      * @private
      */
-    _loadImage(imageId) {
+    _loadImage(imageId, knownIndex) {
         this.state.currentId = imageId;
 
         // Find image data
@@ -365,14 +368,20 @@ const Fullscreen = {
             return;
         }
 
-        // Update index
-        this.state.currentIndex = this.state.imageList.findIndex(i => i.id === imageId);
+        // Update index - use provided index if available (avoids findIndex returning
+        // wrong index when there are duplicate image IDs in the list)
+        this.state.currentIndex = knownIndex !== undefined
+            ? knownIndex
+            : this.state.imageList.findIndex(i => i.id === imageId);
 
         // Load the full image
         this._els.image.src = App.imageUrl(imageId);
 
         // Show filename overlay with dimensions
-        this._showFilename(img.basename, img.width, img.height);
+        // If imageList entry lacks metadata (e.g., opened from faces screen),
+        // try to get it from AppState.images cache
+        const metadata = img.basename ? img : (AppState.images.getById(imageId) || img);
+        this._showFilename(metadata.basename, metadata.width, metadata.height);
 
         // Preload adjacent images
         this._preloadAdjacent();
@@ -794,8 +803,8 @@ const Fullscreen = {
         // Reset zoom/pan for new image
         this._resetTransform();
 
-        // Load the new image
-        this._loadImage(newImage.id);
+        // Load the new image (pass index to handle duplicate image IDs correctly)
+        this._loadImage(newImage.id, index);
 
         // Update gallery selection to match
         App.setSelectedImages([newImage.id]);
