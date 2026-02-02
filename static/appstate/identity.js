@@ -629,7 +629,7 @@ AppState.faces = (function() {
          * @param {string} [options.preferredFaceId] - Face to use as preferred
          * @returns {Promise<{personId: string}>}
          */
-        identify(faceIds, personName, options = {}) {
+        async identify(faceIds, personName, options = {}) {
             if (!Array.isArray(faceIds)) faceIds = [faceIds];
             if (!faceIds?.length) return Promise.resolve();
 
@@ -639,6 +639,9 @@ AppState.faces = (function() {
                 console.log('[AppState.faces.identify] Empty name, delegating to unassign');
                 return this.unassign(faceIds);
             }
+
+            // Ensure people cache is loaded for findByName to work
+            await AppState.people.load();
 
             console.log('[AppState.faces.identify]', faceIds.length, 'faces as', trimmedName);
 
@@ -1156,11 +1159,11 @@ AppState.people = (function() {
          * @param {Object} person - Person object
          */
         add(person) {
-            if (_cache) {
-                console.log('[AppState.people._internal.add]', person.id, person.name);
-                _cache.set(person.id, person);
-                markDirty(domainRef);
-            }
+            // Initialize cache if needed (person creation can happen before load)
+            if (!_cache) _cache = new Map();
+            console.log('[AppState.people._internal.add]', person.id, person.name);
+            _cache.set(person.id, person);
+            markDirty(domainRef);
         },
 
         /**

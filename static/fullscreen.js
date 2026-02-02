@@ -110,6 +110,7 @@ const Fullscreen = {
             image: App.$('fullscreen-image'),
             filename: App.$('fullscreen-filename'),
             closeBtn: App.$('fullscreen-close'),
+            taggingBtn: App.$('fullscreen-tagging'),
             prevBtn: App.$('fullscreen-prev'),
             nextBtn: App.$('fullscreen-next')
         };
@@ -118,12 +119,29 @@ const Fullscreen = {
         this._els.closeBtn.addEventListener('click', () => {
             this.close();
         });
+        this._els.taggingBtn.addEventListener('click', () => {
+            // Toggle tagging mode via Faces module
+            if (typeof Faces !== 'undefined' && Faces.toggleTaggingMode) {
+                Faces.toggleTaggingMode();
+                this._updateTaggingButton();
+            }
+        });
         this._els.prevBtn.addEventListener('click', () => {
             this._navigatePrev();
         });
         this._els.nextBtn.addEventListener('click', () => {
             this._navigateNext();
         });
+    },
+
+    /**
+     * Updates the tagging button active state.
+     * @private
+     */
+    _updateTaggingButton() {
+        if (!this._els.taggingBtn) return;
+        const isActive = typeof Faces !== 'undefined' && Faces.isTaggingModeActive?.();
+        this._els.taggingBtn.classList.toggle('active', isActive);
     },
 
     /**
@@ -412,7 +430,7 @@ const Fullscreen = {
     },
 
     /**
-     * Shows all overlays (close button, nav buttons, filename) and schedules them to hide.
+     * Shows all overlays (close button, nav buttons, tagging button, filename) and schedules them to hide.
      * Called on user interaction to keep overlays visible while active.
      * @private
      */
@@ -420,8 +438,12 @@ const Fullscreen = {
         // Show overlays
         this._els.filename.classList.remove('hidden');
         this._els.closeBtn.classList.remove('hidden');
+        this._els.taggingBtn.classList.remove('hidden');
         this._els.prevBtn.classList.remove('hidden');
         this._els.nextBtn.classList.remove('hidden');
+
+        // Update tagging button state
+        this._updateTaggingButton();
 
         // Clear any existing timeout
         if (this._overlayTimeout) {
@@ -432,6 +454,7 @@ const Fullscreen = {
         this._overlayTimeout = setTimeout(() => {
             this._els.filename.classList.add('hidden');
             this._els.closeBtn.classList.add('hidden');
+            this._els.taggingBtn.classList.add('hidden');
             this._els.prevBtn.classList.add('hidden');
             this._els.nextBtn.classList.add('hidden');
             this._overlayTimeout = null;

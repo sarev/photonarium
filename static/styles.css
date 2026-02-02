@@ -1249,6 +1249,43 @@ a:hover {
     pointer-events: none;
 }
 
+/* Face tagging toggle button (top-left) */
+#fullscreen-tagging {
+    position: absolute;
+    top: 1rem;
+    left: 1rem;
+    width: 2.5rem;
+    height: 2.5rem;
+    border: none;
+    border-radius: 50%;
+    background: var(--color-overlay-button-bg);
+    color: var(--color-overlay-text);
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    transition: opacity 0.3s ease, background-color 0.15s ease;
+    z-index: 10;
+}
+
+#fullscreen-tagging:hover {
+    background: var(--color-overlay-button-hover);
+}
+
+#fullscreen-tagging.active {
+    background: var(--color-accent);
+    color: white;
+}
+
+#fullscreen-tagging .material-symbols-outlined {
+    font-size: 1.5rem;
+}
+
+#fullscreen-tagging.hidden {
+    opacity: 0;
+    pointer-events: none;
+}
+
 /* Navigation button overlays (prev/next) */
 .fullscreen-nav {
     position: absolute;

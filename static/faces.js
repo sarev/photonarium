@@ -2572,6 +2572,9 @@
 
         // Manage resize listener
         if (taggingMode && Fullscreen.isOpen()) {
+            // Ensure people cache is loaded for face identification operations
+            AppState.people.load();
+
             // Add resize listener for bbox repositioning
             if (!resizeHandler) {
                 resizeHandler = handleWindowResize;
