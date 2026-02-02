@@ -1008,17 +1008,21 @@ def get_person(
     conn: sqlite3.Connection,
     person_id: str,
 ) -> dict[str, Any] | None:
-    """Get a person by ID.
+    """Get a person by ID with face count.
 
     Args:
         conn: Database connection.
         person_id: Person's UUID.
 
     Returns:
-        Person dict or None if not found.
+        Person dict with face_count, or None if not found.
     """
     cursor = conn.execute(
-        '''SELECT * FROM people WHERE id = ?''',
+        '''SELECT p.*, COUNT(f.id) as face_count
+           FROM people p
+           LEFT JOIN faces f ON f.person_id = p.id AND f.suppressed = 0
+           WHERE p.id = ?
+           GROUP BY p.id''',
         (person_id,)
     )
     row = cursor.fetchone()
