@@ -3200,10 +3200,24 @@
             enterPickPreferredMode(person.id);
         });
 
-        // Drop target for unknown faces
+        // Make person card draggable (for merging people)
+        card.draggable = true;
+        card.addEventListener('dragstart', (e) => {
+            e.dataTransfer.setData('application/x-person-id', person.id);
+            e.dataTransfer.setData('application/x-person-name', person.name);
+            e.dataTransfer.effectAllowed = 'move';
+        });
+
+        // Drop target for unknown faces AND other person cards (merge)
         card.addEventListener('dragover', (e) => {
             // Check if dragging faces
             if (e.dataTransfer.types.includes('application/x-face-ids')) {
+                e.preventDefault();
+                e.dataTransfer.dropEffect = 'move';
+                card.classList.add('drop-target');
+            }
+            // Check if dragging another person card (for merge)
+            else if (e.dataTransfer.types.includes('application/x-person-id')) {
                 e.preventDefault();
                 e.dataTransfer.dropEffect = 'move';
                 card.classList.add('drop-target');
@@ -3221,29 +3235,46 @@
             e.preventDefault();
             card.classList.remove('drop-target');
 
-            const data = e.dataTransfer.getData('application/x-face-ids');
-            facesLog('DROP on person card:', person.name, 'data=', data);
-            if (!data) {
-                facesLog('  -> No data, ignoring drop');
+            // Handle face drop (identify faces as this person)
+            const faceData = e.dataTransfer.getData('application/x-face-ids');
+            if (faceData) {
+                facesLog('DROP faces on person card:', person.name, 'data=', faceData);
+                try {
+                    const faceIds = JSON.parse(faceData);
+                    facesLog('  -> Parsed faceIds:', faceIds);
+                    if (faceIds && faceIds.length > 0) {
+                        facesLog('  -> Calling identifyFacesAsPerson');
+                        await identifyFacesAsPerson(faceIds, person.name);
+                        facesLog('  -> identifyFacesAsPerson returned');
+                    }
+                } catch (err) {
+                    facesLog('  -> DROP ERROR:', err);
+                    console.error('Drop failed:', err);
+                    App.showError('Failed to identify faces');
+                }
                 return;
             }
 
-            try {
-                const faceIds = JSON.parse(data);
-                facesLog('  -> Parsed faceIds:', faceIds);
-                if (!faceIds || faceIds.length === 0) {
-                    facesLog('  -> Empty faceIds, ignoring drop');
-                    return;
+            // Handle person drop (merge people)
+            const draggedPersonId = e.dataTransfer.getData('application/x-person-id');
+            const draggedPersonName = e.dataTransfer.getData('application/x-person-name');
+            if (draggedPersonId && draggedPersonId !== person.id) {
+                facesLog('DROP person on person card:', draggedPersonName, '->', person.name);
+                try {
+                    // Show merge confirmation dialog
+                    const confirmed = await App.confirm(
+                        'Merge People',
+                        `Merge "${draggedPersonName}" into "${person.name}"? All faces will be moved to "${person.name}".`
+                    );
+                    if (confirmed) {
+                        await AppState.people.merge(draggedPersonId, person.id);
+                        facesLog('  -> Merge complete');
+                    }
+                } catch (err) {
+                    facesLog('  -> MERGE ERROR:', err);
+                    console.error('Merge failed:', err);
+                    App.showError('Failed to merge people');
                 }
-
-                // Identify all dropped faces as this person
-                facesLog('  -> Calling identifyFacesAsPerson');
-                await identifyFacesAsPerson(faceIds, person.name);
-                facesLog('  -> identifyFacesAsPerson returned');
-            } catch (err) {
-                facesLog('  -> DROP ERROR:', err);
-                console.error('Drop failed:', err);
-                App.showError('Failed to identify faces');
             }
         });
 
