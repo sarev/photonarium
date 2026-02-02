@@ -3753,6 +3753,7 @@
 
     /**
      * Load faces for an image from the API.
+     * Always fetches fresh from backend to catch auto-assignments.
      * @param {string} imageId - Image ID
      */
     async function loadFacesForImage(imageId) {
@@ -3762,7 +3763,9 @@
         currentOverlayImageId = imageId;
 
         try {
-            const faces = await AppState.faces.fetchForImage(imageId);
+            // Always fetch fresh - backend may have auto-assigned faces
+            // that the cache doesn't know about
+            const faces = await AppState.faces.fetchForImage(imageId, { fresh: true });
 
             // Skip if we've navigated away during the async call
             if (currentOverlayImageId !== imageId) return;
@@ -3967,24 +3970,36 @@
                 suppressOverlayReload = true;
 
                 // Optimistic UI: update box to ignored styling
-                box.classList.remove('unknown', 'known');
+                box.classList.remove('unknown', 'known', 'focused');
                 box.classList.add('known', 'ignored');
 
                 // Remove the ignore button (no longer needed on ignored face)
                 ignoreBtn.remove();
 
                 // Update action button to unidentify style
-                const actionBtn = box.querySelector('.face-delete-btn');
-                if (actionBtn) {
-                    actionBtn.classList.add('unidentify');
-                    actionBtn.title = 'Remove identification (return to unknown)';
+                const existingActionBtn = box.querySelector('.face-delete-btn');
+                if (existingActionBtn) {
+                    existingActionBtn.classList.add('unidentify');
+                    existingActionBtn.title = 'Remove identification (return to unknown)';
                 }
 
-                // Update label to show "-"
-                const nameSpan = box.querySelector('.face-name');
-                if (nameSpan) {
+                // Update label to show "-" (handle both known faces with span and unknown with input)
+                const label = box.querySelector('.face-label');
+                if (label) {
+                    // Clear any existing content (input or name span)
+                    label.innerHTML = '';
+                    // Create name span showing "-"
+                    const nameSpan = document.createElement('span');
+                    nameSpan.className = 'face-name';
                     nameSpan.textContent = '-';
+                    nameSpan.addEventListener('click', () => {
+                        showNameInput(label, { ...face, person_id: 'ignored', person_name: '-' });
+                    });
+                    label.appendChild(nameSpan);
                 }
+
+                // Close any open autocomplete
+                closeAutocomplete();
 
                 try {
                     await AppState.faces.identify([face.id], '-');

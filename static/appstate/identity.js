@@ -345,19 +345,39 @@ AppState.faces = (function() {
             'personId:', personId, 'created:', createdPerson,
             'faces:', faceIds.length);
 
+        let actualPersonId = personId;
+
         // Create person if new
         if (createdPerson) {
-            await App.apiPost('/people', {
-                id: personId,
-                name: personName,
-                preferred_face_id: preferredFaceId
-            });
+            try {
+                await App.apiPost('/people', {
+                    id: personId,
+                    name: personName,
+                    preferred_face_id: preferredFaceId
+                });
+            } catch (err) {
+                // 409 CONFLICT means person already exists (cache was stale)
+                // Find existing person and use their ID
+                if (err.message?.includes('409')) {
+                    console.log('[AppState.faces._persistIdentify] Person exists, finding by name');
+                    await AppState.people.load(true);
+                    const existing = AppState.people._internal.findByName(personName);
+                    if (existing) {
+                        actualPersonId = existing.id;
+                        console.log('[AppState.faces._persistIdentify] Using existing person:', actualPersonId);
+                    } else {
+                        throw err;  // Can't find person, re-throw
+                    }
+                } else {
+                    throw err;
+                }
+            }
         }
 
         // Assign faces
         await App.apiPost('/faces/assign', {
             face_ids: faceIds,
-            person_id: personId
+            person_id: actualPersonId
         });
 
         // Lock faces
@@ -579,11 +599,13 @@ AppState.faces = (function() {
          * Fetch faces for an image from backend.
          * Uses cache if fully loaded, otherwise fetches from API.
          * @param {string} imageId - Image ID
+         * @param {Object} [options]
+         * @param {boolean} [options.fresh=false] - Bypass cache and fetch from API
          * @returns {Promise<Array>}
          */
-        async fetchForImage(imageId) {
-            // If cache is partial (unknown only), must fetch from API
-            if (_cache && !_cacheIsPartial) return this.getForImage(imageId);
+        async fetchForImage(imageId, { fresh = false } = {}) {
+            // If cache is complete and fresh not requested, use cache
+            if (!fresh && _cache && !_cacheIsPartial) return this.getForImage(imageId);
             return (await App.apiGet(`/images/${imageId}/faces`)).data;
         },
 
