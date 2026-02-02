@@ -97,6 +97,8 @@ _SQL_CREATE_FACE_INDEXES = [
     # Composite index for efficient face count queries (used by get_all_people)
     # Without this, SQLite uses idx_faces_suppressed which causes full scans
     "CREATE INDEX IF NOT EXISTS idx_faces_person_suppressed ON faces(person_id, suppressed)",
+    # Index for unknown_group_id to speed up window functions in get_all_faces
+    "CREATE INDEX IF NOT EXISTS idx_faces_unknown_group ON faces(unknown_group_id)",
 ]
 
 # Migrations for schema updates
