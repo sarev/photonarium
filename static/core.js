@@ -916,6 +916,7 @@ const App = {
         this._bindBtn('btn-database', () => this.showDatabase());
         this._bindBtn('btn-duplicates', () => this.showDuplicates());
         this._bindBtn('btn-filter', () => this._handleFilterClick());
+        this._bindBtn('btn-clear-filter', () => this._handleClearFilterClick());
         this._bindBtn('btn-back-gallery', () => this.showGallery());
 
         // Gallery controls
@@ -1156,14 +1157,33 @@ const App = {
     },
 
     /**
-     * Updates filter button to show active state.
+     * Updates filter button to show active state and clear button enabled state.
      * @private
      */
     _updateFilterButton() {
+        const hasFilter = this.hasActiveFilter();
+
         const btn = document.getElementById('btn-filter');
         if (btn) {
             // Toggle active class to indicate filter is active (styling only)
-            btn.classList.toggle('active', this.hasActiveFilter());
+            btn.classList.toggle('active', hasFilter);
+        }
+
+        const clearBtn = document.getElementById('btn-clear-filter');
+        if (clearBtn) {
+            // Enable/disable clear filter button based on filter state
+            clearBtn.disabled = !hasFilter;
+        }
+    },
+
+    /**
+     * Handles clear filter button click.
+     * Clears the filter without changing screens.
+     * @private
+     */
+    _handleClearFilterClick() {
+        if (this.hasActiveFilter()) {
+            this.clearFilter();
         }
     },
 

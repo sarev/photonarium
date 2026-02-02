@@ -460,6 +460,11 @@ a:hover {
     color: var(--color-accent);
 }
 
+/* Clear filter button shows persistent background when filter is active */
+#btn-clear-filter:not(:disabled) {
+    background-color: var(--color-pastel-teal-bg);
+}
+
 .toolbar-btn:disabled {
     opacity: 0.4;
     cursor: not-allowed;
