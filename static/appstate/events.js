@@ -100,18 +100,23 @@ AppState.events = (function() {
      *
      * Uses incremental cache update (no full reload) for responsiveness.
      * The autoAssign() call updates the cache directly - backend already persisted.
+     *
+     * Backend sends: { person_id, matched_count, updated_faces: [{face_id, person_id, person_name}, ...] }
      */
     function handleFacesReassessed(data) {
-        const { person_id, matched_face_ids } = data || {};
+        const { person_id, updated_faces } = data || {};
 
-        if (matched_face_ids?.length && person_id) {
+        if (updated_faces?.length && person_id) {
+            // Extract face IDs from the updated_faces array
+            const faceIds = updated_faces.map(f => f.face_id);
+
             console.log('[AppState.events] Faces reassessed:',
-                matched_face_ids.length, 'faces matched to', person_id);
+                faceIds.length, 'faces matched to', person_id);
 
             // Use autoAssign (no lock, no persist - backend already stored)
             // This updates the cache incrementally - no full reload needed
             if (AppState.faces?.autoAssign) {
-                AppState.faces.autoAssign(matched_face_ids, person_id);
+                AppState.faces.autoAssign(faceIds, person_id);
             }
         }
         // Note: No full reload here - autoAssign already updated the cache
