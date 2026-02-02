@@ -330,13 +330,33 @@ const Gallery = {
      */
     _applyInitialSelection() {
         const filter = App.getFilter();
-        if (!filter?.initialSelection?.length) {
-            this.state.pendingSelection = null;
+        if (filter?.initialSelection?.length) {
+            // Store the selection to apply when the item's thumbnail loads
+            this.state.pendingSelection = new Set(filter.initialSelection);
             return;
         }
 
-        // Store the selection to apply when the item's thumbnail loads
-        this.state.pendingSelection = new Set(filter.initialSelection);
+        // Check for persisted single selection from localStorage
+        const persistedId = localStorage.getItem('gallery.selectedImageId');
+        if (persistedId) {
+            // Verify the image still exists in the display list
+            const displayList = AppState.images.getDisplayList();
+            const exists = displayList.some(img => img.id === persistedId);
+            if (exists) {
+                console.log('[Gallery] Restoring persisted selection:', persistedId);
+                App.setSelectedImages([persistedId]);
+                // Scroll to the selected image after a brief delay to ensure grid is rendered
+                requestAnimationFrame(() => {
+                    this._grid.scrollToId(persistedId, 'auto');
+                });
+                return;
+            } else {
+                // Image no longer exists, clear the persisted selection
+                localStorage.removeItem('gallery.selectedImageId');
+            }
+        }
+
+        this.state.pendingSelection = null;
     },
 
     /**
@@ -1280,6 +1300,11 @@ const Gallery = {
         const confirmed = await App.confirm('Delete Images', message);
         if (!confirmed) return;
 
+        // Find the index of the first deleted image (to select next image after deletion)
+        const displayList = AppState.images.getDisplayList();
+        const deletedSet = new Set(ids);
+        let firstDeletedIndex = displayList.findIndex(img => deletedSet.has(img.id));
+
         try {
             // Delete via AppState (handles optimistic update and rollback)
             await AppState.images.delete(ids);
@@ -1287,10 +1312,23 @@ const Gallery = {
         } catch (error) {
             console.error('Failed to delete images:', error);
             // Error is already shown by AppState
+            return;
         }
 
-        App.clearSelection();
         this._renderGrid();
+
+        // Select the image now at the position where the first deleted image was
+        const newDisplayList = AppState.images.getDisplayList();
+        if (newDisplayList.length > 0 && firstDeletedIndex >= 0) {
+            // Clamp to valid range (in case we deleted images at the end)
+            const newIndex = Math.min(firstDeletedIndex, newDisplayList.length - 1);
+            const nextImage = newDisplayList[newIndex];
+            App.setSelectedImages([nextImage.id]);
+            // Scroll to keep the selection visible
+            this._grid.scrollToId(nextImage.id, 'auto');
+        } else {
+            App.clearSelection();
+        }
     },
 
     /* ----------------------------------------------------------------------

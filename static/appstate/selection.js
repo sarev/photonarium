@@ -131,6 +131,16 @@ AppState.selection = (function() {
 
             ctx.selected = new Set(idArray);
             ctx.anchor = idArray.length > 0 ? idArray[idArray.length - 1] : null;
+
+            // Persist single gallery selections to localStorage for page reload
+            if (context === 'gallery') {
+                if (idArray.length === 1) {
+                    localStorage.setItem('gallery.selectedImageId', idArray[0]);
+                } else {
+                    localStorage.removeItem('gallery.selectedImageId');
+                }
+            }
+
             broadcast({ type: 'changed', context });
         },
 
@@ -184,6 +194,12 @@ AppState.selection = (function() {
             console.log(`[AppState.selection.clear] ${context}`);
             ctx.selected.clear();
             ctx.anchor = null;
+
+            // Clear persisted gallery selection
+            if (context === 'gallery') {
+                localStorage.removeItem('gallery.selectedImageId');
+            }
+
             broadcast({ type: 'changed', context });
         },
 
