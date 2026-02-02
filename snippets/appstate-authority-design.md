@@ -1053,11 +1053,13 @@ The implementation is split into domain-specific files in `static/appstate/`:
 | `selection.js` | ~230 | selection | Per-context selection with shift-click anchoring |
 | `status.js` | ~170 | status | Backend processing status with polling |
 | `search.js` | ~130 | search | Semantic search execution and results |
-| `folders.js` | ~200 | folders | Folder management, rescan, stats |
+| `folders.js` | ~230 | folders | Folder management, rescan, stats, status tracking |
 | `duplicates.js` | ~340 | duplicates | Duplicate groups by similarity level, polling |
 | `identity.js` | ~1400 | faces, people | Face/people management (tightly coupled) |
 | `images.js` | ~480 | images | Image metadata, display list, delta sync |
-| `index.js` | ~90 | - | Load verification and documentation |
+| `loading.js` | ~160 | loading | Loading overlay with ownership tracking |
+| `events.js` | ~250 | events | Backend event polling and dispatch |
+| `index.js` | ~100 | - | Load verification and documentation |
 
 **Why faces + people are together**: These domains are tightly coupled because:
 - Identifying a face may create a new person
@@ -1080,6 +1082,8 @@ Keeping them in `identity.js` avoids circular dependencies.
 <script src="appstate/duplicates.js"></script>
 <script src="appstate/identity.js"></script>
 <script src="appstate/images.js"></script>
+<script src="appstate/loading.js"></script>
+<script src="appstate/events.js"></script>
 <script src="appstate/index.js"></script>
 ```
 
@@ -1232,29 +1236,30 @@ Screens already use AppState patterns. Verified no direct API calls remain
 [x] Subscribe to changes
 ```
 
-### Phase 8: Backend Simplification
+### Phase 8: Backend Simplification ✓
 
 **8.1 New Simple Endpoints**
 ```
-[ ] POST /people - accept frontend-generated ID
-[ ] PATCH /people/:id - simple field updates
-[ ] DELETE /people/:id - just delete (FK enforced)
-[ ] POST /faces/assign - simple assignment
-[ ] POST /faces/unassign - simple unassignment
-[ ] PATCH /faces - batch field updates
+[x] POST /people - accept frontend-generated ID
+[x] PATCH /people/:id - simple field updates (already existed)
+[x] DELETE /people/:id - just delete, FK enforced (already existed)
+[x] POST /faces/assign - simple assignment
+[x] POST /faces/unassign - simple unassignment
+[x] POST /faces/suppress - simple batch suppress
+[x] PATCH /faces - batch field updates (locked flag)
 ```
 
 **8.2 Response Changes**
 ```
-[ ] identify response includes { auto_assigned: [...] }
-[ ] setThreshold response includes { assigned: [...], unassigned: [...] }
+[x] setThreshold response includes { assigned, unassigned } (already implemented)
+    (identify uses polling via /faces/reassess-status instead of inline response)
 ```
 
 **8.3 Deprecate Complex Endpoints**
 ```
-[ ] /faces/identify-batch (replaced by /faces/assign + auto_assigned response)
-[ ] /people/:id/merge (frontend orchestrates)
-[ ] /people/:id/dissolve (frontend orchestrates)
+[x] /faces/identify-batch - kept for backwards compatibility but no longer used
+[x] /people/:id/merge - kept for backwards compatibility, frontend orchestrates
+[x] /people/:id/dissolve - kept for backwards compatibility, frontend orchestrates
 ```
 
 ### Phase 9: Cleanup

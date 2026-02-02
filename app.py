@@ -1294,35 +1294,55 @@ def get_people():
 
 @app.route('/api/people', methods=['POST'])
 def create_person_endpoint():
-    """Create a new person.
+    """Create a new person with frontend-provided ID.
+
+    The frontend generates UUIDs and orchestrates all application logic.
+    This endpoint simply persists the person record.
 
     Request Body:
         JSON object with:
+            - id: Person's UUID (required, frontend-generated)
             - name: Person's name (required)
+            - preferred_face_id: Initial preferred face (optional)
 
     Returns:
-        JSON object with the created person.
+        JSON object with success status.
     """
     data = request.get_json()
     if not data:
         return error_response('Request body is required')
 
+    person_id = data.get('id')
+    if not person_id:
+        return error_response('id is required (frontend-generated UUID)')
+
     name = data.get('name', '').strip()
     if not name:
         return error_response('Name is required')
 
+    preferred_face_id = data.get('preferred_face_id')
+
     db = get_db()
 
-    # Check if person with this name already exists and create (with lock)
     with db._db_lock:
-        existing = get_person_by_name(db.conn, name)
+        # Check for ID collision (shouldn't happen with UUIDs)
+        existing = get_person(db.conn, person_id)
         if existing:
+            return error_response(f'Person with ID "{person_id}" already exists', 409)
+
+        # Check for name collision
+        existing_name = get_person_by_name(db.conn, name)
+        if existing_name:
             return error_response(f'Person with name "{name}" already exists', 409)
 
-        person_id = create_person(db.conn, name)
-        person = get_person(db.conn, person_id)
+        # Create person with provided ID
+        create_person(db.conn, name, person_id=person_id)
 
-    return success_response(person)
+        # Set preferred face if provided
+        if preferred_face_id:
+            update_person(db.conn, person_id, preferred_face_id=preferred_face_id)
+
+    return success_response(message='Person created')
 
 
 @app.route('/api/people/<person_id>', methods=['GET'])
@@ -1381,12 +1401,13 @@ def update_person_endpoint(person_id):
 
     preferred_face_id = data.get('preferred_face_id')
 
-    # Handle recognition_threshold: present key means update, absent means don't change
+    # Handle recognition_threshold (or alias 'threshold'): present key means update, absent means don't change
     update_kwargs = {'name': name, 'preferred_face_id': preferred_face_id}
     threshold_changed = False
     threshold_value = None
-    if 'recognition_threshold' in data:
-        threshold = data['recognition_threshold']
+    # Accept both 'recognition_threshold' and 'threshold' (frontend uses 'threshold')
+    if 'recognition_threshold' in data or 'threshold' in data:
+        threshold = data.get('recognition_threshold') if 'recognition_threshold' in data else data.get('threshold')
         # Validate threshold if provided
         if threshold is not None:
             try:
@@ -1416,7 +1437,7 @@ def update_person_endpoint(person_id):
                     delete_person(db.conn, person_id)
                     return success_response({
                         'deleted': True,
-                        'ejected_face_ids': ejected_face_ids,
+                        'unassigned': ejected_face_ids,  # AppState expects 'unassigned'
                         'message': 'All faces ejected, person deleted'
                     })
                 faces_changed = True
@@ -1432,8 +1453,11 @@ def update_person_endpoint(person_id):
         )
 
     response_data = dict(updated_person) if updated_person else {}
+    # AppState expects 'assigned' and 'unassigned' arrays
+    # - 'unassigned' = faces immediately ejected due to threshold change
+    # - 'assigned' = faces matched via async reassessment (comes via polling)
     if ejected_face_ids:
-        response_data['ejected_face_ids'] = ejected_face_ids
+        response_data['unassigned'] = ejected_face_ids
     response_data['faces_changed'] = faces_changed or (threshold_changed and threshold_value is not None)
 
     return success_response(response_data)
@@ -1592,6 +1616,209 @@ def get_faces_list():
     faces = get_all_faces(db.conn, unknown_only=unknown_only)
     return success_response(faces)
 
+
+# =============================================================================
+# Simple Face Endpoints (AppState-driven, no business logic)
+# =============================================================================
+
+@app.route('/api/faces/assign', methods=['POST'])
+def assign_faces():
+    """Assign faces to a person (simple batch operation).
+
+    Frontend (AppState) handles application logic:
+    - Find or create person
+    - Update face counts
+    - Set preferred face
+    - Cleanup empty persons
+
+    After assignment, triggers async reassessment to auto-match
+    unknown faces against the person's newly assigned faces.
+
+    Request Body:
+        JSON object with:
+            - face_ids: List of face UUIDs to assign
+            - person_id: Person's UUID
+            - trigger_reassessment: Whether to trigger auto-matching (default: true)
+
+    Returns:
+        Success status with reassessment_triggered flag.
+    """
+    data = request.get_json()
+    if not data:
+        return error_response('Request body is required')
+
+    face_ids = data.get('face_ids', [])
+    person_id = data.get('person_id')
+    trigger_reassessment = data.get('trigger_reassessment', True)
+
+    if not face_ids:
+        return error_response('face_ids is required')
+    if not person_id:
+        return error_response('person_id is required')
+
+    db = get_db()
+
+    with db._db_lock:
+        # Verify person exists
+        person = get_person(db.conn, person_id)
+        if person is None:
+            return error_response('Person not found', 404)
+
+        # Assign each face (just update person_id, don't touch manually_tagged)
+        assigned_count = 0
+        for face_id in face_ids:
+            face = get_face(db.conn, face_id)
+            if face is None:
+                continue
+            update_face_person(db.conn, face_id, person_id)
+            assigned_count += 1
+
+    # Trigger async reassessment to auto-match unknown faces against this person
+    reassessment_triggered = False
+    if trigger_reassessment and assigned_count > 0:
+        reassess_unknown_faces_async(
+            db,
+            threshold=db.config.face_recognition_threshold,
+            person_id=person_id,
+        )
+        reassessment_triggered = True
+
+    return success_response(
+        message=f'{assigned_count} faces assigned',
+        data={'reassessment_triggered': reassessment_triggered}
+    )
+
+
+@app.route('/api/faces/unassign', methods=['POST'])
+def unassign_faces_simple():
+    """Unassign faces from their persons (simple batch operation).
+
+    This is a dumb persistence endpoint - no business logic.
+    Frontend (AppState) handles all application logic:
+    - Track affected persons
+    - Update face counts
+    - Reassign preferred faces
+    - Delete empty persons
+
+    Request Body:
+        JSON object with:
+            - face_ids: List of face UUIDs to unassign
+
+    Returns:
+        Success status.
+    """
+    data = request.get_json()
+    if not data:
+        return error_response('Request body is required')
+
+    face_ids = data.get('face_ids', [])
+    if not face_ids:
+        return error_response('face_ids is required')
+
+    db = get_db()
+
+    with db._db_lock:
+        unassigned_count = 0
+        for face_id in face_ids:
+            face = get_face(db.conn, face_id)
+            if face is None:
+                continue
+            # Clear person_id and manually_tagged (face returns to unknown pool)
+            update_face_person(db.conn, face_id, None, manually_tagged=False)
+            unassigned_count += 1
+
+    return success_response(message=f'{unassigned_count} faces unassigned')
+
+
+@app.route('/api/faces/suppress', methods=['POST'])
+def suppress_faces_batch():
+    """Suppress faces (mark as false positives, simple batch operation).
+
+    This is a dumb persistence endpoint - no business logic.
+    Frontend (AppState) handles all application logic:
+    - Unassign from persons first
+    - Update face counts
+    - Reassign preferred faces
+    - Delete empty persons
+
+    Request Body:
+        JSON object with:
+            - face_ids: List of face UUIDs to suppress
+
+    Returns:
+        Success status.
+    """
+    data = request.get_json()
+    if not data:
+        return error_response('Request body is required')
+
+    face_ids = data.get('face_ids', [])
+    if not face_ids:
+        return error_response('face_ids is required')
+
+    db = get_db()
+
+    with db._db_lock:
+        suppressed_count = 0
+        for face_id in face_ids:
+            face = get_face(db.conn, face_id)
+            if face is None:
+                continue
+            suppress_face(db.conn, face_id)
+            suppressed_count += 1
+
+    return success_response(message=f'{suppressed_count} faces suppressed')
+
+
+@app.route('/api/faces', methods=['PATCH'])
+def update_faces_batch():
+    """Update face properties (batch operation).
+
+    This is a dumb persistence endpoint - no business logic.
+
+    Request Body:
+        JSON object with:
+            - face_ids: List of face UUIDs to update
+            - locked: New locked (manually_tagged) state (optional)
+
+    Returns:
+        Success status.
+    """
+    data = request.get_json()
+    if not data:
+        return error_response('Request body is required')
+
+    face_ids = data.get('face_ids', [])
+    if not face_ids:
+        return error_response('face_ids is required')
+
+    locked = data.get('locked')
+
+    db = get_db()
+
+    with db._db_lock:
+        updated_count = 0
+        for face_id in face_ids:
+            face = get_face(db.conn, face_id)
+            if face is None:
+                continue
+
+            if locked is not None:
+                # Update manually_tagged flag
+                db.conn.execute(
+                    'UPDATE faces SET manually_tagged = ? WHERE id = ?',
+                    (1 if locked else 0, face_id)
+                )
+                updated_count += 1
+
+        db.conn.commit()
+
+    return success_response(message=f'{updated_count} faces updated')
+
+
+# =============================================================================
+# Legacy Face Endpoints (complex business logic - being phased out)
+# =============================================================================
 
 @app.route('/api/faces/<face_id>/identify', methods=['POST'])
 def identify_face(face_id):

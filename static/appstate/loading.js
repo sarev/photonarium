@@ -127,13 +127,28 @@ AppState.loading = (function() {
             ensureElements();
             console.log('[AppState.loading.forceHide]');
 
+            const previousOwner = _owner;
             _owner = null;
             if (_el && _visible) {
                 _el.classList.remove('visible');
                 _visible = false;
             }
 
+            // Notify previous owner they were repurposed
+            if (previousOwner) {
+                broadcast({ type: 'repurposed', previousOwner, newOwner: null });
+            }
             broadcast({ type: 'changed', visible: false });
+        },
+
+        /**
+         * Update the message without changing ownership.
+         * @param {string} message - New message to display
+         */
+        setMessage(message) {
+            ensureElements();
+            _message = message;
+            if (_messageEl) _messageEl.textContent = message;
         },
 
         /**

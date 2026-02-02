@@ -1719,6 +1719,11 @@ const App = {
         // Load thumbnail config from backend (async, uses defaults until loaded)
         this.loadThumbnailConfig();
 
+        // Start event polling (receives backend notifications about new images, faces, etc.)
+        if (AppState.events?.startPolling) {
+            AppState.events.startPolling(2000);
+        }
+
         // Initialise toolbar
         this._initToolbar();
 
