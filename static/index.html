@@ -595,10 +595,26 @@
 
     <!-- ============================================================
          JAVASCRIPT
-         Load order: core.js first (framework), then screen-specific modules.
+         Load order: core.js first (framework), then AppState domains,
+         then screen-specific modules.
          ============================================================ -->
     <script src="core.js"></script>
-    <script src="appstate.js"></script>
+
+    <!-- AppState domains (order matters - see appstate/index.js) -->
+    <script src="appstate/core.js"></script>
+    <script src="appstate/view.js"></script>
+    <script src="appstate/nav.js"></script>
+    <script src="appstate/filter.js"></script>
+    <script src="appstate/selection.js"></script>
+    <script src="appstate/status.js"></script>
+    <script src="appstate/search.js"></script>
+    <script src="appstate/folders.js"></script>
+    <script src="appstate/duplicates.js"></script>
+    <script src="appstate/identity.js"></script>
+    <script src="appstate/images.js"></script>
+    <script src="appstate/loading.js"></script>
+    <script src="appstate/index.js"></script>
+
     <script src="thumbnails.js"></script>
     <script src="gallery.js"></script>
     <script src="fullscreen.js"></script>

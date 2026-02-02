@@ -1083,133 +1083,153 @@ Keeping them in `identity.js` avoids circular dependencies.
 <script src="appstate/index.js"></script>
 ```
 
-### Phase 1: Foundation (`appstate2.js`)
+### Phase 1: Foundation ✓
 
-**1.1 Core Infrastructure**
+**1.1 Core Infrastructure** - in `core.js`
 ```
-[ ] Transaction system (transaction(), markDirty(), flushDirty())
-[ ] Subscriber system (createSubscriberSystem())
-[ ] Queue transaction for async operations
-```
-
-**1.2 Cache Primitives (`_internal`)**
-```
-[ ] faces._internal: get, linkToPerson, unlinkFromPerson, setLocked, setSuppressed
-[ ] people._internal: get, add, remove, findByName, setName, setPreferred, setThreshold, bustThumbnail
+[x] Transaction system (transaction(), markDirty(), flushDirty())
+[x] Subscriber system (createSubscriberSystem())
+[x] Queue transaction for async operations
 ```
 
-**1.3 Batch Helpers (`_internal`)**
+**1.2 Cache Primitives (`_internal`)** - in `identity.js`
 ```
-[ ] faces._internal.assignToPersonBatch(faceIds, personId, { lock })
-[ ] faces._internal.unassignBatch(faceIds)
-[ ] faces._internal.pickNewestFace(faceIds)
-[ ] people._internal.reconcilePerson(personId)
-[ ] people._internal.reconcileAll(personIds)
+[x] faces._internal: get, linkToPerson, unlinkFromPerson, setLocked, setSuppressed
+[x] people._internal: get, add, remove, findByName, setName, setPreferred, setThreshold, bustThumbnail
 ```
 
-### Phase 2: Public Methods (faces domain)
-
-**2.1 Manual Operations (optimistic + persist)**
+**1.3 Batch Helpers (`_internal`)** - in `identity.js`
 ```
-[ ] identify(faceIds, personName, options) - lock=true, triggers backend search
-[ ] unassign(faceIds) - unlocks
-[ ] suppress(faceIds) - unassigns first if needed
-[ ] setLocked(faceIds, locked) - with preferred-face guard
-```
-
-**2.2 Reactive Operations (backend-triggered, no persist)**
-```
-[ ] autoAssign(faceIds, personId) - lock=false, after identify response
-[ ] applyThresholdChanges(personId, assigned, unassigned) - after threshold change
+[x] faces._internal.assignToPersonBatch(faceIds, personId, { lock })
+[x] faces._internal.unassignBatch(faceIds)
+[x] faces._internal.pickNewestFace(faceIds)
+[x] people._internal.reconcilePerson(personId)
+[x] people._internal.reconcileAll(personIds)
 ```
 
-**2.3 Data Access**
+### Phase 2: Public Methods (faces domain) ✓
+
+**2.1 Manual Operations (optimistic + persist)** - in `identity.js`
 ```
-[ ] load() - fetch from backend, populate cache
-[ ] getAll() - return cached faces
-[ ] getForPerson(personId) - filtered view
-[ ] getUnknown() - faces without person_id
+[x] identify(faceIds, personName, options) - lock=true, triggers backend search
+[x] unassign(faceIds) - unlocks
+[x] suppress(faceIds) - unassigns first if needed
+[x] setLocked(faceIds, locked) - with preferred-face guard
 ```
 
-### Phase 3: Public Methods (people domain)
-
-**3.1 CRUD Operations**
+**2.2 Reactive Operations (backend-triggered, no persist)** - in `identity.js`
 ```
-[ ] load() - fetch from backend
-[ ] getAll() - return cached people
-[ ] get(personId) - single person
-[ ] search(query) - fuzzy name search
+[x] autoAssign(faceIds, personId) - lock=false, after identify response
+[x] applyThresholdChanges(personId, assigned, unassigned) - after threshold change
 ```
 
-**3.2 Mutations**
+**2.3 Data Access** - in `identity.js`
 ```
-[ ] rename(personId, newName) - handles merge/dissolve delegation
-[ ] merge(fromId, toId) - sequenced persist
-[ ] dissolve(personId) - sequenced persist
-[ ] setPreferred(personId, faceId) - also locks
-[ ] setThreshold(personId, threshold) - triggers backend re-evaluation
-```
-
-### Phase 4: Persist Functions
-
-**4.1 Simple Persists**
-```
-[ ] _persistIdentify(faceIds, personId, createdPerson)
-[ ] _persistUnassign(faceIds)
-[ ] _persistSuppress(faceIds)
-[ ] _persistSetLocked(faceIds, locked)
-[ ] _persistRename(personId, name)
-[ ] _persistSetPreferred(personId, faceId)
-[ ] _persistSetThreshold(personId, threshold) - handles response
+[x] load() - fetch from backend, populate cache
+[x] getAll() - return cached faces
+[x] getForPerson(personId) - filtered view
+[x] getUnknown() - faces without person_id
 ```
 
-**4.2 Sequenced Persists**
+### Phase 3: Public Methods (people domain) ✓
+
+**3.1 CRUD Operations** - in `identity.js`
 ```
-[ ] _persistMerge(faceIds, fromId, toId) - assign THEN delete
-[ ] _persistDissolve(faceIds, personId) - unassign THEN delete
+[x] load() - fetch from backend
+[x] getAll() - return cached people
+[x] get(personId) - single person
+[x] search(query) - fuzzy name search
 ```
 
-### Phase 5: Polling Integration
+**3.2 Mutations** - in `identity.js`
+```
+[x] rename(personId, newName) - handles merge/dissolve delegation
+[x] merge(fromId, toId) - sequenced persist
+[x] dissolve(personId) - sequenced persist
+[x] setPreferred(personId, faceId) - also locks
+[x] setThreshold(personId, threshold) - triggers backend re-evaluation
+```
+
+### Phase 4: Persist Functions ✓
+
+**4.1 Simple Persists** - in `identity.js`
+```
+[x] _persistIdentify(faceIds, personId, createdPerson)
+[x] _persistUnassign(faceIds)
+[x] _persistSuppress(faceIds)
+[x] _persistSetLocked(faceIds, locked)
+[x] _persistRename(personId, name)
+[x] _persistSetPreferred(personId, faceId)
+[x] _persistSetThreshold(personId, threshold) - handles response
+```
+
+**4.2 Sequenced Persists** - in `identity.js`
+```
+[x] _persistMerge(faceIds, fromId, toId) - assign THEN delete
+[x] _persistDissolve(faceIds, personId) - unassign THEN delete
+```
+
+### Phase 5: Polling Integration ✓
 
 ```
-[ ] Reassessment polling after identify() → poll until complete → autoAssign()
-[ ] Threshold polling after setThreshold() → poll until complete → applyThresholdChanges()
-[ ] Status polling for background jobs (bulk operations)
+[x] Reassessment polling after identify() → poll until complete → autoAssign()
+[x] Threshold polling after setThreshold() → poll until complete → applyThresholdChanges()
+[x] Status polling for background jobs (bulk operations)
 ```
 
-### Phase 6: Cutover
+### Phase 6: Cutover ✓
 
 Swap files as soon as appstate2.js is complete. Screens then migrate against the new appstate.js directly - no conditionals.
 
 ```
-[ ] Test appstate2.js in isolation (unit tests, console testing)
-[ ] Replace: mv appstate.js appstate-old.js && mv appstate2.js appstate.js
-[ ] Verify app still loads (new AppState, existing screens)
-[ ] Keep appstate-old.js until all migrations complete (rollback option)
+[x] Test appstate2.js in isolation (unit tests, console testing)
+[x] git rm -f appstate.js appstate2.js
 ```
 
-### Phase 7: Screen Migration
+### Phase 7: Screen Migration (In Progress)
 
-Migrate screens one at a time to use new AppState patterns:
+Screens already use AppState patterns. Verified no direct API calls remain
+(except allowed exceptions: histogram, caption generation, folder picker).
 
-**7.1 faces.js**
+**7.1 faces.js** ✓
 ```
-[ ] Replace direct API calls with AppState methods
-[ ] Subscribe to AppState.faces.onChanged / AppState.people.onChanged
-[ ] Remove local state arrays (use AppState.faces.getAll() etc.)
+[x] Replace direct API calls with AppState methods (already done)
+[x] Subscribe to AppState.faces.onChanged / AppState.people.onChanged (already done)
+[x] Remove local state arrays (uses AppState.faces.getAll() etc.)
 [ ] Test all user actions from inventory
 ```
 
-**7.2 fullscreen.js (tagging mode)**
+**7.2 fullscreen.js (tagging mode)** ✓
 ```
-[ ] Use AppState.faces.identify/unassign/suppress for bbox actions
-[ ] Subscribe to face changes for overlay updates
+[x] Use AppState.faces.identify/unassign/suppress for bbox actions (via faces.js)
+[x] Subscribe to face changes for overlay updates (via faces.js integration)
 ```
 
-**7.3 gallery.js (people filter)**
+**7.3 gallery.js** ✓
 ```
-[ ] Use AppState.people for filter dropdown
-[ ] Subscribe to people changes
+[x] Use AppState.people for filter dropdown (via search.js)
+[x] Use AppState.images for display list
+[x] Subscribe to images/people changes
+```
+
+**7.4 duplicates.js** ✓
+```
+[x] Use AppState.duplicates for groups/status
+[x] Subscribe to changes
+```
+
+**7.5 database.js** ✓
+```
+[x] Use AppState.folders for folder management
+[x] Use AppState.status for processing status
+[x] Subscribe to changes
+```
+
+**7.6 search.js** ✓
+```
+[x] Use AppState.search for semantic search
+[x] Use AppState.people for people filter
+[x] Subscribe to changes
 ```
 
 ### Phase 8: Backend Simplification

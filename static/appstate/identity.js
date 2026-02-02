@@ -544,6 +544,21 @@ AppState.faces = (function() {
             return (await App.apiGet(`/people/${personId}/faces`)).data;
         },
 
+        /**
+         * Search faces using semantic query.
+         * Calls backend search endpoint.
+         * @param {string} query - Search query
+         * @returns {Promise<Array>} Matching faces
+         */
+        async search(query) {
+            console.log('[AppState.faces.search] query:', query);
+            const url = query
+                ? `/faces?search=${encodeURIComponent(query)}`
+                : '/faces';
+            const response = await App.apiGet(url);
+            return response.data || [];
+        },
+
         // =====================================================================
         // PUBLIC MUTATIONS
         // =====================================================================

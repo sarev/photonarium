@@ -37,6 +37,13 @@ AppState.folders = (function() {
      */
     let _stats = null;
 
+    /**
+     * Processing status (from AppState.status).
+     * Used to detect databaseChanged events.
+     * @type {Object|null}
+     */
+    let _status = null;
+
     /** @type {boolean} Whether folders are loading */
     let _loading = false;
 
@@ -190,6 +197,43 @@ AppState.folders = (function() {
          */
         getStats() {
             return _stats;
+        },
+
+        // --- Status Tracking ---
+
+        /**
+         * Set status from AppState.status.
+         * Detects when processing completes and broadcasts databaseChanged.
+         * @param {Object} status - Status object
+         */
+        setStatus(status) {
+            const wasUpdating = _status?.status === 'updating';
+            const nowUpToDate = status?.status === 'up_to_date';
+
+            _status = status;
+            broadcast({ type: 'changed', property: 'status' });
+
+            // Emit databaseChanged when processing completes
+            if (wasUpdating && nowUpToDate) {
+                console.log('[AppState.folders.setStatus] Processing complete, broadcasting databaseChanged');
+                broadcast({ type: 'databaseChanged' });
+            }
+        },
+
+        /**
+         * Get current status.
+         * @returns {Object|null}
+         */
+        getStatus() {
+            return _status;
+        },
+
+        /**
+         * Check if database is updating.
+         * @returns {boolean}
+         */
+        isUpdating() {
+            return _status?.status === 'updating';
         }
     };
 })();
