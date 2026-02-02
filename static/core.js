@@ -1264,7 +1264,21 @@ const App = {
             const onCancel = () => cleanup(false);
 
             onKeyDown = (e) => {
-                if (e.key === 'ArrowLeft' || e.key === 'ArrowRight') {
+                // Stop all key events from reaching the underlying page
+                e.stopPropagation();
+
+                if (e.key === 'Escape') {
+                    e.preventDefault();
+                    onCancel();
+                } else if (e.key === 'Enter') {
+                    e.preventDefault();
+                    // Enter confirms whichever button is focused, or OK by default
+                    if (document.activeElement === cancelBtn) {
+                        onCancel();
+                    } else {
+                        onOk();
+                    }
+                } else if (e.key === 'ArrowLeft' || e.key === 'ArrowRight') {
                     e.preventDefault();
                     // Toggle focus between buttons
                     if (document.activeElement === okBtn) {
@@ -1277,7 +1291,7 @@ const App = {
 
             okBtn.addEventListener('click', onOk);
             cancelBtn.addEventListener('click', onCancel);
-            dialog.addEventListener('cancel', onCancel); // Escape key
+            dialog.addEventListener('cancel', onCancel); // Escape key (native)
             dialog.addEventListener('keydown', onKeyDown);
 
             dialog.showModal();
@@ -1289,30 +1303,47 @@ const App = {
      * Shows a prompt dialog for text input.
      * @param {string} title - Dialog title
      * @param {string} message - Dialog message
-     * @param {string} [defaultValue=''] - Default input value
+     * @param {string|Object} [defaultValueOrOptions=''] - Default input value, or options object
+     * @param {string} [defaultValueOrOptions.defaultValue=''] - Default input value
+     * @param {Function} [defaultValueOrOptions.onInput] - Callback for input events: (inputEl, autocompleteEl, value) => void
+     * @param {Function} [defaultValueOrOptions.onSelect] - Callback when value is selected (e.g., from autocomplete)
      * @returns {Promise<string|null>} Resolves with the entered value, or null if cancelled
      */
-    prompt(title, message, defaultValue = '') {
+    prompt(title, message, defaultValueOrOptions = '') {
+        // Support both old signature (string) and new signature (options object)
+        const options = typeof defaultValueOrOptions === 'string'
+            ? { defaultValue: defaultValueOrOptions }
+            : defaultValueOrOptions;
+        const { defaultValue = '', onInput, onSelect } = options;
+
         return new Promise(resolve => {
             const dialog = document.getElementById('dialog-prompt');
             const titleEl = document.getElementById('dialog-prompt-title');
             const msgEl = document.getElementById('dialog-prompt-message');
             const inputEl = document.getElementById('dialog-prompt-input');
+            const autocompleteEl = document.getElementById('dialog-prompt-autocomplete');
             const okBtn = document.getElementById('dialog-prompt-ok');
             const cancelBtn = document.getElementById('dialog-prompt-cancel');
 
             titleEl.textContent = title;
             msgEl.textContent = message;
             inputEl.value = defaultValue;
+            if (autocompleteEl) autocompleteEl.innerHTML = '';
 
             let onDialogKeyDown; // Declared here so cleanup can reference it
+            let onInputHandler;
 
             const cleanup = (result) => {
                 okBtn.removeEventListener('click', onOk);
                 cancelBtn.removeEventListener('click', onCancel);
                 inputEl.removeEventListener('keydown', onKeydown);
+                if (onInputHandler) inputEl.removeEventListener('input', onInputHandler);
                 dialog.removeEventListener('cancel', onCancel);
                 dialog.removeEventListener('keydown', onDialogKeyDown);
+                if (autocompleteEl) {
+                    autocompleteEl.innerHTML = '';
+                    autocompleteEl.style.display = 'none';
+                }
                 dialog.close();
                 resolve(result);
             };
@@ -1320,12 +1351,28 @@ const App = {
             const onOk = () => cleanup(inputEl.value);
             const onCancel = () => cleanup(null);
             const onKeydown = (e) => {
+                // Stop all key events from reaching the underlying page
+                e.stopPropagation();
+
                 if (e.key === 'Enter') {
                     e.preventDefault();
                     onOk();
+                } else if (e.key === 'Escape') {
+                    e.preventDefault();
+                    onCancel();
                 }
             };
             onDialogKeyDown = (e) => {
+                // Stop all key events from reaching the underlying page
+                e.stopPropagation();
+
+                // Escape anywhere in dialog cancels
+                if (e.key === 'Escape') {
+                    e.preventDefault();
+                    onCancel();
+                    return;
+                }
+
                 // Arrow keys toggle focus between buttons (only when a button has focus)
                 if (e.key === 'ArrowLeft' || e.key === 'ArrowRight') {
                     if (document.activeElement === okBtn || document.activeElement === cancelBtn) {
@@ -1339,6 +1386,23 @@ const App = {
                 }
             };
 
+            // Wire up onInput callback for autocomplete support
+            if (onInput) {
+                onInputHandler = () => {
+                    onInput(inputEl, autocompleteEl, inputEl.value);
+                };
+                inputEl.addEventListener('input', onInputHandler);
+            }
+
+            // Allow external code to programmatically select a value and close
+            if (onSelect) {
+                // Expose a select function via the dialog element
+                dialog._selectValue = (value) => {
+                    inputEl.value = value;
+                    cleanup(value);
+                };
+            }
+
             okBtn.addEventListener('click', onOk);
             cancelBtn.addEventListener('click', onCancel);
             inputEl.addEventListener('keydown', onKeydown);
@@ -1347,6 +1411,11 @@ const App = {
 
             dialog.showModal();
             inputEl.select(); // Select text for easy replacement
+
+            // Trigger initial onInput if there's a default value
+            if (onInput && defaultValue) {
+                onInput(inputEl, autocompleteEl, defaultValue);
+            }
         });
     },
 
@@ -1371,16 +1440,28 @@ const App = {
             }
         };
 
+        const handleKeyDown = (e) => {
+            // Stop all key events from reaching the underlying page
+            e.stopPropagation();
+
+            if (e.key === 'Escape') {
+                e.preventDefault();
+                cleanup();
+            }
+        };
+
         const cleanup = () => {
             grid.removeEventListener('click', handleClick);
             closeBtn.removeEventListener('click', cleanup);
             dialog.removeEventListener('cancel', cleanup);
+            dialog.removeEventListener('keydown', handleKeyDown);
             dialog.close();
         };
 
         grid.addEventListener('click', handleClick);
         closeBtn.addEventListener('click', cleanup);
         dialog.addEventListener('cancel', cleanup);
+        dialog.addEventListener('keydown', handleKeyDown);
 
         dialog.showModal();
     },

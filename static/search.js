@@ -234,6 +234,22 @@ const Search = {
         if (this._els.peopleSearch) {
             this._els.peopleSearch.addEventListener('input', () => this._filterPeopleList());
         }
+        // Keyboard handling for people picker dialog
+        if (this._els.peopleDialog) {
+            this._els.peopleDialog.addEventListener('keydown', (e) => {
+                // Stop all key events from reaching the underlying page
+                e.stopPropagation();
+
+                if (e.key === 'Escape') {
+                    e.preventDefault();
+                    this._closePeoplePicker(false);
+                } else if (e.key === 'Enter' && e.target !== this._els.peopleSearch) {
+                    // Enter confirms (but not when typing in search)
+                    e.preventDefault();
+                    this._closePeoplePicker(true);
+                }
+            });
+        }
 
         // Drag-and-drop for people picker panels
         this._setupPanelDropHandlers(this._els.peopleAvailable, 'available');

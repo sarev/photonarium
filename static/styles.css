@@ -2181,67 +2181,6 @@ a:hover {
     object-fit: cover;
 }
 
-/* Picker rename input (inline edit in pick-preferred mode header) */
-.picker-rename-container {
-    position: relative;
-    display: inline-block;
-}
-
-.picker-rename-input {
-    font-size: 1.17em;
-    font-weight: bold;
-    padding: 4px 8px;
-    border: 1px solid var(--color-border);
-    border-radius: 4px;
-    background: var(--color-bg-primary);
-    color: var(--color-text-primary);
-    width: 200px;
-}
-
-.picker-rename-input:focus {
-    outline: none;
-    border-color: var(--color-accent);
-}
-
-/* Picker rename autocomplete dropdown */
-.picker-rename-autocomplete {
-    position: absolute;
-    top: 100%;
-    left: 0;
-    width: 100%;
-    min-width: 200px;
-    background: var(--color-bg-elevated);
-    border: 1px solid var(--color-border);
-    border-radius: 4px;
-    box-shadow: var(--shadow-lg);
-    z-index: 100;
-    max-height: 200px;
-    overflow-y: auto;
-}
-
-.picker-rename-autocomplete-item {
-    display: flex;
-    align-items: center;
-    gap: 8px;
-    padding: 8px 12px;
-    cursor: pointer;
-    transition: background-color 0.1s;
-    color: var(--color-text-primary);
-}
-
-.picker-rename-autocomplete-item:hover,
-.picker-rename-autocomplete-item.selected {
-    background-color: var(--color-bg-tertiary);
-}
-
-.picker-rename-autocomplete-item img {
-    width: 24px;
-    height: 24px;
-    border-radius: 50%;
-    object-fit: cover;
-}
-
-
 /* ==========================================================================
    DATABASE SCREEN
 
@@ -3029,6 +2968,69 @@ dialog::backdrop {
     outline: none;
     border-color: var(--color-action-primary);
     box-shadow: 0 0 0 2px var(--color-action-light);
+}
+
+.dialog-input-container {
+    position: relative;
+    margin-bottom: 1rem;
+}
+
+.dialog-input-container .dialog-input {
+    margin-bottom: 0;
+}
+
+/* Autocomplete dropdown - positioned by JS to float below input */
+.dialog-autocomplete {
+    position: fixed;
+    max-height: 240px;
+    overflow-y: auto;
+    background: var(--color-bg-elevated);
+    border: 1px solid var(--color-border);
+    border-radius: 8px;
+    box-shadow: var(--shadow-lg);
+    z-index: 10000;
+}
+
+.dialog-autocomplete:empty {
+    display: none;
+}
+
+.dialog-autocomplete .autocomplete-item {
+    padding: 0.625rem 0.875rem;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    gap: 0.625rem;
+    color: var(--color-text-primary);
+}
+
+.dialog-autocomplete .autocomplete-item:first-child {
+    border-radius: 7px 7px 0 0;
+}
+
+.dialog-autocomplete .autocomplete-item:last-child {
+    border-radius: 0 0 7px 7px;
+}
+
+.dialog-autocomplete .autocomplete-item:only-child {
+    border-radius: 7px;
+}
+
+.dialog-autocomplete .autocomplete-item:hover {
+    background: var(--color-bg-tertiary);
+}
+
+.dialog-autocomplete .autocomplete-item .face-count {
+    color: var(--color-text-muted);
+    font-size: 0.85em;
+    margin-left: auto;
+}
+
+.dialog-autocomplete .autocomplete-item img {
+    width: 28px;
+    height: 28px;
+    border-radius: 50%;
+    object-fit: cover;
 }
 
 /* Emoji picker dialog */

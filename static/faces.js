@@ -584,8 +584,8 @@
         pickerView.setAttribute('tabindex', '0');
         // Focus this view when clicked (for keyboard event routing)
         pickerView.addEventListener('click', (e) => {
-            // Don't steal focus from inputs
-            if (e.target.tagName === 'INPUT') return;
+            // Don't steal focus from inputs within this view
+            if (document.activeElement?.tagName === 'INPUT') return;
             if (document.activeElement !== pickerView) {
                 pickerView.focus({ preventScroll: true });
             }
@@ -1805,96 +1805,105 @@
 
     /**
      * Handle rename button click in pick-preferred mode.
-     * Shows inline edit input with autocomplete.
+     * Shows modal dialog with autocomplete for renaming/merging.
      */
-    function handleRenamePersonClick() {
+    async function handleRenamePersonClick() {
         if (!pickPreferredPersonId || !pickPreferredPersonName) return;
-        if (!pickerTitleEl) return;
-
-        // Already editing?
-        if (pickerTitleEl.querySelector('.picker-rename-input')) return;
-
-        // Store original content for restore on cancel
-        const originalHTML = pickerTitleEl.innerHTML;
-        const titleLeft = pickerTitleEl.parentElement;
-
-        // Hide rename button while editing
-        const renameBtn = titleLeft?.querySelector('.faces-rename-btn');
-        if (renameBtn) renameBtn.hidden = true;
-
-        // Create editable container
-        const editContainer = document.createElement('div');
-        editContainer.className = 'picker-rename-container';
-
-        const input = document.createElement('input');
-        input.type = 'text';
-        input.className = 'picker-rename-input';
-        input.value = pickPreferredPersonName;
-        input.placeholder = 'Enter name...';
-
-        editContainer.appendChild(input);
-
-        // Replace title content with input
-        pickerTitleEl.innerHTML = '';
-        pickerTitleEl.appendChild(editContainer);
 
         // Pre-fetch people for autocomplete
         AppState.people.load();
 
-        // Handle input for autocomplete
-        input.addEventListener('input', () => {
-            showNameAutocomplete(input, input.value, editContainer, {
-                excludePersonId: pickPreferredPersonId,
-                className: 'picker-rename-autocomplete'
-            });
-        });
+        const dialog = document.getElementById('dialog-prompt');
 
-        // Commit on blur
-        input.addEventListener('blur', () => {
-            // Delay to allow autocomplete click
-            setTimeout(() => {
-                const autocomplete = editContainer.querySelector('.picker-rename-autocomplete');
-                if (autocomplete) autocomplete.remove();
-                commitPickerRename(input.value.trim(), originalHTML, renameBtn);
-            }, 150);
-        });
+        const newName = await App.prompt(
+            'Rename Person',
+            `Enter new name for "${pickPreferredPersonName}":`,
+            {
+                defaultValue: pickPreferredPersonName,
+                onInput: (inputEl, autocompleteEl, value) => {
+                    // Build autocomplete dropdown
+                    autocompleteEl.innerHTML = '';
+                    const q = value.trim();
+                    if (!q) {
+                        autocompleteEl.style.display = 'none';
+                        return;
+                    }
 
-        // Handle keyboard
-        input.addEventListener('keydown', (e) => {
-            if (e.key === 'Enter') {
-                e.preventDefault();
-                input.blur();
-            } else if (e.key === 'Escape') {
-                e.preventDefault();
-                e.stopPropagation();
-                // Cancel - restore original
-                pickerTitleEl.innerHTML = originalHTML;
-                if (renameBtn) renameBtn.hidden = false;
+                    let matches = AppState.people.search(q);
+                    // Exclude current person
+                    matches = matches.filter(p => p.id !== pickPreferredPersonId);
+                    if (matches.length === 0) {
+                        autocompleteEl.style.display = 'none';
+                        return;
+                    }
+
+                    // Position autocomplete below input (fixed positioning for dialog top-layer)
+                    const rect = inputEl.getBoundingClientRect();
+                    autocompleteEl.style.top = `${rect.bottom + 4}px`;
+                    autocompleteEl.style.left = `${rect.left}px`;
+                    autocompleteEl.style.width = `${rect.width}px`;
+
+                    // Build items first, then show (to avoid :empty CSS rule)
+                    const maxResults = 5;
+                    for (let i = 0; i < Math.min(matches.length, maxResults); i++) {
+                        const person = matches[i];
+                        const item = document.createElement('div');
+                        item.className = 'autocomplete-item';
+
+                        const img = document.createElement('img');
+                        const bustTime = thumbnailCacheBust.get(person.id);
+                        img.src = bustTime
+                            ? `/api/people/${person.id}/thumbnail?t=${bustTime}`
+                            : `/api/people/${person.id}/thumbnail`;
+                        img.alt = '';
+                        item.appendChild(img);
+
+                        const nameSpan = document.createElement('span');
+                        nameSpan.textContent = person.name;
+                        item.appendChild(nameSpan);
+
+                        const countSpan = document.createElement('span');
+                        countSpan.className = 'face-count';
+                        countSpan.textContent = `(${person.face_count})`;
+                        item.appendChild(countSpan);
+
+                        item.addEventListener('click', () => {
+                            // Use dialog's selectValue to close with this name
+                            if (dialog._selectValue) {
+                                dialog._selectValue(person.name);
+                            }
+                        });
+
+                        autocompleteEl.appendChild(item);
+                    }
+
+                    // Show after items added (so :empty rule doesn't hide it)
+                    autocompleteEl.style.display = 'block';
+                },
+                onSelect: true  // Enable _selectValue on dialog
             }
-        });
+        );
 
-        // Focus and select all
-        input.focus();
-        input.select();
+        // null means cancelled
+        if (newName === null) return;
+
+        // Commit the rename (handles merge, dissolve, simple rename)
+        await commitPickerRenameFromModal(newName.trim());
     }
 
     /**
-     * Commit the picker rename input value.
+     * Commit rename from modal dialog.
      * Handles merge, dissolve, and simple rename cases.
      *
      * Cases:
-     * - B: Same name → no-op
-     * - C: to_name exists → merge faces into existing person, delete original
-     * - D: Empty to_name → unidentify all faces, delete person
-     * - E: New name → simple rename (preserves locked/preferred state)
+     * - Same name → no-op
+     * - Name exists → merge faces into existing person, delete original
+     * - Empty name → unidentify all faces, delete person
+     * - New name → simple rename (preserves locked/preferred state)
      */
-    async function commitPickerRename(trimmedName, originalHTML, renameBtn) {
-        // Restore button visibility
-        if (renameBtn) renameBtn.hidden = false;
-
-        // Case B: Same name - restore and no-op
+    async function commitPickerRenameFromModal(trimmedName) {
+        // Case B: Same name - no-op
         if (trimmedName.toLowerCase() === pickPreferredPersonName.toLowerCase()) {
-            pickerTitleEl.innerHTML = originalHTML;
             return;
         }
 
@@ -1911,10 +1920,7 @@
                     'Merge People',
                     `Merge "${pickPreferredPersonName}" into "${collision.name}"? All faces will be moved to "${collision.name}".`
                 );
-                if (!confirmed) {
-                    pickerTitleEl.innerHTML = originalHTML;
-                    return;
-                }
+                if (!confirmed) return;
 
                 await AppState.people.merge(pickPreferredPersonId, collision.id);
                 exitPickPreferredMode();
@@ -1925,10 +1931,7 @@
                     'Remove Person',
                     `Remove "${pickPreferredPersonName}"? All faces will return to the unknown pool.`
                 );
-                if (!confirmed) {
-                    pickerTitleEl.innerHTML = originalHTML;
-                    return;
-                }
+                if (!confirmed) return;
 
                 await AppState.people.dissolve(pickPreferredPersonId);
                 exitPickPreferredMode();
@@ -1948,7 +1951,6 @@
         } catch (error) {
             console.error('Failed to rename person:', error);
             App.showError('Failed to rename person.');
-            pickerTitleEl.innerHTML = originalHTML;
         }
     }
 
