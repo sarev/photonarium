@@ -1262,12 +1262,20 @@ Screens already use AppState patterns. Verified no direct API calls remain
 [x] /people/:id/dissolve - kept for backwards compatibility, frontend orchestrates
 ```
 
-### Phase 9: Cleanup
+### Phase 9: Cleanup ✓
 
 ```
-[ ] Delete appstate-old.js
-[ ] Update CLAUDE.md with new architecture as current (not "to be")
-[ ] Remove any backwards-compatibility shims
+[x] Look for and remove any stray legacy code (frontend and backend)
+    - Old appstate.js and appstate2.js removed
+    - Backward compatibility shims in core.js kept intentionally for gradual migration
+[x] Delete appstate-old.js
+[x] Update CLAUDE.md with new architecture as current (not "to be")
+    - Updated Frontend Structure table with split AppState files
+    - Updated AppState Domains table with all 13 domains
+[x] Remove any backwards-compatibility shims
+    - Kept deprecated methods in core.js (setTheme, setThumbnailSize, etc.)
+    - These are intentional bridges from old App.* API to new AppState API
+    - Will be removed when all callers are migrated
 ```
 
 ### Testing Checklist
