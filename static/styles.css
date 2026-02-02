@@ -80,6 +80,7 @@
 
     --color-success: #5a765b;
     --color-warning: #ffc107;
+    --color-ignore: #8a837d;
 
     --shadow-sm: 0 1px 2px rgba(46, 42, 39, 0.08);
     --shadow-md: 0 2px 8px rgba(46, 42, 39, 0.12);
@@ -180,6 +181,7 @@
 
     --color-success: #7c9d7c;
     --color-warning: #ffca28;
+    --color-ignore: #6a625d;
 
     --shadow-sm: 0 1px 2px rgba(10, 4, 5, 0.2);
     --shadow-md: 0 2px 8px rgba(10, 4, 5, 0.3);
@@ -1463,6 +1465,35 @@ a:hover {
     font-size: 14px;
 }
 
+/* Ignore button (assign to "-" person) - top-left of face box */
+.face-ignore-btn {
+    position: absolute;
+    top: -10px;
+    left: -10px;
+    width: 20px;
+    height: 20px;
+    border: none;
+    border-radius: 50%;
+    background: var(--color-ignore);
+    color: white;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    opacity: 0;
+    transition: opacity 0.2s;
+    z-index: 1;
+}
+
+.face-box:hover .face-ignore-btn,
+.face-ignore-btn:focus {
+    opacity: 1;
+}
+
+.face-ignore-btn .material-symbols-outlined {
+    font-size: 14px;
+}
+
 /* Autocomplete dropdown */
 .face-autocomplete {
     position: absolute;
@@ -1796,6 +1827,64 @@ a:hover {
 }
 
 .face-card-suppress .material-symbols-outlined {
+    font-size: 14px;
+}
+
+/* Unassign button on identified face cards (picker) */
+.face-card-unassign {
+    position: absolute;
+    top: 0.25rem;
+    right: 0.25rem;
+    width: 22px;
+    height: 22px;
+    border: none;
+    border-radius: 50%;
+    background: var(--color-success);
+    color: white;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    opacity: 0;
+    transition: opacity 0.2s;
+    z-index: 10;
+}
+
+.face-card:hover .face-card-unassign,
+.face-card-unassign:focus {
+    opacity: 1;
+}
+
+.face-card-unassign .material-symbols-outlined {
+    font-size: 14px;
+}
+
+/* Ignore button on face cards (assign to "-" person) */
+.face-card-ignore {
+    position: absolute;
+    top: 0.25rem;
+    left: 0.25rem;
+    width: 22px;
+    height: 22px;
+    border: none;
+    border-radius: 50%;
+    background: var(--color-ignore);
+    color: white;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    opacity: 0;
+    transition: opacity 0.2s;
+    z-index: 10;
+}
+
+.face-card:hover .face-card-ignore,
+.face-card-ignore:focus {
+    opacity: 1;
+}
+
+.face-card-ignore .material-symbols-outlined {
     font-size: 14px;
 }
 

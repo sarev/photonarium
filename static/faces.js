@@ -591,6 +591,24 @@
             }
         });
 
+        // Handle Escape: clear selection first, then exit mode if already empty
+        pickerView.addEventListener('keydown', (e) => {
+            if (e.key === 'Escape') {
+                // Don't handle if an input is focused (let it handle Escape)
+                if (document.activeElement?.tagName === 'INPUT') return;
+
+                // Check if selection is empty BEFORE GridSelection handles it
+                const hasSelection = pickerSelection && pickerSelection.getSelected().length > 0;
+                if (!hasSelection) {
+                    // Selection already empty - exit pick-preferred mode
+                    e.preventDefault();
+                    e.stopPropagation();
+                    exitPickPreferredMode();
+                }
+                // If there's a selection, let GridSelection clear it (don't prevent default)
+            }
+        });
+
         // Create picker header with full structure (persistent)
         pickerHeader = document.createElement('div');
         pickerHeader.className = 'faces-pick-preferred-header';
@@ -1441,7 +1459,55 @@
         img.alt = pickPreferredPersonName || 'Face';
         thumb.appendChild(img);
 
+        // Unassign button (remove face from person)
+        const unassignBtn = document.createElement('button');
+        unassignBtn.className = 'face-card-unassign';
+        unassignBtn.title = 'Unassign from person';
+        unassignBtn.innerHTML = '<span class="material-symbols-outlined">close</span>';
+        unassignBtn.addEventListener('click', async (e) => {
+            e.stopPropagation();
+            e.preventDefault();
+            // Selection model: if card is selected, apply to all selected; otherwise select it first
+            if (pickerSelection && pickerSelection.isSelected(face.id)) {
+                const selectedIds = pickerSelection.getSelected();
+                await handlePickPreferredDeleteRequested(selectedIds);
+            } else {
+                // Not selected - clear selection, select this card, then unassign
+                if (pickerSelection) {
+                    pickerSelection.clear();
+                    pickerSelection.select(face.id);
+                }
+                await handlePickPreferredDeleteRequested([face.id]);
+            }
+        });
+
         card.appendChild(thumb);
+        card.appendChild(unassignBtn);
+
+        // Ignore button (assign to "-" person) - but not when already viewing "-" person
+        if (pickPreferredPersonName !== '-') {
+            const ignoreBtn = document.createElement('button');
+            ignoreBtn.className = 'face-card-ignore';
+            ignoreBtn.title = 'Move to ignored list';
+            ignoreBtn.innerHTML = '<span class="material-symbols-outlined">remove</span>';
+            ignoreBtn.addEventListener('click', async (e) => {
+                e.stopPropagation();
+                e.preventDefault();
+                // Selection model: if card is selected, apply to all selected; otherwise select it first
+                if (pickerSelection && pickerSelection.isSelected(face.id)) {
+                    const selectedIds = pickerSelection.getSelected();
+                    await handleIgnoreFaces(selectedIds, pickerSelection);
+                } else {
+                    // Not selected - clear selection, select this card, then ignore
+                    if (pickerSelection) {
+                        pickerSelection.clear();
+                        pickerSelection.select(face.id);
+                    }
+                    await handleIgnoreFaces([face.id], pickerSelection);
+                }
+            });
+            card.appendChild(ignoreBtn);
+        }
 
         // Add star overlay (outside thumb to avoid circular clip)
         const star = document.createElement('div');
@@ -1466,7 +1532,19 @@
             : 'Auto-tagged - not used for recognition';
         padlock.addEventListener('click', async (e) => {
             e.stopPropagation();
-            await handlePadlockClick(face.id, padlock);
+            e.preventDefault();
+            // Selection model: if card is selected, apply to all selected; otherwise select it first
+            if (pickerSelection && pickerSelection.isSelected(face.id)) {
+                const selectedIds = pickerSelection.getSelected();
+                await handlePadlockClick(selectedIds);
+            } else {
+                // Not selected - clear selection, select this card, then toggle
+                if (pickerSelection) {
+                    pickerSelection.clear();
+                    pickerSelection.select(face.id);
+                }
+                await handlePadlockClick([face.id]);
+            }
         });
         card.appendChild(padlock);
 
@@ -1556,22 +1634,61 @@
 
     /**
      * Handle padlock click to toggle manually_tagged status.
-     * Delegates to AppState which handles cache updates.
-     * @param {string} faceId - Face ID to toggle
-     * @param {HTMLElement} padlockElement - The padlock element for UI update
+     * Implements multi-select lock logic:
+     * - If any unlocked: lock those
+     * - If all locked: unlock all (except preferred faces)
+     *
+     * @param {string[]} faceIds - Face IDs to toggle
      */
-    async function handlePadlockClick(faceId, padlockElement) {
-        // Don't allow unlocking the preferred face
-        const face = pickPreferredFaces.find(f => f.id === faceId);
-        if (face?.is_preferred && face?.manually_tagged) {
-            App.showError('Cannot unlock the preferred face.');
-            return;
+    async function handlePadlockClick(faceIds) {
+        if (!faceIds?.length) return;
+
+        // Get face data and determine lock states
+        const faces = faceIds.map(id => pickPreferredFaces.find(f => f.id === id)).filter(Boolean);
+        if (!faces.length) return;
+
+        const unlockedFaces = faces.filter(f => !f.manually_tagged);
+        const lockedFaces = faces.filter(f => f.manually_tagged);
+
+        let toLock = [];
+        let toUnlock = [];
+
+        if (unlockedFaces.length > 0) {
+            // Some are unlocked - lock those
+            toLock = unlockedFaces.map(f => f.id);
+        } else {
+            // All are locked - unlock all (except preferred)
+            toUnlock = lockedFaces
+                .filter(f => !f.is_preferred)
+                .map(f => f.id);
+
+            if (toUnlock.length === 0 && lockedFaces.length > 0) {
+                App.showError('Cannot unlock the preferred face.');
+                return;
+            }
         }
 
         try {
-            const newValue = await AppState.faces.toggleManualTag(faceId);
-            // Update padlock visual immediately (AppState subscription will refresh anyway)
-            updatePadlockIcon(padlockElement, newValue);
+            if (toLock.length > 0) {
+                await AppState.faces.setLocked(toLock, true);
+                // Update padlock visuals immediately
+                for (const faceId of toLock) {
+                    const padlock = facesGrid.querySelector(`.face-card-padlock[data-face-id="${faceId}"]`);
+                    if (padlock) updatePadlockIcon(padlock, true);
+                    const face = pickPreferredFaces.find(f => f.id === faceId);
+                    if (face) face.manually_tagged = true;
+                }
+            }
+            if (toUnlock.length > 0) {
+                await AppState.faces.setLocked(toUnlock, false);
+                // Update padlock visuals immediately
+                for (const faceId of toUnlock) {
+                    const padlock = facesGrid.querySelector(`.face-card-padlock[data-face-id="${faceId}"]`);
+                    if (padlock) updatePadlockIcon(padlock, false);
+                    const face = pickPreferredFaces.find(f => f.id === faceId);
+                    if (face) face.manually_tagged = false;
+                }
+            }
         } catch (error) {
             console.error('Failed to toggle manual tag:', error);
             App.showError('Failed to toggle manual tag.');
@@ -2230,6 +2347,45 @@
             console.error('Failed to suppress faces:', error);
             App.showError('Failed to suppress faces.');
         });
+    }
+
+    /**
+     * Handle ignore request for faces.
+     * Assigns faces to the "-" (ignored) person.
+     * Works for both unknown faces and picker faces (reassignment).
+     * @param {Array<string>} faceIds - Face IDs to ignore
+     * @param {GridSelection} [selection] - Selection to clear (facesSelection or pickerSelection)
+     */
+    async function handleIgnoreFaces(faceIds, selection) {
+        if (!faceIds || faceIds.length === 0) return;
+
+        // Only confirm if moving multiple faces
+        if (faceIds.length > 1) {
+            const message = `Move ${faceIds.length} faces to the ignored list? They will no longer appear in the unknown faces.`;
+            const confirmed = await App.confirm('Ignore Faces', message);
+            if (!confirmed) return;
+        }
+
+        // Clear selection immediately for better UX
+        if (selection) {
+            selection.clear();
+        }
+
+        try {
+            // Assign to the "-" (ignored) person
+            await AppState.faces.identify(faceIds, '-');
+
+            // If in picker mode, check if all faces were removed
+            if (pickPreferredPersonId) {
+                const remainingFaces = AppState.faces.getForPerson(pickPreferredPersonId);
+                if (remainingFaces.length === 0) {
+                    exitPickPreferredMode();
+                }
+            }
+        } catch (error) {
+            console.error('Failed to ignore faces:', error);
+            App.showError('Failed to ignore faces.');
+        }
     }
 
     /**
@@ -3069,13 +3225,40 @@
                 const selectedIds = facesSelection.getSelected();
                 await handleFacesDeleteRequested(selectedIds);
             } else {
-                // Single face, no selection - suppress just this one
+                // Not selected - clear selection, select this card, then suppress
+                if (facesSelection) {
+                    facesSelection.clear();
+                    facesSelection.select(face.id);
+                }
                 await handleFacesDeleteRequested([face.id]);
+            }
+        });
+
+        // Ignore button (assign to "-" person)
+        const ignoreBtn = document.createElement('button');
+        ignoreBtn.className = 'face-card-ignore';
+        ignoreBtn.title = 'Move to ignored list';
+        ignoreBtn.innerHTML = '<span class="material-symbols-outlined">remove</span>';
+        ignoreBtn.addEventListener('click', async (e) => {
+            e.stopPropagation();
+            e.preventDefault();
+            // Selection model: if card is selected, apply to all selected; otherwise select it first
+            if (facesSelection && facesSelection.isSelected(face.id)) {
+                const selectedIds = facesSelection.getSelected();
+                await handleIgnoreFaces(selectedIds, facesSelection);
+            } else {
+                // Not selected - clear selection, select this card, then ignore
+                if (facesSelection) {
+                    facesSelection.clear();
+                    facesSelection.select(face.id);
+                }
+                await handleIgnoreFaces([face.id], facesSelection);
             }
         });
 
         card.appendChild(thumb);
         card.appendChild(suppressBtn);
+        card.appendChild(ignoreBtn);
 
         // Create editable name input
         const input = document.createElement('input');
@@ -3675,11 +3858,33 @@
             actionBtn.title = 'Remove identification (return to unknown)';
             actionBtn.addEventListener('click', async (e) => {
                 e.stopPropagation();
+                // Suppress overlay reload - we update the DOM directly
+                suppressOverlayReload = true;
+
+                // Optimistic UI: update box to unknown styling
+                box.classList.remove('known', 'ignored');
+                box.classList.add('unknown');
+
+                // Update action button to suppress style
+                actionBtn.classList.remove('unidentify');
+                actionBtn.title = 'Remove face detection (not a real face)';
+
+                // Update label to show input field
+                const label = box.querySelector('.face-label');
+                if (label) {
+                    showNameInput(label, { ...face, person_id: null, person_name: null });
+                }
+
                 try {
                     await AppState.faces.unassign([face.id]);
                 } catch (error) {
                     console.error('Failed to unidentify face:', error);
                     App.showError('Failed to unidentify face');
+                    // Reload to restore correct state on error
+                    const imageId = Fullscreen.state.currentId;
+                    if (imageId) loadFacesForImage(imageId);
+                } finally {
+                    suppressOverlayReload = false;
                 }
             });
         } else {
@@ -3692,6 +3897,53 @@
         }
 
         box.appendChild(actionBtn);
+
+        // Create ignore button (assign to "-" person) - only for non-ignored faces
+        const isIgnored = face.person_id && face.person_name === '-';
+        if (!isIgnored) {
+            const ignoreBtn = document.createElement('button');
+            ignoreBtn.className = 'face-ignore-btn';
+            ignoreBtn.innerHTML = '<span class="material-symbols-outlined">remove</span>';
+            ignoreBtn.title = 'Move to ignored list';
+            ignoreBtn.addEventListener('click', async (e) => {
+                e.stopPropagation();
+                // Suppress overlay reload - we update the DOM directly
+                suppressOverlayReload = true;
+
+                // Optimistic UI: update box to ignored styling
+                box.classList.remove('unknown', 'known');
+                box.classList.add('known', 'ignored');
+
+                // Remove the ignore button (no longer needed on ignored face)
+                ignoreBtn.remove();
+
+                // Update action button to unidentify style
+                const actionBtn = box.querySelector('.face-delete-btn');
+                if (actionBtn) {
+                    actionBtn.classList.add('unidentify');
+                    actionBtn.title = 'Remove identification (return to unknown)';
+                }
+
+                // Update label to show "-"
+                const nameSpan = box.querySelector('.face-name');
+                if (nameSpan) {
+                    nameSpan.textContent = '-';
+                }
+
+                try {
+                    await AppState.faces.identify([face.id], '-');
+                } catch (error) {
+                    console.error('Failed to ignore face:', error);
+                    App.showError('Failed to ignore face');
+                    // Reload to restore correct state on error
+                    const imageId = Fullscreen.state.currentId;
+                    if (imageId) loadFacesForImage(imageId);
+                } finally {
+                    suppressOverlayReload = false;
+                }
+            });
+            box.appendChild(ignoreBtn);
+        }
 
         // Create label
         const label = createFaceLabel(face, top, imgHeight);
@@ -4159,6 +4411,9 @@
      * @param {HTMLElement} faceBox - Face box DOM element (removed from overlay)
      */
     async function suppressFace(faceId, faceBox) {
+        // Suppress overlay reload during suppress - we've already removed the box
+        suppressOverlayReload = true;
+
         // Remove from fullscreen overlay immediately (optimistic UI)
         faceBox.remove();
 
@@ -4168,6 +4423,9 @@
         } catch (error) {
             console.error('Failed to suppress face:', error);
             App.showError('Failed to remove face.');
+            // Note: We don't restore the box on error - user can reload if needed
+        } finally {
+            suppressOverlayReload = false;
         }
     }
 
