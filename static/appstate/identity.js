@@ -37,6 +37,13 @@ AppState.faces = (function() {
      */
     let _cache = null;
 
+    /**
+     * Whether the cache is partial (unknown faces only).
+     * When true, fetchForImage() must hit the API.
+     * @type {boolean}
+     */
+    let _cacheIsPartial = false;
+
     /** @type {boolean} */
     let _loading = false;
 
@@ -408,6 +415,7 @@ AppState.faces = (function() {
             try {
                 const response = await App.apiGet('/faces');
                 _cache = new Map(response.data.map(f => [f.id, f]));
+                _cacheIsPartial = false;  // Full cache loaded
                 invalidateDerived();
 
                 console.log('[AppState.faces.load] Loaded', _cache.size, 'faces');
@@ -449,6 +457,7 @@ AppState.faces = (function() {
             try {
                 const response = await App.apiGet('/faces?unknown=true');
                 _cache = new Map(response.data.map(f => [f.id, f]));
+                _cacheIsPartial = true;  // Only unknown faces loaded
                 invalidateDerived();
 
                 console.log('[AppState.faces.loadUnknownOnly] Loaded', _cache.size, 'unknown faces');
@@ -568,12 +577,13 @@ AppState.faces = (function() {
 
         /**
          * Fetch faces for an image from backend.
-         * Uses cache if loaded.
+         * Uses cache if fully loaded, otherwise fetches from API.
          * @param {string} imageId - Image ID
          * @returns {Promise<Array>}
          */
         async fetchForImage(imageId) {
-            if (_cache) return this.getForImage(imageId);
+            // If cache is partial (unknown only), must fetch from API
+            if (_cache && !_cacheIsPartial) return this.getForImage(imageId);
             return (await App.apiGet(`/images/${imageId}/faces`)).data;
         },
 
@@ -1036,6 +1046,7 @@ AppState.faces = (function() {
          */
         invalidate() {
             _cache = null;
+            _cacheIsPartial = false;
             invalidateDerived();
         },
 

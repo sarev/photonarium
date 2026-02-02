@@ -65,6 +65,12 @@
     /** @type {string|null} Image ID currently being rendered in overlay (prevents stale renders) */
     let currentOverlayImageId = null;
 
+    /** @type {Array|null} Current faces displayed in overlay (for re-rendering on resize) */
+    let currentOverlayFaces = null;
+
+    /** @type {function|null} Bound resize handler for cleanup */
+    let resizeHandler = null;
+
     // -------------------------------------------------------------------------
     // -------------------------------------------------------------------------
     // AUTOCOMPLETE STATE - Tracks active dropdown
@@ -892,9 +898,19 @@
             if (event.property === 'fullscreenImageId') {
                 const imageId = AppState.nav.getFullscreenImageId();
                 if (imageId) {
+                    // Add resize listener when fullscreen opens with tagging mode
+                    if (isTaggingModeActive() && !resizeHandler) {
+                        resizeHandler = handleWindowResize;
+                        window.addEventListener('resize', resizeHandler);
+                    }
                     handleFullscreenImageChange(imageId);
                 }
             } else if (event.property === 'fullscreenClosing') {
+                // Remove resize listener when fullscreen closes
+                if (resizeHandler) {
+                    window.removeEventListener('resize', resizeHandler);
+                    resizeHandler = null;
+                }
                 clearFaceOverlay();
             }
         });
@@ -2554,13 +2570,24 @@
             faceOverlay.hidden = !taggingMode;
         }
 
-        // Refresh faces if enabling
+        // Manage resize listener
         if (taggingMode && Fullscreen.isOpen()) {
+            // Add resize listener for bbox repositioning
+            if (!resizeHandler) {
+                resizeHandler = handleWindowResize;
+                window.addEventListener('resize', resizeHandler);
+            }
+
             const imageId = Fullscreen.state.currentId;
             if (imageId) {
                 loadFacesForImage(imageId);
             }
         } else if (!taggingMode) {
+            // Remove resize listener
+            if (resizeHandler) {
+                window.removeEventListener('resize', resizeHandler);
+                resizeHandler = null;
+            }
             // Clear overlay when disabling
             clearFaceOverlay();
         }
@@ -3677,6 +3704,8 @@
      */
     function handleFullscreenImageChange(imageId) {
         if (isTaggingModeActive() && imageId) {
+            // Clear old bboxes immediately before loading new ones
+            clearFaceOverlay(false);
             loadFacesForImage(imageId);
         }
     }
@@ -3693,6 +3722,26 @@
 
         // Apply same transform as image
         faceOverlay.style.transform = `translate(${panX}px, ${panY}px) scale(${zoom})`;
+    }
+
+    /**
+     * Handle window resize - recalculate bbox positions.
+     * Debounced to avoid excessive re-renders during resize.
+     */
+    let resizeDebounceTimer = null;
+    function handleWindowResize() {
+        if (!faceOverlay || !isTaggingModeActive() || !currentOverlayFaces) return;
+
+        // Debounce resize handling
+        if (resizeDebounceTimer) {
+            clearTimeout(resizeDebounceTimer);
+        }
+        resizeDebounceTimer = setTimeout(() => {
+            resizeDebounceTimer = null;
+            if (currentOverlayFaces && currentOverlayImageId) {
+                renderFaces(currentOverlayFaces, currentOverlayImageId);
+            }
+        }, 100);
     }
 
     // =========================================================================
@@ -3734,6 +3783,7 @@
         }
         if (resetTracking) {
             currentOverlayImageId = null;
+            currentOverlayFaces = null;
         }
         focusedInput = null;
         closeAutocomplete();
@@ -3756,6 +3806,9 @@
 
         // Clear overlay content but preserve tracking variable (we're about to render)
         clearFaceOverlay(false);
+
+        // Store faces for re-rendering on resize
+        currentOverlayFaces = faces;
 
         // Wait for image to be loaded to get dimensions
         if (!fullscreenImage.complete) {
