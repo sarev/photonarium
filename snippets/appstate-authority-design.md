@@ -1035,10 +1035,53 @@ async someAction() {
 
 ### Strategy: Parallel Development
 
-Create `appstate2.js` alongside existing `appstate.js`:
+Create new AppState implementation alongside existing `appstate.js`:
 - Reference current implementation while building new one
 - Test new implementation in isolation
 - Swap in when ready, delete old file
+
+### Implementation Structure
+
+The implementation is split into domain-specific files in `static/appstate/`:
+
+| File | Lines | Domains | Description |
+|------|-------|---------|-------------|
+| `core.js` | ~340 | - | Transaction system, subscriber system, storage helpers |
+| `view.js` | ~180 | view | Theme, thumbnail size, sort settings (localStorage) |
+| `nav.js` | ~170 | nav | Screen navigation, history, scroll positions |
+| `filter.js` | ~130 | filter | Filter criteria (text, date, rating, people) |
+| `selection.js` | ~230 | selection | Per-context selection with shift-click anchoring |
+| `status.js` | ~170 | status | Backend processing status with polling |
+| `search.js` | ~130 | search | Semantic search execution and results |
+| `folders.js` | ~200 | folders | Folder management, rescan, stats |
+| `duplicates.js` | ~340 | duplicates | Duplicate groups by similarity level, polling |
+| `identity.js` | ~1400 | faces, people | Face/people management (tightly coupled) |
+| `images.js` | ~480 | images | Image metadata, display list, delta sync |
+| `index.js` | ~90 | - | Load verification and documentation |
+
+**Why faces + people are together**: These domains are tightly coupled because:
+- Identifying a face may create a new person
+- Unassigning all faces from a person auto-deletes that person
+- Renaming a person to existing name → merge
+- Renaming a person to empty → dissolve
+
+Keeping them in `identity.js` avoids circular dependencies.
+
+**Load order** (scripts must be included in this order):
+```html
+<script src="appstate/core.js"></script>
+<script src="appstate/view.js"></script>
+<script src="appstate/nav.js"></script>
+<script src="appstate/filter.js"></script>
+<script src="appstate/selection.js"></script>
+<script src="appstate/status.js"></script>
+<script src="appstate/search.js"></script>
+<script src="appstate/folders.js"></script>
+<script src="appstate/duplicates.js"></script>
+<script src="appstate/identity.js"></script>
+<script src="appstate/images.js"></script>
+<script src="appstate/index.js"></script>
+```
 
 ### Phase 1: Foundation (`appstate2.js`)
 

@@ -1,0 +1,695 @@
+/**
+ * AppState Images Domain - Image Metadata
+ * =========================================
+ *
+ * Manages image metadata with:
+ * - Delta sync with backend (epoch-based updates)
+ * - Display list (sorted and filtered view)
+ * - Similarity data for content sorting
+ * - People names for people sorting
+ *
+ * The display list is the single source of truth for what the gallery shows.
+ * It's lazily recomputed when images, sort, or filter changes.
+ *
+ * @fileoverview Image metadata and display list domain.
+ */
+
+'use strict';
+
+AppState.images = (function() {
+    const { createSubscriberSystem, markDirty, queueTransaction } = AppState;
+    const { subscribe, subscribeError, broadcast, notify, broadcastError } = createSubscriberSystem();
+
+    // =========================================================================
+    // STATE
+    // =========================================================================
+
+    /** @type {Map<string, Object>|null} Image cache */
+    let _cache = null;
+
+    /** @type {string|null} Backend epoch for delta updates */
+    let _cacheEpoch = null;
+
+    /** @type {boolean} */
+    let _loading = false;
+
+    /** @type {Promise|null} */
+    let _pendingLoad = null;
+
+    // Display list state
+    /** @type {Array} Sorted and filtered images */
+    let _displayList = [];
+
+    /** @type {boolean} Whether display list needs recomputation */
+    let _displayListDirty = true;
+
+    // Sort data (loaded on demand)
+    /** @type {{referenceId: string, scores: Map}|null} */
+    let _similarities = null;
+
+    /** @type {Object|null} imageId → comma-separated people names */
+    let _peopleNames = null;
+
+    /** Domain reference for transaction system */
+    const domainRef = { _name: 'images', _notify: notify };
+
+    // =========================================================================
+    // DISPLAY LIST HELPERS
+    // =========================================================================
+
+    /**
+     * Mark display list as needing recomputation.
+     * @private
+     */
+    function _markDisplayListDirty() {
+        _displayListDirty = true;
+    }
+
+    /**
+     * Ensure display list is computed.
+     * @private
+     */
+    function _ensureDisplayList() {
+        if (!_displayListDirty) return;
+
+        if (!_cache) {
+            _displayList = [];
+        } else {
+            const all = Array.from(_cache.values());
+            _displayList = _filterImages(_sortImages(all));
+        }
+        _displayListDirty = false;
+
+        console.log('[AppState.images._ensureDisplayList]',
+            'Recomputed:', _displayList.length, 'images');
+    }
+
+    /**
+     * Sort images based on view settings.
+     * @param {Array} images
+     * @returns {Array}
+     * @private
+     */
+    function _sortImages(images) {
+        const { by, direction } = AppState.view.getSort();
+        const sorted = [...images];
+
+        sorted.sort((a, b) => {
+            let cmp = 0;
+            if (by === 'date') {
+                cmp = new Date(a.timestamp) - new Date(b.timestamp);
+            } else if (by === 'rating') {
+                cmp = (a.rating || '').localeCompare(b.rating || '');
+            } else if (by === 'content') {
+                const simA = _similarities?.scores.get(a.id) || 0;
+                const simB = _similarities?.scores.get(b.id) || 0;
+                cmp = simA - simB;
+            } else if (by === 'people') {
+                const namesA = _peopleNames?.[a.id] || '';
+                const namesB = _peopleNames?.[b.id] || '';
+                cmp = namesA.localeCompare(namesB, undefined, { sensitivity: 'base' });
+            }
+            return direction === 'asc' ? cmp : -cmp;
+        });
+
+        return sorted;
+    }
+
+    /**
+     * Filter images based on filter settings.
+     * @param {Array} images
+     * @returns {Array}
+     * @private
+     */
+    function _filterImages(images) {
+        const currentFilter = AppState.filter.get();
+        if (!currentFilter) return images;
+
+        // Duplicates filter
+        if (currentFilter.type === 'duplicates' && Array.isArray(currentFilter.imageIds)) {
+            const idSet = new Set(currentFilter.imageIds.map(String));
+            return images.filter(img => idSet.has(String(img.id)));
+        }
+
+        // Semantic search filter
+        if (currentFilter.type === 'semantic' && Array.isArray(currentFilter.imageIds)) {
+            const idSet = new Set(currentFilter.imageIds.map(String));
+            const scores = currentFilter.scores || {};
+
+            let filtered = images.filter(img => idSet.has(String(img.id)));
+
+            filtered = filtered.filter(img => {
+                if (currentFilter.dateStart) {
+                    const imgDate = new Date(img.timestamp);
+                    if (imgDate < new Date(currentFilter.dateStart)) return false;
+                }
+                if (currentFilter.dateEnd) {
+                    const imgDate = new Date(img.timestamp);
+                    const endDate = new Date(currentFilter.dateEnd);
+                    endDate.setHours(23, 59, 59, 999);
+                    if (imgDate > endDate) return false;
+                }
+                if (currentFilter.rating) {
+                    const filterEmoji = [...currentFilter.rating];
+                    const hasMatch = filterEmoji.some(e => img.rating && img.rating.includes(e));
+                    if (!hasMatch) return false;
+                }
+                if (currentFilter.people && currentFilter.peopleImageIds) {
+                    if (!currentFilter.peopleImageIds.has(String(img.id))) return false;
+                }
+                return true;
+            });
+
+            // Sort by similarity score
+            filtered.sort((a, b) => (scores[b.id] || 0) - (scores[a.id] || 0));
+            return filtered;
+        }
+
+        // Standard filters
+        return images.filter(img => {
+            if (currentFilter.text) {
+                const desc = (img.description || '').toLowerCase();
+                if (!desc.includes(currentFilter.text.toLowerCase())) {
+                    return false;
+                }
+            }
+            if (currentFilter.dateStart) {
+                if (new Date(img.timestamp) < new Date(currentFilter.dateStart)) {
+                    return false;
+                }
+            }
+            if (currentFilter.dateEnd) {
+                const endDate = new Date(currentFilter.dateEnd);
+                endDate.setHours(23, 59, 59, 999);
+                if (new Date(img.timestamp) > endDate) return false;
+            }
+            if (currentFilter.rating) {
+                const filterEmoji = [...currentFilter.rating];
+                const hasMatch = filterEmoji.some(e => img.rating && img.rating.includes(e));
+                if (!hasMatch) return false;
+            }
+            if (currentFilter.people && currentFilter.peopleImageIds) {
+                if (!currentFilter.peopleImageIds.has(String(img.id))) {
+                    return false;
+                }
+            }
+            return true;
+        });
+    }
+
+    // Subscribe to view and filter changes
+    AppState.view.onChanged((event) => {
+        if (event.property === 'sortBy' || event.property === 'sortDirection') {
+            _markDisplayListDirty();
+            broadcast({ type: 'changed', property: 'displayList' });
+        }
+    });
+
+    AppState.filter.onChanged(() => {
+        _markDisplayListDirty();
+        broadcast({ type: 'changed', property: 'displayList' });
+    });
+
+    // =========================================================================
+    // INTERNAL API
+    // =========================================================================
+
+    const _internal = {
+        /**
+         * Update an image in cache.
+         * @param {string} id - Image ID
+         * @param {Object} changes - Properties to merge
+         */
+        update(id, changes) {
+            const image = _cache?.get(id);
+            if (image) {
+                Object.assign(image, changes);
+                _markDisplayListDirty();
+                markDirty(domainRef);
+            }
+        },
+
+        /**
+         * Remove an image from cache.
+         * @param {string} id - Image ID
+         */
+        remove(id) {
+            if (_cache?.delete(id)) {
+                _markDisplayListDirty();
+                markDirty(domainRef);
+            }
+        },
+
+        /**
+         * Get image by ID.
+         * @param {string} id - Image ID
+         * @returns {Object|null}
+         */
+        get(id) {
+            return _cache?.get(id) || null;
+        }
+    };
+
+    // =========================================================================
+    // FACE CLEANUP HELPER
+    // =========================================================================
+
+    /**
+     * Handle face/person cleanup when deleting an image.
+     * @param {string} imageId - Image being deleted
+     * @private
+     */
+    function handleFaceCleanup(imageId) {
+        const imageFaces = AppState.faces.getForImage(imageId);
+        if (!imageFaces || imageFaces.length === 0) return;
+
+        console.log('[AppState.images.handleFaceCleanup]',
+            imageId, 'has', imageFaces.length, 'faces');
+
+        const personUpdates = new Map();
+
+        for (const face of imageFaces) {
+            if (face.person_id) {
+                const existing = personUpdates.get(face.person_id) || {
+                    decrement: 0,
+                    wasPreferred: false
+                };
+                existing.decrement++;
+
+                const person = AppState.people._internal.get(face.person_id);
+                if (person?.preferred_face_id === face.id) {
+                    existing.wasPreferred = true;
+                }
+                personUpdates.set(face.person_id, existing);
+            }
+            AppState.faces._internal.remove(face.id);
+        }
+
+        for (const [personId, updates] of personUpdates) {
+            for (let i = 0; i < updates.decrement; i++) {
+                const newCount = AppState.people._internal.decrementFaceCount(personId);
+                if (newCount === 0) {
+                    AppState.people._internal.remove(personId);
+                    break;
+                }
+            }
+
+            const person = AppState.people._internal.get(personId);
+            if (person && updates.wasPreferred) {
+                const remainingFace = AppState.faces._internal.getFirstForPerson(
+                    personId, { excludingImageId: imageId }
+                );
+                if (remainingFace) {
+                    AppState.people._internal.update(personId, {
+                        preferred_face_id: remainingFace.id
+                    });
+                    AppState.people._internal.bustThumbnail(personId);
+                    AppState.faces._internal.update(remainingFace.id, {
+                        manually_tagged: true
+                    });
+                }
+            }
+        }
+    }
+
+    // =========================================================================
+    // LOAD
+    // =========================================================================
+
+    /**
+     * Load images (full or delta based on cache state).
+     * @param {boolean} [forceFullReload=false] - Force full reload
+     * @returns {Promise<void>}
+     */
+    async function load(forceFullReload = false) {
+        if (_pendingLoad) return _pendingLoad;
+
+        _loading = true;
+        console.log('[AppState.images.load]', forceFullReload ? 'FULL' : 'delta');
+
+        _pendingLoad = (async () => {
+            try {
+                if (_cache === null || forceFullReload) {
+                    // Full load
+                    const response = await App.apiGet('/images');
+                    const data = response.data;
+                    _cache = new Map(data.images.map(img => [img.id, img]));
+                    _cacheEpoch = data.epoch;
+
+                    console.log('[AppState.images.load] Full load:',
+                        _cache.size, 'images, epoch:', _cacheEpoch);
+                } else {
+                    // Delta load
+                    const response = await App.apiGet(`/images?since=${_cacheEpoch}`);
+                    const data = response.data;
+
+                    if (data.updated) {
+                        for (const img of data.updated) {
+                            _cache.set(img.id, img);
+                        }
+                        console.log('[AppState.images.load] Delta: updated',
+                            data.updated.length, 'images');
+                    }
+                    if (data.deleted_ids) {
+                        for (const id of data.deleted_ids) {
+                            _cache.delete(id);
+                        }
+                        console.log('[AppState.images.load] Delta: deleted',
+                            data.deleted_ids.length, 'images');
+                    }
+                    _cacheEpoch = data.epoch;
+                }
+
+                _markDisplayListDirty();
+                broadcast({ type: 'changed' });
+
+            } catch (err) {
+                console.error('[AppState.images.load] Error:', err);
+                broadcastError(err.message || 'Failed to load images');
+                throw err;
+            } finally {
+                _loading = false;
+                _pendingLoad = null;
+            }
+        })();
+
+        return _pendingLoad;
+    }
+
+    // =========================================================================
+    // PUBLIC API
+    // =========================================================================
+
+    return {
+        _name: 'images',
+        _notify: notify,
+        _internal,
+
+        onChanged: subscribe,
+        onError: subscribeError,
+
+        load,
+        reload() { return load(true); },
+
+        // --- Accessors ---
+
+        /**
+         * Get all images.
+         * @returns {Array}
+         */
+        getAll() {
+            return _cache ? Array.from(_cache.values()) : [];
+        },
+
+        /**
+         * Get image by ID.
+         * @param {string} id - Image ID
+         * @returns {Object|null}
+         */
+        getById(id) {
+            return _cache?.get(id) || null;
+        },
+
+        /**
+         * Get image count.
+         * @returns {number}
+         */
+        getCount() {
+            return _cache?.size || 0;
+        },
+
+        /**
+         * Check if images are loaded.
+         * @returns {boolean}
+         */
+        isLoaded() {
+            return _cache !== null;
+        },
+
+        /**
+         * Check if images are loading.
+         * @returns {boolean}
+         */
+        isLoading() {
+            return _loading;
+        },
+
+        // --- Display List ---
+
+        /**
+         * Get the display list (sorted and filtered images).
+         *
+         * This is the single source of truth for gallery display.
+         * Lazily recomputed when dependencies change.
+         *
+         * @returns {Array} DO NOT MUTATE
+         */
+        getDisplayList() {
+            _ensureDisplayList();
+            return _displayList;
+        },
+
+        // --- Mutations ---
+
+        /**
+         * Update one or more images.
+         * @param {Object|Array} updates - {id, ...changes} or array of them
+         * @returns {Promise<void>}
+         */
+        update(updates) {
+            if (!Array.isArray(updates)) updates = [updates];
+
+            console.log('[AppState.images.update]', updates.length, 'images');
+
+            return queueTransaction(async () => {
+                const backup = new Map();
+                for (const upd of updates) {
+                    const image = _cache?.get(upd.id);
+                    if (image) {
+                        backup.set(upd.id, { ...image });
+                        _internal.update(upd.id, upd);
+                    }
+                }
+
+                try {
+                    for (const upd of updates) {
+                        const { id, ...changes } = upd;
+                        await App.apiPost(`/images/${id}`, changes);
+                    }
+                } catch (err) {
+                    console.error('[AppState.images.update] Persist failed:', err);
+                    for (const [id, img] of backup) {
+                        _cache.set(id, img);
+                        markDirty(domainRef);
+                    }
+                    broadcastError(err.message || 'Failed to update images');
+                    throw err;
+                }
+            });
+        },
+
+        /**
+         * Delete one or more images.
+         * Handles cascade: faces → people → duplicates → images.
+         *
+         * @param {string|Array} ids - Image ID(s)
+         * @param {Object} [options]
+         * @param {boolean} [options.deleteFiles=false] - Delete files from disk
+         * @returns {Promise<void>}
+         */
+        delete(ids, options = {}) {
+            if (!Array.isArray(ids)) ids = [ids];
+            const { deleteFiles = false } = options;
+
+            console.log('[AppState.images.delete]', ids.length, 'images',
+                deleteFiles ? '(with files)' : '');
+
+            return queueTransaction(async () => {
+                const backup = new Map();
+                for (const id of ids) {
+                    const img = _cache?.get(id);
+                    if (img) backup.set(id, img);
+                }
+
+                // Handle cascade cleanup
+                for (const id of ids) {
+                    handleFaceCleanup(id);
+                    AppState.duplicates._internal.removeImage(id);
+                    _internal.remove(id);
+                }
+
+                try {
+                    const deleteFileParam = deleteFiles ? '?delete_file=true' : '';
+                    for (const id of ids) {
+                        await App.apiDelete(`/images/${id}${deleteFileParam}`);
+                    }
+                } catch (err) {
+                    console.error('[AppState.images.delete] Persist failed:', err);
+                    broadcastError(err.message || 'Failed to delete images');
+                    // Cascade rollback is complex - reload instead
+                    AppState.faces.reload();
+                    AppState.people.reload();
+                    load(true);
+                    throw err;
+                }
+            });
+        },
+
+        /**
+         * Rotate one or more images.
+         * @param {string|Array} ids - Image ID(s)
+         * @param {number} degrees - Rotation (90, 180, 270)
+         * @returns {Promise<void>}
+         */
+        rotate(ids, degrees) {
+            if (!Array.isArray(ids)) ids = [ids];
+
+            console.log('[AppState.images.rotate]', ids.length, 'images by', degrees);
+
+            return queueTransaction(async () => {
+                try {
+                    await App.apiPost('/images/rotate', { ids, degrees });
+
+                    for (const id of ids) {
+                        const image = _cache?.get(id);
+                        if (image && (degrees === 90 || degrees === 270)) {
+                            const temp = image.width;
+                            image.width = image.height;
+                            image.height = temp;
+                        }
+                    }
+                    markDirty(domainRef);
+                } catch (err) {
+                    console.error('[AppState.images.rotate] Error:', err);
+                    broadcastError(err.message || 'Failed to rotate images');
+                    throw err;
+                }
+            });
+        },
+
+        /**
+         * Fetch single image by ID.
+         * Uses cache if available.
+         * @param {string} id - Image ID
+         * @returns {Promise<Object>}
+         */
+        async fetchById(id) {
+            if (_cache?.has(id)) return _cache.get(id);
+            const response = await App.apiGet(`/images/${id}`);
+            const image = response.data;
+            if (_cache && image) _cache.set(image.id, image);
+            return image;
+        },
+
+        // --- Similarity Data ---
+
+        /**
+         * Load similarity scores for content sorting.
+         * @param {string} referenceId - Reference image ID
+         * @returns {Promise<Object>}
+         */
+        async loadSimilarities(referenceId) {
+            console.log('[AppState.images.loadSimilarities] ref:', referenceId);
+
+            const response = await App.apiGet(`/similar/${referenceId}`);
+            _similarities = {
+                referenceId,
+                scores: new Map(response.data.results.map(r => [r.id, r.similarity]))
+            };
+            _markDisplayListDirty();
+            broadcast({ type: 'changed', property: 'similarities' });
+            return response;
+        },
+
+        /**
+         * Get similarity score for an image.
+         * @param {string} imageId - Image ID
+         * @returns {number}
+         */
+        getSimilarity(imageId) {
+            return _similarities?.scores.get(imageId) || 0;
+        },
+
+        /**
+         * Get reference image ID for similarity sort.
+         * @returns {string|null}
+         */
+        getSimilarityReferenceId() {
+            return _similarities?.referenceId || null;
+        },
+
+        /**
+         * Clear similarity data.
+         */
+        clearSimilarities() {
+            _similarities = null;
+            _markDisplayListDirty();
+        },
+
+        // --- People Names ---
+
+        /**
+         * Load people names for people sorting.
+         * @returns {Promise<Object>}
+         */
+        async loadPeopleNames() {
+            console.log('[AppState.images.loadPeopleNames]');
+
+            const response = await App.apiGet('/images/people-names');
+            _peopleNames = response.data;
+            _markDisplayListDirty();
+            broadcast({ type: 'changed', property: 'peopleNames' });
+            return response.data;
+        },
+
+        /**
+         * Get people names for an image.
+         * @param {string} imageId - Image ID
+         * @returns {string}
+         */
+        getPeopleNames(imageId) {
+            return _peopleNames?.[imageId] || '';
+        },
+
+        /**
+         * Check if people names are loaded.
+         * @returns {boolean}
+         */
+        hasPeopleNames() {
+            return _peopleNames !== null;
+        },
+
+        /**
+         * Clear people names data.
+         */
+        clearPeopleNames() {
+            _peopleNames = null;
+            _markDisplayListDirty();
+        },
+
+        // --- Filter by People ---
+
+        /**
+         * Get image IDs filtered by people.
+         * @param {string[]} peopleIds - Person IDs
+         * @returns {Promise<Set<string>>}
+         */
+        async getFilteredByPeople(peopleIds) {
+            console.log('[AppState.images.getFilteredByPeople]', peopleIds);
+
+            const response = await App.apiGet(
+                `/images?people=${encodeURIComponent(peopleIds.join(','))}`
+            );
+            const images = response.data.images || [];
+            return new Set(images.map(img => String(img.id)));
+        },
+
+        /**
+         * Invalidate cache.
+         */
+        invalidate() {
+            _cache = null;
+            _cacheEpoch = null;
+        }
+    };
+})();
