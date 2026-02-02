@@ -4077,6 +4077,12 @@
             if (faceBox) {
                 faceBox.classList.remove('known');
                 faceBox.classList.add('unknown');
+
+                // Also update the action button from green (unidentify) to red (suppress)
+                const actionBtn = faceBox.querySelector('.face-delete-btn');
+                if (actionBtn) {
+                    actionBtn.classList.remove('unidentify');
+                }
             }
 
             // AppState.faces.unassign() does synchronous optimistic updates
@@ -4093,6 +4099,11 @@
                         faceBox.className = '';
                         for (const cls of originalClasses) {
                             faceBox.classList.add(cls);
+                        }
+                        // Restore action button to green (unidentify) since face was known
+                        const actionBtn = faceBox.querySelector('.face-delete-btn');
+                        if (actionBtn) {
+                            actionBtn.classList.add('unidentify');
                         }
                     }
                 })

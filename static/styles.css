@@ -1332,14 +1332,24 @@ a:hover {
     background: var(--color-face-ignored-bg);
 }
 
-/* Hide label on ignored faces unless focused */
-.face-box.ignored .face-label {
-    display: none;
+/* Hide labels by default on all face boxes, show on hover or focus */
+.face-box .face-label {
+    opacity: 0;
+    pointer-events: none;
+    transition: opacity 0.15s ease-in-out;
 }
 
-.face-box.ignored.focused .face-label,
-.face-box.ignored:focus-within .face-label {
-    display: flex;
+/* Show label on hover (except ignored faces - they require a click to edit) */
+.face-box:not(.ignored):hover .face-label {
+    opacity: 1;
+    pointer-events: auto;
+}
+
+/* Always show label when focused (orange box - actively editing) */
+.face-box.focused .face-label,
+.face-box:focus-within .face-label {
+    opacity: 1;
+    pointer-events: auto;
 }
 
 /* Highlight when editing an ignored face */
