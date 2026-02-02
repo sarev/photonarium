@@ -4161,7 +4161,11 @@
      * @param {HTMLInputElement} input - Input element
      * @param {string} query - Search query
      */
-    function showAutocomplete(input, query) {
+    async function showAutocomplete(input, query) {
+        // Ensure people cache is fresh before searching
+        // load() handles TTL internally - returns immediately if cache is valid
+        await AppState.people.load();
+
         // Use AppState for fuzzy search with proper sorting
         const matches = AppState.people.search(query);
 

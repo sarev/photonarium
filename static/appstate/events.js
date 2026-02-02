@@ -114,12 +114,17 @@ AppState.events = (function() {
                 faceIds.length, 'faces matched to', person_id);
 
             // Use autoAssign (no lock, no persist - backend already stored)
-            // This updates the cache incrementally - no full reload needed
+            // This updates the faces cache incrementally
             if (AppState.faces?.autoAssign) {
                 AppState.faces.autoAssign(faceIds, person_id);
             }
+
+            // Invalidate people cache - face counts changed, new people may exist
+            // This ensures autocomplete has fresh data
+            if (AppState.people?.invalidate) {
+                AppState.people.invalidate();
+            }
         }
-        // Note: No full reload here - autoAssign already updated the cache
     }
 
     /**
