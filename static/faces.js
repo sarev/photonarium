@@ -2749,7 +2749,9 @@
 
         // Trigger loads - subscription handlers will render when data arrives
         // and hide loading banner when both domains are ready
-        AppState.faces.load();
+        // Use loadUnknownOnly() for faster initial load - only fetches unknown faces
+        // Known people section uses AppState.people data directly
+        AppState.faces.loadUnknownOnly();
         AppState.people.load();
 
         // Mark refresh complete - actual rendering happens in subscription handlers
@@ -2789,31 +2791,28 @@
         // Clear pending flags
         reloadPending = false;
 
-        // Get faces from AppState (the single source of truth)
-        const allFacesData = AppState.faces.getAll();
-        facesLog('  AppState faces count:', allFacesData.length);
-
-        // Apply view filter
-        let faces = showOnlyUnknowns
-            ? allFacesData.filter(f => !f.person_id)
-            : allFacesData;
-
-        // Partition into known (has person_id) and unknown
-        const knownFaces = faces.filter(f => f.person_id);
-        const unknownFaces = faces.filter(f => !f.person_id && !f.suppressed);
-        facesLog('  After partition: known=', knownFaces.length, 'unknown=', unknownFaces.length);
+        // Get unknown faces from AppState (uses loadUnknownOnly for fast initial load)
+        const unknownFaces = AppState.faces.getUnknown();
+        facesLog('  Unknown faces count:', unknownFaces.length);
 
         // Update displayedFaces - this is what VirtualGrid and GridSelection use
         displayedFaces = unknownFaces;
         facesLog('  displayedFaces set to', displayedFaces.length, 'faces');
 
-        // Build known people list
-        knownPeople = buildKnownPeopleList(knownFaces);
+        // Get people from AppState (already has face_count from backend)
+        // Filter out people with 0 faces (shouldn't exist, but defensive)
+        const allPeople = AppState.people.getAll();
+        knownPeople = allPeople
+            .filter(p => p.face_count > 0)
+            .sort((a, b) => {
+                const cmp = a.name.localeCompare(b.name);
+                return sortAscending ? cmp : -cmp;
+            });
+        facesLog('  Known people count:', knownPeople.length);
 
         // Check for empty state
-        if (faces.length === 0) {
+        if (unknownFaces.length === 0 && knownPeople.length === 0) {
             displayedFaces = [];
-            knownPeople = [];
             if (facesEmpty) facesEmpty.hidden = false;
             if (normalView) normalView.hidden = true;
             return;
@@ -3324,9 +3323,9 @@
 
         const img = document.createElement('img');
         // Use cache bust timestamp if available (after preferred face changed in this session),
-        // or fall back to preferredFace.id from the faces data (handles page reload)
+        // or fall back to preferred_face_id from the people data (handles page reload)
         const bustTime = thumbnailCacheBust.get(person.id);
-        const cacheKey = bustTime || (person.preferredFace && person.preferredFace.id) || '';
+        const cacheKey = bustTime || person.preferred_face_id || '';
         img.src = cacheKey
             ? `/api/people/${person.id}/thumbnail?t=${cacheKey}`
             : `/api/people/${person.id}/thumbnail`;
@@ -3337,11 +3336,12 @@
         card.appendChild(thumb);
 
         // Add face count badge if multiple faces (outside thumb to avoid circle clipping)
-        if (person.faces.length > 1) {
+        const faceCount = person.face_count ?? person.faces?.length ?? 0;
+        if (faceCount > 1) {
             const badge = document.createElement('div');
             badge.className = 'face-card-badge';
             badge.innerHTML = `<span class="material-symbols-outlined">star</span>`;
-            badge.title = `${person.faces.length} faces`;
+            badge.title = `${faceCount} faces`;
             card.appendChild(badge);
         }
 

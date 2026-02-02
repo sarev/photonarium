@@ -426,6 +426,47 @@ AppState.faces = (function() {
         return _pendingLoad;
     }
 
+    /** @type {Promise|null} Pending unknown-only load */
+    let _pendingUnknownLoad = null;
+
+    /**
+     * Load only unknown faces from backend.
+     * This is faster than load() as it skips known faces.
+     * Used for initial render of faces screen.
+     * @param {boolean} [force=false] - Force reload even if cached
+     * @returns {Promise<void>}
+     */
+    async function loadUnknownOnly(force = false) {
+        // If full cache exists, no need to load unknown only
+        if (!force && _cache !== null) return;
+        if (_pendingUnknownLoad) return _pendingUnknownLoad;
+        if (_pendingLoad) return _pendingLoad;
+
+        _loading = true;
+        console.log('[AppState.faces.loadUnknownOnly] Starting...');
+
+        _pendingUnknownLoad = (async () => {
+            try {
+                const response = await App.apiGet('/faces?unknown=true');
+                _cache = new Map(response.data.map(f => [f.id, f]));
+                invalidateDerived();
+
+                console.log('[AppState.faces.loadUnknownOnly] Loaded', _cache.size, 'unknown faces');
+                broadcast({ type: 'changed' });
+
+            } catch (err) {
+                console.error('[AppState.faces.loadUnknownOnly] Error:', err);
+                broadcastError(err.message || 'Failed to load faces');
+                throw err;
+            } finally {
+                _loading = false;
+                _pendingUnknownLoad = null;
+            }
+        })();
+
+        return _pendingUnknownLoad;
+    }
+
     // =========================================================================
     // PUBLIC API
     // =========================================================================
@@ -439,6 +480,7 @@ AppState.faces = (function() {
         onError: subscribeError,
 
         load,
+        loadUnknownOnly,
         reload() { return load(true); },
 
         // --- Accessors ---
