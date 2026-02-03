@@ -145,6 +145,16 @@ The full-screen viewer is for focused viewing and quick decisions. It gives you 
 
 Touch gestures for zoom and pan may vary by device and browser.
 
+### Keyboard shortcuts
+
+These shortcuts use Ctrl on Windows/Linux and Cmd on macOS:
+
+- **Ctrl/Cmd + F** toggles face tagging mode on or off.
+- **Ctrl/Cmd + I** ignores all unknown faces in the current image (marks them as `-`).
+- **Ctrl/Cmd + R** rotates the image right (90° clockwise).
+- **Ctrl/Cmd + L** rotates the image left (90° counter-clockwise).
+- **Ctrl/Cmd + Backspace** or **Ctrl/Cmd + Delete** deletes the current image and advances to the next one.
+
 ---
 
 ## Face tagging (in full-screen)

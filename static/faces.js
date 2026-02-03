@@ -2583,7 +2583,7 @@
 
             const imageId = Fullscreen.state.currentId;
             if (imageId) {
-                loadFacesForImage(imageId);
+                loadFacesForImage(imageId, { fresh: true });
             }
         } else if (!taggingMode) {
             // Remove resize listener
@@ -3709,7 +3709,7 @@
         if (isTaggingModeActive() && imageId) {
             // Clear old bboxes immediately before loading new ones
             clearFaceOverlay(false);
-            loadFacesForImage(imageId);
+            loadFacesForImage(imageId, { fresh: true });
         }
     }
 
@@ -3752,20 +3752,30 @@
     // =========================================================================
 
     /**
-     * Load faces for an image from the API.
-     * Always fetches fresh from backend to catch auto-assignments.
+     * Load faces for an image and render overlays.
+     * Uses cache by default (for optimistic updates), fetches fresh on navigation.
      * @param {string} imageId - Image ID
+     * @param {Object} [options]
+     * @param {boolean} [options.fresh=false] - Bypass cache and fetch from backend
      */
-    async function loadFacesForImage(imageId) {
+    async function loadFacesForImage(imageId, { fresh = false } = {}) {
         if (!faceOverlay) return;
 
         // Track which image we're loading faces for
         currentOverlayImageId = imageId;
 
         try {
-            // Always fetch fresh - backend may have auto-assigned faces
-            // that the cache doesn't know about
-            const faces = await AppState.faces.fetchForImage(imageId, { fresh: true });
+            // Use cache when available (has optimistic updates from user actions)
+            // Only fetch fresh when explicitly requested (e.g., initial load, navigation)
+            let faces;
+            if (!fresh) {
+                faces = AppState.faces.getForImage(imageId);
+            }
+
+            // Fetch from backend if cache miss or fresh requested
+            if (!faces || faces.length === 0 || fresh) {
+                faces = await AppState.faces.fetchForImage(imageId, { fresh });
+            }
 
             // Skip if we've navigated away during the async call
             if (currentOverlayImageId !== imageId) return;
@@ -4544,6 +4554,8 @@
         loadAllFaces,
         renderFacesGrid,
         markNeedsRefresh: markFacesNeedsRefresh,
+        // Render faces on overlay from provided data (for optimistic updates)
+        renderFaceOverlay: renderFaces,
     };
 
 })();

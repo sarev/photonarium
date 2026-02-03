@@ -335,14 +335,29 @@
                     <!-- Face boxes are dynamically inserted here -->
                 </div>
             </div>
-            <!-- Close button overlay (shown temporarily, reappears on interaction) -->
-            <button id="fullscreen-close" class="fullscreen-btn fullscreen-close" title="Close (Escape)">
-                <span class="icon" data-icon="close">✕</span>
-            </button>
-            <!-- Face tagging mode toggle (top-left) -->
-            <button id="fullscreen-tagging" class="fullscreen-btn fullscreen-tagging" title="Toggle face tagging mode">
-                <span class="icon" data-icon="person_add">🏷️</span>
-            </button>
+            <!-- Top toolbar (evenly spaced buttons) -->
+            <div id="fullscreen-toolbar" class="fullscreen-toolbar">
+                <!-- Face tagging mode toggle -->
+                <button id="fullscreen-tagging" class="fullscreen-btn" title="Toggle face tagging (Ctrl+F)">
+                    <span class="material-symbols-outlined">person_search</span>
+                </button>
+                <!-- Ignore all unknown faces -->
+                <button id="fullscreen-ignore" class="fullscreen-btn" title="Ignore unknown faces (Ctrl+I)">
+                    <span class="material-symbols-outlined">person_off</span>
+                </button>
+                <!-- Rotate left -->
+                <button id="fullscreen-rotate-left" class="fullscreen-btn" title="Rotate left (Ctrl+L)">
+                    <span class="material-symbols-outlined">rotate_left</span>
+                </button>
+                <!-- Rotate right -->
+                <button id="fullscreen-rotate-right" class="fullscreen-btn" title="Rotate right (Ctrl+R)">
+                    <span class="material-symbols-outlined">rotate_right</span>
+                </button>
+                <!-- Close button -->
+                <button id="fullscreen-close" class="fullscreen-btn" title="Close (Escape)">
+                    <span class="material-symbols-outlined">close</span>
+                </button>
+            </div>
             <!-- Navigation button overlays (shown temporarily) -->
             <button id="fullscreen-prev" class="fullscreen-btn fullscreen-nav fullscreen-prev" title="Previous (Left arrow)">
                 <span class="icon" data-icon="chevron_left">❮</span>

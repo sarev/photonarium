@@ -114,7 +114,9 @@ _MIGRATIONS = [
     ("faces", "manually_tagged", "ALTER TABLE faces ADD COLUMN manually_tagged INTEGER DEFAULT 0"),
     # Add updated_at for optimistic concurrency control in background processes
     # Allows background tasks to skip faces that were modified since they started
-    ("faces", "updated_at", "ALTER TABLE faces ADD COLUMN updated_at TEXT DEFAULT (datetime('now'))"),
+    # Note: SQLite ALTER TABLE doesn't allow function defaults, so we add with NULL default
+    # and backfill in _run_migrations()
+    ("faces", "updated_at", "ALTER TABLE faces ADD COLUMN updated_at TEXT"),
 ]
 
 
@@ -165,12 +167,12 @@ def _run_migrations(conn: sqlite3.Connection) -> None:
                 logger.warning(f"Migration failed for {table}.{column}: {e}")
 
     # Backfill updated_at for existing faces (set to created_at if NULL)
-    if ('faces', 'updated_at') in newly_added_columns:
-        cursor = conn.execute(
-            "UPDATE faces SET updated_at = created_at WHERE updated_at IS NULL"
-        )
-        if cursor.rowcount > 0:
-            logger.info(f"Migration: backfilled updated_at for {cursor.rowcount} existing faces")
+    # Always run this, not just when column is newly added, in case previous backfill failed
+    cursor = conn.execute(
+        "UPDATE faces SET updated_at = created_at WHERE updated_at IS NULL"
+    )
+    if cursor.rowcount > 0:
+        logger.info(f"Migration: backfilled updated_at for {cursor.rowcount} existing faces")
 
 
 # =============================================================================
@@ -1432,10 +1434,13 @@ def get_face(
         face_id: Face's UUID.
 
     Returns:
-        Face dict or None if not found.
+        Face dict with person_name if identified, or None if not found.
     """
     cursor = conn.execute(
-        '''SELECT * FROM faces WHERE id = ?''',
+        '''SELECT f.*, p.name as person_name
+           FROM faces f
+           LEFT JOIN people p ON f.person_id = p.id
+           WHERE f.id = ?''',
         (face_id,)
     )
     row = cursor.fetchone()

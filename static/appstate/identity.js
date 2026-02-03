@@ -611,6 +611,7 @@ AppState.faces = (function() {
         /**
          * Fetch faces for an image from backend.
          * Uses cache if fully loaded, otherwise fetches from API.
+         * ALWAYS adds fetched faces to cache to prevent mutation bugs.
          * @param {string} imageId - Image ID
          * @param {Object} [options]
          * @param {boolean} [options.fresh=false] - Bypass cache and fetch from API
@@ -619,7 +620,21 @@ AppState.faces = (function() {
         async fetchForImage(imageId, { fresh = false } = {}) {
             // If cache is complete and fresh not requested, use cache
             if (!fresh && _cache && !_cacheIsPartial) return this.getForImage(imageId);
-            return (await App.apiGet(`/images/${imageId}/faces`)).data;
+
+            const faces = (await App.apiGet(`/images/${imageId}/faces`)).data;
+
+            // ALWAYS add fetched faces to cache - this prevents bugs where
+            // subsequent mutations fail because faces aren't in cache
+            if (faces?.length) {
+                if (!_cache) _cache = new Map();
+                for (const face of faces) {
+                    _cache.set(face.id, face);
+                }
+                _cacheIsPartial = true;
+                invalidateDerived();
+            }
+
+            return faces;
         },
 
         /**
@@ -664,6 +679,57 @@ AppState.faces = (function() {
         },
 
         // =====================================================================
+        // CACHE HELPERS
+        // =====================================================================
+
+        /**
+         * Ensure faces are in cache before mutation operations.
+         *
+         * This is the ROOT FIX for the recurring bug where mutations fail
+         * silently because faces aren't in the cache. Call this at the start
+         * of identify(), unassign(), suppress(), etc.
+         *
+         * @param {string[]} faceIds - Face IDs that must be in cache
+         * @returns {Promise<void>}
+         */
+        async ensureFacesInCache(faceIds) {
+            if (!faceIds?.length) return;
+            if (!_cache) _cache = new Map();
+
+            // Find faces missing from cache
+            const missingIds = faceIds.filter(id => !_cache.has(id));
+            if (!missingIds.length) return;
+
+            console.log('[AppState.faces.ensureFacesInCache]',
+                missingIds.length, 'of', faceIds.length, 'faces missing from cache');
+
+            // Fetch missing faces individually (batch endpoint doesn't exist)
+            // Group by image to minimize API calls if we had that info,
+            // but we don't, so fetch each face directly
+            const fetched = [];
+            for (const faceId of missingIds) {
+                try {
+                    const response = await App.apiGet(`/faces/${faceId}`);
+                    if (response.data) {
+                        fetched.push(response.data);
+                    }
+                } catch (err) {
+                    console.warn('[AppState.faces.ensureFacesInCache] Failed to fetch face:', faceId, err);
+                }
+            }
+
+            // Add to cache
+            if (fetched.length) {
+                for (const face of fetched) {
+                    _cache.set(face.id, face);
+                }
+                _cacheIsPartial = true;
+                invalidateDerived();
+                console.log('[AppState.faces.ensureFacesInCache] Added', fetched.length, 'faces to cache');
+            }
+        },
+
+        // =====================================================================
         // PUBLIC MUTATIONS
         // =====================================================================
 
@@ -684,6 +750,9 @@ AppState.faces = (function() {
         async identify(faceIds, personName, options = {}) {
             if (!Array.isArray(faceIds)) faceIds = [faceIds];
             if (!faceIds?.length) return Promise.resolve();
+
+            // Ensure faces are in cache before proceeding
+            await this.ensureFacesInCache(faceIds);
 
             // Empty name = unassign
             const trimmedName = personName?.trim() || '';
@@ -851,9 +920,12 @@ AppState.faces = (function() {
          * @param {string|string[]} faceIds - Face ID(s) to unassign
          * @returns {Promise<void>}
          */
-        unassign(faceIds) {
+        async unassign(faceIds) {
             if (!Array.isArray(faceIds)) faceIds = [faceIds];
             if (!faceIds?.length) return Promise.resolve();
+
+            // Ensure faces are in cache before proceeding
+            await this.ensureFacesInCache(faceIds);
 
             console.log('[AppState.faces.unassign]', faceIds.length, 'faces');
 
@@ -910,9 +982,12 @@ AppState.faces = (function() {
          * @param {string|string[]} faceIds - Face ID(s) to suppress
          * @returns {Promise<void>}
          */
-        suppress(faceIds) {
+        async suppress(faceIds) {
             if (!Array.isArray(faceIds)) faceIds = [faceIds];
             if (!faceIds?.length) return Promise.resolve();
+
+            // Ensure faces are in cache before proceeding
+            await this.ensureFacesInCache(faceIds);
 
             console.log('[AppState.faces.suppress]', faceIds.length, 'faces');
 
@@ -987,9 +1062,12 @@ AppState.faces = (function() {
          * @param {boolean} locked - New locked state
          * @returns {Promise<void>}
          */
-        setLocked(faceIds, locked) {
+        async setLocked(faceIds, locked) {
             if (!Array.isArray(faceIds)) faceIds = [faceIds];
             if (!faceIds?.length) return Promise.resolve();
+
+            // Ensure faces are in cache before proceeding
+            await this.ensureFacesInCache(faceIds);
 
             console.log('[AppState.faces.setLocked]', faceIds.length, 'faces, locked:', locked);
 
@@ -1090,10 +1168,72 @@ AppState.faces = (function() {
          * @param {string} faceId - Face ID
          * @returns {Promise<boolean>} New locked state
          */
-        toggleManualTag(faceId) {
+        async toggleManualTag(faceId) {
+            // Ensure face is in cache before reading current state
+            await this.ensureFacesInCache([faceId]);
             const face = _cache?.get(faceId);
             const newValue = !(face?.manually_tagged || false);
-            return this.setLocked([faceId], newValue).then(() => newValue);
+            await this.setLocked([faceId], newValue);
+            return newValue;
+        },
+
+        /**
+         * Rotate face bounding boxes for an image (optimistic update).
+         *
+         * Called when user rotates an image to immediately update the overlay
+         * without waiting for backend API. The backend will update the DB
+         * independently; this just updates the client-side cache for instant UI.
+         *
+         * NOTE: This does NOT broadcast changes because:
+         * 1. The subscriber would fetch fresh data from server (old bboxes)
+         * 2. The caller must manually re-render the overlay from cache
+         *
+         * Bounding box transformation for 90° clockwise:
+         *   new_x = 1 - old_y - old_h
+         *   new_y = old_x
+         *   new_w = old_h
+         *   new_h = old_w
+         *
+         * For 270° (counter-clockwise):
+         *   new_x = old_y
+         *   new_y = 1 - old_x - old_w
+         *   new_w = old_h
+         *   new_h = old_w
+         *
+         * @param {string} imageId - Image ID whose faces to rotate
+         * @param {number} degrees - Rotation degrees (90 or 270)
+         * @returns {Array} Updated faces array for caller to render
+         */
+        rotateBoundingBoxes(imageId, degrees) {
+            if (!_cache || (degrees !== 90 && degrees !== 270)) return [];
+
+            const faces = this.getForImage(imageId);
+            if (!faces.length) return [];
+
+            console.log('[AppState.faces.rotateBoundingBoxes]',
+                imageId, degrees + '°', faces.length, 'faces');
+
+            for (const face of faces) {
+                const { box_x, box_y, box_w, box_h } = face;
+
+                if (degrees === 90) {
+                    // 90° clockwise
+                    face.box_x = 1 - box_y - box_h;
+                    face.box_y = box_x;
+                    face.box_w = box_h;
+                    face.box_h = box_w;
+                } else {
+                    // 270° clockwise (same as 90° counter-clockwise)
+                    face.box_x = box_y;
+                    face.box_y = 1 - box_x - box_w;
+                    face.box_w = box_h;
+                    face.box_h = box_w;
+                }
+            }
+
+            // Don't broadcast - caller must handle re-render manually
+            // (broadcasting would cause subscription to fetch old data from server)
+            return faces;
         },
 
         /**

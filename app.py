@@ -1617,6 +1617,23 @@ def get_faces_list():
     return success_response(faces)
 
 
+@app.route('/api/faces/<face_id>', methods=['GET'])
+def get_single_face(face_id):
+    """Get a single face by ID.
+
+    Used by AppState.faces.ensureFacesInCache() to fetch faces
+    that are missing from the client-side cache.
+
+    Returns:
+        JSON face object with person_name if identified.
+    """
+    db = get_db()
+    face = get_face(db.conn, face_id)
+    if not face:
+        return error_response('Face not found', 404)
+    return success_response(dict(face))
+
+
 # =============================================================================
 # Simple Face Endpoints (AppState-driven, no business logic)
 # =============================================================================

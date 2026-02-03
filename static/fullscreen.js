@@ -109,8 +109,12 @@ const Fullscreen = {
             container: App.$('fullscreen-container'),
             image: App.$('fullscreen-image'),
             filename: App.$('fullscreen-filename'),
+            toolbar: App.$('fullscreen-toolbar'),
             closeBtn: App.$('fullscreen-close'),
             taggingBtn: App.$('fullscreen-tagging'),
+            ignoreBtn: App.$('fullscreen-ignore'),
+            rotateLeftBtn: App.$('fullscreen-rotate-left'),
+            rotateRightBtn: App.$('fullscreen-rotate-right'),
             prevBtn: App.$('fullscreen-prev'),
             nextBtn: App.$('fullscreen-next')
         };
@@ -120,11 +124,16 @@ const Fullscreen = {
             this.close();
         });
         this._els.taggingBtn.addEventListener('click', () => {
-            // Toggle tagging mode via Faces module
-            if (typeof Faces !== 'undefined' && Faces.toggleTaggingMode) {
-                Faces.toggleTaggingMode();
-                this._updateTaggingButton();
-            }
+            this._toggleFaceTagging();
+        });
+        this._els.ignoreBtn.addEventListener('click', () => {
+            this._ignoreUnknownFaces();
+        });
+        this._els.rotateLeftBtn.addEventListener('click', () => {
+            this._rotateImage(270);
+        });
+        this._els.rotateRightBtn.addEventListener('click', () => {
+            this._rotateImage(90);
         });
         this._els.prevBtn.addEventListener('click', () => {
             this._navigatePrev();
@@ -439,15 +448,14 @@ const Fullscreen = {
     },
 
     /**
-     * Shows all overlays (close button, nav buttons, tagging button, filename) and schedules them to hide.
+     * Shows all overlays (toolbar, nav buttons, filename) and schedules them to hide.
      * Called on user interaction to keep overlays visible while active.
      * @private
      */
     _showOverlays() {
         // Show overlays
         this._els.filename.classList.remove('hidden');
-        this._els.closeBtn.classList.remove('hidden');
-        this._els.taggingBtn.classList.remove('hidden');
+        this._els.toolbar.classList.remove('hidden');
         this._els.prevBtn.classList.remove('hidden');
         this._els.nextBtn.classList.remove('hidden');
 
@@ -462,8 +470,7 @@ const Fullscreen = {
         // Schedule hide
         this._overlayTimeout = setTimeout(() => {
             this._els.filename.classList.add('hidden');
-            this._els.closeBtn.classList.add('hidden');
-            this._els.taggingBtn.classList.add('hidden');
+            this._els.toolbar.classList.add('hidden');
             this._els.prevBtn.classList.add('hidden');
             this._els.nextBtn.classList.add('hidden');
             this._overlayTimeout = null;
@@ -968,6 +975,41 @@ const Fullscreen = {
         // Show overlays on any key interaction
         this._showOverlays();
 
+        // Check for Ctrl/Cmd modifier shortcuts
+        const ctrlOrCmd = e.ctrlKey || e.metaKey;
+
+        if (ctrlOrCmd) {
+            console.log('[Fullscreen._handleKeyDown] Ctrl+' + e.key);
+            switch (e.key.toLowerCase()) {
+                case 'f':
+                    // Ctrl+F: Toggle face tagging mode
+                    e.preventDefault();
+                    this._toggleFaceTagging();
+                    return;
+                case 'i':
+                    // Ctrl+I: Ignore all unknown faces in this image
+                    e.preventDefault();
+                    this._ignoreUnknownFaces();
+                    return;
+                case 'r':
+                    // Ctrl+R: Rotate image right (90° clockwise)
+                    e.preventDefault();
+                    this._rotateImage(90);
+                    return;
+                case 'l':
+                    // Ctrl+L: Rotate image left (90° counter-clockwise)
+                    e.preventDefault();
+                    this._rotateImage(270);
+                    return;
+                case 'backspace':
+                case 'delete':
+                    // Ctrl+Backspace/Delete: Delete image and advance
+                    e.preventDefault();
+                    this._deleteAndAdvance();
+                    return;
+            }
+        }
+
         switch (e.key) {
             case 'Escape':
                 e.preventDefault();
@@ -1045,6 +1087,186 @@ const Fullscreen = {
      */
     _exit() {
         this.close();
+    },
+
+    /* ----------------------------------------------------------------------
+       KEYBOARD SHORTCUT ACTIONS
+
+       Actions triggered by Ctrl/Cmd keyboard shortcuts.
+       ---------------------------------------------------------------------- */
+
+    /**
+     * Toggles face tagging mode.
+     * Ctrl+F shortcut.
+     * @private
+     */
+    _toggleFaceTagging() {
+        if (typeof Faces !== 'undefined' && Faces.toggleTaggingMode) {
+            Faces.toggleTaggingMode();
+            this._updateTaggingButton();
+        }
+    },
+
+    /**
+     * Ignores all unknown faces in the current image.
+     * Identifies them as '-' (the ignored person).
+     * Ctrl+I shortcut.
+     * @private
+     */
+    async _ignoreUnknownFaces() {
+        const imageId = this.state.currentId;
+        console.log('[Fullscreen._ignoreUnknownFaces] imageId:', imageId);
+
+        if (!imageId) {
+            console.log('[Fullscreen._ignoreUnknownFaces] No current image');
+            return;
+        }
+
+        // Get faces for this image from cache
+        let faces = AppState.faces.getForImage(imageId);
+        console.log('[Fullscreen._ignoreUnknownFaces] Faces from cache:', faces.length);
+
+        if (!faces.length) {
+            // Cache might be empty/partial - fetch fresh and add to cache
+            try {
+                const fetched = await AppState.faces.fetchForImage(imageId, { fresh: true });
+                console.log('[Fullscreen._ignoreUnknownFaces] Faces from API:', fetched?.length || 0);
+
+                // Add fetched faces to cache so identify() can find them
+                if (fetched?.length) {
+                    for (const face of fetched) {
+                        AppState.faces._test.addToCache(face);
+                    }
+                    faces = fetched;
+                }
+            } catch (err) {
+                console.error('[Fullscreen._ignoreUnknownFaces] Failed to fetch faces:', err);
+                return;
+            }
+        }
+
+        if (!faces?.length) {
+            console.log('[Fullscreen._ignoreUnknownFaces] No faces on this image');
+            return;
+        }
+
+        // Filter to unknown faces only (no person_id, not suppressed)
+        const unknownFaceIds = faces
+            .filter(f => !f.person_id && !f.suppressed)
+            .map(f => f.id);
+
+        if (!unknownFaceIds.length) {
+            console.log('[Fullscreen._ignoreUnknownFaces] No unknown faces to ignore (all already identified or suppressed)');
+            return;
+        }
+
+        console.log('[Fullscreen._ignoreUnknownFaces] Ignoring', unknownFaceIds.length, 'faces');
+
+        try {
+            // Identify all unknown faces as '-' (ignored)
+            await AppState.faces.identify(unknownFaceIds, '-');
+        } catch (error) {
+            console.error('Failed to ignore faces:', error);
+            App.showError('Failed to ignore faces');
+        }
+    },
+
+    /**
+     * Rotates the current image.
+     * Backend rotates both the image file and face bounding boxes atomically.
+     * Ctrl+R (90° right) and Ctrl+L (270° left) shortcuts.
+     * @param {number} degrees - 90 for clockwise, 270 for counter-clockwise
+     * @private
+     */
+    async _rotateImage(degrees) {
+        const imageId = this.state.currentId;
+        if (!imageId) return;
+
+        console.log('[Fullscreen._rotateImage]', imageId, degrees + '°');
+
+        try {
+            // Rotate via AppState (handles dimension swap, cache bust, API call)
+            // Backend rotates both the image and face bounding boxes atomically
+            await AppState.images.rotate(imageId, degrees);
+
+            // Emit imageRotated for gallery to update thumbnails
+            App.emit('imageRotated', imageId);
+
+            // Reload the full image (it's been rotated on disk)
+            const cacheBust = Date.now();
+            this._els.image.src = App.imageUrl(imageId) + '?t=' + cacheBust;
+
+            // Update filename display with new dimensions
+            const img = this._getCurrentImage();
+            if (img) {
+                this._showFilename(img.basename, img.width, img.height);
+            }
+
+            // Update face bounding boxes in cache and reload overlay
+            // Backend has already rotated the bboxes in the database
+            if (typeof Faces !== 'undefined' && Faces.isTaggingModeActive?.()) {
+                // Update cache with rotated bboxes
+                AppState.faces.rotateBoundingBoxes(imageId, degrees);
+                // Re-render overlay from updated cache
+                const faces = AppState.faces.getForImage(imageId);
+                if (faces.length) {
+                    // Wait for image to load before rendering overlay
+                    // (overlay needs correct image dimensions)
+                    this._els.image.addEventListener('load', () => {
+                        Faces.renderFaceOverlay(faces, imageId);
+                    }, { once: true });
+                }
+            }
+        } catch (error) {
+            console.error('Failed to rotate image:', error);
+            App.showError('Failed to rotate image');
+        }
+    },
+
+    /**
+     * Deletes the current image and advances to the next one.
+     * If this is the last image, closes fullscreen.
+     * Ctrl+Backspace/Delete shortcut.
+     * @private
+     */
+    async _deleteAndAdvance() {
+        const imageId = this.state.currentId;
+        const { imageList, currentIndex } = this.state;
+        if (!imageId || imageList.length === 0) return;
+
+        console.log('[Fullscreen._deleteAndAdvance]', imageId);
+
+        // Store the next image info before deletion
+        const wasLastImage = imageList.length === 1;
+        const nextIndex = currentIndex < imageList.length - 1
+            ? currentIndex
+            : currentIndex - 1;
+
+        // Remove from local list first for immediate UI update
+        this.state.imageList = imageList.filter(img => img.id !== imageId);
+
+        if (wasLastImage) {
+            // No more images, close fullscreen
+            this.close();
+        } else {
+            // Navigate to next image (or previous if we were at the end)
+            const newIndex = Math.max(0, Math.min(nextIndex, this.state.imageList.length - 1));
+            const nextImage = this.state.imageList[newIndex];
+            if (nextImage) {
+                this._resetTransform();
+                this._loadImage(nextImage.id, newIndex);
+            }
+        }
+
+        try {
+            // Delete via AppState (handles cache update, faces cleanup, API call)
+            await AppState.images.delete(imageId);
+        } catch (error) {
+            console.error('Failed to delete image:', error);
+            App.showError('Failed to delete image');
+            // Restore by reloading the display list
+            this.state.imageList = AppState.images.getDisplayList();
+        }
     }
 };
 
