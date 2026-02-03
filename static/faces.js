@@ -4014,6 +4014,24 @@
                 }
             });
             box.appendChild(ignoreBtn);
+
+            // Repel buttons if they would overlap on small bboxes
+            // Both buttons are 20px wide, positioned -10px from edges
+            // They overlap when box width < 40px (need 20+20 with some gap)
+            const MIN_BUTTON_GAP = 4;
+            const BUTTON_SIZE = 20;
+            const minWidthNeeded = BUTTON_SIZE * 2 + MIN_BUTTON_GAP;
+
+            if (width < minWidthNeeded) {
+                // Calculate how much each button needs to move outward
+                const overflow = minWidthNeeded - width;
+                const offset = overflow / 2;
+
+                // Move ignore button further left
+                ignoreBtn.style.left = `${-10 - offset}px`;
+                // Move action button further right
+                actionBtn.style.right = `${-10 - offset}px`;
+            }
         }
 
         // Create label

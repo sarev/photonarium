@@ -329,7 +329,10 @@ const Fullscreen = {
             mousedown: (e) => this._handleMouseDown(e),
             mousemove: (e) => this._handleMouseMove(e),
             mouseup: (e) => this._handleMouseUp(e),
-            dblclick: (e) => this._handleDoubleClick(e)
+            dblclick: (e) => this._handleDoubleClick(e),
+            touchstart: (e) => this._handleTouchStart(e),
+            touchmove: (e) => this._handleTouchMove(e),
+            touchend: (e) => this._handleTouchEnd(e)
         };
 
         document.addEventListener('keydown', this._handlers.keydown);
@@ -338,6 +341,9 @@ const Fullscreen = {
         document.addEventListener('mousemove', this._handlers.mousemove);
         document.addEventListener('mouseup', this._handlers.mouseup);
         this._els.container.addEventListener('dblclick', this._handlers.dblclick);
+        this._els.container.addEventListener('touchstart', this._handlers.touchstart, { passive: true });
+        this._els.container.addEventListener('touchmove', this._handlers.touchmove, { passive: false });
+        this._els.container.addEventListener('touchend', this._handlers.touchend, { passive: true });
     },
 
     /**
@@ -351,6 +357,9 @@ const Fullscreen = {
         document.removeEventListener('mousemove', this._handlers.mousemove);
         document.removeEventListener('mouseup', this._handlers.mouseup);
         this._els.container.removeEventListener('dblclick', this._handlers.dblclick);
+        this._els.container.removeEventListener('touchstart', this._handlers.touchstart);
+        this._els.container.removeEventListener('touchmove', this._handlers.touchmove);
+        this._els.container.removeEventListener('touchend', this._handlers.touchend);
 
         this._handlers = {};
     },
@@ -745,6 +754,203 @@ const Fullscreen = {
         // Clamp pan values
         this.state.panX = Math.max(-maxPanX, Math.min(maxPanX, this.state.panX));
         this.state.panY = Math.max(-maxPanY, Math.min(maxPanY, this.state.panY));
+    },
+
+    /* ----------------------------------------------------------------------
+       TOUCH SWIPE GESTURES
+
+       Swipe left/right for navigation, swipe up to close.
+       Visual feedback: image follows finger, then animates to complete or snap back.
+       ---------------------------------------------------------------------- */
+
+    /**
+     * Minimum swipe distance in pixels to trigger navigation.
+     * @type {number}
+     * @constant
+     */
+    SWIPE_THRESHOLD: 50,
+
+    /**
+     * Starting touch position for swipe detection.
+     * @type {{x: number, y: number, time: number}|null}
+     * @private
+     */
+    _touchStart: null,
+
+    /**
+     * Whether a swipe gesture is actively in progress.
+     * @type {boolean}
+     * @private
+     */
+    _isSwiping: false,
+
+    /**
+     * Handles touch start - records starting position.
+     * @param {TouchEvent} e
+     * @private
+     */
+    _handleTouchStart(e) {
+        // Only track single-finger touches for swipe
+        if (e.touches.length !== 1) {
+            this._touchStart = null;
+            return;
+        }
+
+        this._touchStart = {
+            x: e.touches[0].clientX,
+            y: e.touches[0].clientY,
+            time: Date.now()
+        };
+        this._isSwiping = false;
+    },
+
+    /**
+     * Handles touch move - translates image to follow finger.
+     * @param {TouchEvent} e
+     * @private
+     */
+    _handleTouchMove(e) {
+        // Only process single-finger swipes when not zoomed
+        if (!this._touchStart || e.touches.length !== 1 || this.state.zoom > 1) return;
+
+        const dx = e.touches[0].clientX - this._touchStart.x;
+        const dy = e.touches[0].clientY - this._touchStart.y;
+        const absDx = Math.abs(dx);
+        const absDy = Math.abs(dy);
+
+        // Determine swipe direction once movement exceeds threshold
+        if (!this._isSwiping && (absDx > 10 || absDy > 10)) {
+            // Horizontal swipe
+            if (absDx > absDy) {
+                this._isSwiping = true;
+                this._swipeDirection = 'horizontal';
+                this._hideFaceOverlay();
+            }
+            // Upward vertical swipe
+            else if (dy < -10) {
+                this._isSwiping = true;
+                this._swipeDirection = 'vertical';
+                this._hideFaceOverlay();
+            }
+        }
+
+        if (!this._isSwiping) return;
+
+        e.preventDefault();
+
+        // Apply transform to follow finger
+        if (this._swipeDirection === 'horizontal') {
+            this._els.image.style.transition = 'none';
+            this._els.image.style.transform = `translateX(${dx}px)`;
+        } else if (this._swipeDirection === 'vertical' && dy < 0) {
+            // Only allow upward movement for close gesture
+            const opacity = Math.max(0.3, 1 + dy / 300);
+            this._els.image.style.transition = 'none';
+            this._els.image.style.transform = `translateY(${dy}px)`;
+            this._els.image.style.opacity = opacity;
+        }
+    },
+
+    /**
+     * Handles touch end - completes or cancels swipe with animation.
+     * @param {TouchEvent} e
+     * @private
+     */
+    _handleTouchEnd(e) {
+        if (!this._touchStart) return;
+
+        const touch = e.changedTouches[0];
+        const dx = touch.clientX - this._touchStart.x;
+        const dy = touch.clientY - this._touchStart.y;
+        const elapsed = Date.now() - this._touchStart.time;
+
+        const wasSwiping = this._isSwiping;
+        const direction = this._swipeDirection;
+
+        this._touchStart = null;
+        this._isSwiping = false;
+        this._swipeDirection = null;
+
+        // If zoomed or wasn't swiping, just reset
+        if (this.state.zoom > 1 || !wasSwiping) {
+            this._resetSwipeTransform();
+            return;
+        }
+
+        const absDx = Math.abs(dx);
+        const absDy = Math.abs(dy);
+        const velocity = direction === 'horizontal' ? absDx / elapsed : absDy / elapsed;
+
+        // Check if swipe should complete (past threshold or fast enough)
+        const shouldComplete = direction === 'horizontal'
+            ? (absDx > this.SWIPE_THRESHOLD || velocity > 0.3)
+            : (dy < -this.SWIPE_THRESHOLD || velocity > 0.3);
+
+        if (shouldComplete && direction === 'horizontal') {
+            // Animate off-screen then navigate
+            const targetX = dx < 0 ? -window.innerWidth : window.innerWidth;
+            this._els.image.style.transition = 'transform 0.2s ease-out';
+            this._els.image.style.transform = `translateX(${targetX}px)`;
+
+            setTimeout(() => {
+                if (dx < 0) {
+                    this._navigateNext();
+                } else {
+                    this._navigatePrev();
+                }
+                this._resetSwipeTransform();
+                this._showFaceOverlay();
+            }, 200);
+        } else if (shouldComplete && direction === 'vertical' && dy < 0) {
+            // Animate up and fade out then close
+            this._els.image.style.transition = 'transform 0.2s ease-out, opacity 0.2s ease-out';
+            this._els.image.style.transform = `translateY(${-window.innerHeight}px)`;
+            this._els.image.style.opacity = '0';
+
+            setTimeout(() => {
+                this._resetSwipeTransform();
+                this.close();
+            }, 200);
+        } else {
+            // Snap back
+            this._els.image.style.transition = 'transform 0.2s ease-out, opacity 0.2s ease-out';
+            this._els.image.style.transform = 'translateX(0) translateY(0)';
+            this._els.image.style.opacity = '1';
+
+            setTimeout(() => {
+                this._resetSwipeTransform();
+                this._showFaceOverlay();
+            }, 200);
+        }
+    },
+
+    /**
+     * Resets swipe transform styles on the image.
+     * @private
+     */
+    _resetSwipeTransform() {
+        this._els.image.style.transition = '';
+        this._els.image.style.transform = '';
+        this._els.image.style.opacity = '';
+        this._applyTransform(); // Restore zoom/pan transform
+    },
+
+    /**
+     * Hides the face overlay during swipe animation.
+     * @private
+     */
+    _hideFaceOverlay() {
+        const overlay = document.getElementById('face-overlay');
+        if (overlay) overlay.style.visibility = 'hidden';
+    },
+
+    /**
+     * Shows the face overlay after swipe animation.
+     * @private
+     */
+    _showFaceOverlay() {
+        const overlay = document.getElementById('face-overlay');
+        if (overlay) overlay.style.visibility = '';
     },
 
     /* ----------------------------------------------------------------------

@@ -356,15 +356,27 @@ AppState.faces = (function() {
                     preferred_face_id: preferredFaceId
                 });
             } catch (err) {
-                // 409 CONFLICT means person already exists (cache was stale)
-                // Find existing person and use their ID
+                // 409 CONFLICT means person already exists (race condition with another identify)
+                // Find existing person and use their ID, then fix up the local cache
                 if (err.message?.includes('409')) {
-                    console.log('[AppState.faces._persistIdentify] Person exists, finding by name');
+                    console.log('[AppState.faces._persistIdentify] Person exists (409), fixing cache');
                     await AppState.people.load(true);
                     const existing = AppState.people._internal.findByName(personName);
                     if (existing) {
                         actualPersonId = existing.id;
                         console.log('[AppState.faces._persistIdentify] Using existing person:', actualPersonId);
+
+                        // Fix local cache: move faces from wrong person to correct person
+                        transaction(() => {
+                            // Update face cache to point to correct person
+                            for (const faceId of faceIds) {
+                                _internal.linkToPerson(faceId, actualPersonId, personName);
+                            }
+                            // Remove the incorrectly created person from cache
+                            AppState.people._internal.remove(personId);
+                            // Update face count on correct person
+                            AppState.people._internal.reconcilePerson(actualPersonId);
+                        });
                     } else {
                         throw err;  // Can't find person, re-throw
                     }
@@ -511,6 +523,7 @@ AppState.faces = (function() {
         load,
         loadUnknownOnly,
         reload() { return load(true); },
+        isCachePartial() { return _cacheIsPartial; },
 
         // --- Accessors ---
 
@@ -620,9 +633,14 @@ AppState.faces = (function() {
 
             // Add fetched faces to cache (ensures setPreferredFace can validate them)
             if (faces?.length) {
+                const wasEmpty = !_cache;
                 if (!_cache) _cache = new Map();
                 for (const face of faces) {
                     _cache.set(face.id, face);
+                }
+                // Mark cache as partial if we just created it (only has this person's faces)
+                if (wasEmpty) {
+                    _cacheIsPartial = true;
                 }
                 invalidateDerived();
             }
@@ -1338,9 +1356,12 @@ AppState.people = (function() {
         /**
          * Reconcile a person's state after face changes.
          *
-         * - Recalculates face_count from actual faces
-         * - Auto-deletes person if no faces remain
+         * - Recalculates face_count from actual faces (only if cache is complete)
+         * - Auto-deletes person if no faces remain (only if cache is complete)
          * - Reassigns preferred face if it was removed
+         *
+         * IMPORTANT: When faces cache is partial (e.g., only current image's faces),
+         * we can't accurately count faces or determine if a person should be deleted.
          *
          * @param {string} personId - Person ID
          */
@@ -1349,31 +1370,41 @@ AppState.people = (function() {
             if (!person) return;
 
             const linkedFaces = AppState.faces._internal.getForPerson(personId);
-            person.face_count = linkedFaces.length;
 
-            console.log('[AppState.people._internal.reconcilePerson]',
-                personId, 'face_count:', person.face_count);
+            // Only recalculate face_count if we have the full faces cache
+            // With partial cache, we'd incorrectly set count to 0 or a small number
+            if (!AppState.faces.isCachePartial()) {
+                person.face_count = linkedFaces.length;
 
-            if (person.face_count === 0) {
                 console.log('[AppState.people._internal.reconcilePerson]',
-                    'Auto-deleting empty person:', personId);
-                this.remove(personId);
-                return;
+                    personId, 'face_count:', person.face_count);
+
+                if (person.face_count === 0) {
+                    console.log('[AppState.people._internal.reconcilePerson]',
+                        'Auto-deleting empty person:', personId);
+                    this.remove(personId);
+                    return;
+                }
+            } else {
+                console.log('[AppState.people._internal.reconcilePerson]',
+                    personId, 'skipping face_count recalc (partial cache)');
             }
 
-            // Check if preferred face was removed
-            const preferredStillExists = linkedFaces.some(
-                f => f.id === person.preferred_face_id
-            );
-
-            if (!preferredStillExists) {
-                // Pick newest
-                const newest = linkedFaces.reduce((a, b) =>
-                    (a.image_timestamp || 0) > (b.image_timestamp || 0) ? a : b
+            // Check if preferred face was removed (safe even with partial cache)
+            if (linkedFaces.length > 0) {
+                const preferredStillExists = linkedFaces.some(
+                    f => f.id === person.preferred_face_id
                 );
-                console.log('[AppState.people._internal.reconcilePerson]',
-                    'Reassigning preferred:', newest.id);
-                this.setPreferred(personId, newest.id);
+
+                if (!preferredStillExists) {
+                    // Pick newest from what we have
+                    const newest = linkedFaces.reduce((a, b) =>
+                        (a.image_timestamp || 0) > (b.image_timestamp || 0) ? a : b
+                    );
+                    console.log('[AppState.people._internal.reconcilePerson]',
+                        'Reassigning preferred:', newest.id);
+                    this.setPreferred(personId, newest.id);
+                }
             }
         },
 

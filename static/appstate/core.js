@@ -271,13 +271,28 @@ const AppState = (function() {
      * });
      */
     function queueTransaction(fn) {
+        // Create a new promise that captures this transaction's result
+        // but doesn't break the queue chain if it fails
+        let resolve, reject;
+        const resultPromise = new Promise((res, rej) => {
+            resolve = res;
+            reject = rej;
+        });
+
+        // Chain onto queue, but always resolve the queue chain
+        // (individual transaction errors go to resultPromise, not the queue)
         _transactionQueue = _transactionQueue
             .then(() => fn())
+            .then(result => {
+                resolve(result);
+            })
             .catch(err => {
                 console.error('[AppState] Queued transaction failed:', err);
-                throw err;
+                reject(err);
+                // Don't re-throw - let queue continue to next transaction
             });
-        return _transactionQueue;
+
+        return resultPromise;
     }
 
     /**

@@ -22,13 +22,13 @@ Imaginary keeps your library local and helps you do the three things people actu
 - **Duplicate finding** at multiple strictness levels (identical, near-identical, similar, related)
 - **Ratings and descriptions** so you can build your own “favourites” system
 
-Everything runs locally. On first run, models may download once, then stay on your machine.
+Once you have run the model downloader, the models stay on your machine. Everything runs locally.
 
 ## A quick start (how most people use it)
 
 1. Start Imaginary, then open the web page in your browser.
 2. Go to **Database** and **add one or more folders** that contain photos.
-3. Let it scan. Big libraries take time, especially face work.
+3. Let it scan. Big libraries take time, especially face detection.
 4. Go back to **Gallery** and start browsing.
 5. Use **Search** when you want to find something specific.
 6. Use **Duplicates** when you want to clean up.
@@ -39,10 +39,10 @@ Everything runs locally. On first run, models may download once, then stay on yo
 Use the toolbar buttons, or these shortcuts (ignored while you are typing in a text box):
 
 - **Ctrl/Cmd + G**: Gallery
-- **Ctrl/Cmd + M**: Database
+- **Ctrl/Cmd + M**: Manage Database
 - **Ctrl/Cmd + D**: Duplicates
-- **Ctrl/Cmd + F**: Search
-- **Ctrl/Cmd + P**: Faces
+- **Ctrl/Cmd + S**: Search
+- **Ctrl/Cmd + F**: Faces
 
 Common keys across screens:
 
@@ -84,8 +84,8 @@ The Gallery is where you spend most of your time: browsing your library quickly,
 ### What you can do
 
 - Browse a smooth thumbnail grid, even for large libraries.
-- Sort the Gallery to surface what you care about.
-- Open photos in full-screen.
+- Sort the Gallery to find the images you care about.
+- Open photos full-screen.
 - Delete, rotate, and reveal photos on disk.
 - Edit descriptions and ratings in the info panel.
 

@@ -982,11 +982,11 @@ const App = {
                     e.preventDefault();
                     this.showDuplicates();
                     break;
-                case 'f':
+                case 's':
                     e.preventDefault();
                     this.showSearch();
                     break;
-                case 'p':
+                case 'f':
                     e.preventDefault();
                     this.showFaces();
                     break;
