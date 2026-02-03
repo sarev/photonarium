@@ -1415,7 +1415,9 @@ AppState.people = (function() {
     async function _persistMerge(faceIds, fromId, toId) {
         console.log('[AppState.people._persistMerge]',
             faceIds.length, 'faces from', fromId, 'to', toId);
-        await App.apiPost('/faces/assign', { face_ids: faceIds, person_id: toId });
+        if (faceIds.length > 0) {
+            await App.apiPost('/faces/assign', { face_ids: faceIds, person_id: toId });
+        }
         await App.apiDelete(`/people/${fromId}`);
     }
 
@@ -1692,8 +1694,8 @@ AppState.people = (function() {
          * @param {string} toId - Person to merge into
          * @returns {Promise<void>}
          */
-        merge(fromId, toId) {
-            if (fromId === toId) return Promise.resolve();
+        async merge(fromId, toId) {
+            if (fromId === toId) return;
 
             const fromPerson = _internal.get(fromId);
             const toPerson = _internal.get(toId);
@@ -1701,7 +1703,13 @@ AppState.people = (function() {
 
             console.log('[AppState.people.merge]', fromId, '->', toId);
 
-            const faceIds = AppState.faces.getForPerson(fromId).map(f => f.id);
+            // Ensure faces are loaded for the source person
+            let faces = AppState.faces.getForPerson(fromId);
+            if (faces.length === 0 && fromPerson.face_count > 0) {
+                // Faces not in cache - fetch them
+                faces = await AppState.faces.fetchForPerson(fromId);
+            }
+            const faceIds = faces.map(f => f.id);
 
             // Backup
             const backup = {

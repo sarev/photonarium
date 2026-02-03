@@ -1851,10 +1851,6 @@ const App = {
         // Determine initial screen
         this._determineInitialScreen();
 
-        // Speculative preloading: only start when user has been idle for 3 seconds
-        // This avoids blocking initial interactions while still warming caches
-        this._scheduleIdlePreload();
-
         // Mark as ready and run callbacks
         this._isReady = true;
         for (const callback of this._readyCallbacks) {
@@ -1905,62 +1901,6 @@ const App = {
         }
         if (app) {
             app.classList.add('ready');
-        }
-    },
-
-    /**
-     * Schedules speculative preloading to run shortly after images load.
-     * Waits for initial images to load, then a brief idle period before preloading.
-     * This ensures preloading doesn't compete with the initial gallery load.
-     * @private
-     */
-    _scheduleIdlePreload() {
-        const IDLE_DELAY = 500; // 500ms after images load (enough for initial render)
-        let idleTimer = null;
-        let preloadDone = false;
-        let imagesLoaded = false;
-
-        const doPreload = () => {
-            if (preloadDone || !imagesLoaded) return;
-            preloadDone = true;
-            // Remove listeners once preload starts
-            document.removeEventListener('mousemove', resetTimer);
-            document.removeEventListener('keydown', resetTimer);
-            document.removeEventListener('click', resetTimer);
-            document.removeEventListener('scroll', resetTimer, true);
-            // Fire preload
-            AppState.preloadAll();
-        };
-
-        const resetTimer = () => {
-            if (preloadDone || !imagesLoaded) return;
-            if (idleTimer) clearTimeout(idleTimer);
-            idleTimer = setTimeout(doPreload, IDLE_DELAY);
-        };
-
-        // Wait for images to load before starting idle detection
-        const onImagesLoaded = () => {
-            if (imagesLoaded) return;
-            imagesLoaded = true;
-            // Start listening for user activity only after images are loaded
-            document.addEventListener('mousemove', resetTimer, { passive: true });
-            document.addEventListener('keydown', resetTimer, { passive: true });
-            document.addEventListener('click', resetTimer, { passive: true });
-            document.addEventListener('scroll', resetTimer, { passive: true, capture: true });
-            // Start the idle timer
-            resetTimer();
-        };
-
-        // Check if images already loaded, otherwise subscribe
-        if (AppState.images.isLoaded()) {
-            onImagesLoaded();
-        } else {
-            const unsub = AppState.images.onChanged(() => {
-                if (AppState.images.isLoaded()) {
-                    unsub(); // Unsubscribe after first load
-                    onImagesLoaded();
-                }
-            });
         }
     }
 };
