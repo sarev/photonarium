@@ -112,6 +112,9 @@ _MIGRATIONS = [
     # Add manually_tagged flag to track user-tagged vs auto-matched faces
     # 0 = auto-tagged (or not yet tagged), 1 = manually tagged by user
     ("faces", "manually_tagged", "ALTER TABLE faces ADD COLUMN manually_tagged INTEGER DEFAULT 0"),
+    # Add updated_at for optimistic concurrency control in background processes
+    # Allows background tasks to skip faces that were modified since they started
+    ("faces", "updated_at", "ALTER TABLE faces ADD COLUMN updated_at TEXT DEFAULT (datetime('now'))"),
 ]
 
 
@@ -156,10 +159,18 @@ def _run_migrations(conn: sqlite3.Connection) -> None:
         if column not in columns:
             try:
                 conn.execute(sql)
-                newly_added_columns.add(column)
+                newly_added_columns.add((table, column))
                 logger.info(f"Migration: added {table}.{column}")
             except sqlite3.OperationalError as e:
                 logger.warning(f"Migration failed for {table}.{column}: {e}")
+
+    # Backfill updated_at for existing faces (set to created_at if NULL)
+    if ('faces', 'updated_at') in newly_added_columns:
+        cursor = conn.execute(
+            "UPDATE faces SET updated_at = created_at WHERE updated_at IS NULL"
+        )
+        if cursor.rowcount > 0:
+            logger.info(f"Migration: backfilled updated_at for {cursor.rowcount} existing faces")
 
 
 # =============================================================================
@@ -1355,7 +1366,7 @@ def update_face_semantic_embedding(
     """
     semantic_bytes = semantic_embedding.astype(np.float32).tobytes()
     cursor = conn.execute(
-        'UPDATE faces SET semantic_embedding = ? WHERE id = ?',
+        "UPDATE faces SET semantic_embedding = ?, updated_at = datetime('now') WHERE id = ?",
         (semantic_bytes, face_id)
     )
     conn.commit()
@@ -1633,12 +1644,12 @@ def update_face_person(
     """
     if manually_tagged is None:
         cursor = conn.execute(
-            '''UPDATE faces SET person_id = ? WHERE id = ?''',
+            '''UPDATE faces SET person_id = ?, updated_at = datetime('now') WHERE id = ?''',
             (person_id, face_id)
         )
     else:
         cursor = conn.execute(
-            '''UPDATE faces SET person_id = ?, manually_tagged = ? WHERE id = ?''',
+            '''UPDATE faces SET person_id = ?, manually_tagged = ?, updated_at = datetime('now') WHERE id = ?''',
             (person_id, 1 if manually_tagged else 0, face_id)
         )
     conn.commit()
@@ -1672,7 +1683,7 @@ def toggle_face_manual_tag(
     new_value = 0 if current else 1
 
     conn.execute(
-        '''UPDATE faces SET manually_tagged = ? WHERE id = ?''',
+        '''UPDATE faces SET manually_tagged = ?, updated_at = datetime('now') WHERE id = ?''',
         (new_value, face_id)
     )
     conn.commit()
@@ -1697,7 +1708,7 @@ def suppress_face(
         True if updated, False if face not found.
     """
     cursor = conn.execute(
-        '''UPDATE faces SET suppressed = 1, person_id = NULL WHERE id = ?''',
+        '''UPDATE faces SET suppressed = 1, person_id = NULL, updated_at = datetime('now') WHERE id = ?''',
         (face_id,)
     )
     conn.commit()
@@ -1837,7 +1848,7 @@ def rotate_faces_for_image(
             new_h = box_w
 
         conn.execute(
-            '''UPDATE faces SET box_x = ?, box_y = ?, box_w = ?, box_h = ? WHERE id = ?''',
+            '''UPDATE faces SET box_x = ?, box_y = ?, box_w = ?, box_h = ?, updated_at = datetime('now') WHERE id = ?''',
             (new_x, new_y, new_w, new_h, face_id)
         )
         updated_count += 1
@@ -2489,8 +2500,13 @@ def compute_unknown_face_groups_async(
 ) -> None:
     """Compute unknown face groups in a background thread.
 
-    Uses the shared database connection and lock from ImageDatabase to avoid
-    "database is locked" errors when other threads are accessing the database.
+    Uses fine-grained locking to avoid blocking other database operations
+    during the CPU-intensive similarity computation phase.
+
+    The operation is split into three phases:
+    1. READ (with lock): Fetch embeddings from database
+    2. COMPUTE (no lock): Matrix multiplication and UnionFind clustering
+    3. WRITE (with lock): Update faces with group IDs
 
     Args:
         db: ImageDatabase instance (provides conn and _db_lock).
@@ -2505,10 +2521,122 @@ def compute_unknown_face_groups_async(
             with _grouping_lock:
                 _grouping_status = {'status': 'computing', 'progress': 0}
 
-            # Use shared connection with lock from ImageDatabase
-            # Call impl directly to avoid double status tracking
+            # ================================================================
+            # PHASE 1: READ (with lock) - fetch embeddings
+            # ================================================================
             with db._db_lock:
-                n_groups = _compute_unknown_face_groups_impl(db.conn, threshold)
+                logger.debug('Async face grouping: READ phase started')
+                cursor = db.conn.execute("""
+                    SELECT f.id, f.embedding
+                    FROM faces f
+                    WHERE f.person_id IS NULL AND f.suppressed = 0
+                    ORDER BY f.id
+                """)
+
+                face_ids = []
+                embeddings = []
+                for row in cursor:
+                    face_ids.append(row[0])
+                    embedding = np.frombuffer(row[1], dtype=np.float32)
+                    embeddings.append(embedding)
+
+                logger.debug(f'Async face grouping: READ phase done - {len(face_ids)} faces')
+
+            # Early exit if nothing to group
+            if not face_ids:
+                logger.info('No unknown faces to group')
+                with _grouping_lock:
+                    _grouping_status = {'status': 'done', 'n_groups': 0}
+                if callback:
+                    callback(0)
+                return
+
+            n_faces = len(face_ids)
+            logger.info(f'Computing groups for {n_faces} unknown faces')
+
+            # ================================================================
+            # PHASE 2: COMPUTE (no lock) - similarity matrix and clustering
+            # ================================================================
+            logger.debug('Async face grouping: COMPUTE phase started (lock released)')
+
+            # Stack embeddings into a matrix (already L2-normalized)
+            embedding_matrix = np.vstack(embeddings)
+
+            # Use UnionFind in ID mode
+            uf = UnionFind(ids=face_ids)
+
+            # Chunked similarity computation
+            chunk_size = 1000
+            n_chunks = (n_faces + chunk_size - 1) // chunk_size
+            logger.info(f'Computing pairwise similarities in {n_chunks} chunks...')
+
+            for chunk_idx, i in enumerate(range(0, n_faces, chunk_size)):
+                chunk_end = min(i + chunk_size, n_faces)
+                chunk = embedding_matrix[i:chunk_end]
+
+                # Progress logging every few chunks
+                if chunk_idx % 5 == 0 or chunk_idx == n_chunks - 1:
+                    logger.info(f'  Processing chunk {chunk_idx + 1}/{n_chunks}...')
+
+                # Compute similarities: chunk @ all.T
+                similarities = chunk @ embedding_matrix.T
+
+                # Find pairs above threshold
+                for local_idx in range(chunk_end - i):
+                    global_idx = i + local_idx
+                    face_id_i = face_ids[global_idx]
+
+                    # Only check j > global_idx to avoid duplicate pairs
+                    for j in range(global_idx + 1, n_faces):
+                        if similarities[local_idx, j] >= threshold:
+                            face_id_j = face_ids[j]
+                            uf.union_ids(face_id_i, face_id_j)
+
+            # Extract groups
+            logger.info('Extracting groups from UnionFind structure...')
+            groups = uf.extract_groups_by_id()
+            logger.info(f'Found {len(groups)} distinct clusters')
+
+            logger.debug('Async face grouping: COMPUTE phase done')
+
+            # ================================================================
+            # PHASE 3: WRITE (with lock) - update database with group IDs
+            # ================================================================
+            # NOTE: Between READ and WRITE phases, some faces may have been
+            # identified or suppressed. We use WHERE clauses to only affect
+            # faces that are still unknown and not suppressed.
+            with db._db_lock:
+                logger.debug('Async face grouping: WRITE phase started')
+
+                # Clear all existing group IDs for unknown, non-suppressed faces
+                db.conn.execute(
+                    "UPDATE faces SET unknown_group_id = NULL "
+                    "WHERE person_id IS NULL AND suppressed = 0"
+                )
+
+                # Assign new group IDs (batch to avoid SQLite variable limit)
+                # Only update faces that are still unknown and not suppressed
+                BATCH_SIZE = 500
+                n_groups = 0
+                for root_id, members in groups.items():
+                    if len(members) > 1:
+                        group_id = str(uuid.uuid4())[:8]
+                        n_groups += 1
+
+                        for i in range(0, len(members), BATCH_SIZE):
+                            batch = members[i:i + BATCH_SIZE]
+                            placeholders = ','.join('?' * len(batch))
+                            db.conn.execute(
+                                f"UPDATE faces SET unknown_group_id = ? "
+                                f"WHERE id IN ({placeholders}) "
+                                f"AND person_id IS NULL AND suppressed = 0",
+                                [group_id] + batch
+                            )
+
+                db.conn.commit()
+                logger.debug('Async face grouping: WRITE phase done')
+
+            logger.info(f'Created {n_groups} unknown face groups')
 
             # Store result
             with _grouping_lock:
@@ -2715,8 +2843,13 @@ def reassess_unknown_faces_async(
 ) -> None:
     """Re-assess unknown faces in a background thread.
 
-    Uses the shared database connection and lock from ImageDatabase to avoid
-    "database is locked" errors when other threads are accessing the database.
+    Uses fine-grained locking to avoid blocking other database operations
+    during the CPU-intensive similarity computation phase.
+
+    The operation is split into three phases:
+    1. READ (with lock): Fetch embeddings and thresholds from database
+    2. COMPUTE (no lock): Matrix multiplication for similarity matching
+    3. WRITE (with lock): Update matched faces and build response
 
     Args:
         db: ImageDatabase instance (provides conn and _db_lock).
@@ -2729,29 +2862,179 @@ def reassess_unknown_faces_async(
     def _worker():
         global _reassess_thread, _reassess_result
         try:
-            # Use shared connection with lock from ImageDatabase
+            # ================================================================
+            # PHASE 1: READ (with lock) - fetch all data needed for computation
+            # ================================================================
             with db._db_lock:
-                matched = reassess_unknown_faces(db.conn, threshold, person_id)
+                logger.debug('Async reassessment: READ phase started')
 
-                # Build list of updated faces with person names for SSE event
-                # matched is list of (face_id, person_id, similarity)
+                # Load per-person thresholds
+                person_thresholds: dict[str, float | None] = {}
+                cursor = db.conn.execute('SELECT id, recognition_threshold FROM people')
+                for row in cursor.fetchall():
+                    person_thresholds[row['id']] = row['recognition_threshold']
+
+                # Get known embeddings
+                if person_id:
+                    cursor = db.conn.execute(
+                        '''SELECT id, person_id, embedding
+                           FROM faces
+                           WHERE person_id = ? AND suppressed = 0''',
+                        (person_id,)
+                    )
+                    known_embeddings = []
+                    for row in cursor.fetchall():
+                        embedding = np.frombuffer(row['embedding'], dtype=np.float32)
+                        known_embeddings.append((row['id'], row['person_id'], embedding))
+                else:
+                    known_embeddings = get_cached_known_embeddings(db.conn)
+
+                # Get unknown embeddings WITH updated_at for optimistic concurrency
+                # If updated_at changes between READ and WRITE, we skip that face
+                cursor = db.conn.execute(
+                    '''SELECT id, embedding, updated_at
+                       FROM faces
+                       WHERE person_id IS NULL AND suppressed = 0 AND embedding IS NOT NULL'''
+                )
+                unknown_embeddings = []
+                face_timestamps: dict[str, str | None] = {}  # face_id -> updated_at
+                for row in cursor.fetchall():
+                    embedding = np.frombuffer(row['embedding'], dtype=np.float32)
+                    unknown_embeddings.append((row['id'], embedding))
+                    face_timestamps[row['id']] = row['updated_at']
+
+                logger.debug(f'Async reassessment: READ phase done - {len(known_embeddings)} known, {len(unknown_embeddings)} unknown')
+
+            # Early exit if nothing to compare
+            if not known_embeddings or not unknown_embeddings:
+                logger.debug('Async reassessment: no embeddings to compare')
+                with _reassess_lock:
+                    _reassess_result = {'matched_count': 0, 'person_id': person_id}
+                if callback:
+                    callback(0)
+                return
+
+            # ================================================================
+            # PHASE 2: COMPUTE (no lock) - CPU-intensive similarity matching
+            # ================================================================
+            logger.debug('Async reassessment: COMPUTE phase started (lock released)')
+
+            # Build matrices for vectorized comparison
+            known_ids = [(fid, pid) for fid, pid, _ in known_embeddings]
+            known_matrix = np.vstack([emb for _, _, emb in known_embeddings])
+
+            unknown_ids = [fid for fid, _ in unknown_embeddings]
+            unknown_matrix = np.vstack([emb for _, emb in unknown_embeddings])
+
+            # Ensure L2-normalized
+            known_norms = np.linalg.norm(known_matrix, axis=1)
+            unknown_norms = np.linalg.norm(unknown_matrix, axis=1)
+            if not np.allclose(known_norms, 1.0, atol=0.01):
+                known_matrix = known_matrix / known_norms[:, np.newaxis]
+            if not np.allclose(unknown_norms, 1.0, atol=0.01):
+                unknown_matrix = unknown_matrix / unknown_norms[:, np.newaxis]
+
+            # Compute all similarities at once: (num_unknown, num_known)
+            similarities = unknown_matrix @ known_matrix.T
+
+            # Find best match for each unknown face
+            matched = []
+            for i, unknown_face_id in enumerate(unknown_ids):
+                best_idx = np.argmax(similarities[i])
+                best_similarity = similarities[i, best_idx]
+
+                _, matched_person_id = known_ids[best_idx]
+
+                # Use per-person threshold if set, otherwise use global default
+                person_threshold = person_thresholds.get(matched_person_id)
+                effective_threshold = person_threshold if person_threshold is not None else threshold
+
+                if best_similarity >= effective_threshold:
+                    matched.append((unknown_face_id, matched_person_id, float(best_similarity)))
+
+            logger.debug(f'Async reassessment: COMPUTE phase done - {len(matched)} matches found')
+
+            # ================================================================
+            # PHASE 3: WRITE (with lock) - persist matches and build response
+            # ================================================================
+            # Use optimistic concurrency: only update faces whose updated_at
+            # hasn't changed since READ phase. If the user (or another process)
+            # modified a face, we skip it rather than overwriting their change.
+            with db._db_lock:
+                logger.debug('Async reassessment: WRITE phase started')
+
+                actually_updated = []
+                skipped_modified = 0
+
+                for face_id, matched_person_id, similarity in matched:
+                    original_timestamp = face_timestamps.get(face_id)
+
+                    # Conditional update: only if updated_at hasn't changed
+                    # This handles all cases: suppressed, identified, deleted, etc.
+                    if original_timestamp is not None:
+                        cursor = db.conn.execute(
+                            '''UPDATE faces
+                               SET person_id = ?, manually_tagged = 0, updated_at = datetime('now')
+                               WHERE id = ? AND updated_at = ?''',
+                            (matched_person_id, face_id, original_timestamp)
+                        )
+                    else:
+                        # No timestamp (legacy row) - fall back to checking person_id IS NULL
+                        cursor = db.conn.execute(
+                            '''UPDATE faces
+                               SET person_id = ?, manually_tagged = 0, updated_at = datetime('now')
+                               WHERE id = ? AND person_id IS NULL AND suppressed = 0''',
+                            (matched_person_id, face_id)
+                        )
+
+                    if cursor.rowcount > 0:
+                        logger.debug(
+                            f'Auto-matched face {face_id} to person {matched_person_id} '
+                            f'(similarity: {similarity:.3f})'
+                        )
+                        actually_updated.append((face_id, matched_person_id, similarity))
+                    else:
+                        skipped_modified += 1
+
+                db.conn.commit()
+
+                if skipped_modified:
+                    logger.debug(f'Async reassessment: skipped {skipped_modified} faces (modified since READ)')
+
+                # Invalidate cache if we made changes
+                if actually_updated:
+                    invalidate_embedding_cache()
+
+                # Build updated_faces list for frontend event (only actually updated faces)
                 updated_faces = []
-                if matched:
-                    # Get unique person_ids and look up their names
-                    person_ids = list(set(m[1] for m in matched))
-                    placeholders = ','.join('?' * len(person_ids))
+                if actually_updated:
+                    person_ids_list = list(set(m[1] for m in actually_updated))
+                    placeholders = ','.join('?' * len(person_ids_list))
                     cursor = db.conn.execute(
                         f'SELECT id, name FROM people WHERE id IN ({placeholders})',
-                        person_ids
+                        person_ids_list
                     )
                     person_names = {row['id']: row['name'] for row in cursor.fetchall()}
 
-                    for face_id, pid, similarity in matched:
+                    for face_id, pid, similarity in actually_updated:
                         updated_faces.append({
                             'face_id': face_id,
                             'person_id': pid,
                             'person_name': person_names.get(pid, ''),
                         })
+
+                logger.debug('Async reassessment: WRITE phase done')
+
+            # Update matched to reflect what was actually updated (for logging/callback)
+            matched = actually_updated
+
+            # Log summary
+            if matched:
+                sims = [m[2] for m in matched]
+                logger.info(
+                    f'Async face reassessment: auto-matched {len(matched)} of {len(unknown_ids)} unknown faces '
+                    f'(similarity {min(sims):.2f}-{max(sims):.2f}, threshold={threshold:.2f})'
+                )
 
             # Store result
             with _reassess_lock:
@@ -2762,7 +3045,7 @@ def reassess_unknown_faces_async(
 
             logger.debug(f'Async reassessment complete: {len(matched)} faces matched')
 
-            # Emit SSE event so frontend can update
+            # Emit event so frontend can update
             if hasattr(db, 'event_queue') and db.event_queue:
                 db.event_queue.emit('faces_reassessed', {
                     'matched_count': len(matched),

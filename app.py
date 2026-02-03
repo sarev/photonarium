@@ -1806,7 +1806,7 @@ def update_faces_batch():
             if locked is not None:
                 # Update manually_tagged flag
                 db.conn.execute(
-                    'UPDATE faces SET manually_tagged = ? WHERE id = ?',
+                    "UPDATE faces SET manually_tagged = ?, updated_at = datetime('now') WHERE id = ?",
                     (1 if locked else 0, face_id)
                 )
                 updated_count += 1
@@ -1957,7 +1957,7 @@ def identify_faces_batch():
                 new_preferred = remaining_faces[-1]['id']
                 update_person(db.conn, source_id, preferred_face_id=new_preferred)
                 # Lock the new preferred face (prevents auto-reassignment)
-                db.conn.execute('UPDATE faces SET manually_tagged = 1 WHERE id = ?', (new_preferred,))
+                db.conn.execute("UPDATE faces SET manually_tagged = 1, updated_at = datetime('now') WHERE id = ?", (new_preferred,))
 
         # Delete source persons with no more faces
         delete_people_without_faces(db.conn)
@@ -2100,7 +2100,7 @@ def suppress_face_endpoint(face_id):
                     (new_preferred_id, old_person_id)
                 )
                 # Lock the new preferred face (prevents auto-reassignment)
-                db.conn.execute('UPDATE faces SET manually_tagged = 1 WHERE id = ?', (new_preferred_id,))
+                db.conn.execute("UPDATE faces SET manually_tagged = 1, updated_at = datetime('now') WHERE id = ?", (new_preferred_id,))
                 db.conn.commit()
                 new_preferred_selected = True
 
@@ -2277,7 +2277,7 @@ def unassign_face(face_id):
                 new_preferred = remaining_faces[-1]['id']
                 update_person(db.conn, old_person_id, preferred_face_id=new_preferred)
                 # Lock the new preferred face (prevents auto-reassignment)
-                db.conn.execute('UPDATE faces SET manually_tagged = 1 WHERE id = ?', (new_preferred,))
+                db.conn.execute("UPDATE faces SET manually_tagged = 1, updated_at = datetime('now') WHERE id = ?", (new_preferred,))
 
         # Delete person if they have no more faces
         delete_people_without_faces(db.conn)
@@ -2359,7 +2359,7 @@ def unassign_faces_batch():
                 new_preferred = remaining_faces[-1]['id']
                 update_person(db.conn, person_id, preferred_face_id=new_preferred)
                 # Lock the new preferred face (prevents auto-reassignment)
-                db.conn.execute('UPDATE faces SET manually_tagged = 1 WHERE id = ?', (new_preferred,))
+                db.conn.execute("UPDATE faces SET manually_tagged = 1, updated_at = datetime('now') WHERE id = ?", (new_preferred,))
 
         # Phase 3: Delete people with no more faces
         delete_people_without_faces(db.conn)
@@ -2428,7 +2428,7 @@ def set_preferred_face(person_id):
         update_person(db.conn, person_id, preferred_face_id=face_id)
 
         # Also mark the face as manually tagged (preferred implies manual selection)
-        db.conn.execute('UPDATE faces SET manually_tagged = 1 WHERE id = ?', (face_id,))
+        db.conn.execute("UPDATE faces SET manually_tagged = 1, updated_at = datetime('now') WHERE id = ?", (face_id,))
         db.conn.commit()
 
         # Get updated person
@@ -2479,7 +2479,7 @@ def merge_person(person_id):
 
         # Move all faces from source to target
         db.conn.execute(
-            '''UPDATE faces SET person_id = ? WHERE person_id = ?''',
+            '''UPDATE faces SET person_id = ?, updated_at = datetime('now') WHERE person_id = ?''',
             (target_id, person_id)
         )
 
@@ -2524,7 +2524,7 @@ def dissolve_person(person_id):
 
         # Unidentify all faces (set person_id to NULL)
         db.conn.execute(
-            '''UPDATE faces SET person_id = NULL, manually_tagged = 0 WHERE person_id = ?''',
+            '''UPDATE faces SET person_id = NULL, manually_tagged = 0, updated_at = datetime('now') WHERE person_id = ?''',
             (person_id,)
         )
 
