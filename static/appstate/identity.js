@@ -611,11 +611,23 @@ AppState.faces = (function() {
 
         /**
          * Fetch faces for a person from backend.
+         * Also updates the cache with fetched faces (for setPreferredFace validation).
          * @param {string} personId - Person ID
          * @returns {Promise<Array>}
          */
         async fetchForPerson(personId) {
-            return (await App.apiGet(`/people/${personId}/faces`)).data;
+            const faces = (await App.apiGet(`/people/${personId}/faces`)).data;
+
+            // Add fetched faces to cache (ensures setPreferredFace can validate them)
+            if (faces?.length) {
+                if (!_cache) _cache = new Map();
+                for (const face of faces) {
+                    _cache.set(face.id, face);
+                }
+                invalidateDerived();
+            }
+
+            return faces;
         },
 
         /**
