@@ -323,6 +323,8 @@ _SQL_CREATE_INDEXES = [
     "CREATE INDEX IF NOT EXISTS idx_images_deleted_timestamp ON images(deleted, timestamp DESC)",
     "CREATE INDEX IF NOT EXISTS idx_dup_level_group ON duplicate_groups(level, group_hash)",
     "CREATE INDEX IF NOT EXISTS idx_dup_updated_at ON duplicate_groups(updated_at)",
+    # Index for cascade deletes when an image is removed
+    "CREATE INDEX IF NOT EXISTS idx_dup_image_id ON duplicate_groups(image_id)",
 ]
 
 

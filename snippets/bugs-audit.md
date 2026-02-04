@@ -140,15 +140,10 @@ CREATE INDEX idx_faces_image ON faces(image_id, suppressed) WHERE suppressed = 0
 
 ---
 
-#### 1.7 Missing Index on duplicate_groups.image_id
+#### 1.7 ~~Missing Index on duplicate_groups.image_id~~ FIXED
 **File:** `imagedb.py:316`
 
-**Issue:** Deleting an image cascades to duplicate_groups, requiring full table scan.
-
-**Recommendation:**
-```sql
-CREATE INDEX idx_dup_image ON duplicate_groups(image_id);
-```
+**Fix Applied:** Added `idx_dup_image_id ON duplicate_groups(image_id)` to `_SQL_CREATE_INDEXES`.
 
 ---
 
@@ -427,7 +422,7 @@ The following concurrency patterns are correctly implemented:
 1. ~~**Fix memory explosion in duplicates** - Use chunking in incremental path~~ **DONE**
 2. ~~**Replace LIKE queries with range queries** - 100x speedup~~ **DONE**
 3. ~~**Convert O(n²) loops to use Sets** - identity.js:1247, faces.js:1782~~ **DONE**
-4. **Add missing database indexes** - faces table, duplicate_groups table
+4. ~~**Add missing database indexes** - faces table, duplicate_groups table~~ **DONE**
 5. **Fix subscription leak** - faces.js tagging mode
 
 ### Short Term
