@@ -261,6 +261,24 @@
     let displayedFaces = [];
 
     /**
+     * Pending input state to restore after grid refresh.
+     * VirtualGrid creates cards asynchronously (after thumbnails load),
+     * so we can't restore immediately after render(). Instead, we store
+     * the state here and restore it in onItemCreated when the card appears.
+     * Cleared when: user focuses another input, navigates away, or timeout expires.
+     * @type {Object|null}
+     */
+    let _pendingInputRestore = null;
+
+    /**
+     * Clear pending input restore state.
+     * Called when user interacts elsewhere or navigates away.
+     */
+    function clearPendingInputRestore() {
+        _pendingInputRestore = null;
+    }
+
+    /**
      * Whether a full reload is pending (deferred because user had active selection).
      * Checked by handleFacesSelectionChanged to trigger reload when selection clears.
      *
@@ -348,37 +366,76 @@
         /**
          * Capture input state from a grid container.
          * Returns null if no input is focused.
+         * Also saves to _pendingInputRestore for async restoration via onItemCreated.
          */
         captureInputState(gridContainer) {
-            if (!gridContainer) return null;
+            if (!gridContainer) {
+                _pendingInputRestore = null;
+                return null;
+            }
 
             const activeInput = gridContainer.querySelector('input:focus, textarea:focus');
-            if (!activeInput) return null;
+            if (!activeInput) {
+                _pendingInputRestore = null;
+                return null;
+            }
 
             // Use data-id which is standard across all face cards
             const faceCard = activeInput.closest('[data-id]');
-            if (!faceCard) return null;
+            if (!faceCard) {
+                _pendingInputRestore = null;
+                return null;
+            }
 
-            return {
+            const state = {
                 faceId: faceCard.dataset.id,
                 inputSelector: activeInput.tagName.toLowerCase() +
                     (activeInput.className ? '.' + activeInput.className.split(' ').join('.') : ''),
                 value: activeInput.value,
                 selectionStart: activeInput.selectionStart,
                 selectionEnd: activeInput.selectionEnd,
+                container: gridContainer,  // Track which container this is for
             };
+
+            // Save for async restoration when card is created
+            _pendingInputRestore = state;
+
+            // Clear pending state if user focuses a different input
+            // (they've moved on, don't steal focus back)
+            const onFocusElsewhere = (e) => {
+                if (_pendingInputRestore !== state) {
+                    // State already cleared or changed, remove listener
+                    document.removeEventListener('focusin', onFocusElsewhere, true);
+                    return;
+                }
+                // If focus went to an input/textarea that's NOT in the target card, clear
+                const focusedEl = e.target;
+                if (focusedEl.matches('input, textarea')) {
+                    const focusedCard = focusedEl.closest('[data-id]');
+                    if (!focusedCard || focusedCard.dataset.id !== state.faceId) {
+                        // User focused a different input - abandon restore
+                        _pendingInputRestore = null;
+                        document.removeEventListener('focusin', onFocusElsewhere, true);
+                    }
+                }
+            };
+            document.addEventListener('focusin', onFocusElsewhere, true);
+
+            return state;
         },
 
         /**
          * Restore input state after refresh.
-         * Only restores if the face still exists in the grid.
+         * Only restores if the face card already exists in the grid.
+         * For VirtualGrid (async card creation), this may not find the card yet;
+         * in that case, onItemCreated will handle restoration via _pendingInputRestore.
          */
         restoreInputState(gridContainer, state) {
             if (!gridContainer || !state) return;
 
-            // Find the face card by data-id (if it still exists)
+            // Find the face card by data-id (if it already exists)
             const faceCard = gridContainer.querySelector(`[data-id="${state.faceId}"]`);
-            if (!faceCard) return;  // Face was removed by reassessment
+            if (!faceCard) return;  // Card not created yet (or face was removed)
 
             // Find the input
             const input = faceCard.querySelector(state.inputSelector);
@@ -391,8 +448,49 @@
                 input.setSelectionRange(state.selectionStart, state.selectionEnd);
             }
 
+            // Clear pending state since we've restored
+            if (_pendingInputRestore?.faceId === state.faceId) {
+                _pendingInputRestore = null;
+            }
+
             // Ensure visible
             faceCard.scrollIntoView({ block: 'nearest' });
+        },
+
+        /**
+         * Check if a newly-created card needs input state restored.
+         * Called from VirtualGrid's onItemCreated callback.
+         * @param {string} id - Face ID of the created card
+         * @param {HTMLElement} el - The card element
+         * @param {HTMLElement} container - The grid container
+         */
+        maybeRestoreInput(id, el, container) {
+            // Check if this is the card we're waiting for
+            if (!_pendingInputRestore) return;
+            if (_pendingInputRestore.faceId !== id) return;
+            if (_pendingInputRestore.container !== container) return;
+
+            const state = _pendingInputRestore;
+            _pendingInputRestore = null;
+
+            // Find the input in the new card
+            const input = el.querySelector(state.inputSelector);
+            if (!input) return;
+
+            // Restore value and selection
+            input.value = state.value;
+            input.focus();
+            if (input.setSelectionRange) {
+                input.setSelectionRange(state.selectionStart, state.selectionEnd);
+            }
+
+            // Ensure visible
+            el.scrollIntoView({ block: 'nearest' });
+
+            // Reopen autocomplete if there was text (same as typing a character)
+            if (state.value) {
+                showCardAutocomplete(input, state.value, el);
+            }
         },
 
         // --- Refresh Handlers ---
@@ -744,9 +842,12 @@
             gap: 16,
             padding: 16,
             onItemCreated: (id, el) => {
+                // Restore selection state
                 if (facesSelection && facesSelection.isSelected(id)) {
                     el.classList.add('selected');
                 }
+                // Restore input state if this is the card we were typing in
+                FacesRefresh.maybeRestoreInput(id, el, unknownContainer);
             }
         });
     }
@@ -798,9 +899,12 @@
             getThumbSize: () => facesThumbnailSize,
             getItemHeight: (thumbSize, itemWidth) => itemWidth + 50,
             onItemCreated: (id, el) => {
+                // Restore selection state
                 if (pickerSelection && pickerSelection.isSelected(id)) {
                     el.classList.add('selected');
                 }
+                // Restore input state if this is the card we were typing in
+                FacesRefresh.maybeRestoreInput(id, el, pickerGridContainer);
             }
         });
     }
@@ -1558,6 +1662,10 @@
         input.addEventListener('blur', () => {
             // Delay to allow autocomplete click
             setTimeout(() => {
+                // Skip if card was removed from DOM (e.g., during grid refresh)
+                // This prevents committing partial input when refresh destroys the card
+                if (!card.isConnected) return;
+
                 const autocomplete = card.querySelector('.face-card-autocomplete');
                 if (autocomplete) {
                     autocomplete.remove();
@@ -3283,6 +3391,10 @@
         input.addEventListener('blur', () => {
             // Delay to allow autocomplete click
             setTimeout(() => {
+                // Skip if card was removed from DOM (e.g., during grid refresh)
+                // This prevents committing partial input when refresh destroys the card
+                if (!card.isConnected) return;
+
                 const autocomplete = card.querySelector('.face-card-autocomplete');
                 if (autocomplete) {
                     autocomplete.remove();
@@ -3656,6 +3768,9 @@
      * @param {string} screen - New screen name
      */
     function handleScreenChange(screen) {
+        // Clear pending input restore - user navigated away
+        clearPendingInputRestore();
+
         // Clear face overlay when changing screens
         // (fullscreen overlay handles its own faces via fullscreenImageChanged event)
         if (!Fullscreen.isOpen()) {
@@ -3768,11 +3883,56 @@
     }
 
     /**
+     * Capture input state from the face overlay.
+     * Used to preserve user's typing when overlay refreshes.
+     * @returns {Object|null} Input state or null if no input focused
+     */
+    function captureOverlayInputState() {
+        if (!faceOverlay) return null;
+
+        const activeInput = faceOverlay.querySelector('input:focus');
+        if (!activeInput) return null;
+
+        const faceBox = activeInput.closest('[data-face-id]');
+        if (!faceBox) return null;
+
+        return {
+            faceId: faceBox.dataset.faceId,
+            value: activeInput.value,
+            selectionStart: activeInput.selectionStart,
+            selectionEnd: activeInput.selectionEnd,
+        };
+    }
+
+    /**
+     * Restore input state after overlay refresh.
+     * @param {Object} state - State from captureOverlayInputState
+     */
+    function restoreOverlayInputState(state) {
+        if (!state || !faceOverlay) return;
+
+        // Find the face box by data-face-id (if it still exists)
+        const faceBox = faceOverlay.querySelector(`[data-face-id="${state.faceId}"]`);
+        if (!faceBox) return;  // Face was removed
+
+        const input = faceBox.querySelector('input');
+        if (!input) return;
+
+        // Restore value and selection
+        input.value = state.value;
+        input.focus();
+        if (input.setSelectionRange) {
+            input.setSelectionRange(state.selectionStart, state.selectionEnd);
+        }
+    }
+
+    /**
      * Render faces on the overlay.
      * @param {Array<Object>} faces - Array of face objects
      * @param {string} forImageId - Image ID these faces belong to (for stale check)
+     * @param {Object} [savedInputState] - Input state to restore (passed through recursive calls)
      */
-    function renderFaces(faces, forImageId) {
+    function renderFaces(faces, forImageId, savedInputState = null) {
         if (!faceOverlay || !fullscreenImage || !fullscreenContainer) {
             return;
         }
@@ -3781,6 +3941,10 @@
         if (forImageId && currentOverlayImageId !== forImageId) {
             return;
         }
+
+        // Capture input state before clearing (for restore after render)
+        // Use passed-in state if this is a recursive call after image load
+        const inputState = savedInputState || captureOverlayInputState();
 
         // Clear overlay content but preserve tracking variable (we're about to render)
         clearFaceOverlay(false);
@@ -3793,7 +3957,8 @@
             fullscreenImage.addEventListener('load', () => {
                 // Check again after load - user may have navigated away
                 if (forImageId && currentOverlayImageId !== forImageId) return;
-                renderFaces(faces, forImageId);
+                // Pass through input state to the recursive call
+                renderFaces(faces, forImageId, inputState);
             }, { once: true });
             return;
         }
@@ -3838,6 +4003,11 @@
         for (const face of faces) {
             const faceBox = createFaceBox(face, baseWidth, baseHeight);
             faceOverlay.appendChild(faceBox);
+        }
+
+        // Restore input state after render (if we had a focused input)
+        if (inputState) {
+            requestAnimationFrame(() => restoreOverlayInputState(inputState));
         }
     }
 
@@ -4116,6 +4286,10 @@
 
             // Delay to allow autocomplete click to update input value first
             setTimeout(() => {
+                // Skip if label was removed from DOM (e.g., during overlay refresh)
+                // This prevents committing partial input when refresh destroys the element
+                if (!label.isConnected) return;
+
                 closeAutocomplete();
 
                 // Commit the change
