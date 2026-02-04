@@ -1186,17 +1186,22 @@ def _compute_duplicates_embedding_incremental(
     dirty_ids: list[str],
     level: int,
     threshold: float,
+    chunk_size: int = 5000,
 ) -> int:
     """Incrementally update embedding-based duplicates for dirty images.
 
     For each dirty image, finds all images with similarity >= threshold
     and either adds to existing groups or creates new ones.
 
+    Uses chunked database loading to avoid memory explosion with large databases.
+    Memory usage is O(chunk_size + dirty_count) instead of O(total_images).
+
     Args:
         conn: Database connection.
         dirty_ids: List of image IDs that need checking.
         level: Duplicate level (2 or 3).
         threshold: Minimum cosine similarity for a match.
+        chunk_size: Number of embeddings to load per chunk (default 5000).
 
     Returns:
         Number of new groups created.
@@ -1208,45 +1213,104 @@ def _compute_duplicates_embedding_incremental(
 
     image_to_group = _get_image_to_group_mapping(conn, level=level)
 
+    # Get total count for chunking
     cursor = conn.execute(
-        'SELECT id, embedding FROM images WHERE deleted = 0 AND embedding IS NOT NULL'
+        'SELECT COUNT(*) as cnt FROM images WHERE deleted = 0 AND embedding IS NOT NULL'
     )
-    rows = cursor.fetchall()
+    total_count = cursor.fetchone()['cnt']
 
-    if len(rows) < 2:
+    if total_count < 2:
         return 0
 
-    # Build lookup structures
-    all_embeddings = {row['id']: embedding_to_numpy(row['embedding']) for row in rows}
+    # Load dirty image embeddings first (these we need to keep in memory)
+    dirty_id_set = set(dirty_ids)
+    dirty_embeddings: dict[str, np.ndarray] = {}
 
-    # Stack all embeddings for vectorized comparison
-    id_list = list(all_embeddings.keys())
-    embedding_matrix = np.array([all_embeddings[id_] for id_ in id_list])
+    # Fetch dirty embeddings - these are typically few so OK to load at once
+    if dirty_ids:
+        placeholders = ','.join('?' * len(dirty_ids))
+        cursor = conn.execute(
+            f'SELECT id, embedding FROM images WHERE id IN ({placeholders}) AND deleted = 0 AND embedding IS NOT NULL',
+            dirty_ids
+        )
+        for row in cursor:
+            emb = embedding_to_numpy(row['embedding'])
+            # Normalize
+            norm = np.linalg.norm(emb)
+            if norm > 0:
+                emb = emb / norm
+            dirty_embeddings[row['id']] = emb
 
-    # Normalize once for all comparisons
-    embedding_matrix = _normalize_embeddings(embedding_matrix)
+    if not dirty_embeddings:
+        logger.info(f'Incremental level {level}: no valid dirty embeddings found')
+        return 0
 
-    # Build id -> index mapping for fast lookup
-    id_to_idx = {id_: idx for idx, id_ in enumerate(id_list)}
+    # Stack dirty embeddings into matrix for vectorized comparison
+    dirty_id_list = list(dirty_embeddings.keys())
+    dirty_matrix = np.array([dirty_embeddings[id_] for id_ in dirty_id_list])
 
+    # Collect all matches for each dirty image across all chunks
+    # matches_by_dirty[dirty_id] = set of matching image IDs
+    matches_by_dirty: dict[str, set[str]] = {did: set() for did in dirty_id_list}
+
+    # Process database in chunks to find matches
+    chunks_processed = 0
+    offset = 0
+
+    while offset < total_count:
+        # Load a chunk of embeddings from database
+        cursor = conn.execute(
+            '''SELECT id, embedding FROM images
+               WHERE deleted = 0 AND embedding IS NOT NULL
+               ORDER BY id
+               LIMIT ? OFFSET ?''',
+            (chunk_size, offset)
+        )
+        chunk_rows = cursor.fetchall()
+
+        if not chunk_rows:
+            break
+
+        # Build chunk data
+        chunk_ids = []
+        chunk_embeddings = []
+        for row in chunk_rows:
+            chunk_ids.append(row['id'])
+            emb = embedding_to_numpy(row['embedding'])
+            norm = np.linalg.norm(emb)
+            if norm > 0:
+                emb = emb / norm
+            chunk_embeddings.append(emb)
+
+        chunk_matrix = np.array(chunk_embeddings)
+
+        # Compute similarities: dirty_matrix @ chunk_matrix.T
+        # Shape: (num_dirty, chunk_size)
+        similarities = dirty_matrix @ chunk_matrix.T
+
+        # Find matches above threshold
+        for dirty_idx, dirty_id in enumerate(dirty_id_list):
+            row_sims = similarities[dirty_idx]
+            match_indices = np.where(row_sims >= threshold)[0]
+
+            for match_idx in match_indices:
+                match_id = chunk_ids[match_idx]
+                # Exclude self-matches
+                if match_id != dirty_id:
+                    matches_by_dirty[dirty_id].add(match_id)
+
+        # Free chunk memory
+        del chunk_matrix, chunk_embeddings, chunk_rows
+        chunks_processed += 1
+        offset += chunk_size
+
+    logger.info(f'Incremental level {level}: processed {chunks_processed} chunks')
+
+    # Now process matches and update groups
     new_groups = 0
 
-    for dirty_id in dirty_ids:
-        if dirty_id not in all_embeddings:
-            continue
-
-        # Get normalized embedding for dirty image
-        dirty_idx = id_to_idx[dirty_id]
-        dirty_emb_norm = embedding_matrix[dirty_idx]
-
-        # Vectorized similarity computation
-        similarities = embedding_matrix @ dirty_emb_norm
-
-        # Find matches above threshold (excluding self)
-        match_mask = (similarities >= threshold)
-        match_mask[dirty_idx] = False  # Exclude self
-        match_indices = np.where(match_mask)[0]
-        matches = [id_list[idx] for idx in match_indices]
+    for dirty_id in dirty_id_list:
+        matches = list(matches_by_dirty[dirty_id])
 
         if not matches:
             continue

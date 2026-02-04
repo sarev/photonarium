@@ -30,21 +30,16 @@ Comprehensive audit of the Imaginary codebase for bugs, performance issues at sc
 
 ### HIGH SEVERITY
 
-#### 1.1 Memory Explosion in Duplicate Detection
-**File:** `duplicates.py:1209-1230`
+#### 1.1 ~~Memory Explosion in Duplicate Detection~~ FIXED
+**File:** `duplicates.py:1184-1310`
 
-```python
-all_embeddings = {row['id']: embedding_to_numpy(row['embedding']) for row in rows}
-embedding_matrix = np.array([all_embeddings[id_] for id_ in id_list])
-```
+**Issue:** Incremental duplicate detection loaded ALL image embeddings into RAM at once.
 
-**Issue:** Loads ALL image embeddings into RAM, then creates NxN similarity matrix.
-- 100,000 images × 512-dim float32 = ~200MB for embeddings
-- 100,000 × 100,000 × 4 bytes = **40GB for similarity matrix**
-
-**Impact:** Crashes with OOM at ~50,000 images.
-
-**Recommendation:** The chunked approach exists (`_compute_embedding_duplicates_chunked`) but incremental path loads everything. Fix incremental to use chunking.
+**Fix Applied:** Rewrote `_compute_duplicates_embedding_incremental()` to use chunked database loading:
+- Loads only dirty image embeddings first (typically few)
+- Iterates through database in chunks of 5000 embeddings
+- Computes similarities per chunk, frees memory before next chunk
+- Memory usage reduced from O(n) to O(chunk_size + dirty_count)
 
 ---
 
@@ -453,7 +448,7 @@ The following concurrency patterns are correctly implemented:
 
 ### Immediate (Before 50K+ Scale)
 
-1. **Fix memory explosion in duplicates** - Use chunking in incremental path
+1. ~~**Fix memory explosion in duplicates** - Use chunking in incremental path~~ **DONE**
 2. **Replace LIKE queries with range queries** - 100x speedup
 3. **Convert O(n²) loops to use Sets** - identity.js:1247, faces.js:1782
 4. **Add missing database indexes** - faces table, duplicate_groups table
