@@ -13,7 +13,7 @@
 
 AppState.loading = (function() {
     const { createSubscriberSystem } = AppState;
-    const { subscribe, broadcast } = createSubscriberSystem();
+    const { subscribe, broadcast, notify } = createSubscriberSystem();
 
     // =========================================================================
     // STATE
@@ -56,6 +56,8 @@ AppState.loading = (function() {
     return {
         /** @type {string} Domain name for transaction system */
         _name: 'loading',
+        /** @type {Function} Notify function for transaction system */
+        _notify: notify,
 
         /**
          * Subscribe to loading changes.
