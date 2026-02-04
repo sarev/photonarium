@@ -273,19 +273,15 @@ except Exception:
 
 ---
 
-#### 2.3 Subscription Leak in Fullscreen Tagging
+#### 2.3 ~~Subscription Leak in Fullscreen Tagging~~ NOT A BUG
 **File:** `static/faces.js:990-998`
 
-```javascript
-AppState.nav.onChanged((event) => {
-    // Subscription never unsubscribed on screen leave
-    window.addEventListener('resize', resizeHandler);  // Accumulates
-});
-```
+**Analysis:** The subscription is created once in `init()` at DOM ready and intentionally persists for the app's lifetime. It needs to respond to fullscreen changes even when not on faces screen (for tagging mode). The handler properly:
+- Checks `isTaggingModeActive()` before adding resize listener
+- Removes resize listener when fullscreen closes (lines 1004-1007)
+- Guards actions with condition checks
 
-**Impact:** Memory leak, accumulating event handlers.
-
-**Recommendation:** Track subscription, unsubscribe in `onLeave()`.
+This is intentional long-lived subscription, not a leak.
 
 ---
 
@@ -423,7 +419,7 @@ The following concurrency patterns are correctly implemented:
 2. ~~**Replace LIKE queries with range queries** - 100x speedup~~ **DONE**
 3. ~~**Convert O(n²) loops to use Sets** - identity.js:1247, faces.js:1782~~ **DONE**
 4. ~~**Add missing database indexes** - faces table, duplicate_groups table~~ **DONE**
-5. **Fix subscription leak** - faces.js tagging mode
+5. ~~**Fix subscription leak** - faces.js tagging mode~~ **NOT A BUG** (intentionally long-lived)
 
 ### Short Term
 
