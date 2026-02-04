@@ -405,22 +405,15 @@
          */
         onFacesChanged() {
             if (viewMode === 'pick-preferred' && pickPreferredPersonId) {
-                // Picker shows faces for a specific person - reload that person's faces
+                // Picker shows faces for a specific person
+                // Use cache (already updated via optimistic update) instead of re-fetching
+                // to avoid race condition where GET returns stale data before POST completes
                 const inputState = this.captureInputState(pickerGridContainer);
-                const personId = pickPreferredPersonId;
 
-                // Re-fetch the person's faces (backend may have added new ones)
-                AppState.faces.fetchForPerson(personId).then((faces) => {
-                    // Only update if still viewing the same person
-                    if (viewMode !== 'pick-preferred' || pickPreferredPersonId !== personId) return;
-
-                    pickPreferredFaces = faces || [];
-                    if (pickerSelection) pickerSelection.pruneToValidIds();
-                    renderPickerContent();
-                    requestAnimationFrame(() => this.restoreInputState(pickerGridContainer, inputState));
-                }).catch(error => {
-                    console.error('Failed to reload person faces:', error);
-                });
+                pickPreferredFaces = AppState.faces.getForPerson(pickPreferredPersonId);
+                if (pickerSelection) pickerSelection.pruneToValidIds();
+                renderPickerContent();
+                requestAnimationFrame(() => this.restoreInputState(pickerGridContainer, inputState));
             } else {
                 // Normal mode - update both sections
                 const inputState = this.captureInputState(unknownContainer);
