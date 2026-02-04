@@ -410,8 +410,8 @@ const Fullscreen = {
             ? knownIndex
             : this.state.imageList.findIndex(i => i.id === imageId);
 
-        // Load the full image
-        this._els.image.src = App.imageUrl(imageId);
+        // Load the full image (with cache-bust if image was recently modified)
+        this._els.image.src = ThumbnailLoader.getFullImageUrl(imageId);
 
         // Show filename overlay with dimensions
         // If imageList entry lacks metadata (e.g., opened from faces screen),
@@ -488,12 +488,12 @@ const Fullscreen = {
         const prevIndex = (currentIndex - 1 + imageList.length) % imageList.length;
         const nextIndex = (currentIndex + 1) % imageList.length;
 
-        // Preload by creating Image objects
+        // Preload by creating Image objects (with cache-bust for recently rotated images)
         const preloadPrev = new Image();
-        preloadPrev.src = App.imageUrl(imageList[prevIndex].id);
+        preloadPrev.src = ThumbnailLoader.getFullImageUrl(imageList[prevIndex].id);
 
         const preloadNext = new Image();
-        preloadNext.src = App.imageUrl(imageList[nextIndex].id);
+        preloadNext.src = ThumbnailLoader.getFullImageUrl(imageList[nextIndex].id);
 
         // Note: Adjacent face preloading disabled - was causing SQLite contention
         // that made fullscreen navigation unresponsive. Faces are loaded on-demand
@@ -979,7 +979,6 @@ const Fullscreen = {
         const ctrlOrCmd = e.ctrlKey || e.metaKey;
 
         if (ctrlOrCmd) {
-            console.log('[Fullscreen._handleKeyDown] Ctrl+' + e.key);
             switch (e.key.toLowerCase()) {
                 case 'f':
                     // Ctrl+F: Toggle face tagging mode
@@ -997,7 +996,7 @@ const Fullscreen = {
                     this._rotateImage(90);
                     return;
                 case 'l':
-                    // Ctrl+L: Rotate image left (90° counter-clockwise)
+                    // Ctrl+L: Rotate image left (270°)
                     e.preventDefault();
                     this._rotateImage(270);
                     return;
@@ -1115,22 +1114,15 @@ const Fullscreen = {
      */
     async _ignoreUnknownFaces() {
         const imageId = this.state.currentId;
-        console.log('[Fullscreen._ignoreUnknownFaces] imageId:', imageId);
-
-        if (!imageId) {
-            console.log('[Fullscreen._ignoreUnknownFaces] No current image');
-            return;
-        }
+        if (!imageId) return;
 
         // Get faces for this image from cache
         let faces = AppState.faces.getForImage(imageId);
-        console.log('[Fullscreen._ignoreUnknownFaces] Faces from cache:', faces.length);
 
         if (!faces.length) {
             // Cache might be empty/partial - fetch fresh and add to cache
             try {
                 const fetched = await AppState.faces.fetchForImage(imageId, { fresh: true });
-                console.log('[Fullscreen._ignoreUnknownFaces] Faces from API:', fetched?.length || 0);
 
                 // Add fetched faces to cache so identify() can find them
                 if (fetched?.length) {
@@ -1145,22 +1137,16 @@ const Fullscreen = {
             }
         }
 
-        if (!faces?.length) {
-            console.log('[Fullscreen._ignoreUnknownFaces] No faces on this image');
-            return;
-        }
+        if (!faces?.length) return;
 
         // Filter to unknown faces only (no person_id, not suppressed)
         const unknownFaceIds = faces
             .filter(f => !f.person_id && !f.suppressed)
             .map(f => f.id);
 
-        if (!unknownFaceIds.length) {
-            console.log('[Fullscreen._ignoreUnknownFaces] No unknown faces to ignore (all already identified or suppressed)');
-            return;
-        }
+        if (!unknownFaceIds.length) return;
 
-        console.log('[Fullscreen._ignoreUnknownFaces] Ignoring', unknownFaceIds.length, 'faces');
+        console.log('[Fullscreen._ignoreUnknownFaces]', unknownFaceIds.length, 'faces');
 
         try {
             // Identify all unknown faces as '-' (ignored)
@@ -1175,7 +1161,7 @@ const Fullscreen = {
      * Rotates the current image.
      * Backend rotates both the image file and face bounding boxes atomically.
      * Ctrl+R (90° right) and Ctrl+L (270° left) shortcuts.
-     * @param {number} degrees - 90 for clockwise, 270 for counter-clockwise
+     * @param {number} degrees - 90 for right, 270 for left
      * @private
      */
     async _rotateImage(degrees) {
@@ -1189,12 +1175,10 @@ const Fullscreen = {
             // Backend rotates both the image and face bounding boxes atomically
             await AppState.images.rotate(imageId, degrees);
 
-            // Emit imageRotated for gallery to update thumbnails
-            App.emit('imageRotated', imageId);
-
-            // Reload the full image (it's been rotated on disk)
-            const cacheBust = Date.now();
-            this._els.image.src = App.imageUrl(imageId) + '?t=' + cacheBust;
+            // Bust cache and reload the full image (it's been rotated on disk)
+            // Note: Gallery thumbnail update happens via images_modified event from backend
+            ThumbnailLoader.bustCache(imageId);
+            this._els.image.src = ThumbnailLoader.getFullImageUrl(imageId);
 
             // Update filename display with new dimensions
             const img = this._getCurrentImage();

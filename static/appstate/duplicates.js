@@ -88,8 +88,6 @@ AppState.duplicates = (function() {
                         // Remove group if only 1 image left
                         if (group.image_ids.length <= 1) {
                             groups.splice(i, 1);
-                            console.log('[AppState.duplicates._internal.removeImage]',
-                                'Removed empty group at level', level);
                         }
                     }
                 }
@@ -116,8 +114,6 @@ AppState.duplicates = (function() {
         if (_pollTimer && _pollLevel === level) return;
 
         _stopPolling();
-
-        console.log('[AppState.duplicates] Starting poll for level', level);
         _pollLevel = level;
         _pollTimer = setInterval(async () => {
             try {
@@ -132,7 +128,6 @@ AppState.duplicates = (function() {
                 };
 
                 if (newStatus !== 'computing' && newStatus !== 'pending') {
-                    console.log('[AppState.duplicates] Computation complete for level', level);
                     _stopPolling();
                     _computing = false;
                     _groupCache[level] = data.groups || [];
@@ -151,7 +146,6 @@ AppState.duplicates = (function() {
      */
     function _stopPolling() {
         if (_pollTimer) {
-            console.log('[AppState.duplicates] Stopping poll');
             clearInterval(_pollTimer);
             _pollTimer = null;
             _pollLevel = null;
@@ -195,11 +189,8 @@ AppState.duplicates = (function() {
         async loadLevel(level, force = false) {
             // Return cached if available
             if (!force && _groupCache[level] !== undefined) {
-                console.log('[AppState.duplicates.loadLevel] Returning cached level', level);
                 return _groupCache[level];
             }
-
-            console.log('[AppState.duplicates.loadLevel] Loading level', level);
 
             try {
                 const response = await App.apiGet(`/duplicates?level=${level}`);
@@ -215,9 +206,6 @@ AppState.duplicates = (function() {
 
                 const status = data.status;
                 _computing = status === 'computing' || status === 'pending';
-
-                console.log('[AppState.duplicates.loadLevel] Got', _groupCache[level].length,
-                    'groups, status:', status);
 
                 // Start polling if computation in progress
                 _startPollingIfNeeded(level, status);
@@ -283,7 +271,6 @@ AppState.duplicates = (function() {
          * @param {number} level - Similarity level (0-3)
          */
         setCurrentLevel(level) {
-            console.log('[AppState.duplicates.setCurrentLevel]', _currentLevel, '->', level);
             _currentLevel = level;
         },
 
@@ -305,9 +292,6 @@ AppState.duplicates = (function() {
          * @returns {Promise<Array<{image_id: string, score: number}>>}
          */
         async sortSemantic(query, imageIds) {
-            console.log('[AppState.duplicates.sortSemantic] query:', query,
-                'images:', imageIds.length);
-
             const response = await App.apiPost('/duplicates/sort-semantic', {
                 query,
                 image_ids: imageIds
@@ -328,11 +312,9 @@ AppState.duplicates = (function() {
          */
         invalidate(level) {
             if (level !== undefined) {
-                console.log('[AppState.duplicates.invalidate] level', level);
                 delete _groupCache[level];
                 delete _epochCache[level];
             } else {
-                console.log('[AppState.duplicates.invalidate] all levels');
                 _groupCache = {};
                 _epochCache = {};
             }

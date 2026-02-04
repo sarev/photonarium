@@ -1070,12 +1070,13 @@ def get_all_people(conn: sqlite3.Connection) -> list[dict[str, Any]]:
         conn: Database connection.
 
     Returns:
-        List of person dicts with 'face_count' field.
+        List of person dicts with 'face_count' and 'preferred_face_updated_at' fields.
     """
     cursor = conn.execute('''
-        SELECT p.*, COUNT(f.id) as face_count
+        SELECT p.*, COUNT(f.id) as face_count, pf.updated_at as preferred_face_updated_at
         FROM people p
         LEFT JOIN faces f ON f.person_id = p.id AND f.suppressed = 0
+        LEFT JOIN faces pf ON pf.id = p.preferred_face_id
         GROUP BY p.id
         ORDER BY p.name COLLATE NOCASE
     ''')
@@ -1259,12 +1260,14 @@ def search_people(
         limit: Maximum results to return.
 
     Returns:
-        List of matching person dicts.
+        List of matching person dicts with preferred_face_updated_at.
     """
     cursor = conn.execute(
-        '''SELECT * FROM people
-           WHERE name LIKE ? COLLATE NOCASE
-           ORDER BY name COLLATE NOCASE
+        '''SELECT p.*, pf.updated_at as preferred_face_updated_at
+           FROM people p
+           LEFT JOIN faces pf ON pf.id = p.preferred_face_id
+           WHERE p.name LIKE ? COLLATE NOCASE
+           ORDER BY p.name COLLATE NOCASE
            LIMIT ?''',
         (f'%{query}%', limit)
     )
@@ -1494,6 +1497,39 @@ def get_faces_for_image(
             face['embedding'] = np.frombuffer(face['embedding'], dtype=np.float32)
         faces.append(face)
     return faces
+
+
+def get_faces_for_images(
+    conn: sqlite3.Connection,
+    image_ids: list[str],
+) -> list[dict[str, Any]]:
+    """Get all non-suppressed faces for multiple images (batch operation).
+
+    Args:
+        conn: Database connection.
+        image_ids: List of image UUIDs.
+
+    Returns:
+        List of face dicts with person_name. Does not include embedding blob.
+    """
+    if not image_ids:
+        return []
+
+    # Use parameterized query with placeholder for each ID
+    placeholders = ','.join('?' * len(image_ids))
+    cursor = conn.execute(
+        f'''SELECT f.id, f.image_id, f.box_x, f.box_y, f.box_w, f.box_h,
+                   f.confidence, f.person_id, f.created_at, f.manually_tagged,
+                   f.unknown_group_id, f.suppressed,
+                   p.name as person_name
+            FROM faces f
+            LEFT JOIN people p ON f.person_id = p.id
+            WHERE f.image_id IN ({placeholders}) AND f.suppressed = 0
+            ORDER BY f.image_id, f.created_at''',
+        image_ids
+    )
+
+    return [dict(row) for row in cursor.fetchall()]
 
 
 def get_faces_for_person(
@@ -1799,7 +1835,7 @@ def delete_faces_for_image(
 def rotate_faces_for_image(
     conn: sqlite3.Connection,
     image_id: str,
-    direction: str,
+    degrees: float,
 ) -> int:
     """Rotate all face bounding boxes for an image.
 
@@ -1813,7 +1849,13 @@ def rotate_faces_for_image(
         new_w = old_h
         new_h = old_w
 
-    For 90° counter-clockwise rotation:
+    For 180° rotation:
+        new_x = 1 - old_x - old_w
+        new_y = 1 - old_y - old_h
+        new_w = old_w
+        new_h = old_h
+
+    For 270° (90° left) rotation:
         new_x = old_y
         new_y = 1 - old_x - old_w
         new_w = old_h
@@ -1822,11 +1864,16 @@ def rotate_faces_for_image(
     Args:
         conn: Database connection.
         image_id: Image's UUID.
-        direction: 'cw' for clockwise, 'ccw' for counter-clockwise.
+        degrees: Rotation angle (clockwise positive). Supports 90, 180, 270.
 
     Returns:
         Number of faces updated.
     """
+    # Normalise degrees to 0-360 range
+    degrees = degrees % 360
+    if degrees == 0:
+        return 0
+
     # Get all faces for this image
     cursor = conn.execute(
         '''SELECT id, box_x, box_y, box_w, box_h FROM faces WHERE image_id = ?''',
@@ -1839,19 +1886,30 @@ def rotate_faces_for_image(
 
     updated_count = 0
     for face_id, box_x, box_y, box_w, box_h in faces:
-        if direction == 'cw':
+        if degrees == 90:
             # 90° clockwise rotation
             new_x = 1.0 - box_y - box_h
             new_y = box_x
             new_w = box_h
             new_h = box_w
-        else:  # ccw
-            # 90° counter-clockwise rotation
+        elif degrees == 180:
+            # 180° rotation
+            new_x = 1.0 - box_x - box_w
+            new_y = 1.0 - box_y - box_h
+            new_w = box_w
+            new_h = box_h
+        elif degrees == 270:
+            # 270° (90° left) rotation
             new_x = box_y
             new_y = 1.0 - box_x - box_w
             new_w = box_h
             new_h = box_w
+        else:
+            # Arbitrary angles not supported for face bboxes yet
+            logger.warning(f'Arbitrary rotation angle {degrees}° not supported for face bboxes')
+            continue
 
+        logger.debug(f'rotate_faces_for_image: {face_id[:8]}... ({box_x:.3f},{box_y:.3f},{box_w:.3f},{box_h:.3f}) -> ({new_x:.3f},{new_y:.3f},{new_w:.3f},{new_h:.3f})')
         conn.execute(
             '''UPDATE faces SET box_x = ?, box_y = ?, box_w = ?, box_h = ?, updated_at = datetime('now') WHERE id = ?''',
             (new_x, new_y, new_w, new_h, face_id)
@@ -1859,6 +1917,7 @@ def rotate_faces_for_image(
         updated_count += 1
 
     conn.commit()
+    logger.debug(f'rotate_faces_for_image: Committed {updated_count} bbox updates')
     return updated_count
 
 

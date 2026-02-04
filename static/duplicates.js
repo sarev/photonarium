@@ -591,24 +591,35 @@ Duplicates._sortGroupsByPeople = async function() {
         return;
     }
 
-    // Load people names for each group's best image
+    // Collect all unique image IDs from best_image
+    const imageIds = this.state.allGroups
+        .map(g => g.best_image?.id)
+        .filter(id => id);
+
+    // Fetch faces for all images in a single batch request
+    let facesByImage = new Map();
+    if (imageIds.length > 0) {
+        try {
+            facesByImage = await AppState.faces.fetchForImages(imageIds);
+        } catch (error) {
+            console.warn('[Duplicates._sortGroupsByPeople] Batch fetch failed:', error);
+        }
+    }
+
+    // Build people names map from batch results
     const peopleNames = {};
     for (const group of this.state.allGroups) {
         if (!group.best_image?.id) {
             peopleNames[group.group_hash] = '';
             continue;
         }
-        try {
-            const faces = await AppState.faces.fetchForImage(group.best_image.id);
-            const names = (faces || [])
-                .filter(f => f.person_name)
-                .map(f => f.person_name)
-                .sort((a, b) => a.localeCompare(b, undefined, { sensitivity: 'base' }));
-            const uniqueNames = [...new Set(names)];
-            peopleNames[group.group_hash] = uniqueNames.join(', ');
-        } catch (error) {
-            peopleNames[group.group_hash] = '';
-        }
+        const faces = facesByImage.get(group.best_image.id) || [];
+        const names = faces
+            .filter(f => f.person_name)
+            .map(f => f.person_name)
+            .sort((a, b) => a.localeCompare(b, undefined, { sensitivity: 'base' }));
+        const uniqueNames = [...new Set(names)];
+        peopleNames[group.group_hash] = uniqueNames.join(', ');
     }
 
     // Sort groups: those with people first (alphabetically), then others by size

@@ -126,9 +126,6 @@ AppState.selection = (function() {
         set(context, ids) {
             const idArray = Array.isArray(ids) ? ids : [ids];
             const ctx = getContext(context);
-
-            console.log(`[AppState.selection.set] ${context}:`, idArray.length, 'items');
-
             ctx.selected = new Set(idArray);
             ctx.anchor = idArray.length > 0 ? idArray[idArray.length - 1] : null;
 
@@ -190,8 +187,6 @@ AppState.selection = (function() {
         clear(context) {
             const ctx = getContext(context);
             if (ctx.selected.size === 0) return;
-
-            console.log(`[AppState.selection.clear] ${context}`);
             ctx.selected.clear();
             ctx.anchor = null;
 
@@ -232,8 +227,6 @@ AppState.selection = (function() {
 
             const start = Math.min(anchorIdx, toIdx);
             const end = Math.max(anchorIdx, toIdx);
-
-            console.log(`[AppState.selection.selectRange] ${context}: ${start} to ${end}`);
 
             for (let i = start; i <= end; i++) {
                 ctx.selected.add(ids[i]);

@@ -3090,6 +3090,7 @@ EVENT_IMAGE_INGESTED = 'image_ingested'
 EVENT_PROCESSING_COMPLETE = 'processing_complete'
 EVENT_ERROR = 'error'
 EVENT_FACES_REASSESSED = 'faces_reassessed'
+EVENT_IMAGES_MODIFIED = 'images_modified'
 
 
 @dataclass
@@ -4215,7 +4216,7 @@ class ImageDatabase:
     def rotate_images(
         self,
         image_ids: list[str],
-        direction: str,
+        degrees: float,
     ) -> dict[str, Any]:
         """Rotate multiple image files in parallel.
 
@@ -4224,7 +4225,8 @@ class ImageDatabase:
 
         Args:
             image_ids: List of image UUIDs to rotate.
-            direction: 'cw' for clockwise, 'ccw' for counter-clockwise.
+            degrees: Rotation angle in degrees (clockwise positive).
+                     Common values: 90 (right), 180, 270 (left).
 
         Returns:
             Dict with:
@@ -4249,7 +4251,7 @@ class ImageDatabase:
             max_workers = self.config.indexing_threads
 
             def rotate_one(image_id: str) -> tuple[str, bool, str | None]:
-                success, old_checksum = self._rotate_single_image(image_id, direction)
+                success, old_checksum = self._rotate_single_image(image_id, degrees)
                 return (image_id, success, old_checksum)
 
             with ThreadPoolExecutor(max_workers=max_workers) as executor:
@@ -4264,6 +4266,10 @@ class ImageDatabase:
                                 old_checksums.append(old_checksum)
                     except Exception as e:
                         logger.error(f'rotate_images: Thread error: {e}')
+
+            # Emit event for frontend to refresh affected images
+            if rotated:
+                self.event_queue.emit(EVENT_IMAGES_MODIFIED, {'image_ids': rotated})
 
             return {'results': results, 'rotated': rotated, 'old_checksums': old_checksums}
 
@@ -4289,7 +4295,7 @@ class ImageDatabase:
                 self._image_locks[image_id] = threading.Lock()
             return self._image_locks[image_id]
 
-    def _rotate_single_image(self, image_id: str, direction: str) -> tuple[bool, str | None]:
+    def _rotate_single_image(self, image_id: str, degrees: float) -> tuple[bool, str | None]:
         """Rotate a single image file and update its metadata.
 
         Performs lossless rotation for JPEG files when possible.
@@ -4300,7 +4306,7 @@ class ImageDatabase:
 
         Args:
             image_id: UUID of the image to rotate.
-            direction: 'cw' for clockwise, 'ccw' for counter-clockwise.
+            degrees: Rotation angle in degrees (clockwise positive).
 
         Returns:
             Tuple of (success, old_checksum). old_checksum is returned on success
@@ -4324,7 +4330,7 @@ class ImageDatabase:
             old_checksum = image.get('checksum')
 
             # Rotate the image file
-            if not rotate_image_file(path, direction):
+            if not rotate_image_file(path, degrees):
                 logger.error(f'rotate_image: Rotation failed for: {path}')
                 return (False, None)
 
@@ -4345,7 +4351,7 @@ class ImageDatabase:
                     new_width, new_height = img.size
             except Exception as e:
                 logger.error(f'rotate_image: Failed to compute new metadata: {e}')
-                return False
+                return (False, None)
 
             # Update database (with db lock for thread safety)
             try:
@@ -4376,26 +4382,34 @@ class ImageDatabase:
                 with self._db_lock:
                     # Get faces before rotating their coordinates
                     faces = get_faces_for_image(self.conn, image_id, include_suppressed=True)
+                    logger.debug(f'rotate_image: Found {len(faces)} faces for {path.name}')
 
                     # Rotate the bounding box coordinates in the database
-                    rotated_count = rotate_faces_for_image(self.conn, image_id, direction)
+                    rotated_count = rotate_faces_for_image(self.conn, image_id, degrees)
+                    logger.debug(f'rotate_image: Rotated {rotated_count} face bounding boxes')
 
                     if rotated_count > 0:
-                        logger.debug(f'Rotated {rotated_count} face bounding boxes for {path.name}')
-
                         # Delete old face thumbnails and regenerate them
                         for face in faces:
                             face_id = face['id']
+                            old_bbox = (face['box_x'], face['box_y'], face['box_w'], face['box_h'])
+
                             # Delete old thumbnail
-                            delete_face_thumbnail(face_id, self.thumbnail_dir)
+                            thumb_path = get_face_thumbnail_path(face_id, self.thumbnail_dir)
+                            thumb_existed = thumb_path.exists()
+                            deleted = delete_face_thumbnail(face_id, self.thumbnail_dir)
+                            logger.debug(f'rotate_image: Face {face_id[:8]}... old_bbox={old_bbox}, thumb_existed={thumb_existed}, deleted={deleted}')
 
                             # Get updated face coordinates (after rotation)
                             updated_face = get_face(self.conn, face_id)
                             if updated_face:
+                                new_bbox = (updated_face['box_x'], updated_face['box_y'],
+                                           updated_face['box_w'], updated_face['box_h'])
+                                logger.debug(f'rotate_image: Face {face_id[:8]}... new_bbox={new_bbox}')
+
                                 # Regenerate face thumbnail with new coordinates
-                                thumb_path = get_face_thumbnail_path(face_id, self.thumbnail_dir)
                                 try:
-                                    generate_face_thumbnail(
+                                    success = generate_face_thumbnail(
                                         path,
                                         thumb_path,
                                         box_x=updated_face['box_x'],
@@ -4405,13 +4419,15 @@ class ImageDatabase:
                                         size=200,
                                         quality=self.config.thumbnail_quality,
                                     )
+                                    thumb_exists_now = thumb_path.exists()
+                                    logger.debug(f'rotate_image: Face {face_id[:8]}... regen_success={success}, thumb_exists_now={thumb_exists_now}, thumb_path={thumb_path}')
                                 except Exception as e:
-                                    logger.warning(f'Failed to regenerate face thumbnail for {face_id}: {e}')
+                                    logger.warning(f'rotate_image: Failed to regenerate face thumbnail for {face_id}: {e}')
             except Exception as e:
                 logger.warning(f'rotate_image: Failed to rotate faces: {e}')
                 # Non-fatal - image was still rotated successfully
 
-            logger.info(f'Rotated image {direction}: {path.name}')
+            logger.info(f'Rotated image {degrees}°: {path.name}')
             return (True, old_checksum)
 
     def search_images(

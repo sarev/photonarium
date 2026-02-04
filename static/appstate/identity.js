@@ -102,8 +102,6 @@ AppState.faces = (function() {
         linkToPerson(faceId, personId, personName) {
             const face = _cache?.get(faceId);
             if (face) {
-                console.log('[AppState.faces._internal.linkToPerson]',
-                    faceId, '->', personId, `(${personName})`);
                 face.person_id = personId;
                 face.person_name = personName;
                 invalidateDerived();
@@ -121,8 +119,6 @@ AppState.faces = (function() {
             const face = _cache?.get(faceId);
             if (face && face.person_id) {
                 const oldPersonId = face.person_id;
-                console.log('[AppState.faces._internal.unlinkFromPerson]',
-                    faceId, 'was:', oldPersonId);
                 face.person_id = null;
                 face.person_name = null;
                 invalidateDerived();
@@ -140,8 +136,6 @@ AppState.faces = (function() {
         setLocked(faceId, locked) {
             const face = _cache?.get(faceId);
             if (face && face.manually_tagged !== locked) {
-                console.log('[AppState.faces._internal.setLocked]',
-                    faceId, locked ? 'LOCKED' : 'UNLOCKED');
                 face.manually_tagged = locked;
                 markDirty(domainRef);
             }
@@ -237,10 +231,6 @@ AppState.faces = (function() {
                 }
             }
 
-            console.log('[AppState.faces._internal.assignToPersonBatch]',
-                faceIds.length, 'faces ->', personId,
-                'affected old persons:', Array.from(affectedPersonIds));
-
             return affectedPersonIds;
         },
 
@@ -261,10 +251,6 @@ AppState.faces = (function() {
                 this.unlinkFromPerson(faceId);
                 this.setLocked(faceId, false);
             }
-
-            console.log('[AppState.faces._internal.unassignBatch]',
-                faceIds.length, 'faces, affected persons:',
-                Array.from(affectedPersonIds));
 
             return affectedPersonIds;
         },
@@ -341,10 +327,6 @@ AppState.faces = (function() {
      * @private
      */
     async function _persistIdentify(faceIds, personId, createdPerson, personName, preferredFaceId) {
-        console.log('[AppState.faces._persistIdentify]',
-            'personId:', personId, 'created:', createdPerson,
-            'faces:', faceIds.length);
-
         let actualPersonId = personId;
 
         // Create person if new
@@ -359,12 +341,11 @@ AppState.faces = (function() {
                 // 409 CONFLICT means person already exists (race condition with another identify)
                 // Find existing person and use their ID, then fix up the local cache
                 if (err.message?.includes('409')) {
-                    console.log('[AppState.faces._persistIdentify] Person exists (409), fixing cache');
+                    // Person already exists (race condition) - fix cache
                     await AppState.people.load(true);
                     const existing = AppState.people._internal.findByName(personName);
                     if (existing) {
                         actualPersonId = existing.id;
-                        console.log('[AppState.faces._persistIdentify] Using existing person:', actualPersonId);
 
                         // Fix local cache: move faces from wrong person to correct person
                         transaction(() => {
@@ -404,7 +385,6 @@ AppState.faces = (function() {
      * @private
      */
     async function _persistUnassign(faceIds) {
-        console.log('[AppState.faces._persistUnassign]', faceIds.length, 'faces');
         await App.apiPost('/faces/unassign', { face_ids: faceIds });
     }
 
@@ -413,7 +393,6 @@ AppState.faces = (function() {
      * @private
      */
     async function _persistSuppress(faceIds) {
-        console.log('[AppState.faces._persistSuppress]', faceIds.length, 'faces');
         await App.apiPost('/faces/suppress', { face_ids: faceIds });
     }
 
@@ -422,8 +401,6 @@ AppState.faces = (function() {
      * @private
      */
     async function _persistSetLocked(faceIds, locked) {
-        console.log('[AppState.faces._persistSetLocked]',
-            faceIds.length, 'faces, locked:', locked);
         await App.apiPatch('/faces', { face_ids: faceIds, locked });
     }
 
@@ -441,7 +418,6 @@ AppState.faces = (function() {
         if (_pendingLoad) return _pendingLoad;
 
         _loading = true;
-        console.log('[AppState.faces.load] Starting...');
 
         _pendingLoad = (async () => {
             try {
@@ -449,8 +425,6 @@ AppState.faces = (function() {
                 _cache = new Map(response.data.map(f => [f.id, f]));
                 _cacheIsPartial = false;  // Full cache loaded
                 invalidateDerived();
-
-                console.log('[AppState.faces.load] Loaded', _cache.size, 'faces');
                 broadcast({ type: 'changed' });
 
             } catch (err) {
@@ -483,7 +457,6 @@ AppState.faces = (function() {
         if (_pendingLoad) return _pendingLoad;
 
         _loading = true;
-        console.log('[AppState.faces.loadUnknownOnly] Starting...');
 
         _pendingUnknownLoad = (async () => {
             try {
@@ -491,8 +464,6 @@ AppState.faces = (function() {
                 _cache = new Map(response.data.map(f => [f.id, f]));
                 _cacheIsPartial = true;  // Only unknown faces loaded
                 invalidateDerived();
-
-                console.log('[AppState.faces.loadUnknownOnly] Loaded', _cache.size, 'unknown faces');
                 broadcast({ type: 'changed' });
 
             } catch (err) {
@@ -664,13 +635,47 @@ AppState.faces = (function() {
         },
 
         /**
+         * Fetch faces for multiple images in a single batch request.
+         * More efficient than calling fetchForImage() in a loop.
+         * @param {string[]} imageIds - Image IDs
+         * @returns {Promise<Map<string, Array>>} Map of imageId -> faces array
+         */
+        async fetchForImages(imageIds) {
+            if (!imageIds?.length) return new Map();
+
+            const response = await App.apiGet(`/faces?image_ids=${imageIds.join(',')}`);
+            const allFaces = response.data || [];
+
+            // Add fetched faces to cache
+            if (allFaces.length) {
+                if (!_cache) _cache = new Map();
+                for (const face of allFaces) {
+                    _cache.set(face.id, face);
+                }
+                _cacheIsPartial = true;
+                invalidateDerived();
+            }
+
+            // Group by image_id for caller convenience
+            const byImage = new Map();
+            for (const imageId of imageIds) {
+                byImage.set(imageId, []);
+            }
+            for (const face of allFaces) {
+                const arr = byImage.get(face.image_id);
+                if (arr) arr.push(face);
+            }
+
+            return byImage;
+        },
+
+        /**
          * Search faces using semantic query.
          * Calls backend search endpoint.
          * @param {string} query - Search query
          * @returns {Promise<Array>} Matching faces
          */
         async search(query) {
-            console.log('[AppState.faces.search] query:', query);
             const url = query
                 ? `/faces?search=${encodeURIComponent(query)}`
                 : '/faces';
@@ -700,9 +705,6 @@ AppState.faces = (function() {
             const missingIds = faceIds.filter(id => !_cache.has(id));
             if (!missingIds.length) return;
 
-            console.log('[AppState.faces.ensureFacesInCache]',
-                missingIds.length, 'of', faceIds.length, 'faces missing from cache');
-
             // Fetch missing faces individually (batch endpoint doesn't exist)
             // Group by image to minimize API calls if we had that info,
             // but we don't, so fetch each face directly
@@ -725,7 +727,6 @@ AppState.faces = (function() {
                 }
                 _cacheIsPartial = true;
                 invalidateDerived();
-                console.log('[AppState.faces.ensureFacesInCache] Added', fetched.length, 'faces to cache');
             }
         },
 
@@ -757,7 +758,6 @@ AppState.faces = (function() {
             // Empty name = unassign
             const trimmedName = personName?.trim() || '';
             if (!trimmedName) {
-                console.log('[AppState.faces.identify] Empty name, delegating to unassign');
                 return this.unassign(faceIds);
             }
 
@@ -804,10 +804,8 @@ AppState.faces = (function() {
                     AppState.people._internal.add(person);
                     createdPerson = true;
                     backup.createdPersonId = personId;
-                    console.log('[AppState.faces.identify] Created new person:', personId);
                 } else {
                     personId = person.id;
-                    console.log('[AppState.faces.identify] Found existing person:', personId);
                 }
 
                 // Backup person state
@@ -847,7 +845,6 @@ AppState.faces = (function() {
                         faceIds, finalPersonId, createdPerson,
                         trimmedName, finalPreferredId
                     );
-                    console.log('[AppState.faces.identify] Persist complete');
                     return { personId: finalPersonId };
 
                 } catch (err) {
@@ -900,9 +897,6 @@ AppState.faces = (function() {
         autoAssign(faceIds, personId) {
             if (!faceIds?.length) return;
             if (!AppState.people._internal.get(personId)) return;
-
-            console.log('[AppState.faces.autoAssign]',
-                faceIds.length, 'faces ->', personId, '(no lock, no persist)');
 
             transaction(() => {
                 const affectedPersonIds = _internal.assignToPersonBatch(
@@ -1135,11 +1129,6 @@ AppState.faces = (function() {
         applyThresholdChanges(personId, assignedFaceIds, unassignedFaceIds) {
             if (!AppState.people._internal.get(personId)) return;
 
-            console.log('[AppState.faces.applyThresholdChanges]',
-                'person:', personId,
-                'assign:', assignedFaceIds?.length || 0,
-                'unassign:', unassignedFaceIds?.length || 0);
-
             transaction(() => {
                 if (assignedFaceIds?.length) {
                     _internal.assignToPersonBatch(assignedFaceIds, personId, { lock: false });
@@ -1194,7 +1183,7 @@ AppState.faces = (function() {
          *   new_w = old_h
          *   new_h = old_w
          *
-         * For 270° (counter-clockwise):
+         * For 270° (left):
          *   new_x = old_y
          *   new_y = 1 - old_x - old_w
          *   new_w = old_h
@@ -1210,9 +1199,6 @@ AppState.faces = (function() {
             const faces = this.getForImage(imageId);
             if (!faces.length) return [];
 
-            console.log('[AppState.faces.rotateBoundingBoxes]',
-                imageId, degrees + '°', faces.length, 'faces');
-
             for (const face of faces) {
                 const { box_x, box_y, box_w, box_h } = face;
 
@@ -1223,7 +1209,7 @@ AppState.faces = (function() {
                     face.box_w = box_h;
                     face.box_h = box_w;
                 } else {
-                    // 270° clockwise (same as 90° counter-clockwise)
+                    // 270° (left)
                     face.box_x = box_y;
                     face.box_y = 1 - box_x - box_w;
                     face.box_w = box_h;
@@ -1243,6 +1229,47 @@ AppState.faces = (function() {
             _cache = null;
             _cacheIsPartial = false;
             invalidateDerived();
+        },
+
+        /**
+         * Refresh faces for specific images.
+         * Fetches fresh face data using batch endpoint and reconciles people.
+         * Called by images_modified event handler.
+         *
+         * @param {string[]} imageIds - Image IDs whose faces to refresh
+         */
+        async refreshForImages(imageIds) {
+            if (!imageIds?.length) return;
+
+            // Remove old faces for these images from cache
+            if (_cache) {
+                for (const [faceId, face] of _cache) {
+                    if (imageIds.includes(face.image_id)) {
+                        _cache.delete(faceId);
+                    }
+                }
+            }
+            invalidateDerived();
+
+            // Fetch fresh faces for all images in one batch request
+            try {
+                const response = await App.apiGet(`/faces?image_ids=${imageIds.join(',')}`);
+                const faces = response.data || [];
+
+                // Add fetched faces to cache
+                if (!_cache) _cache = new Map();
+                for (const face of faces) {
+                    _cache.set(face.id, face);
+                }
+            } catch (err) {
+                console.warn('[AppState.faces.refreshForImages] Batch fetch failed:', err);
+            }
+
+            // Reconcile all people (face counts, deletions, etc.)
+            // Some people may have lost all their faces
+            AppState.people.load(true);  // Force reload to get accurate face counts
+
+            broadcast({ type: 'changed' });
         },
 
         // =====================================================================
@@ -1353,7 +1380,6 @@ AppState.people = (function() {
         add(person) {
             // Initialize cache if needed (person creation can happen before load)
             if (!_cache) _cache = new Map();
-            console.log('[AppState.people._internal.add]', person.id, person.name);
             _cache.set(person.id, person);
             markDirty(domainRef);
         },
@@ -1364,7 +1390,6 @@ AppState.people = (function() {
          */
         remove(id) {
             if (_cache?.delete(id)) {
-                console.log('[AppState.people._internal.remove]', id);
                 markDirty(domainRef);
             }
         },
@@ -1408,9 +1433,6 @@ AppState.people = (function() {
             const person = this.get(personId);
             if (!person) return;
 
-            console.log('[AppState.people._internal.setName]',
-                personId, person.name, '->', name);
-
             person.name = name;
 
             // Update denormalized name on faces
@@ -1431,9 +1453,6 @@ AppState.people = (function() {
         setPreferred(personId, faceId) {
             const person = this.get(personId);
             if (!person) return;
-
-            console.log('[AppState.people._internal.setPreferred]',
-                personId, '->', faceId);
 
             person.preferred_face_id = faceId;
             AppState.faces._internal.setLocked(faceId, true);
@@ -1516,18 +1535,10 @@ AppState.people = (function() {
             if (!AppState.faces.isCachePartial()) {
                 person.face_count = linkedFaces.length;
 
-                console.log('[AppState.people._internal.reconcilePerson]',
-                    personId, 'face_count:', person.face_count);
-
                 if (person.face_count === 0) {
-                    console.log('[AppState.people._internal.reconcilePerson]',
-                        'Auto-deleting empty person:', personId);
                     this.remove(personId);
                     return;
                 }
-            } else {
-                console.log('[AppState.people._internal.reconcilePerson]',
-                    personId, 'skipping face_count recalc (partial cache)');
             }
 
             // Check if preferred face was removed (safe even with partial cache)
@@ -1541,8 +1552,6 @@ AppState.people = (function() {
                     const newest = linkedFaces.reduce((a, b) =>
                         (a.image_timestamp || 0) > (b.image_timestamp || 0) ? a : b
                     );
-                    console.log('[AppState.people._internal.reconcilePerson]',
-                        'Reassigning preferred:', newest.id);
                     this.setPreferred(personId, newest.id);
                 }
             }
@@ -1564,18 +1573,15 @@ AppState.people = (function() {
     // =========================================================================
 
     async function _persistRename(personId, name) {
-        console.log('[AppState.people._persistRename]', personId, name);
         await App.apiPatch(`/people/${personId}`, { name });
     }
 
     async function _persistSetPreferred(personId, faceId) {
-        console.log('[AppState.people._persistSetPreferred]', personId, faceId);
         await App.apiPatch(`/people/${personId}`, { preferred_face_id: faceId });
         await App.apiPatch('/faces', { face_ids: [faceId], locked: true });
     }
 
     async function _persistSetThreshold(personId, threshold) {
-        console.log('[AppState.people._persistSetThreshold]', personId, threshold);
         return await App.apiPatch(`/people/${personId}`, { threshold });
     }
 
@@ -1584,8 +1590,6 @@ AppState.people = (function() {
      * SEQUENCE: assign faces → delete person
      */
     async function _persistMerge(faceIds, fromId, toId) {
-        console.log('[AppState.people._persistMerge]',
-            faceIds.length, 'faces from', fromId, 'to', toId);
         if (faceIds.length > 0) {
             await App.apiPost('/faces/assign', { face_ids: faceIds, person_id: toId });
         }
@@ -1597,8 +1601,6 @@ AppState.people = (function() {
      * SEQUENCE: unassign faces → delete person
      */
     async function _persistDissolve(faceIds, personId) {
-        console.log('[AppState.people._persistDissolve]',
-            faceIds.length, 'faces from', personId);
         if (faceIds.length > 0) {
             await App.apiPost('/faces/unassign', { face_ids: faceIds });
         }
@@ -1616,15 +1618,12 @@ AppState.people = (function() {
         if (_pendingLoad) return _pendingLoad;
 
         _loading = true;
-        console.log('[AppState.people.load] Starting...');
 
         _pendingLoad = (async () => {
             try {
                 const response = await App.apiGet('/people');
                 _cache = new Map(response.data.map(p => [p.id, p]));
                 _cacheTime = Date.now();
-
-                console.log('[AppState.people.load] Loaded', _cache.size, 'people');
                 broadcast({ type: 'changed' });
 
             } catch (err) {
@@ -1765,12 +1764,24 @@ AppState.people = (function() {
 
         /**
          * Get thumbnail URL with cache busting.
+         * Uses session cache-bust if set, otherwise falls back to
+         * preferred_face_updated_at from person data (survives page reload).
          * @param {string} personId - Person ID
          * @param {number} [size=200] - Thumbnail size
          * @returns {string}
          */
         getThumbnailUrl(personId, size = 200) {
-            const bust = _thumbnailBust.get(personId);
+            // Session cache-bust takes priority (set during this session after rotation)
+            let bust = _thumbnailBust.get(personId);
+
+            // Fall back to preferred face's updated_at (survives page reload)
+            if (!bust) {
+                const person = _cache.get(personId);
+                if (person?.preferred_face_updated_at) {
+                    bust = person.preferred_face_updated_at;
+                }
+            }
+
             const bustParam = bust ? `&_=${bust}` : '';
             return `/api/people/${personId}/thumbnail?size=${size}${bustParam}`;
         },
@@ -1809,7 +1820,6 @@ AppState.people = (function() {
 
             // Case A: No-op
             if (trimmedNew === oldName) {
-                console.log('[AppState.people.rename] No-op, same name');
                 return Promise.resolve();
             }
 
@@ -1820,14 +1830,12 @@ AppState.people = (function() {
 
             // Case C: Dissolve
             if (!trimmedNew) {
-                console.log('[AppState.people.rename] Empty name, delegating to dissolve');
                 return this.dissolve(personId);
             }
 
             // Case D: Merge
             const collision = _internal.findByName(trimmedNew);
             if (collision && collision.id !== personId) {
-                console.log('[AppState.people.rename] Collision, delegating to merge');
                 return this.merge(personId, collision.id);
             }
 
@@ -2057,7 +2065,6 @@ AppState.people = (function() {
 
                     // Handle threshold changes from backend
                     if (response?.data?.assigned || response?.data?.unassigned) {
-                        console.log('[AppState.people.setThreshold] Applying backend changes');
                         AppState.faces.applyThresholdChanges(
                             personId,
                             response.data.assigned,

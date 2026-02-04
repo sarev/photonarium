@@ -79,17 +79,12 @@ AppState.status = (function() {
                 const isCompleted = _status?.face_reassessment?.completed;
 
                 if (isCompleted && !wasCompleted) {
-                    console.log('[AppState.status] Face reassessment completed, acknowledging...');
-
                     // Acknowledge the reassessment
-                    App.apiPost('/faces/reassess-ack').catch(err => {
-                        console.warn('[AppState.status] Failed to ack reassessment:', err);
-                    });
+                    App.apiPost('/faces/reassess-ack').catch(() => {});
 
                     // Trigger faces reload if loaded
                     setTimeout(() => {
                         if (AppState.faces?.isLoaded()) {
-                            console.log('[AppState.status] Reloading faces after reassessment');
                             AppState.faces.load(true);
                         }
                     }, 0);

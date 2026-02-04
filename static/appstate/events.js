@@ -46,7 +46,7 @@ AppState.events = (function() {
      * Process a single event from the backend.
      * @param {Object} event - Event object with type and data
      */
-    function processEvent(event) {
+    async function processEvent(event) {
         const { type, data } = event;
         console.log('[AppState.events.processEvent]', type, data);
 
@@ -84,6 +84,12 @@ AppState.events = (function() {
                 // Backend error
                 // data: { message }
                 handleError(data);
+                break;
+
+            case 'images_modified':
+                // Images modified (rotation, rescan, etc.)
+                // data: { image_ids: [...] }
+                await handleImagesModified(data);
                 break;
 
             default:
@@ -211,6 +217,44 @@ AppState.events = (function() {
         broadcast({ type: 'error', message: data?.message });
     }
 
+    /**
+     * Handle images_modified event.
+     *
+     * Called when backend has modified one or more images (rotation, rescan, etc.)
+     * Orchestrates cache invalidation and data refresh across all affected domains.
+     *
+     * @param {Object} data - Event data
+     * @param {string[]} data.image_ids - IDs of modified images
+     */
+    async function handleImagesModified(data) {
+        const imageIds = data?.image_ids;
+        if (!imageIds?.length) return;
+
+        console.log('[AppState.events] Images modified:', imageIds.length, 'images');
+
+        // 1. Cache-bust image thumbnails (sync)
+        for (const imageId of imageIds) {
+            ThumbnailLoader.bustCache(imageId);
+        }
+
+        // 2. Cache-bust face and person thumbnails BEFORE refresh
+        // (face IDs and person associations don't change during rotation, only bboxes)
+        // This ensures when refreshForImages() broadcasts and triggers re-render,
+        // the cache-bust timestamps are already set
+        FaceThumbnails.bustCacheForImages(imageIds);
+
+        // 3. Refresh image metadata - wait for AppState to update
+        await AppState.images.refreshByIds(imageIds);
+
+        // 4. Refresh faces for these images (cascades to people)
+        // This broadcasts and triggers re-render with cache-busted URLs
+        await AppState.faces.refreshForImages(imageIds);
+
+        // 5. Emit frontend event for Gallery to update rendered items
+        // (VirtualGrid caches DOM elements - needs explicit removal for re-fetch)
+        App.emit('imagesModified', imageIds);
+    }
+
     // =========================================================================
     // POLLING
     // =========================================================================
@@ -226,11 +270,8 @@ AppState.events = (function() {
             const response = await App.apiGet('/events');
             const events = response?.data?.events || [];
 
-            if (events.length > 0) {
-                console.log('[AppState.events.poll] Got', events.length, 'events');
-                for (const event of events) {
-                    processEvent(event);
-                }
+            for (const event of events) {
+                await processEvent(event);
             }
         } catch (err) {
             console.error('[AppState.events.poll] Error:', err);

@@ -80,6 +80,7 @@ from faces import (
     get_face,
     get_all_faces,
     get_faces_for_image,
+    get_faces_for_images,
     get_faces_for_person,
     update_face_person,
     toggle_face_manual_tag,
@@ -108,7 +109,7 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 # Set our modules to INFO level
-for module in ['app', 'imagedb', 'faces', 'thumbnails', 'duplicates', 'config', 'timestamps']:
+for module in ['app', '__main__', 'imagedb', 'faces', 'thumbnails', 'duplicates', 'config', 'timestamps']:
     logging.getLogger(module).setLevel(logging.INFO)
 
 app = Flask(__name__, static_folder='static', static_url_path='')
@@ -757,7 +758,8 @@ def rotate_images():
     Request Body:
         JSON object with:
             - image_ids: Array of image IDs to rotate
-            - direction: 'cw' for clockwise, 'ccw' for counter-clockwise
+            - degrees: Rotation angle in degrees (clockwise positive).
+                       Common values: 90 (right), 180, 270 or -90 (left).
 
     Returns:
         JSON object with:
@@ -768,12 +770,12 @@ def rotate_images():
     if not data:
         return error_response('Request body is required')
 
-    if 'direction' not in data:
-        return error_response('Direction is required (cw or ccw)')
+    if 'degrees' not in data:
+        return error_response('degrees is required')
 
-    direction = data['direction']
-    if direction not in ('cw', 'ccw'):
-        return error_response('Direction must be "cw" or "ccw"')
+    degrees = data['degrees']
+    if not isinstance(degrees, (int, float)):
+        return error_response('degrees must be a number')
 
     image_ids = data.get('image_ids', [])
     if not image_ids:
@@ -782,7 +784,7 @@ def rotate_images():
     if not isinstance(image_ids, list):
         return error_response('image_ids must be an array')
 
-    results = get_db().rotate_images(image_ids, direction)
+    results = get_db().rotate_images(image_ids, degrees)
 
     # Invalidate thumbnail RAM cache for old checksums
     old_checksums = results.pop('old_checksums', [])
@@ -1534,15 +1536,25 @@ def get_person_thumbnail(person_id):
 
     # Get preferred face or first face
     face_id = person.get('preferred_face_id')
+    fallback_used = False
     if not face_id:
         faces = get_faces_for_person(db.conn, person_id)
         if not faces:
             return error_response('Person has no faces', 404)
         face_id = faces[0]['id']
+        fallback_used = True
 
     # Get face thumbnail
     thumb_path = get_face_thumbnail_path(face_id, db.thumbnail_dir)
-    if not thumb_path.exists():
+    thumb_exists = thumb_path.exists()
+    thumb_mtime = thumb_path.stat().st_mtime if thumb_exists else None
+
+    logger.debug(f'get_person_thumbnail: person={person_id[:8]}... '
+                f'preferred_face_id={person.get("preferred_face_id", "None")[:8] if person.get("preferred_face_id") else "None"}... '
+                f'face_id={face_id[:8]}... fallback={fallback_used} '
+                f'exists={thumb_exists} mtime={thumb_mtime} path={thumb_path}')
+
+    if not thumb_exists:
         return error_response('Face thumbnail not found', 404)
 
     return send_file(
@@ -1590,16 +1602,27 @@ def get_faces_list():
         unknown: If 'true', only return faces without a person_id.
         search: Text query for semantic search (unknown faces only).
                 When provided, returns unknown faces sorted by similarity.
+        image_ids: Comma-separated list of image IDs to filter by (batch operation).
+                   When provided, returns only faces for those images.
 
     Returns:
         JSON array of face objects with person_name if identified.
         Ordered by: known faces (alphabetically by person name), then unknown faces.
         When search is provided: unknown faces sorted by similarity descending.
+        When image_ids is provided: faces for those images, ordered by image then created_at.
     """
     unknown_only = request.args.get('unknown', '').lower() == 'true'
     search_query = request.args.get('search', '').strip()
+    image_ids_param = request.args.get('image_ids', '').strip()
 
     db = get_db()
+
+    # If image_ids provided, do batch fetch for specific images
+    if image_ids_param:
+        image_ids = [id.strip() for id in image_ids_param.split(',') if id.strip()]
+        if image_ids:
+            faces = get_faces_for_images(db.conn, image_ids)
+            return success_response(faces)
 
     # If search query provided, do semantic search on unknown faces
     if search_query:
@@ -2210,7 +2233,11 @@ def get_face_thumbnail(face_id):
         return error_response('Face not found', 404)
 
     thumb_path = get_face_thumbnail_path(face_id, db.thumbnail_dir)
-    if not thumb_path.exists():
+    thumb_exists = thumb_path.exists()
+    thumb_mtime = thumb_path.stat().st_mtime if thumb_exists else None
+    logger.debug(f'get_face_thumbnail: {face_id[:8]}... exists={thumb_exists}, mtime={thumb_mtime}, path={thumb_path}')
+
+    if not thumb_exists:
         # Check if another request is already regenerating this thumbnail
         should_regenerate = False
         with _face_thumb_regen_lock:
@@ -2223,7 +2250,8 @@ def get_face_thumbnail(face_id):
             try:
                 image = db.get_image(face['image_id'])
                 if image and Path(image['path']).exists():
-                    logger.info(f'Regenerating missing face thumbnail: {face_id}')
+                    bbox = (face['box_x'], face['box_y'], face['box_w'], face['box_h'])
+                    logger.debug(f'get_face_thumbnail: Regenerating {face_id[:8]}... bbox={bbox}')
                     success = generate_face_thumbnail(
                         source_path=image['path'],
                         dest_path=thumb_path,

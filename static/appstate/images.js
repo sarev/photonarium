@@ -17,7 +17,7 @@
 'use strict';
 
 AppState.images = (function() {
-    const { createSubscriberSystem, markDirty, queueTransaction } = AppState;
+    const { createSubscriberSystem, queueTransaction } = AppState;
     const { subscribe, subscribeError, broadcast, notify, broadcastError } = createSubscriberSystem();
 
     // =========================================================================
@@ -79,9 +79,6 @@ AppState.images = (function() {
             _displayList = _filterImages(_sortImages(all));
         }
         _displayListDirty = false;
-
-        console.log('[AppState.images._ensureDisplayList]',
-            'Recomputed:', _displayList.length, 'images');
     }
 
     /**
@@ -263,9 +260,6 @@ AppState.images = (function() {
         const imageFaces = AppState.faces.getForImage(imageId);
         if (!imageFaces || imageFaces.length === 0) return;
 
-        console.log('[AppState.images.handleFaceCleanup]',
-            imageId, 'has', imageFaces.length, 'faces');
-
         const personUpdates = new Map();
 
         for (const face of imageFaces) {
@@ -325,7 +319,6 @@ AppState.images = (function() {
         if (_pendingLoad) return _pendingLoad;
 
         _loading = true;
-        console.log('[AppState.images.load]', forceFullReload ? 'FULL' : 'delta');
 
         _pendingLoad = (async () => {
             try {
@@ -335,9 +328,6 @@ AppState.images = (function() {
                     const data = response.data;
                     _cache = new Map(data.images.map(img => [img.id, img]));
                     _cacheEpoch = data.epoch;
-
-                    console.log('[AppState.images.load] Full load:',
-                        _cache.size, 'images, epoch:', _cacheEpoch);
                 } else {
                     // Delta load
                     const response = await App.apiGet(`/images?since=${_cacheEpoch}`);
@@ -347,15 +337,11 @@ AppState.images = (function() {
                         for (const img of data.updated) {
                             _cache.set(img.id, img);
                         }
-                        console.log('[AppState.images.load] Delta: updated',
-                            data.updated.length, 'images');
                     }
                     if (data.deleted_ids) {
                         for (const id of data.deleted_ids) {
                             _cache.delete(id);
                         }
-                        console.log('[AppState.images.load] Delta: deleted',
-                            data.deleted_ids.length, 'images');
                     }
                     _cacheEpoch = data.epoch;
                 }
@@ -538,18 +524,20 @@ AppState.images = (function() {
         /**
          * Rotate one or more images.
          * @param {string|Array} ids - Image ID(s)
-         * @param {number} degrees - Rotation (90, 180, 270)
+         * @param {number} degrees - Rotation angle in degrees (clockwise positive).
+         *                           Common values: 90 (right), 180, 270 (left).
          * @returns {Promise<void>}
          */
         rotate(ids, degrees) {
             if (!Array.isArray(ids)) ids = [ids];
 
-            console.log('[AppState.images.rotate]', ids.length, 'images by', degrees);
+            console.log('[AppState.images.rotate]', ids.length, 'images by', degrees + '°');
 
             return queueTransaction(async () => {
                 try {
-                    await App.apiPost('/images/rotate', { ids, degrees });
+                    await App.apiPost('/images/rotate', { image_ids: ids, degrees });
 
+                    // Update cached dimensions for 90/270 rotations
                     for (const id of ids) {
                         const image = _cache?.get(id);
                         if (image && (degrees === 90 || degrees === 270)) {
@@ -558,7 +546,7 @@ AppState.images = (function() {
                             image.height = temp;
                         }
                     }
-                    markDirty(domainRef);
+                    broadcast({ type: 'changed' });
                 } catch (err) {
                     console.error('[AppState.images.rotate] Error:', err);
                     broadcastError(err.message || 'Failed to rotate images');
@@ -589,8 +577,6 @@ AppState.images = (function() {
          * @returns {Promise<Object>}
          */
         async loadSimilarities(referenceId) {
-            console.log('[AppState.images.loadSimilarities] ref:', referenceId);
-
             const response = await App.apiGet(`/similar/${referenceId}`);
             _similarities = {
                 referenceId,
@@ -633,8 +619,6 @@ AppState.images = (function() {
          * @returns {Promise<Object>}
          */
         async loadPeopleNames() {
-            console.log('[AppState.images.loadPeopleNames]');
-
             const response = await App.apiGet('/images/people-names');
             _peopleNames = response.data;
             _markDisplayListDirty();
@@ -675,13 +659,25 @@ AppState.images = (function() {
          * @returns {Promise<Set<string>>}
          */
         async getFilteredByPeople(peopleIds) {
-            console.log('[AppState.images.getFilteredByPeople]', peopleIds);
-
             const response = await App.apiGet(
                 `/images?people=${encodeURIComponent(peopleIds.join(','))}`
             );
             const images = response.data.images || [];
             return new Set(images.map(img => String(img.id)));
+        },
+
+        /**
+         * Refresh metadata for specific images.
+         * Uses delta sync to efficiently fetch only changed images.
+         * Called by images_modified event handler.
+         * @param {string[]} ids - Image IDs to refresh (for logging only)
+         */
+        async refreshByIds(ids) {
+            if (!ids?.length) return;
+
+            // Delta sync will fetch all images changed since last epoch,
+            // which includes the rotated images (they have updated updated_at)
+            await load();
         },
 
         /**

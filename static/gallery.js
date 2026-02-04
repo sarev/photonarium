@@ -137,6 +137,114 @@ const Gallery = {
     _els: {},
 
     /**
+     * Debug: dump state of gallery, grid, and specific image.
+     * Call from console: Gallery._debugDump('image-id-here')
+     * @param {string} [imageId] - Optional image ID to highlight
+     * @param {string} [context] - Description of when this was called
+     */
+    _debugDump(imageId, context = 'manual') {
+        console.group(`[Gallery._debugDump] ${context}`);
+
+        // Gallery state
+        console.log('Gallery.state:', { ...this.state });
+
+        // Grid container
+        const grid = this._els.grid;
+        if (grid) {
+            console.log('Grid container:', {
+                clientWidth: grid.clientWidth,
+                clientHeight: grid.clientHeight,
+                scrollTop: grid.scrollTop,
+                scrollHeight: grid.scrollHeight,
+                offsetTop: grid.offsetTop,
+                offsetLeft: grid.offsetLeft,
+                hidden: grid.hidden,
+                display: getComputedStyle(grid).display
+            });
+        } else {
+            console.log('Grid container: NOT FOUND');
+        }
+
+        // VirtualGrid state
+        if (this._grid) {
+            const vgState = this._grid._state;
+            const vgConfig = this._grid._config;
+            console.log('VirtualGrid._state:', {
+                itemsPerRow: vgState?.itemsPerRow,
+                itemWidth: vgState?.itemWidth,
+                itemHeight: vgState?.itemHeight,
+                totalHeight: vgState?.totalHeight,
+                visibleRows: vgState?.visibleRows,
+                renderedCount: vgState?.renderedItems?.size,
+                pendingCount: vgState?.pendingItems?.size
+            });
+            console.log('VirtualGrid._config:', {
+                gap: vgConfig?.gap,
+                padding: vgConfig?.padding,
+                itemCount: vgConfig?.getItems?.()?.length
+            });
+            console.log('VirtualGrid._bound:', this._grid._bound);
+
+            // Inner container
+            const inner = this._grid._innerContainer;
+            if (inner) {
+                console.log('InnerContainer:', {
+                    clientHeight: inner.clientHeight,
+                    styleHeight: inner.style.height,
+                    childCount: inner.children.length,
+                    backgroundPosition: inner.style.backgroundPosition
+                });
+            }
+        } else {
+            console.log('VirtualGrid: NOT INITIALIZED');
+        }
+
+        // Specific image info
+        if (imageId && this._grid) {
+            const displayList = AppState.images.getDisplayList();
+            const index = displayList.findIndex(img => img.id === imageId);
+            console.log(`Image ${imageId}:`, {
+                indexInDisplayList: index,
+                inRenderedItems: this._grid._state?.renderedItems?.has(imageId),
+                inPendingItems: this._grid._state?.pendingItems?.has(imageId)
+            });
+
+            if (index >= 0 && this._grid._state) {
+                const { itemsPerRow, itemWidth, itemHeight } = this._grid._state;
+                const { gap, padding } = this._grid._config;
+                const row = Math.floor(index / itemsPerRow);
+                const col = index % itemsPerRow;
+                const expectedTop = padding + row * itemHeight;
+                const expectedLeft = padding + col * (itemWidth + gap);
+                console.log(`Image expected position:`, {
+                    row, col, expectedTop, expectedLeft
+                });
+            }
+
+            // Find actual DOM element
+            const el = this._grid._innerContainer?.querySelector(`[data-id="${imageId}"]`);
+            if (el) {
+                console.log('Image DOM element:', {
+                    styleTop: el.style.top,
+                    styleLeft: el.style.left,
+                    styleWidth: el.style.width,
+                    styleHeight: el.style.height,
+                    offsetTop: el.offsetTop,
+                    offsetLeft: el.offsetLeft,
+                    className: el.className
+                });
+            } else {
+                console.log('Image DOM element: NOT IN DOM');
+            }
+        }
+
+        // ThumbnailLoader state
+        console.log('ThumbnailLoader:', ThumbnailLoader.getStats());
+
+        console.groupEnd();
+    },
+
+    /**
      * Initialises the gallery module.
      */
     init() {
@@ -212,7 +320,7 @@ const Gallery = {
         App.on('filterChanged', () => this._onFilterChanged());
         App.on('selectionChanged', (sel) => this._onSelectionChanged(sel));
         App.on('selectAll', () => this._selection.selectAll());
-        App.on('imageRotated', (imageId) => this._onImageRotated(imageId));
+        App.on('imagesModified', (imageIds) => this._onImagesModified(imageIds));
 
         // Subscribe to AppState for reactive updates
         this._unsubs.push(AppState.images.onChanged(() => this._onImagesChanged()));
@@ -283,8 +391,6 @@ const Gallery = {
      * @private
      */
     async _loadImages() {
-        console.time('_loadImages total');
-
         // Show inline loading on first load
         const isFirstLoad = App.getCachedImageCount() === 0;
         if (isFirstLoad) {
@@ -292,16 +398,12 @@ const Gallery = {
         }
 
         try {
-            console.time('_loadImages fetch');
             // Load into AppState (single source of truth)
             await AppState.images.load();
             const imageCount = AppState.images.getCount();
-            console.timeEnd('_loadImages fetch');
-            console.log(`_loadImages: ${imageCount} images in AppState`);
 
             // Check if we're still on gallery screen after async fetch
             if (App.getScreen() !== 'gallery') {
-                console.log('_loadImages: gallery no longer active, skipping render');
                 return;
             }
 
@@ -319,8 +421,6 @@ const Gallery = {
                 this._hideLoading();
             }
         }
-
-        console.timeEnd('_loadImages total');
     },
 
     /**
@@ -343,7 +443,6 @@ const Gallery = {
             const displayList = AppState.images.getDisplayList();
             const exists = displayList.some(img => img.id === persistedId);
             if (exists) {
-                console.log('[Gallery] Restoring persisted selection:', persistedId);
                 App.setSelectedImages([persistedId]);
                 // Scroll to the selected image after a brief delay to ensure grid is rendered
                 requestAnimationFrame(() => {
@@ -603,19 +702,29 @@ const Gallery = {
     },
 
     /**
-     * Handles image rotation.
-     * @param {string} imageId
+     * Handles images modified (rotation, rescan, etc.).
+     * Called via imagesModified event from AppState.events.
+     * @param {string[]} imageIds - IDs of modified images
      * @private
      */
-    _onImageRotated(imageId) {
-        // Use ThumbnailLoader cache bust
-        ThumbnailLoader.bustCache(imageId);
+    _onImagesModified(imageIds) {
+        if (!imageIds?.length || !this._grid) return;
 
-        // Remove the element so it gets re-fetched with the new thumbnail
-        // This also revokes the old blob URL to prevent memory leaks
-        this._grid.removeRenderedItem(imageId, true);
+        // If gallery isn't visible (different screen or fullscreen overlay),
+        // mark for full refresh on next enter to avoid stale state issues
+        if (App.getScreen() !== 'gallery' || AppState.nav.isFullscreenOpen()) {
+            this.state.needsRefresh = true;
+            return;
+        }
 
-        // Trigger a refresh to re-request the thumbnail
+        // Remove rendered elements so they get re-fetched with new thumbnails
+        // This also revokes old blob URLs to prevent memory leaks
+        // Note: ThumbnailLoader.bustCache already called in event handler
+        for (const imageId of imageIds) {
+            this._grid.removeRenderedItem(imageId, true);
+        }
+
+        // Trigger a refresh to re-request the thumbnails
         this._grid.refresh();
     },
 
@@ -628,19 +737,14 @@ const Gallery = {
      * @private
      */
     _renderGrid() {
-        console.time('_renderGrid total');
         const grid = this._els.grid;
 
         // Get display images from AppState (single source of truth)
-        console.time('_renderGrid compute');
         const displayList = AppState.images.getDisplayList();
-        console.timeEnd('_renderGrid compute');
-        console.log(`_renderGrid: ${displayList.length} images`);
 
         // Handle empty state
         if (displayList.length === 0) {
             grid.innerHTML = '<div class="empty-state"><span class="material-symbols-outlined">photo_library</span><p>No images to display</p></div>';
-            console.timeEnd('_renderGrid total');
             return;
         }
 
@@ -662,8 +766,6 @@ const Gallery = {
 
         // Set up scroll overlay updates
         this._bindScrollOverlay();
-
-        console.timeEnd('_renderGrid total');
     },
 
     /**
@@ -1259,8 +1361,12 @@ const Gallery = {
                     this._selection.select(newId);
                 }
             } else if (event.property === 'fullscreenClosing') {
-                // Fullscreen is closing - scroll to the last viewed image
-                if (event.imageId && this._grid) {
+                // Fullscreen is closing - check if we need to refresh
+                if (this.state.needsRefresh) {
+                    // Images were modified while fullscreen was open - do full refresh
+                    this._loadImages();
+                } else if (event.imageId && this._grid) {
+                    // Just scroll to the last viewed image
                     this._grid.scrollToId(event.imageId);
                 }
                 // Unsubscribe

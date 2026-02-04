@@ -92,7 +92,7 @@ I'd like to double-check what happens when the user clicks on "Rescan all folder
 
 ## Rotate buttons - DONE
 
-In the gallery toolbar, we have a button for going into full-screen mode. This is shaded if there isn't exactly one imgae selected. It's good. I'd like two buttons next to it: for rotating all selected images anti-clockwise, or clockwise. It will be shaded if no images are selected.
+In the gallery toolbar, we have a button for going into full-screen mode. This is shaded if there isn't exactly one image selected. It's good. I'd like two buttons next to it: for rotating all selected images left, or right. It will be shaded if no images are selected.
 
 Clearly, rotating the image will mean its sha256 checksum (and probably size and modified date) will change. As an optimisation, to help speed things up, I think we can assume that the rotation operation *doesn't* change the embedding, description, rating, description embedding, laplacian variance, or perceptual hash
 

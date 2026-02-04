@@ -78,8 +78,6 @@ AppState.loading = (function() {
             _owner = owner;
             _message = message;
 
-            console.log('[AppState.loading.show]', owner, message);
-
             // Update DOM
             if (_messageEl) _messageEl.textContent = message;
             if (_el && !_visible) {
@@ -103,12 +101,10 @@ AppState.loading = (function() {
          */
         hide(owner) {
             if (_owner !== owner) {
-                console.log('[AppState.loading.hide] Ignored, owner is', _owner, 'not', owner);
                 return false;
             }
 
             ensureElements();
-            console.log('[AppState.loading.hide]', owner);
 
             _owner = null;
             if (_el && _visible) {
@@ -125,7 +121,6 @@ AppState.loading = (function() {
          */
         forceHide() {
             ensureElements();
-            console.log('[AppState.loading.forceHide]');
 
             const previousOwner = _owner;
             _owner = null;

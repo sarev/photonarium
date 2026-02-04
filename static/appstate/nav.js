@@ -124,7 +124,6 @@ AppState.nav = (function() {
          */
         clearHistory() {
             _history = [];
-            console.log('[AppState.nav.clearHistory]');
         },
 
         // --- Fullscreen Viewer ---

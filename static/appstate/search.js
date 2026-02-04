@@ -63,8 +63,7 @@ AppState.search = (function() {
          * @returns {Promise<Object>} Search results
          */
         async execute(query, threshold = 0.2, limit = 500) {
-            console.log('[AppState.search.execute] query:', query,
-                'threshold:', threshold, 'limit:', limit);
+            console.log('[AppState.search.execute] query:', query);
 
             _loading = true;
             _query = query;
@@ -75,8 +74,6 @@ AppState.search = (function() {
                 const response = await App.apiPost('/search', { query, threshold, limit });
                 _results = response.data;
                 _loading = false;
-
-                console.log('[AppState.search.execute] Got', _results?.results?.length || 0, 'results');
                 broadcast({ type: 'changed' });
                 return _results;
 
@@ -124,7 +121,6 @@ AppState.search = (function() {
          * Clear search results and query.
          */
         clear() {
-            console.log('[AppState.search.clear]');
             _results = null;
             _query = null;
             _threshold = null;

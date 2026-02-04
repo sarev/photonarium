@@ -206,6 +206,22 @@ const ThumbnailLoader = {
     },
 
     /**
+     * Gets the full image URL with cache-bust if needed.
+     * Use this for fullscreen viewer to ensure rotated images are refreshed.
+     *
+     * @param {string} imageId - The image ID
+     * @returns {string} The full image URL, with cache-bust parameter if needed
+     */
+    getFullImageUrl(imageId) {
+        let url = App.imageUrl(imageId);
+        const bustTime = this._cacheBust.get(imageId);
+        if (bustTime) {
+            url += (url.includes('?') ? '&' : '?') + '_t=' + bustTime;
+        }
+        return url;
+    },
+
+    /**
      * Gets the thumbnail URL for an image, with cache-bust if needed.
      *
      * @param {string} imageId - The image ID
@@ -582,6 +598,8 @@ const VirtualGrid = {
              */
             _onResize() {
                 const oldItemsPerRow = this._state.itemsPerRow;
+                const oldItemWidth = this._state.itemWidth;
+                const oldItemHeight = this._state.itemHeight;
 
                 // Skip if container has no dimensions
                 if (!this._calculateDimensions()) {
@@ -592,8 +610,11 @@ const VirtualGrid = {
                 this._innerContainer.style.height = this._state.totalHeight + 'px';
                 this._updateGridPattern();
 
-                // If items per row changed, reposition all rendered items
-                if (oldItemsPerRow !== this._state.itemsPerRow) {
+                // Reposition all rendered items if layout changed
+                const layoutChanged = oldItemsPerRow !== this._state.itemsPerRow ||
+                                      oldItemWidth !== this._state.itemWidth ||
+                                      oldItemHeight !== this._state.itemHeight;
+                if (layoutChanged && this._state.renderedItems.size > 0) {
                     const items = this._config.getItems();
                     // Build id->index map once for O(1) lookups
                     const idToIndex = new Map();

@@ -33,10 +33,13 @@ from pathlib import Path
 from PIL import Image, ImageFilter, ImageOps
 
 import logging
+import os
 import shutil
 import subprocess
+import sys
 import tempfile
 import threading
+import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
 # Configure module logger
@@ -45,6 +48,43 @@ logger = logging.getLogger(__name__)
 
 # Default thumbnail directory
 DEFAULT_THUMBNAIL_DIR = Path('.thumbnails')
+
+
+def _move_with_retry(src: Path, dst: Path, max_retries: int = 5, delay: float = 0.1) -> None:
+    """Move a file with retry logic for Windows file locking issues.
+
+    On Windows, files can be temporarily locked by antivirus scanners,
+    search indexers, or cloud sync services. This function retries
+    the move operation with exponential backoff.
+
+    Args:
+        src: Source file path.
+        dst: Destination file path.
+        max_retries: Maximum number of retry attempts.
+        delay: Initial delay between retries (doubles each attempt).
+
+    Raises:
+        OSError: If all retry attempts fail.
+    """
+    last_error = None
+    for attempt in range(max_retries):
+        try:
+            shutil.move(src, dst)
+            return
+        except OSError as e:
+            last_error = e
+            # Only retry on Windows file locking errors
+            if sys.platform == 'win32' and e.winerror == 32:
+                if attempt < max_retries - 1:
+                    logger.warning(
+                        f'File locked, retry {attempt + 1}/{max_retries} '
+                        f'(waiting {delay:.1f}s): {src.name}'
+                    )
+                    time.sleep(delay)
+                    delay *= 2  # Exponential backoff
+                    continue
+            raise
+    raise last_error
 
 
 def get_thumbnail_cache_path(
@@ -159,7 +199,7 @@ def generate_thumbnail(
 
 def rotate_image_file(
     path: Path | str,
-    direction: str,
+    degrees: float,
 ) -> bool:
     """Rotate an image file in place.
 
@@ -168,48 +208,108 @@ def rotate_image_file(
 
     Args:
         path: Path to the image file.
-        direction: 'cw' for clockwise (90 degrees right),
-                   'ccw' for counter-clockwise (90 degrees left).
+        degrees: Rotation angle in degrees (clockwise positive).
+                 Common values: 90 (right), -90 or 270 (left), 180.
 
     Returns:
         True if rotation was successful, False otherwise.
     """
     path = Path(path)
 
-    if direction not in ('cw', 'ccw'):
-        logger.error(f'Invalid rotation direction: {direction}')
-        return False
-
     if not path.exists():
         logger.error(f'Image file not found: {path}')
         return False
+
+    # Normalise degrees to 0-360 range
+    degrees = degrees % 360
+    if degrees == 0:
+        return True  # No rotation needed
 
     # Check if JPEG (can use lossless rotation)
     suffix = path.suffix.lower()
     is_jpeg = suffix in ('.jpg', '.jpeg')
 
-    if is_jpeg:
-        # Try lossless JPEG rotation with jpegtran
-        if _rotate_jpeg_lossless(path, direction):
+    # Lossless JPEG rotation only supports 90, 180, 270
+    if is_jpeg and degrees in (90, 180, 270):
+        if _rotate_jpeg_lossless(path, degrees):
             return True
         # Fall through to Pillow if jpegtran failed
 
-    # Use Pillow for non-JPEG or if jpegtran unavailable
-    return _rotate_with_pillow(path, direction)
+    # Use Pillow for non-JPEG, arbitrary angles, or if jpegtran unavailable
+    return _rotate_with_pillow(path, degrees)
 
 
-def _rotate_jpeg_lossless(path: Path, direction: str) -> bool:
+def _reset_exif_orientation(path: Path) -> bool:
+    """Reset EXIF orientation tag to 1 (normal) in a JPEG file.
+
+    This is necessary after jpegtran rotation because jpegtran preserves
+    the original EXIF orientation tag even though it has physically rotated
+    the pixels. This causes issues when other code applies exif_transpose().
+
+    Args:
+        path: Path to the JPEG file.
+
+    Returns:
+        True if successful, False otherwise.
+    """
+    try:
+        with Image.open(path) as img:
+            # Get existing EXIF data
+            exif = img.getexif()
+            if not exif:
+                return True  # No EXIF data, nothing to fix
+
+            # Check if orientation tag exists (tag 0x0112 = 274)
+            ORIENTATION_TAG = 274
+            if ORIENTATION_TAG not in exif:
+                return True  # No orientation tag, nothing to fix
+
+            if exif[ORIENTATION_TAG] == 1:
+                return True  # Already normal orientation
+
+            # Set orientation to 1 (normal)
+            exif[ORIENTATION_TAG] = 1
+
+            # Save with updated EXIF
+            # Need to save to temp file then replace (can't overwrite while open)
+            with tempfile.NamedTemporaryFile(
+                suffix='.jpg',
+                delete=False,
+                dir=path.parent,
+            ) as tmp:
+                tmp_path = Path(tmp.name)
+
+            img.save(tmp_path, 'JPEG', quality=95, exif=exif, optimize=True)
+
+        _move_with_retry(tmp_path, path)
+        logger.debug(f'Reset EXIF orientation to normal: {path}')
+        return True
+
+    except Exception as e:
+        logger.warning(f'Failed to reset EXIF orientation for {path}: {e}')
+        if 'tmp_path' in locals() and tmp_path.exists():
+            try:
+                tmp_path.unlink()
+            except OSError:
+                pass
+        return False
+
+
+def _rotate_jpeg_lossless(path: Path, degrees: float) -> bool:
     """Attempt lossless JPEG rotation using jpegtran.
 
     Args:
         path: Path to the JPEG file.
-        direction: 'cw' or 'ccw'.
+        degrees: Rotation angle (must be 90, 180, or 270).
 
     Returns:
         True if successful, False if jpegtran not available or failed.
     """
-    # Map direction to jpegtran argument
-    rotate_arg = '90' if direction == 'cw' else '270'
+    # jpegtran only supports 90, 180, 270
+    if degrees not in (90, 180, 270):
+        return False
+
+    rotate_arg = str(int(degrees))
 
     try:
         # Create temp file for output
@@ -228,14 +328,21 @@ def _rotate_jpeg_lossless(path: Path, direction: str) -> bool:
         )
 
         if result.returncode == 0 and tmp_path.exists():
-            # Replace original with rotated version
-            shutil.move(tmp_path, path)
+            # Replace original with rotated version (retry on Windows file locking)
+            _move_with_retry(tmp_path, path)
+            # Reset EXIF orientation to normal (jpegtran preserves old orientation
+            # tag even though pixels are now rotated, which causes double-rotation
+            # when code applies exif_transpose later)
+            _reset_exif_orientation(path)
             logger.debug(f'Lossless JPEG rotation successful: {path}')
             return True
         else:
             # jpegtran failed
             if tmp_path.exists():
-                tmp_path.unlink()
+                try:
+                    tmp_path.unlink()
+                except OSError:
+                    pass  # Best-effort cleanup
             logger.debug(f'jpegtran failed: {result.stderr.decode() if result.stderr else "unknown error"}')
             return False
 
@@ -249,16 +356,19 @@ def _rotate_jpeg_lossless(path: Path, direction: str) -> bool:
     except Exception as e:
         logger.warning(f'jpegtran error for {path}: {e}')
         if 'tmp_path' in locals() and tmp_path.exists():
-            tmp_path.unlink()
+            try:
+                tmp_path.unlink()
+            except OSError:
+                pass  # Best-effort cleanup
         return False
 
 
-def _rotate_with_pillow(path: Path, direction: str) -> bool:
+def _rotate_with_pillow(path: Path, degrees: float) -> bool:
     """Rotate an image using Pillow.
 
     Args:
         path: Path to the image file.
-        direction: 'cw' or 'ccw'.
+        degrees: Rotation angle in degrees (clockwise positive).
 
     Returns:
         True if successful, False otherwise.
@@ -268,11 +378,18 @@ def _rotate_with_pillow(path: Path, direction: str) -> bool:
             # Apply EXIF orientation first
             img = ImageOps.exif_transpose(img)
 
-            # Rotate (Pillow uses counter-clockwise positive angles)
-            if direction == 'cw':
+            # Use fast transpose for 90-degree increments, rotate() for arbitrary angles
+            # Note: Pillow's rotate() uses positive = left rotation, so negate degrees
+            if degrees == 90:
                 rotated = img.transpose(Image.Transpose.ROTATE_270)
-            else:
+            elif degrees == 180:
+                rotated = img.transpose(Image.Transpose.ROTATE_180)
+            elif degrees == 270:
                 rotated = img.transpose(Image.Transpose.ROTATE_90)
+            else:
+                # Arbitrary rotation - use rotate() with expand=True to fit result
+                # Negate degrees because Pillow uses positive = left rotation
+                rotated = img.rotate(-degrees, expand=True, resample=Image.Resampling.BICUBIC)
 
             # Determine save format and options
             suffix = path.suffix.lower()
@@ -295,7 +412,7 @@ def _rotate_with_pillow(path: Path, direction: str) -> bool:
                 tmp_path = Path(tmp.name)
 
             rotated.save(tmp_path, **save_kwargs)
-            shutil.move(tmp_path, path)
+            _move_with_retry(tmp_path, path)
 
             logger.debug(f'Pillow rotation successful: {path}')
             return True
@@ -303,7 +420,10 @@ def _rotate_with_pillow(path: Path, direction: str) -> bool:
     except Exception as e:
         logger.error(f'Failed to rotate image {path}: {e}')
         if 'tmp_path' in locals() and tmp_path.exists():
-            tmp_path.unlink()
+            try:
+                tmp_path.unlink()
+            except OSError:
+                pass  # Best-effort cleanup
         return False
 
 

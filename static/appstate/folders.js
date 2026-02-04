@@ -79,13 +79,9 @@ AppState.folders = (function() {
             if (_loading) return;
             _loading = true;
 
-            console.log('[AppState.folders.load]');
-
             try {
                 const response = await App.apiGet('/folders');
                 _folders = response.data || [];
-
-                console.log('[AppState.folders.load] Got', _folders.length, 'folders');
                 broadcast({ type: 'changed' });
 
             } catch (err) {
@@ -174,13 +170,9 @@ AppState.folders = (function() {
          * @returns {Promise<Object>} Stats object
          */
         async loadStats() {
-            console.log('[AppState.folders.loadStats]');
-
             try {
                 const response = await App.apiGet('/stats');
                 _stats = response.data;
-
-                console.log('[AppState.folders.loadStats] Got:', _stats);
                 broadcast({ type: 'changed', property: 'stats' });
                 return _stats;
 
@@ -215,7 +207,6 @@ AppState.folders = (function() {
 
             // Emit databaseChanged when processing completes
             if (wasUpdating && nowUpToDate) {
-                console.log('[AppState.folders.setStatus] Processing complete, broadcasting databaseChanged');
                 broadcast({ type: 'databaseChanged' });
             }
         },

@@ -35,7 +35,7 @@
  * CACHES (see detailed docs in cache section below):
  *   - AppState.faces: Face data (managed by AppState)
  *   - AppState.people: Autocomplete suggestions (TTL-based, managed by AppState)
- *   - thumbnailCacheBust: Forces browser to refetch changed person thumbnails
+ *   - AppState.people._thumbnailBust: Forces browser to refetch changed person thumbnails
  *   - knownPeople: Computed on render from AppState.faces
  *   - displayedFaces: Computed on render, or search results (transient)
  *
@@ -170,7 +170,7 @@
     let needsRerender = false;
 
     // Debug logging for face identification flow
-    const FACES_DEBUG = true;
+    const FACES_DEBUG = false;
     function facesLog(...args) {
         if (FACES_DEBUG) console.log('[FacesFlow]', ...args);
     }
@@ -322,26 +322,6 @@
 
     /** @type {number|null} Per-person recognition threshold (null = use global default) */
     let pickPreferredPersonThreshold = null;
-
-    // -------------------------------------------------------------------------
-    // THUMBNAIL CACHE BUSTING
-    // -------------------------------------------------------------------------
-    // Problem: Browser caches /api/people/:id/thumbnail URLs. When the preferred
-    // face changes (star click, suppression, reassignment), the cached thumbnail
-    // becomes stale.
-    //
-    // Solution: Map of personId → timestamp. When rendering person thumbnails,
-    // append ?t=timestamp to force refetch. The timestamp is set when:
-    //   - User clicks star to change preferred face
-    //   - User suppresses a face that was the preferred face
-    //   - User reassigns the preferred face to another person
-    //
-    // Used by: renderKnownFacesSection(), showCardAutocomplete(), fullscreen
-    // autocomplete rendering. Cleared on page reload (acceptable - browser
-    // cache will eventually expire anyway).
-
-    /** @type {Map<string, number>} Person ID → cache bust timestamp */
-    let thumbnailCacheBust = new Map();
 
     /** @type {string} Current semantic search query for filtering unknown faces */
     let unknownFacesSearchQuery = '';
@@ -764,7 +744,7 @@
             getItemId: (face) => face.id,
             createItem: (face, index, blobUrl) => createUnknownFaceCard(face, blobUrl),
             getThumbnailId: (face) => face.id,
-            getThumbnailUrl: (faceId) => `/api/faces/${faceId}/thumbnail`,
+            getThumbnailUrl: (faceId) => FaceThumbnails.getUrl(faceId),
             itemSelector: '.face-card',
             getThumbSize: () => facesThumbnailSize,
             getItemHeight: (thumbSize, itemWidth) => itemWidth + 50,
@@ -818,7 +798,7 @@
             getItemId: (face) => face.id,
             createItem: (face, index, blobUrl) => createPickPreferredFaceCard(face, blobUrl),
             getThumbnailId: (face) => face.id,
-            getThumbnailUrl: (faceId) => `/api/faces/${faceId}/thumbnail`,
+            getThumbnailUrl: (faceId) => FaceThumbnails.getUrl(faceId),
             itemSelector: '.face-card',
             gap: 16,
             padding: 16,
@@ -1641,7 +1621,7 @@
             }
 
             // Mark person thumbnail for cache busting when returning to grid
-            thumbnailCacheBust.set(pickPreferredPersonId, Date.now());
+            AppState.people.bustThumbnailCache(pickPreferredPersonId);
         } catch (error) {
             console.error('Failed to set preferred face:', error);
             App.showError('Failed to set preferred face.');
@@ -1984,10 +1964,7 @@
                         item.className = 'autocomplete-item';
 
                         const img = document.createElement('img');
-                        const bustTime = thumbnailCacheBust.get(person.id);
-                        img.src = bustTime
-                            ? `/api/people/${person.id}/thumbnail?t=${bustTime}`
-                            : `/api/people/${person.id}/thumbnail`;
+                        img.src = AppState.people.getThumbnailUrl(person.id);
                         img.alt = '';
                         item.appendChild(img);
 
@@ -2781,8 +2758,10 @@
         // and hide loading banner when both domains are ready
         // Use loadUnknownOnly() for faster initial load - only fetches unknown faces
         // Known people section uses AppState.people data directly
-        AppState.faces.loadUnknownOnly();
-        AppState.people.load();
+        // Force reload if needsRefresh was true (otherwise loadUnknownOnly returns early
+        // when cache exists, broadcast never fires, and nothing renders)
+        AppState.faces.loadUnknownOnly(wasRefreshNeeded);
+        AppState.people.load(wasRefreshNeeded);
 
         // Mark refresh complete - actual rendering happens in subscription handlers
         needsRefresh = false;
@@ -3170,7 +3149,7 @@
             getItemId: (face) => face.id,
             createItem: (face, index, blobUrl) => createUnknownFaceCard(face, blobUrl),
             getThumbnailId: (face) => face.id,
-            getThumbnailUrl: (faceId) => `/api/faces/${faceId}/thumbnail`,
+            getThumbnailUrl: (faceId) => FaceThumbnails.getUrl(faceId),
             itemSelector: '.face-card',
             gap: 16,
             padding: 0,  // Section already has padding
@@ -3352,13 +3331,7 @@
         thumb.className = 'face-card-thumb';
 
         const img = document.createElement('img');
-        // Use cache bust timestamp if available (after preferred face changed in this session),
-        // or fall back to preferred_face_id from the people data (handles page reload)
-        const bustTime = thumbnailCacheBust.get(person.id);
-        const cacheKey = bustTime || person.preferred_face_id || '';
-        img.src = cacheKey
-            ? `/api/people/${person.id}/thumbnail?t=${cacheKey}`
-            : `/api/people/${person.id}/thumbnail`;
+        img.src = AppState.people.getThumbnailUrl(person.id);
         img.alt = person.name;
         img.loading = 'lazy';
         thumb.appendChild(img);
@@ -3537,11 +3510,7 @@
             item.className = className.split(' ')[0] + '-item';
 
             const img = document.createElement('img');
-            // Use cache bust timestamp if available (in case preferred face changed)
-            const bustTime = thumbnailCacheBust.get(person.id);
-            img.src = bustTime
-                ? `/api/people/${person.id}/thumbnail?t=${bustTime}`
-                : `/api/people/${person.id}/thumbnail`;
+            img.src = AppState.people.getThumbnailUrl(person.id);
             img.alt = '';
             item.appendChild(img);
 
@@ -4227,10 +4196,7 @@
 
             // Add thumbnail (with cache busting if preferred face changed)
             const img = document.createElement('img');
-            const bustTime = thumbnailCacheBust.get(person.id);
-            img.src = bustTime
-                ? `/api/people/${person.id}/thumbnail?t=${bustTime}`
-                : `/api/people/${person.id}/thumbnail`;
+            img.src = AppState.people.getThumbnailUrl(person.id);
             img.alt = '';
             img.onerror = () => { img.style.display = 'none'; };
             item.appendChild(img);

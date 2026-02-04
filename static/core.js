@@ -772,12 +772,20 @@ const App = {
         const url = this.apiBase + endpoint;
         const method = options.method || 'GET';
         const headers = method === 'GET' ? {} : { 'Content-Type': 'application/json' };
+
+        // Log API request (skip noisy polling endpoints)
+        const isPolling = endpoint === '/events' || endpoint === '/status';
+        if (!isPolling) {
+            console.log(`[API] ${method} ${endpoint}`);
+        }
+
         const response = await fetch(url, {
             headers,
             ...options
         });
 
         if (!response.ok) {
+            console.error(`[API] ${method} ${endpoint} failed: ${response.status}`);
             throw new Error(`API error: ${response.status} ${response.statusText}`);
         }
 
@@ -857,7 +865,6 @@ const App = {
                 timeoutMs: data.thumbnail_timeout_ms,
                 scrollThrottleMs: data.thumbnail_scroll_throttle_ms
             };
-            console.log('Thumbnail config loaded:', this._thumbnailConfig);
         } catch (error) {
             console.warn('Failed to load thumbnail config, using defaults:', error);
         }
@@ -924,8 +931,8 @@ const App = {
         this._bindBtn('btn-thumb-larger', () => this.setThumbnailSize(AppState.view.getThumbnailSize() + 50));
         this._bindBtn('btn-fullscreen', () => this._handleFullscreenClick());
         this._bindBtn('btn-reveal-folder', () => this._handleRevealFolderClick());
-        this._bindBtn('btn-rotate-ccw', () => this._handleRotateClick('ccw'));
-        this._bindBtn('btn-rotate-cw', () => this._handleRotateClick('cw'));
+        this._bindBtn('btn-rotate-ccw', () => this._handleRotateClick(270));
+        this._bindBtn('btn-rotate-cw', () => this._handleRotateClick(90));
         this._bindBtn('btn-select-all', () => this.emit('selectAll'));
         this._bindBtn('btn-clear-selection', () => this.clearSelection());
 
@@ -1047,11 +1054,11 @@ const App = {
 
     /**
      * Handles rotate button click.
-     * Rotates all selected images in the specified direction.
-     * @param {string} direction - 'cw' for clockwise, 'ccw' for counter-clockwise
+     * Rotates all selected images by the specified angle.
+     * @param {number} degrees - Rotation angle (90 for right, 270 for left)
      * @private
      */
-    async _handleRotateClick(direction) {
+    async _handleRotateClick(degrees) {
         const selectedIds = [...this.state.selectedImages];
         if (selectedIds.length === 0) {
             return;
@@ -1059,17 +1066,11 @@ const App = {
 
         try {
             // Rotate all selected images in one batch request
+            // Note: Backend emits images_modified event for gallery thumbnail updates
             const result = await this.apiPost('/images/rotate', {
                 image_ids: selectedIds,
-                direction: direction
+                degrees: degrees
             });
-
-            // Emit event for each successfully rotated image
-            if (result && result.rotated) {
-                for (const imageId of result.rotated) {
-                    this.emit('imageRotated', imageId);
-                }
-            }
 
             // Report any failures
             if (result && result.results) {
@@ -1861,8 +1862,6 @@ const App = {
             }
         }
         this._readyCallbacks = [];
-
-        console.log('Imaginary initialised');
     },
 
     /**

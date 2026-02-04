@@ -52,7 +52,6 @@ AppState.view = (function() {
         const app = document.getElementById('app');
         if (app) {
             app.dataset.theme = theme;
-            console.log('[AppState.view] Theme applied to DOM:', theme);
         }
     }
 
@@ -79,8 +78,6 @@ AppState.view = (function() {
          */
         init() {
             applyThemeToDOM(_theme);
-            console.log('[AppState.view] Initialized with theme:', _theme,
-                'thumbnailSize:', _thumbnailSize, 'sort:', _sortBy, _sortDirection);
         },
 
         // --- Theme ---
@@ -101,7 +98,6 @@ AppState.view = (function() {
             if (theme !== 'light' && theme !== 'dark') return;
             if (_theme === theme) return;
 
-            console.log('[AppState.view.setTheme]', _theme, '->', theme);
             _theme = theme;
             storage.set('theme', theme);
             applyThemeToDOM(theme);
@@ -133,7 +129,6 @@ AppState.view = (function() {
             size = Math.max(100, Math.min(400, Number(size) || 200));
             if (_thumbnailSize === size) return;
 
-            console.log('[AppState.view.setThumbnailSize]', _thumbnailSize, '->', size);
             _thumbnailSize = size;
             storage.set('thumbnailSize', size);
             broadcast({ type: 'changed', property: 'thumbnailSize' });
@@ -166,7 +161,6 @@ AppState.view = (function() {
             if (!valid.includes(by)) return;
             if (_sortBy === by) return;
 
-            console.log('[AppState.view.setSortBy]', _sortBy, '->', by);
             _sortBy = by;
             storage.set('sortBy', by);
             broadcast({ type: 'changed', property: 'sortBy' });
@@ -188,7 +182,6 @@ AppState.view = (function() {
             if (direction !== 'asc' && direction !== 'desc') return;
             if (_sortDirection === direction) return;
 
-            console.log('[AppState.view.setSortDirection]', _sortDirection, '->', direction);
             _sortDirection = direction;
             storage.set('sortDirection', direction);
             broadcast({ type: 'changed', property: 'sortDirection' });
