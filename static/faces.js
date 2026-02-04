@@ -1779,7 +1779,9 @@
         if (!faceIds?.length) return;
 
         // Get face data and determine lock states
-        const faces = faceIds.map(id => pickPreferredFaces.find(f => f.id === id)).filter(Boolean);
+        // Use Map for O(1) lookup instead of O(n) array.find()
+        const faceMap = new Map(pickPreferredFaces.map(f => [f.id, f]));
+        const faces = faceIds.map(id => faceMap.get(id)).filter(Boolean);
         if (!faces.length) return;
 
         const unlockedFaces = faces.filter(f => !f.manually_tagged);

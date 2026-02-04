@@ -1242,9 +1242,11 @@ AppState.faces = (function() {
             if (!imageIds?.length) return;
 
             // Remove old faces for these images from cache
+            // Use Set for O(1) lookup instead of O(n) array.includes()
             if (_cache) {
+                const imageIdSet = new Set(imageIds);
                 for (const [faceId, face] of _cache) {
-                    if (imageIds.includes(face.image_id)) {
+                    if (imageIdSet.has(face.image_id)) {
                         _cache.delete(faceId);
                     }
                 }

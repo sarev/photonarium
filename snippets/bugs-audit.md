@@ -264,33 +264,17 @@ except Exception:
 
 ### HIGH SEVERITY
 
-#### 2.1 O(n²) Loop in Face Refresh
+#### 2.1 ~~O(n²) Loop in Face Refresh~~ FIXED
 **File:** `static/appstate/identity.js:1246-1250`
 
-```javascript
-for (const [faceId, face] of _cache) {
-    if (imageIds.includes(face.image_id)) {  // O(n) inside O(n)
-        _cache.delete(faceId);
-    }
-}
-```
-
-**Impact:** 100,000 faces × array scan = very slow.
-
-**Recommendation:** Convert `imageIds` to Set for O(1) lookup.
+**Fix Applied:** Convert `imageIds` array to Set before loop for O(1) lookup instead of O(n) `includes()`.
 
 ---
 
-#### 2.2 Linear Search in Pick-Preferred Mode
+#### 2.2 ~~Linear Search in Pick-Preferred Mode~~ FIXED
 **File:** `static/faces.js:1782`
 
-```javascript
-const faces = faceIds.map(id => pickPreferredFaces.find(f => f.id === id)).filter(Boolean);
-```
-
-**Impact:** O(n×m) for n selected faces in array of m faces.
-
-**Recommendation:** Build Map for O(1) lookup.
+**Fix Applied:** Build Map from `pickPreferredFaces` for O(1) lookup instead of O(n) `find()` per face.
 
 ---
 
@@ -442,7 +426,7 @@ The following concurrency patterns are correctly implemented:
 
 1. ~~**Fix memory explosion in duplicates** - Use chunking in incremental path~~ **DONE**
 2. ~~**Replace LIKE queries with range queries** - 100x speedup~~ **DONE**
-3. **Convert O(n²) loops to use Sets** - identity.js:1247, faces.js:1782
+3. ~~**Convert O(n²) loops to use Sets** - identity.js:1247, faces.js:1782~~ **DONE**
 4. **Add missing database indexes** - faces table, duplicate_groups table
 5. **Fix subscription leak** - faces.js tagging mode
 
