@@ -1030,6 +1030,8 @@ def get_person(
     Returns:
         Person dict with face_count, or None if not found.
     """
+    # DESIGN: Computed face_count in GET response - standard API efficiency pattern,
+    # avoids frontend needing separate query for counts (see design-audit.md 1.5)
     cursor = conn.execute(
         '''SELECT p.*, COUNT(f.id) as face_count
            FROM people p
@@ -1072,6 +1074,8 @@ def get_all_people(conn: sqlite3.Connection) -> list[dict[str, Any]]:
     Returns:
         List of person dicts with 'face_count' and 'preferred_face_updated_at' fields.
     """
+    # DESIGN: Computed face_count in GET response - standard API efficiency pattern,
+    # avoids frontend needing separate query for counts (see design-audit.md 1.5)
     cursor = conn.execute('''
         SELECT p.*, COUNT(f.id) as face_count, pf.updated_at as preferred_face_updated_at
         FROM people p
@@ -1144,6 +1148,11 @@ def revalidate_person_faces(
 
     Checks each face's similarity to other faces of the same person.
     Faces that don't meet the threshold are unassigned (ejected to unknown pool).
+
+    DESIGN: This function implements atomic cascade behavior - if ejecting faces would
+    leave preferred_face_id invalid, auto-selects a new one. This maintains the data
+    integrity invariant that person.preferred_face_id must always be valid.
+    (see design-audit.md 1.4)
 
     Args:
         conn: Database connection.
@@ -1333,6 +1342,8 @@ def create_face(
     Returns:
         The face's UUID.
     """
+    # DESIGN: Backend generates face IDs because faces are ML-detected entities that
+    # frontend cannot pre-generate IDs for (see design-audit.md 1.10)
     if face_id is None:
         face_id = str(uuid.uuid4())
 

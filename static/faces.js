@@ -295,7 +295,12 @@
     /** @type {Function|null} Fullscreen event subscription cleanup function */
     let fullscreenUnsub = null;
 
-    /** @type {boolean} Suppress face overlay reload during identify operation */
+    /**
+     * @type {boolean} Suppress face overlay reload during identify operation.
+     * DESIGN: Known deviation - avoids redundant DOM updates when identify() already
+     * updates the overlay directly. Should ideally use debouncing instead, but this
+     * works correctly. (see design-audit.md 2.1)
+     */
     let suppressOverlayReload = false;
 
     /** @type {Array<Object>} Known people with faces, for static known section */

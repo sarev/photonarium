@@ -1866,7 +1866,8 @@ class IngestionThread(threading.Thread):
                 logger.warning(f'Failed to extract metadata for new image: {path}')
                 return
 
-            # Generate new UUID
+            # DESIGN: Backend generates image IDs because images are discovered via folder
+            # scanning, which frontend cannot pre-generate IDs for (see design-audit.md 1.11)
             image_id = str(uuid.uuid4())
 
             # Insert new record (lock needed - DB write)

@@ -342,7 +342,9 @@ const Duplicates = {
         AppState.duplicates.onChanged((event) => {
             if (App.getScreen() === 'duplicates' && event.level === this.state.currentLevel) {
                 // Data changed in AppState - copy for sorting and re-render
-                // We copy because sorting mutates the array
+                // DESIGN: Local presentation state - we maintain a sorted copy because sort
+                // criteria (user preference, search query) are local UI state that AppState
+                // doesn't know about (see design-audit.md 2.2/2.4)
                 const groups = AppState.duplicates.getGroups(this.state.currentLevel);
                 const statusObj = AppState.duplicates.getStatus(this.state.currentLevel);
 
@@ -572,6 +574,7 @@ Duplicates._applyMinGroupSizeFilter = function() {
 /**
  * Sorts groups by size (count) in descending order.
  * Sorts allGroups and re-applies min size filter.
+ * DESIGN: Sorts local copy, not AppState (see design-audit.md 2.2)
  * @private
  */
 Duplicates._sortGroupsBySize = function() {
@@ -583,6 +586,7 @@ Duplicates._sortGroupsBySize = function() {
  * Sorts groups by people names in alphabetical order.
  * Groups with people come first, sorted by names string.
  * Groups without people come last, sorted by size.
+ * DESIGN: Sorts local copy, not AppState (see design-audit.md 2.2)
  * @private
  */
 Duplicates._sortGroupsByPeople = async function() {
@@ -663,6 +667,7 @@ Duplicates._applySortOrder = async function() {
  * Applies semantic sorting based on the current query.
  * Fetches similarity scores from the backend and reorders groups.
  * Sorts allGroups and re-applies min size filter.
+ * DESIGN: Sorts local copy, not AppState (see design-audit.md 2.2)
  * @private
  */
 Duplicates._applySemanticSort = async function() {

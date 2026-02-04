@@ -1333,6 +1333,7 @@ def create_person_endpoint():
             return error_response(f'Person with ID "{person_id}" already exists', 409)
 
         # Check for name collision
+        # DESIGN: Defensive validation - rejects invalid request with error (see design-audit.md 1.7)
         existing_name = get_person_by_name(db.conn, name)
         if existing_name:
             return error_response(f'Person with name "{name}" already exists', 409)
@@ -1396,7 +1397,7 @@ def update_person_endpoint(person_id):
         name = name.strip()
         if not name:
             return error_response('Name cannot be empty')
-        # Check if another person has this name
+        # DESIGN: Defensive validation - rejects invalid request with error (see design-audit.md 1.7)
         existing = get_person_by_name(db.conn, name)
         if existing and existing['id'] != person_id:
             return error_response(f'Person with name "{name}" already exists', 409)
@@ -1410,7 +1411,7 @@ def update_person_endpoint(person_id):
     # Accept both 'recognition_threshold' and 'threshold' (frontend uses 'threshold')
     if 'recognition_threshold' in data or 'threshold' in data:
         threshold = data.get('recognition_threshold') if 'recognition_threshold' in data else data.get('threshold')
-        # Validate threshold if provided
+        # DESIGN: Defensive validation - rejects invalid input with error (see design-audit.md 1.9)
         if threshold is not None:
             try:
                 threshold = float(threshold)
@@ -1432,11 +1433,13 @@ def update_person_endpoint(person_id):
             # Eject faces that no longer meet the threshold
             ejected_face_ids = revalidate_person_faces(db.conn, person_id, threshold_value)
 
-            # If all faces were ejected, delete the person
+            # DESIGN: Atomic cascade - person with 0 faces is invalid state, so we clean up
+            # atomically rather than requiring frontend roundtrip (see design-audit.md 1.1)
             if ejected_face_ids:
                 remaining = get_faces_for_person(db.conn, person_id)
                 if not remaining:
                     delete_person(db.conn, person_id)
+                    # DESIGN: Response flags report cascade results (see design-audit.md 1.6)
                     return success_response({
                         'deleted': True,
                         'unassigned': ejected_face_ids,  # AppState expects 'unassigned'
@@ -1446,7 +1449,8 @@ def update_person_endpoint(person_id):
 
         updated_person = get_person(db.conn, person_id)
 
-    # Trigger async reassessment to potentially add matching unknowns
+    # DESIGN: Auto-trigger reassessment - the purpose of changing threshold is to re-evaluate
+    # faces, so this avoids requiring a separate API call (see design-audit.md 1.8)
     if threshold_changed and threshold_value is not None:
         reassess_unknown_faces_async(
             db,
@@ -1454,6 +1458,8 @@ def update_person_endpoint(person_id):
             person_id=person_id,
         )
 
+    # DESIGN: Response flags report cascade results so frontend can update correctly
+    # without refetching all state (see design-audit.md 1.6)
     response_data = dict(updated_person) if updated_person else {}
     # AppState expects 'assigned' and 'unassigned' arrays
     # - 'unassigned' = faces immediately ejected due to threshold change
@@ -2314,7 +2320,8 @@ def unassign_face(face_id):
         # Unlink face from person (clear manual flag since no longer assigned)
         update_face_person(db.conn, face_id, None, manually_tagged=False)
 
-        # If this was the preferred face, auto-select a new one
+        # DESIGN: Data integrity invariant - person must have valid preferred_face_id for
+        # thumbnails, so auto-select if current preferred was removed (see design-audit.md 1.2)
         if person and person.get('preferred_face_id') == face_id:
             remaining_faces = get_faces_for_person(db.conn, old_person_id)
             if remaining_faces:
@@ -2324,7 +2331,7 @@ def unassign_face(face_id):
                 # Lock the new preferred face (prevents auto-reassignment)
                 db.conn.execute("UPDATE faces SET manually_tagged = 1, updated_at = datetime('now') WHERE id = ?", (new_preferred,))
 
-        # Delete person if they have no more faces
+        # DESIGN: Global cleanup of empty people - prevents orphaned records (see design-audit.md 1.3)
         delete_people_without_faces(db.conn)
 
         # Get updated person (or None if deleted)
@@ -2384,6 +2391,8 @@ def unassign_faces_batch():
             update_face_person(db.conn, face_id, None, manually_tagged=False)
             unassigned_count += 1
 
+        # DESIGN: Data integrity invariant - person must have valid preferred_face_id for
+        # thumbnails, so auto-select if current preferred was removed (see design-audit.md 1.2)
         # Phase 2: Fix preferred faces for affected persons
         # Select newest remaining face (by image timestamp) as preferred
         for person_id in affected_person_ids:
@@ -2406,6 +2415,7 @@ def unassign_faces_batch():
                 # Lock the new preferred face (prevents auto-reassignment)
                 db.conn.execute("UPDATE faces SET manually_tagged = 1, updated_at = datetime('now') WHERE id = ?", (new_preferred,))
 
+        # DESIGN: Global cleanup of empty people - prevents orphaned records (see design-audit.md 1.3)
         # Phase 3: Delete people with no more faces
         delete_people_without_faces(db.conn)
 
