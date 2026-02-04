@@ -338,6 +338,9 @@
     /** @type {Array<Object>} All faces for focused person in pick-preferred mode */
     let pickPreferredFaces = [];
 
+    /** @type {boolean} True after picker data fetch completes (distinguishes loading from empty) */
+    let pickerDataLoaded = false;
+
     /** @type {number|null} Per-person recognition threshold (null = use global default) */
     let pickPreferredPersonThreshold = null;
 
@@ -586,7 +589,11 @@
         peopleSection.className = 'faces-section known';
         peopleSection.setAttribute('tabindex', '0');
         // Focus this section when clicked (for keyboard event routing)
-        peopleSection.addEventListener('click', () => {
+        peopleSection.addEventListener('click', (e) => {
+            // Don't steal focus from inputs
+            if (e.target.matches('input, textarea')) return;
+            if (peopleSection.contains(document.activeElement) &&
+                document.activeElement.matches('input, textarea')) return;
             if (document.activeElement !== peopleSection) {
                 peopleSection.focus({ preventScroll: true });
             }
@@ -611,8 +618,11 @@
         unknownSection.setAttribute('tabindex', '0');
         // Focus this section when clicked (for keyboard event routing)
         unknownSection.addEventListener('click', (e) => {
-            // Don't steal focus from search input
-            if (e.target.tagName === 'INPUT') return;
+            // Don't steal focus from inputs (including during text selection where
+            // mouseup lands elsewhere but an input inside this section has focus)
+            if (e.target.matches('input, textarea')) return;
+            if (unknownSection.contains(document.activeElement) &&
+                document.activeElement.matches('input, textarea')) return;
             if (document.activeElement !== unknownSection) {
                 unknownSection.focus({ preventScroll: true });
             }
@@ -661,8 +671,10 @@
         pickerView.setAttribute('tabindex', '0');
         // Focus this view when clicked (for keyboard event routing)
         pickerView.addEventListener('click', (e) => {
-            // Don't steal focus from inputs within this view
-            if (document.activeElement?.tagName === 'INPUT') return;
+            // Don't steal focus from inputs (including during text selection)
+            if (e.target.matches('input, textarea')) return;
+            if (pickerView.contains(document.activeElement) &&
+                document.activeElement.matches('input, textarea')) return;
             if (document.activeElement !== pickerView) {
                 pickerView.focus({ preventScroll: true });
             }
@@ -1376,6 +1388,7 @@
         pickPreferredPersonName = localPerson.name;
         pickPreferredPersonThreshold = null;
         pickPreferredFaces = []; // Start empty, will populate when data loads
+        pickerDataLoaded = false; // Mark as loading until fetch completes
 
         // Toggle visibility: hide normal, show picker
         if (normalView) normalView.hidden = true;
@@ -1412,11 +1425,13 @@
 
             pickPreferredFaces = faces || [];
             pickPreferredPersonThreshold = personResult?.recognition_threshold ?? null;
+            pickerDataLoaded = true; // Fetch complete
 
             // Re-render with actual data
             renderPickerContent();
         }).catch(error => {
             console.error('Failed to load person data:', error);
+            pickerDataLoaded = true; // Mark loaded even on error to stop spinner
         });
     }
 
@@ -1435,6 +1450,7 @@
         pickPreferredPersonName = null;
         pickPreferredFaces = [];
         pickPreferredPersonThreshold = null;
+        pickerDataLoaded = false;
 
         // Toggle visibility: hide picker, show normal
         if (pickerView) pickerView.hidden = true;
@@ -1496,8 +1512,8 @@
             }
         }
 
-        // Show/hide loading state
-        const isLoading = pickPreferredFaces.length === 0;
+        // Show/hide loading state (only show spinner while fetch is in progress)
+        const isLoading = !pickerDataLoaded;
         if (pickerLoadingEl) {
             pickerLoadingEl.hidden = !isLoading;
         }
@@ -1653,6 +1669,20 @@
             AppState.people.load();
         });
 
+        // Track text selection to prevent focus loss when releasing outside input
+        input.addEventListener('mousedown', () => {
+            const refocusOnMouseUp = (e) => {
+                if (e.target !== input) {
+                    setTimeout(() => {
+                        if (document.activeElement !== input && card.isConnected) {
+                            input.focus();
+                        }
+                    }, 0);
+                }
+            };
+            document.addEventListener('mouseup', refocusOnMouseUp, { capture: true, once: true });
+        });
+
         // Handle input for autocomplete
         input.addEventListener('input', () => {
             showCardAutocomplete(input, input.value, card);
@@ -1665,6 +1695,9 @@
                 // Skip if card was removed from DOM (e.g., during grid refresh)
                 // This prevents committing partial input when refresh destroys the card
                 if (!card.isConnected) return;
+
+                // Skip if input was refocused (user was just selecting text, not leaving)
+                if (document.activeElement === input) return;
 
                 const autocomplete = card.querySelector('.face-card-autocomplete');
                 if (autocomplete) {
@@ -1858,9 +1891,10 @@
                 preferredFaceId: typedFaceId
             });
 
-            // Check if all faces moved out - if so, exit pick-preferred mode
+            // Check if all faces moved out - if so, delete the empty person and exit
             const remainingFaces = AppState.faces.getForPerson(pickPreferredPersonId);
             if (remainingFaces.length === 0) {
+                await AppState.people.delete(pickPreferredPersonId);
                 exitPickPreferredMode();
             }
         } catch (error) {
@@ -2308,9 +2342,11 @@
             // The subscription will refresh the pick-preferred view
             await AppState.faces.unassign(faceIds);
 
-            // Check if all faces were removed - if so, exit pick-preferred mode
+            // Check if all faces were removed - if so, delete the person and exit
+            // (reconcilePerson() can't handle this with partial cache, so we do it explicitly)
             const remainingFaces = AppState.faces.getForPerson(pickPreferredPersonId);
             if (remainingFaces.length === 0) {
+                await AppState.people.delete(pickPreferredPersonId);
                 exitPickPreferredMode();
             }
         } catch (error) {
@@ -2469,10 +2505,11 @@
             // Assign to the "-" (ignored) person
             await AppState.faces.identify(faceIds, '-');
 
-            // If in picker mode, check if all faces were removed
+            // If in picker mode, check if all faces were removed - if so, delete person and exit
             if (pickPreferredPersonId) {
                 const remainingFaces = AppState.faces.getForPerson(pickPreferredPersonId);
                 if (remainingFaces.length === 0) {
+                    await AppState.people.delete(pickPreferredPersonId);
                     exitPickPreferredMode();
                 }
             }
@@ -3286,6 +3323,12 @@
 
         // Drag start - include this face and all other selected faces
         card.addEventListener('dragstart', (e) => {
+            // Don't start card drag when selecting text in input field
+            if (e.target.matches('input, textarea')) {
+                e.preventDefault();
+                return;
+            }
+
             // If this card isn't selected, select only this one
             let faceIds;
             if (facesSelection && facesSelection.isSelected(face.id)) {
@@ -3380,6 +3423,26 @@
         input.addEventListener('focus', () => {
             // AppState.people.load() handles TTL internally
             AppState.people.load();
+            // Disable card dragging while editing text (allows text selection)
+            card.draggable = false;
+        });
+
+        // Track text selection to prevent focus loss when releasing outside input
+        // On mousedown in input, add a one-time document mouseup handler that refocuses
+        input.addEventListener('mousedown', () => {
+            const refocusOnMouseUp = (e) => {
+                // If released outside the input, refocus to prevent blur
+                if (e.target !== input) {
+                    // Use setTimeout to let any pending events settle, then refocus
+                    setTimeout(() => {
+                        if (document.activeElement !== input && card.isConnected) {
+                            input.focus();
+                        }
+                    }, 0);
+                }
+            };
+            // Add handler with capture to run before other handlers, once to auto-cleanup
+            document.addEventListener('mouseup', refocusOnMouseUp, { capture: true, once: true });
         });
 
         // Handle input for autocomplete
@@ -3389,11 +3452,16 @@
 
         // Handle blur to commit (applies to all selected faces)
         input.addEventListener('blur', () => {
+            // Re-enable card dragging after editing
+            card.draggable = true;
             // Delay to allow autocomplete click
             setTimeout(() => {
                 // Skip if card was removed from DOM (e.g., during grid refresh)
                 // This prevents committing partial input when refresh destroys the card
                 if (!card.isConnected) return;
+
+                // Skip if input was refocused (user was just selecting text, not leaving)
+                if (document.activeElement === input) return;
 
                 const autocomplete = card.querySelector('.face-card-autocomplete');
                 if (autocomplete) {

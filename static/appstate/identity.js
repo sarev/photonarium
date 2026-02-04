@@ -797,7 +797,7 @@ AppState.faces = (function() {
                     person = {
                         id: personId,
                         name: trimmedName,
-                        face_count: 0,
+                        face_count: faceIds.length,
                         preferred_face_id: null,
                         threshold: null
                     };

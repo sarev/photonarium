@@ -1471,6 +1471,9 @@ const GridSelection = {
             _handlePointerDown(e) {
                 if (!this._config.enableLongPress) return;
 
+                // Don't start long-press on input fields (user may be placing cursor)
+                if (e.target.matches('input, textarea')) return;
+
                 const id = this._getItemId(e.target);
                 if (!id) return;
 
@@ -1511,6 +1514,9 @@ const GridSelection = {
                 // Only handle left or right mouse button on grid background
                 if (e.button !== 0 && e.button !== 2) return;
                 if (this._getItemId(e.target)) return; // Clicked on an item
+
+                // Don't interfere with text selection in input fields
+                if (e.target.matches('input, textarea')) return;
 
                 e.preventDefault();
                 const gridEl = this._getGridElement();
