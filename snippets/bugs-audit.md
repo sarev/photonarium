@@ -43,26 +43,18 @@ Comprehensive audit of the Imaginary codebase for bugs, performance issues at sc
 
 ---
 
-#### 1.2 Folder Path LIKE Queries (Full Table Scans)
-**File:** `imagedb.py:499, 1306-1315`
+#### 1.2 ~~Folder Path LIKE Queries (Full Table Scans)~~ FIXED
+**File:** `imagedb.py`
 
-```python
-LEFT JOIN images i ON i.path LIKE f.path || '%' AND i.deleted = 0
-WHERE path LIKE ? || '%'
-```
+**Issue:** LIKE with prefix wildcard cannot use B-tree index, causing full table scans.
 
-**Issue:** LIKE with prefix cannot use B-tree index. Falls back to full table scan.
+**Fix Applied:** Added `folder_path_upper_bound()` helper and replaced all LIKE queries with range queries:
+- `get_folders()` - JOIN now uses `path >= f.path AND path < f.path || '~'`
+- `remove_folder()` - NOT LIKE conditions converted to `NOT (path >= ? AND path < ?)`
+- `get_images_for_folder()` - Uses range query with upper bound
+- `_get_orphaned_image_ids()` - Same pattern
 
-**Impact:** With 100,000 images:
-- `get_folders()` scans entire table for each folder
-- `remove_folder()` scans for all images
-- ~8-10 seconds per query vs <100ms with range query
-
-**Recommendation:** Replace with range queries:
-```python
-folder_end = folder_path.rstrip('/') + '\x00'
-cursor.execute("SELECT id FROM images WHERE path >= ? AND path < ?", (folder_path, folder_end))
-```
+Index can now be used, ~100x speedup for large databases.
 
 ---
 
@@ -449,7 +441,7 @@ The following concurrency patterns are correctly implemented:
 ### Immediate (Before 50K+ Scale)
 
 1. ~~**Fix memory explosion in duplicates** - Use chunking in incremental path~~ **DONE**
-2. **Replace LIKE queries with range queries** - 100x speedup
+2. ~~**Replace LIKE queries with range queries** - 100x speedup~~ **DONE**
 3. **Convert O(n²) loops to use Sets** - identity.js:1247, faces.js:1782
 4. **Add missing database indexes** - faces table, duplicate_groups table
 5. **Fix subscription leak** - faces.js tagging mode

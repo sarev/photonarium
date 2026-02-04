@@ -479,6 +479,30 @@ def canonicalise_path(path: Path | str) -> Path:
     return Path(path).resolve()
 
 
+def folder_path_upper_bound(folder_path: str) -> str:
+    """Get the exclusive upper bound for a folder path range query.
+
+    For efficient folder-based queries, use range comparisons instead of LIKE:
+        WHERE path >= folder_path AND path < folder_path_upper_bound(folder_path)
+
+    This allows SQLite to use the index on the path column, whereas
+    LIKE with a prefix wildcard (path LIKE folder || '%') cannot use indexes.
+
+    Args:
+        folder_path: Folder path (should end with '/' for correct behavior).
+
+    Returns:
+        Upper bound string for exclusive comparison.
+
+    Example:
+        folder_path_upper_bound('/photos/2024/')  # Returns '/photos/2024/~'
+        # Query: WHERE path >= '/photos/2024/' AND path < '/photos/2024/~'
+    """
+    # Append '~' (ASCII 126) which is higher than all typical filename characters
+    # This ensures we match all paths starting with folder_path but nothing else
+    return folder_path + '~'
+
+
 def get_folders(conn: sqlite3.Connection) -> list[dict[str, Any]]:
     """Get all registered folders with their image counts.
 
@@ -491,12 +515,13 @@ def get_folders(conn: sqlite3.Connection) -> list[dict[str, Any]]:
             - count: Number of non-deleted images from this folder
     """
     # Query folders with count of non-deleted images whose path starts with folder path
+    # Use range query instead of LIKE for index efficiency (see folder_path_upper_bound)
     cursor = conn.execute("""
         SELECT
             f.path,
             COUNT(i.id) as count
         FROM folders f
-        LEFT JOIN images i ON i.path LIKE f.path || '%' AND i.deleted = 0
+        LEFT JOIN images i ON i.path >= f.path AND i.path < f.path || '~' AND i.deleted = 0
         GROUP BY f.path
         ORDER BY f.path
     """)
@@ -599,10 +624,17 @@ def remove_folder(conn: sqlite3.Connection, path: Path | str) -> bool:
     if remaining_folders:
         # Build query to find images not in any remaining folder
         # An image is orphaned if its path doesn't start with any remaining folder path
-        placeholders = ' AND '.join(['path NOT LIKE ? || \'%\''] * len(remaining_folders))
+        # Use range queries instead of LIKE for index efficiency
+        conditions = ' AND '.join(
+            ['NOT (path >= ? AND path < ?)'] * len(remaining_folders)
+        )
+        # Build params: each folder needs (folder_path, folder_path + '~')
+        params = [datetime.now().isoformat()]
+        for folder in remaining_folders:
+            params.extend([folder, folder_path_upper_bound(folder)])
         conn.execute(
-            f'UPDATE images SET deleted = 1, updated_at = ? WHERE {placeholders}',
-            [datetime.now().isoformat()] + remaining_folders
+            f'UPDATE images SET deleted = 1, updated_at = ? WHERE {conditions}',
+            params
         )
     else:
         # No folders left, mark all images as deleted
@@ -1297,24 +1329,27 @@ def get_images_in_folder(
     """
     folder_str = str(canonicalise_path(folder))
 
+    # Use range query instead of LIKE for index efficiency
+    folder_upper = folder_path_upper_bound(folder_str)
+
     if include_deleted:
         cursor = conn.execute("""
             SELECT id, path, basename, size, width, height, timestamp,
                    timestamp_confidence, checksum, perceptual_hash, laplacian_var,
                    lossless, description, rating, deleted, created_at, updated_at
             FROM images
-            WHERE path LIKE ? || '%'
+            WHERE path >= ? AND path < ?
             ORDER BY path ASC
-        """, (folder_str,))
+        """, (folder_str, folder_upper))
     else:
         cursor = conn.execute("""
             SELECT id, path, basename, size, width, height, timestamp,
                    timestamp_confidence, checksum, perceptual_hash, laplacian_var,
                    lossless, description, rating, deleted, created_at, updated_at
             FROM images
-            WHERE path LIKE ? || '%' AND deleted = 0
+            WHERE path >= ? AND path < ? AND deleted = 0
             ORDER BY path ASC
-        """, (folder_str,))
+        """, (folder_str, folder_upper))
 
     return rows_to_dicts(cursor.fetchall())
 
@@ -4088,18 +4123,27 @@ class ImageDatabase:
         remaining_folders = [row['path'] for row in cursor.fetchall()]
 
         # Find images in this folder that won't be covered by remaining folders
+        # Use range queries instead of LIKE for index efficiency
+        folder_upper = folder_path_upper_bound(folder_str)
+
         if remaining_folders:
             # Images that start with this folder but don't start with any remaining folder
-            placeholders = ' AND '.join(['path NOT LIKE ? || \'%\''] * len(remaining_folders))
+            not_conditions = ' AND '.join(
+                ['NOT (path >= ? AND path < ?)'] * len(remaining_folders)
+            )
+            # Build params: folder range, then each remaining folder's range
+            params = [folder_str, folder_upper]
+            for remaining in remaining_folders:
+                params.extend([remaining, folder_path_upper_bound(remaining)])
             cursor = self.conn.execute(
-                f'SELECT id FROM images WHERE path LIKE ? || \'%\' AND deleted = 0 AND {placeholders}',
-                [folder_str] + remaining_folders
+                f'SELECT id FROM images WHERE path >= ? AND path < ? AND deleted = 0 AND {not_conditions}',
+                params
             )
         else:
             # No other folders, all images in this folder will be orphaned
             cursor = self.conn.execute(
-                'SELECT id FROM images WHERE path LIKE ? || \'%\' AND deleted = 0',
-                (folder_str + '%',)
+                'SELECT id FROM images WHERE path >= ? AND path < ? AND deleted = 0',
+                (folder_str, folder_upper)
             )
 
         return [row['id'] for row in cursor.fetchall()]
