@@ -10,14 +10,16 @@ This document catalogues violations of the architectural design principles docum
 
 ## Executive Summary
 
-After detailed analysis, many "violations" turn out to be justified design decisions:
+After detailed analysis, many "violations" turn out to be justified design decisions. The remaining architectural impurities work correctly and have been accepted as technical debt (documented with inline comments).
 
-| Category | True Violations | Permitted Exceptions | Defensive/OK |
-|----------|-----------------|---------------------|--------------|
-| Backend | 1 (empty person cleanup) | 5 (cascades, computed reads) | 2 |
-| GUI | 1 (suppress flag) | 2 (local presentation state) | 1 (not a violation) |
-| AppState consistency | ~~1~~ 0 (fixed) | 0 | 5 (low priority) |
-| **Total** | **2** | **7** | **8** |
+| Category | Fixed | Accepted Debt | Permitted Exceptions | Defensive/OK |
+|----------|-------|---------------|---------------------|--------------|
+| Backend | 0 | 2 (cleanup, auto-reassess) | 5 (cascades, computed reads) | 2 |
+| GUI | 0 | 1 (suppress flag) | 2 (local presentation state) | 1 |
+| AppState | 1 (_notify) | 1 (selection txn) | 0 | 5 |
+| **Total** | **1** | **4** | **7** | **8** |
+
+**Status: Audit complete. No further action required.**
 
 ### Key Distinctions
 
@@ -107,7 +109,7 @@ delete_people_without_faces(db.conn)
 
 **Violation:** Backend automatically deletes all people with zero faces.
 
-**Assessment: TRUE VIOLATION (but pragmatic)**
+**Assessment: ACCEPTED TECHNICAL DEBT**
 
 This is a global cleanup that deletes ALL empty people, not just the affected one.
 
@@ -120,7 +122,7 @@ Arguments against:
 - Frontend loses control over when cleanup happens
 - Global cleanup is non-obvious side effect of unassign operation
 
-Verdict: Keep but document. The frontend already handles this case explicitly in picker mode (see "Partial Cache Limitation" in CLAUDE.md), so the backend cleanup is belt-and-suspenders.
+Verdict: **Accepted as-is.** The frontend already handles this case explicitly in picker mode (see "Partial Cache Limitation" in CLAUDE.md), so the backend cleanup is belt-and-suspenders. Changing to targeted cleanup risks missing edge cases. Inline comment added pointing to this audit.
 
 ---
 
@@ -236,7 +238,7 @@ if threshold_changed and threshold_value is not None:
     )
 ```
 
-**Assessment: BORDERLINE (convenience vs purity)**
+**Assessment: ACCEPTED TECHNICAL DEBT**
 
 Arguments for:
 - The whole PURPOSE of changing threshold is to re-evaluate faces
@@ -249,7 +251,7 @@ Arguments against:
 - Frontend loses control over when expensive operation runs
 - Could be batching multiple changes before reassessing
 
-Verdict: Consider adding explicit flag for consistency with assign endpoint. But current behavior is user-friendly and matches expectations.
+Verdict: **Accepted as-is.** The current behavior matches user expectations and adding an explicit flag would be a breaking change for no practical benefit. Inline comment added pointing to this audit.
 
 ---
 
@@ -323,7 +325,7 @@ try {
 }
 ```
 
-**Assessment: QUESTIONABLE (deduplication vs purity)**
+**Assessment: ACCEPTED TECHNICAL DEBT**
 
 The comment in code says "commitNameChange updates the UI directly, no need to re-render". This is avoiding REDUNDANT work - the identify operation already updates the fullscreen overlay directly, so the subscription would just re-do the same work.
 
@@ -337,7 +339,7 @@ Arguments against:
 - Better patterns exist: debouncing, request ID tracking
 - Creates coupling between the mutation and the handler
 
-Verdict: Technically a violation, but solving a real problem. Should be refactored to use debouncing or "version" tracking instead of a flag, but not urgent.
+Verdict: Technically a violation, but solving a real problem. Refactoring to debouncing would risk introducing race conditions without automated tests to catch regressions. **Accepted as-is.** Inline comment added pointing to this audit.
 
 ---
 
@@ -449,7 +451,9 @@ set(context, ids) {
 }
 ```
 
-**Violation:** Other domains wrap mutations in transactions. Selection domain mutates directly and broadcasts without transaction batching.
+**Assessment: ACCEPTED (not actually a problem)**
+
+Selection is synchronous-only and doesn't need cross-domain coordination. Transaction batching would add complexity for no benefit. Direct broadcast is fine here.
 
 ---
 
@@ -457,7 +461,9 @@ set(context, ids) {
 
 **File:** `selection.js`
 
-**Violation:** Selection domain has no `_internal` API. If GUI needs atomic selection operations coordinated with other domains in a transaction, there's no way to do so.
+**Assessment: ACCEPTED (not actually a problem)**
+
+No use case exists for atomic selection operations coordinated with other domains. Selection is a UI concern that doesn't need to participate in data transactions.
 
 ---
 
@@ -472,18 +478,18 @@ show(owner, message = 'Loading…') {
 }
 ```
 
-**Violation:** Bypasses transaction batching by calling `broadcast()` directly instead of using `markDirty()`.
+**Assessment: ACCEPTED (not actually a problem)**
+
+Loading overlay is a UI concern with immediate visual feedback requirements. Transaction batching would add latency for no benefit.
 
 ---
 
 #### 3.5 Inconsistent Dirty Flag Marking
 
-**Files:** Various
-
 - `images.js`, `identity.js`, `duplicates.js` - use `markDirty(domainRef)`
 - `selection.js` - does NOT use `markDirty()` at all
 
-**Violation:** Inconsistent approach to triggering broadcasts. Selection changes won't batch with other domain changes.
+Inconsistent approach to triggering broadcasts, but selection and loading don't need to batch with data domains. This is fine.
 
 ---
 
@@ -504,19 +510,21 @@ Some batch helpers in `faces._internal` are only called from within the same dom
 
 ## Recommendations
 
-### Actual Issues to Fix
+### Completed
 
 1. ~~**Add `_notify` to loading.js** (AppState) - Critical. Transaction system expects this.~~ **DONE**
 
-2. **Refactor `suppressOverlayReload`** (faces.js) - Low priority. Works correctly but violates principle. Consider debouncing or version tracking instead.
+### Accepted Technical Debt
 
-3. **Document `delete_people_without_faces()`** (Backend) - The global cleanup is aggressive. Either document the behavior clearly or make it opt-in via parameter.
+The following items are architectural impurities that work correctly. Given the lack of automated tests and the risk of introducing regressions, these are accepted as-is. Each has been documented with inline comments pointing to this audit.
 
-### Consider for Consistency (Low Priority)
+2. **`suppressOverlayReload` flag** (faces.js) - Violates "trust subscriptions" principle but prevents redundant DOM updates during rapid face identification. Refactoring to debouncing would require careful timing analysis and risk race conditions. **ACCEPTED**
 
-4. **Add `trigger_reassessment` flag** to `PATCH /api/people` - For consistency with `/api/faces/assign` which has this flag.
+3. **`delete_people_without_faces()` global cleanup** (Backend) - Aggressively cleans ALL empty people on any unassign, not just the affected one. Works correctly and prevents orphaned records. Changing to targeted cleanup would reduce blast radius but risks missing edge cases. **ACCEPTED**
 
-5. **Selection domain transactions** (AppState) - Consider wrapping in transactions or documenting why it's exempt (synchronous-only, no cross-domain coordination).
+4. **Auto-trigger reassessment on threshold change** (Backend) - Inconsistent with `/api/faces/assign` which has explicit `trigger_reassessment` flag. However, the current behavior matches user expectations (change threshold → re-evaluate faces). **ACCEPTED**
+
+5. **Selection domain bypasses transactions** (AppState) - Selection mutates directly without transaction batching. This is fine because selection is synchronous-only and doesn't need cross-domain coordination. **ACCEPTED** (not actually a problem)
 
 ### Documented as Permitted Exceptions
 
