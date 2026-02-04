@@ -33,7 +33,6 @@ from pathlib import Path
 from PIL import Image, ImageFilter, ImageOps
 
 import logging
-import os
 import shutil
 import subprocess
 import sys

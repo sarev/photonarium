@@ -4405,7 +4405,7 @@ class ImageDatabase:
                             updated_face = get_face(self.conn, face_id)
                             if updated_face:
                                 new_bbox = (updated_face['box_x'], updated_face['box_y'],
-                                           updated_face['box_w'], updated_face['box_h'])
+                                            updated_face['box_w'], updated_face['box_h'])
                                 logger.debug(f'rotate_image: Face {face_id[:8]}... new_bbox={new_bbox}')
 
                                 # Regenerate face thumbnail with new coordinates

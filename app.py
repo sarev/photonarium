@@ -1556,9 +1556,9 @@ def get_person_thumbnail(person_id):
     thumb_mtime = thumb_path.stat().st_mtime if thumb_exists else None
 
     logger.debug(f'get_person_thumbnail: person={person_id[:8]}... '
-                f'preferred_face_id={person.get("preferred_face_id", "None")[:8] if person.get("preferred_face_id") else "None"}... '
-                f'face_id={face_id[:8]}... fallback={fallback_used} '
-                f'exists={thumb_exists} mtime={thumb_mtime} path={thumb_path}')
+                 f'preferred_face_id={person.get("preferred_face_id", "None")[:8] if person.get("preferred_face_id") else "None"}... '
+                 f'face_id={face_id[:8]}... fallback={fallback_used} '
+                 f'exists={thumb_exists} mtime={thumb_mtime} path={thumb_path}')
 
     if not thumb_exists:
         return error_response('Face thumbnail not found', 404)
