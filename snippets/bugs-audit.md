@@ -294,12 +294,12 @@ This is intentional long-lived subscription, not a leak.
 
 ### MEDIUM SEVERITY
 
-#### 2.5 Sequential Filter Passes
-**File:** `static/appstate/images.js:90-113`
+#### 2.5 Sequential Filter Passes ✓ FIXED
+**File:** `static/appstate/images.js:121-195`
 
-**Issue:** Multiple `.filter()` calls create intermediate arrays.
+**Issue:** Multiple `.filter()` calls create intermediate arrays; `new Date()`, `[...string]` spread repeated per-image.
 
-**Recommendation:** Combine into single pass.
+**Fix:** Combined semantic and standard filter paths into single pass with pre-computed filter values.
 
 ---
 
@@ -427,7 +427,7 @@ The following concurrency patterns are correctly implemented:
 7. **Use OrderedDict for thumbnail cache** - O(1) instead of O(n)
 8. **Add LRU eviction to embedding cache** - Bound memory usage
 9. **Fix cache stampede** - Double-checked locking
-10. **Combine filter passes** - Single pass in _filterImages()
+10. ~~**Combine filter passes** - Single pass in _filterImages()~~ **DONE**
 
 ### Nice to Have
 

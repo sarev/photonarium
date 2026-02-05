@@ -128,70 +128,45 @@ AppState.images = (function() {
             return images.filter(img => idSet.has(String(img.id)));
         }
 
-        // Semantic search filter
-        if (currentFilter.type === 'semantic' && Array.isArray(currentFilter.imageIds)) {
-            const idSet = new Set(currentFilter.imageIds.map(String));
-            const scores = currentFilter.scores || {};
-
-            let filtered = images.filter(img => idSet.has(String(img.id)));
-
-            filtered = filtered.filter(img => {
-                if (currentFilter.dateStart) {
-                    const imgDate = new Date(img.timestamp);
-                    if (imgDate < new Date(currentFilter.dateStart)) return false;
-                }
-                if (currentFilter.dateEnd) {
-                    const imgDate = new Date(img.timestamp);
-                    const endDate = new Date(currentFilter.dateEnd);
-                    endDate.setHours(23, 59, 59, 999);
-                    if (imgDate > endDate) return false;
-                }
-                if (currentFilter.rating) {
-                    const filterEmoji = [...currentFilter.rating];
-                    const hasMatch = filterEmoji.some(e => img.rating && img.rating.includes(e));
-                    if (!hasMatch) return false;
-                }
-                if (currentFilter.people && currentFilter.peopleImageIds) {
-                    if (!currentFilter.peopleImageIds.has(String(img.id))) return false;
-                }
-                return true;
-            });
-
-            // Sort by similarity score
-            filtered.sort((a, b) => (scores[b.id] || 0) - (scores[a.id] || 0));
-            return filtered;
+        // Pre-compute filter values outside the loop (avoids per-image object creation)
+        const isSemantic = currentFilter.type === 'semantic' && Array.isArray(currentFilter.imageIds);
+        const idSet = isSemantic ? new Set(currentFilter.imageIds.map(String)) : null;
+        const scores = isSemantic ? (currentFilter.scores || {}) : null;
+        const textLower = (!isSemantic && currentFilter.text) ? currentFilter.text.toLowerCase() : null;
+        const dateStart = currentFilter.dateStart ? new Date(currentFilter.dateStart) : null;
+        let dateEnd = null;
+        if (currentFilter.dateEnd) {
+            dateEnd = new Date(currentFilter.dateEnd);
+            dateEnd.setHours(23, 59, 59, 999);
         }
+        const filterEmoji = currentFilter.rating ? [...currentFilter.rating] : null;
+        const peopleImageIds = (currentFilter.people && currentFilter.peopleImageIds) || null;
 
-        // Standard filters
-        return images.filter(img => {
-            if (currentFilter.text) {
+        // Single pass through all images
+        const filtered = images.filter(img => {
+            if (idSet && !idSet.has(String(img.id))) return false;
+            if (textLower) {
                 const desc = (img.description || '').toLowerCase();
-                if (!desc.includes(currentFilter.text.toLowerCase())) {
-                    return false;
-                }
+                if (!desc.includes(textLower)) return false;
             }
-            if (currentFilter.dateStart) {
-                if (new Date(img.timestamp) < new Date(currentFilter.dateStart)) {
-                    return false;
-                }
+            if (dateStart || dateEnd) {
+                const imgDate = new Date(img.timestamp);
+                if (dateStart && imgDate < dateStart) return false;
+                if (dateEnd && imgDate > dateEnd) return false;
             }
-            if (currentFilter.dateEnd) {
-                const endDate = new Date(currentFilter.dateEnd);
-                endDate.setHours(23, 59, 59, 999);
-                if (new Date(img.timestamp) > endDate) return false;
+            if (filterEmoji) {
+                if (!filterEmoji.some(e => img.rating && img.rating.includes(e))) return false;
             }
-            if (currentFilter.rating) {
-                const filterEmoji = [...currentFilter.rating];
-                const hasMatch = filterEmoji.some(e => img.rating && img.rating.includes(e));
-                if (!hasMatch) return false;
-            }
-            if (currentFilter.people && currentFilter.peopleImageIds) {
-                if (!currentFilter.peopleImageIds.has(String(img.id))) {
-                    return false;
-                }
-            }
+            if (peopleImageIds && !peopleImageIds.has(String(img.id))) return false;
             return true;
         });
+
+        // Semantic results sorted by similarity score
+        if (scores) {
+            filtered.sort((a, b) => (scores[b.id] || 0) - (scores[a.id] || 0));
+        }
+
+        return filtered;
     }
 
     // Subscribe to view and filter changes
