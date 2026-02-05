@@ -1193,35 +1193,6 @@ def update_image_metadata(
     return False
 
 
-def update_image_embedding(
-    conn: sqlite3.Connection,
-    image_id: str,
-    embedding: bytes,
-) -> bool:
-    """Update the embedding for an image.
-
-    Args:
-        conn: Database connection.
-        image_id: UUID of the image.
-        embedding: OpenCLIP embedding as bytes (numpy.tobytes()).
-
-    Returns:
-        True if image was updated, False if not found.
-    """
-    now = datetime.now().isoformat()
-
-    cursor = conn.execute(
-        'UPDATE images SET embedding = ?, updated_at = ? WHERE id = ?',
-        (embedding, now, image_id)
-    )
-    conn.commit()
-
-    if cursor.rowcount > 0:
-        logger.debug(f'Updated embedding for image: {image_id}')
-        return True
-    return False
-
-
 def delete_image(
     conn: sqlite3.Connection,
     image_id: str,
@@ -2348,14 +2319,13 @@ class EmbeddingThread(threading.Thread):
         # Encode batch
         results = self.clip_model.encode_images_batch(paths)
 
-        # Store results
+        # Collect successful embeddings for batch commit
+        updates = []
         for (idx, embedding), image_id in zip(results, image_ids):
             try:
                 if embedding is not None:
-                    # Convert to bytes for storage
                     embedding_bytes = embedding.astype(np.float32).tobytes()
-                    with self._db_lock:
-                        update_image_embedding(self.conn, image_id, embedding_bytes)
+                    updates.append((embedding_bytes, datetime.now().isoformat(), image_id))
                     self._processed_count += 1
                 else:
                     self._error_count += 1
@@ -2364,6 +2334,15 @@ class EmbeddingThread(threading.Thread):
                 self._error_count += 1
             finally:
                 self.embedding_queue.task_done()
+
+        # Batch commit all updates at once (single fsync instead of per-row)
+        if updates:
+            with self._db_lock:
+                self.conn.executemany(
+                    'UPDATE images SET embedding = ?, updated_at = ? WHERE id = ?',
+                    updates
+                )
+                self.conn.commit()
 
     def _check_completion(self) -> None:
         """Check if all processing is complete and trigger completion callback.

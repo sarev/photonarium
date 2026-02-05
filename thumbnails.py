@@ -29,6 +29,7 @@ Usage:
 
 from __future__ import annotations
 
+from collections import OrderedDict
 from pathlib import Path
 from PIL import Image, ImageFilter, ImageOps
 
@@ -526,8 +527,7 @@ class ThumbnailCache:
             max_size_bytes: Maximum cache size in bytes. Set to 0 to disable.
         """
         self._max_size = max_size_bytes
-        self._cache: dict[tuple[str, int], bytes] = {}  # (checksum, size) -> bytes
-        self._access_order: list[tuple[str, int]] = []  # LRU tracking
+        self._cache: OrderedDict[tuple[str, int], bytes] = OrderedDict()  # LRU: oldest first
         self._current_size = 0
         self._lock = threading.Lock()
         self._hits = 0
@@ -549,9 +549,7 @@ class ThumbnailCache:
         key = (checksum, size)
         with self._lock:
             if key in self._cache:
-                # Move to end (most recently used)
-                self._access_order.remove(key)
-                self._access_order.append(key)
+                self._cache.move_to_end(key)  # O(1) LRU update
                 self._hits += 1
                 return self._cache[key]
             self._misses += 1
@@ -578,21 +576,18 @@ class ThumbnailCache:
             return
 
         with self._lock:
-            # Evict until we have room
-            while self._current_size + data_size > self._max_size and self._access_order:
-                evict_key = self._access_order.pop(0)
-                evicted = self._cache.pop(evict_key, None)
-                if evicted:
-                    self._current_size -= len(evicted)
+            # Evict LRU items until we have room
+            while self._current_size + data_size > self._max_size and self._cache:
+                _, evicted = self._cache.popitem(last=False)  # O(1) pop oldest
+                self._current_size -= len(evicted)
 
             # Update if already exists
             if key in self._cache:
                 self._current_size -= len(self._cache[key])
-                self._access_order.remove(key)
 
-            # Add new item
+            # Add/update item at end (most recently used)
             self._cache[key] = data
-            self._access_order.append(key)
+            self._cache.move_to_end(key)
             self._current_size += data_size
 
     def remove(self, checksum: str) -> int:
@@ -617,7 +612,6 @@ class ThumbnailCache:
                 data = self._cache.pop(key, None)
                 if data:
                     self._current_size -= len(data)
-                    self._access_order.remove(key)
                     removed += 1
         return removed
 
