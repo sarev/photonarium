@@ -1163,22 +1163,25 @@ def revalidate_person_faces(
         List of face IDs that were ejected.
     """
     # Get all faces for this person with embeddings
+    # Include manually_tagged so we can skip locked faces during ejection,
+    # but still use their embeddings for similarity comparison
     cursor = conn.execute(
-        '''SELECT id, embedding FROM faces
+        '''SELECT id, embedding, manually_tagged FROM faces
            WHERE person_id = ? AND suppressed = 0''',
         (person_id,)
     )
     faces = []
     for row in cursor.fetchall():
         embedding = np.frombuffer(row['embedding'], dtype=np.float32)
-        faces.append((row['id'], embedding))
+        faces.append((row['id'], embedding, bool(row['manually_tagged'])))
 
     if len(faces) <= 1:
         # Can't eject if only 0 or 1 face - nothing to compare against
         return []
 
-    # Build embedding matrix
+    # Build embedding matrix (ALL faces, including locked, for similarity comparison)
     face_ids = [f[0] for f in faces]
+    face_locked = [f[2] for f in faces]
     embeddings = np.vstack([f[1] for f in faces])
 
     # Ensure normalized
@@ -1193,20 +1196,21 @@ def revalidate_person_faces(
     np.fill_diagonal(similarities, -1)  # Exclude self-similarity
     max_similarities = np.max(similarities, axis=1)
 
-    # Find faces that don't meet threshold
+    # Find faces that don't meet threshold (skip locked faces - user confirmed these)
     ejected_ids = []
     for i, (face_id, max_sim) in enumerate(zip(face_ids, max_similarities)):
+        if face_locked[i]:
+            continue  # Locked faces are never ejected
         if max_sim < threshold:
-            ejected_ids.append(face_id)
             logger.info(
                 f'Ejecting face {face_id} from person {person_id}: '
                 f'max similarity {max_sim:.3f} < threshold {threshold:.3f}'
             )
 
-    # Unassign ejected faces
+    # Unassign ejected faces (clear manually_tagged so they're candidates for reassessment)
     if ejected_ids:
         for face_id in ejected_ids:
-            update_face_person(conn, face_id, None)
+            update_face_person(conn, face_id, None, manually_tagged=False)
 
         # Check if preferred face was ejected - if so, select new preferred
         person = get_person(conn, person_id)
@@ -1239,7 +1243,10 @@ def delete_person(
     """Delete a person record.
 
     This also unlinks all faces associated with this person
-    (person_id set to NULL via ON DELETE SET NULL).
+    (person_id set to NULL via ON DELETE SET NULL). We explicitly clear
+    manually_tagged before deletion because the foreign key cascade only
+    nulls person_id, leaving orphaned locked faces that would never be
+    candidates for reassessment.
 
     Args:
         conn: Database connection.
@@ -1248,6 +1255,12 @@ def delete_person(
     Returns:
         True if deleted, False if person not found.
     """
+    # Clear manually_tagged before delete - ON DELETE SET NULL only nulls person_id
+    conn.execute(
+        '''UPDATE faces SET manually_tagged = 0, updated_at = datetime('now')
+           WHERE person_id = ? AND manually_tagged = 1''',
+        (person_id,)
+    )
     cursor = conn.execute(
         '''DELETE FROM people WHERE id = ?''',
         (person_id,)
@@ -2964,24 +2977,40 @@ def reassess_unknown_faces_async(
                 else:
                     known_embeddings = get_cached_known_embeddings(db.conn)
 
-                # Get unknown embeddings WITH updated_at for optimistic concurrency
+                # Get candidate embeddings WITH updated_at for optimistic concurrency
                 # If updated_at changes between READ and WRITE, we skip that face
-                cursor = db.conn.execute(
-                    '''SELECT id, embedding, updated_at
-                       FROM faces
-                       WHERE person_id IS NULL AND suppressed = 0 AND embedding IS NOT NULL'''
-                )
-                unknown_embeddings = []
+                #
+                # Candidates include:
+                # - Unknown faces (person_id IS NULL)
+                # - Unlocked faces from OTHER people (person_id != target, manually_tagged = 0)
+                # This allows threshold changes to pull faces from other people if they
+                # match better. Locked faces (manually_tagged = 1) are never candidates.
+                if person_id:
+                    cursor = db.conn.execute(
+                        '''SELECT id, embedding, updated_at
+                           FROM faces
+                           WHERE (person_id IS NULL OR (person_id != ? AND manually_tagged = 0))
+                             AND suppressed = 0 AND embedding IS NOT NULL''',
+                        (person_id,)
+                    )
+                else:
+                    # General reassessment: only unknown faces (no person_id target to exclude)
+                    cursor = db.conn.execute(
+                        '''SELECT id, embedding, updated_at
+                           FROM faces
+                           WHERE person_id IS NULL AND suppressed = 0 AND embedding IS NOT NULL'''
+                    )
+                candidate_embeddings = []
                 face_timestamps: dict[str, str | None] = {}  # face_id -> updated_at
                 for row in cursor.fetchall():
                     embedding = np.frombuffer(row['embedding'], dtype=np.float32)
-                    unknown_embeddings.append((row['id'], embedding))
+                    candidate_embeddings.append((row['id'], embedding))
                     face_timestamps[row['id']] = row['updated_at']
 
-                logger.debug(f'Async reassessment: READ phase done - {len(known_embeddings)} known, {len(unknown_embeddings)} unknown')
+                logger.debug(f'Async reassessment: READ phase done - {len(known_embeddings)} known, {len(candidate_embeddings)} candidates')
 
             # Early exit if nothing to compare
-            if not known_embeddings or not unknown_embeddings:
+            if not known_embeddings or not candidate_embeddings:
                 logger.debug('Async reassessment: no embeddings to compare')
                 with _reassess_lock:
                     _reassess_result = {'matched_count': 0, 'person_id': person_id}
@@ -2998,23 +3027,23 @@ def reassess_unknown_faces_async(
             known_ids = [(fid, pid) for fid, pid, _ in known_embeddings]
             known_matrix = np.vstack([emb for _, _, emb in known_embeddings])
 
-            unknown_ids = [fid for fid, _ in unknown_embeddings]
-            unknown_matrix = np.vstack([emb for _, emb in unknown_embeddings])
+            candidate_ids = [fid for fid, _ in candidate_embeddings]
+            candidate_matrix = np.vstack([emb for _, emb in candidate_embeddings])
 
             # Ensure L2-normalized
             known_norms = np.linalg.norm(known_matrix, axis=1)
-            unknown_norms = np.linalg.norm(unknown_matrix, axis=1)
+            candidate_norms = np.linalg.norm(candidate_matrix, axis=1)
             if not np.allclose(known_norms, 1.0, atol=0.01):
                 known_matrix = known_matrix / known_norms[:, np.newaxis]
-            if not np.allclose(unknown_norms, 1.0, atol=0.01):
-                unknown_matrix = unknown_matrix / unknown_norms[:, np.newaxis]
+            if not np.allclose(candidate_norms, 1.0, atol=0.01):
+                candidate_matrix = candidate_matrix / candidate_norms[:, np.newaxis]
 
-            # Compute all similarities at once: (num_unknown, num_known)
-            similarities = unknown_matrix @ known_matrix.T
+            # Compute all similarities at once: (num_candidates, num_known)
+            similarities = candidate_matrix @ known_matrix.T
 
-            # Find best match for each unknown face
+            # Find best match for each candidate face
             matched = []
-            for i, unknown_face_id in enumerate(unknown_ids):
+            for i, candidate_face_id in enumerate(candidate_ids):
                 best_idx = np.argmax(similarities[i])
                 best_similarity = similarities[i, best_idx]
 
@@ -3025,9 +3054,9 @@ def reassess_unknown_faces_async(
                 effective_threshold = person_threshold if person_threshold is not None else threshold
 
                 if best_similarity >= effective_threshold:
-                    matched.append((unknown_face_id, matched_person_id, float(best_similarity)))
+                    matched.append((candidate_face_id, matched_person_id, float(best_similarity)))
 
-            logger.debug(f'Async reassessment: COMPUTE phase done - {len(matched)} matches found')
+            logger.debug(f'Async reassessment: COMPUTE phase done - {len(matched)} matches from {len(candidate_ids)} candidates')
 
             # ================================================================
             # PHASE 3: WRITE (with lock) - persist matches and build response
@@ -3054,11 +3083,11 @@ def reassess_unknown_faces_async(
                             (matched_person_id, face_id, original_timestamp)
                         )
                     else:
-                        # No timestamp (legacy row) - fall back to checking person_id IS NULL
+                        # No timestamp (legacy row) - fall back to checking not locked
                         cursor = db.conn.execute(
                             '''UPDATE faces
                                SET person_id = ?, manually_tagged = 0, updated_at = datetime('now')
-                               WHERE id = ? AND person_id IS NULL AND suppressed = 0''',
+                               WHERE id = ? AND manually_tagged = 0 AND suppressed = 0''',
                             (matched_person_id, face_id)
                         )
 
@@ -3107,7 +3136,7 @@ def reassess_unknown_faces_async(
             if matched:
                 sims = [m[2] for m in matched]
                 logger.info(
-                    f'Async face reassessment: auto-matched {len(matched)} of {len(unknown_ids)} unknown faces '
+                    f'Async face reassessment: auto-matched {len(matched)} of {len(candidate_ids)} candidate faces '
                     f'(similarity {min(sims):.2f}-{max(sims):.2f}, threshold={threshold:.2f})'
                 )
 

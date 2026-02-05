@@ -2075,8 +2075,8 @@ def unidentify_face(face_id):
 
         old_person_id = face.get('person_id')
 
-        # Unlink face from person
-        update_face_person(db.conn, face_id, None)
+        # Unlink face from person (clear manually_tagged so face is a candidate for reassessment)
+        update_face_person(db.conn, face_id, None, manually_tagged=False)
 
         # Delete person if they have no more faces
         if old_person_id:
