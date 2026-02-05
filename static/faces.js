@@ -2566,6 +2566,10 @@
                     if (viewMode === 'pick-preferred') {
                         if (pickPreferredGrid) pickPreferredGrid.bind();
                         if (pickerSelection) pickerSelection.bind();
+                        if (needsRerender) {
+                            needsRerender = false;
+                            FacesRefresh.onFacesChanged();
+                        }
                         // Focus picker view
                         if (pickerView) pickerView.focus({ preventScroll: true });
                         return;
