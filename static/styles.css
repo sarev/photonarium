@@ -544,7 +544,8 @@ a:hover {
 #btn-faces:hover,
 #btn-face-tagging:hover,
 #btn-faces-only-unknowns:hover,
-#btn-faces-focus-person:hover {
+#btn-faces-focus-person:hover,
+#btn-picker-hide-locked:hover {
     background-color: var(--color-pastel-green-bg);
     color: var(--color-pastel-green-fg);
 }

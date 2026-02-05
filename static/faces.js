@@ -252,6 +252,9 @@
     let btnFacesFocusPerson;
 
     /** @type {HTMLButtonElement} */
+    let btnPickerHideLocked;
+
+    /** @type {HTMLButtonElement} */
     let btnFacesSortDirection;
 
     /** @type {Object|null} GridSelection instance for faces screen */
@@ -351,6 +354,9 @@
 
     /** @type {string} Current semantic search query for filtering unknown faces */
     let unknownFacesSearchQuery = '';
+
+    /** @type {boolean} Whether to show locked faces in pick-preferred mode (default: true) */
+    let showLockedFaces = true;
 
     // =========================================================================
     // FACES REFRESH - Centralized refresh handling with state preservation
@@ -905,7 +911,9 @@
 
         pickPreferredGrid = VirtualGrid.create({
             container: pickerGridContainer,
-            getItems: () => pickPreferredFaces,
+            getItems: () => showLockedFaces
+                ? pickPreferredFaces
+                : pickPreferredFaces.filter(f => !f.manually_tagged),
             getItemId: (face) => face.id,
             createItem: (face, index, blobUrl) => createPickPreferredFaceCard(face, blobUrl),
             getThumbnailId: (face) => face.id,
@@ -936,7 +944,9 @@
 
         pickerSelection = GridSelection.create({
             grid: pickPreferredGrid,
-            getItems: () => pickPreferredFaces,
+            getItems: () => showLockedFaces
+                ? pickPreferredFaces
+                : pickPreferredFaces.filter(f => !f.manually_tagged),
             getItemId: (face) => face.id,
             itemSelector: '.face-card',
             selectedClass: 'selected',
@@ -973,6 +983,7 @@
         btnFacesThumbLarger = document.getElementById('btn-faces-thumb-larger');
         btnFacesOnlyUnknowns = document.getElementById('btn-faces-only-unknowns');
         btnFacesFocusPerson = document.getElementById('btn-faces-focus-person');
+        btnPickerHideLocked = document.getElementById('btn-picker-hide-locked');
         btnFacesSortDirection = document.getElementById('btn-faces-sort-direction');
 
         // Check if face detection is enabled
@@ -1201,6 +1212,16 @@
             btnFacesFocusPerson.addEventListener('click', handleFocusButtonClick);
         }
 
+        // Hide locked faces button (for pick-preferred mode)
+        if (btnPickerHideLocked) {
+            btnPickerHideLocked.addEventListener('click', () => {
+                showLockedFaces = !showLockedFaces;
+                updateHideLockedButton();
+                // Full re-render needed because item count changes
+                renderPickerContent();
+            });
+        }
+
         // Sort direction button
         if (btnFacesSortDirection) {
             btnFacesSortDirection.addEventListener('click', () => {
@@ -1333,6 +1354,24 @@
     }
 
     /**
+     * Update the hide-locked button state.
+     * Only visible in pick-preferred mode.
+     */
+    function updateHideLockedButton() {
+        if (!btnPickerHideLocked) return;
+
+        if (viewMode === 'pick-preferred') {
+            btnPickerHideLocked.hidden = false;
+            btnPickerHideLocked.classList.toggle('active', !showLockedFaces);
+            btnPickerHideLocked.title = showLockedFaces
+                ? 'Show unlocked only'
+                : 'Show all faces';
+        } else {
+            btnPickerHideLocked.hidden = true;
+        }
+    }
+
+    /**
      * Get the person ID if a known person card is selected.
      * Returns null if no known person is selected.
      */
@@ -1416,6 +1455,7 @@
         // Render picker content (loading state initially)
         renderPickerContent();
         updateFocusButtonState();
+        updateHideLockedButton();
 
         // Focus picker view for keyboard navigation
         if (pickerView) pickerView.focus({ preventScroll: true });
@@ -1456,6 +1496,7 @@
         pickPreferredFaces = [];
         pickPreferredPersonThreshold = null;
         pickerDataLoaded = false;
+        showLockedFaces = true; // Reset to default when exiting
 
         // Toggle visibility: hide picker, show normal
         if (pickerView) pickerView.hidden = true;
@@ -1474,6 +1515,7 @@
         renderFacesGrid();
 
         updateFocusButtonState();
+        updateHideLockedButton();
 
         // Focus people section and reselect the person we were viewing
         if (peopleSection) {
@@ -1499,9 +1541,14 @@
     function renderPickerContent() {
         if (!pickerView || !pickerTitleEl) return;
 
-        // Update title with name and count
-        const faceCount = pickPreferredFaces.length;
-        const countText = faceCount === 1 ? '1 image' : `${faceCount} images`;
+        // Update title with name and count (reflect filtered count when hiding locked)
+        const displayedFaceCount = showLockedFaces
+            ? pickPreferredFaces.length
+            : pickPreferredFaces.filter(f => !f.manually_tagged).length;
+        const totalCount = pickPreferredFaces.length;
+        const countText = showLockedFaces
+            ? (displayedFaceCount === 1 ? '1 image' : `${displayedFaceCount} images`)
+            : `${displayedFaceCount} of ${totalCount} images`;
         pickerTitleEl.innerHTML = `${App.escapeHtml(pickPreferredPersonName || '')} <span class="face-count">(${countText})</span>`;
 
         // Update threshold slider/value (preserve focus if user is interacting)
