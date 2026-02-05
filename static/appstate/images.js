@@ -17,7 +17,7 @@
 'use strict';
 
 AppState.images = (function() {
-    const { createSubscriberSystem, queueTransaction } = AppState;
+    const { createSubscriberSystem, markDirty, transaction, queueTransaction } = AppState;
     const { subscribe, subscribeError, broadcast, notify, broadcastError } = createSubscriberSystem();
 
     // =========================================================================
@@ -447,8 +447,9 @@ AppState.images = (function() {
 
             console.log('[AppState.images.update]', updates.length, 'images');
 
-            return queueTransaction(async () => {
-                const backup = new Map();
+            // PHASE 1: Synchronous optimistic updates
+            const backup = new Map();
+            transaction(() => {
                 for (const upd of updates) {
                     const image = _cache?.get(upd.id);
                     if (image) {
@@ -456,7 +457,10 @@ AppState.images = (function() {
                         _internal.update(upd.id, upd);
                     }
                 }
+            });
 
+            // PHASE 2: Persist to backend
+            return queueTransaction(async () => {
                 try {
                     for (const upd of updates) {
                         const { id, ...changes } = upd;
@@ -464,10 +468,12 @@ AppState.images = (function() {
                     }
                 } catch (err) {
                     console.error('[AppState.images.update] Persist failed:', err);
-                    for (const [id, img] of backup) {
-                        _cache.set(id, img);
-                        markDirty(domainRef);
-                    }
+                    transaction(() => {
+                        for (const [id, img] of backup) {
+                            _cache.set(id, img);
+                            markDirty(domainRef);
+                        }
+                    });
                     broadcastError(err.message || 'Failed to update images');
                     throw err;
                 }

@@ -2836,9 +2836,9 @@ def semantic_search(
     """Search for images similar to a query embedding.
 
     Compares the query embedding against image embeddings using cosine
-    similarity. Description embeddings provide a weighted boost but don't
-    dominate the score, since text-to-text similarity in CLIP tends to be
-    higher than text-to-image similarity.
+    similarity. Description embeddings provide a small additive boost but
+    cannot dominate the score, since text-to-text similarity in CLIP is
+    inherently 2-3x higher than text-to-image similarity.
 
     Uses vectorized numpy operations for performance - computing similarity
     scores for 50k+ images in milliseconds rather than minutes.
@@ -2853,8 +2853,12 @@ def semantic_search(
         List of image dictionaries with added 'score' field, sorted by
         descending similarity score.
     """
-    # Weight for description embedding score (lower to avoid text-to-text bias)
-    DESC_WEIGHT = 0.5
+    # Additive boost weight for description embedding score.  Text-to-text
+    # cosine similarity in CLIP is ~2-3× higher than text-to-image for the same
+    # semantic relevance, so using max(img, desc) lets even unrelated descriptions
+    # dominate.  Instead, treat description as a small additive bonus on top of
+    # the image score.
+    DESC_BOOST = 0.1
 
     # Step 1: Get just IDs and embeddings (minimal data transfer)
     cursor = conn.execute("""
@@ -2899,14 +2903,16 @@ def semantic_search(
 
     # Step 3: Vectorized similarity computation (single matrix multiply)
     img_scores = img_matrix @ query_embedding  # Shape: (n,)
-    desc_scores = desc_matrix @ query_embedding * DESC_WEIGHT  # Shape: (n,)
+    desc_scores = desc_matrix @ query_embedding  # Shape: (n,)
 
     # Zero out scores for missing embeddings
     img_scores = np.where(has_img, img_scores, 0.0)
     desc_scores = np.where(has_desc, desc_scores, 0.0)
 
-    # Take max of the two scores
-    scores = np.maximum(img_scores, desc_scores)
+    # Description is an additive boost on top of image score, not an
+    # independent competing signal.  A relevant description nudges an image
+    # up in the rankings; an irrelevant one barely registers.
+    scores = img_scores + desc_scores * DESC_BOOST
 
     # Step 4: Filter by threshold and get top results
     above_threshold = scores >= threshold

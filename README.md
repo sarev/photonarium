@@ -385,6 +385,7 @@ The app runs entirely offline after models are downloaded.
 
 ```bash
 python app.py --port 8080              # Use a different port
+python app.py --data-dir /path/to/data # Store user data in a specific directory
 python app.py --generate-thumbnails    # Pre-generate thumbnails for all images
 python app.py --scan                   # Run folder scan on startup
 python app.py --detect-faces           # Run face detection on startup
