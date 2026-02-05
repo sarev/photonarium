@@ -42,6 +42,7 @@ import logging
 import numpy as np
 import sqlite3
 import threading
+import time
 import torch
 import uuid
 
@@ -2646,6 +2647,7 @@ def compute_unknown_face_groups_async(
             # PHASE 2: COMPUTE (no lock) - similarity matrix and clustering
             # ================================================================
             logger.debug('Async face grouping: COMPUTE phase started (lock released)')
+            _compute_start = time.time()  # [PERF-LOG]
 
             # Stack embeddings into a matrix (already L2-normalized)
             embedding_matrix = np.vstack(embeddings)
@@ -2653,9 +2655,14 @@ def compute_unknown_face_groups_async(
             # Use UnionFind in ID mode
             uf = UnionFind(ids=face_ids)
 
-            # Chunked similarity computation
+            # Chunked similarity computation.
+            # Use vectorized np.where to find above-threshold pairs instead of
+            # a pure-Python nested loop.  At 500K faces, the old nested loop
+            # would do ~125 billion Python iterations holding the GIL.  The
+            # numpy approach releases the GIL during the bulk comparison.
             chunk_size = 1000
             n_chunks = (n_faces + chunk_size - 1) // chunk_size
+            total_pairs = 0  # [PERF-LOG] total above-threshold pairs found
             logger.info(f'Computing pairwise similarities in {n_chunks} chunks...')
 
             for chunk_idx, i in enumerate(range(0, n_faces, chunk_size)):
@@ -2669,21 +2676,37 @@ def compute_unknown_face_groups_async(
                 # Compute similarities: chunk @ all.T
                 similarities = chunk @ embedding_matrix.T
 
-                # Find pairs above threshold
-                for local_idx in range(chunk_end - i):
-                    global_idx = i + local_idx
-                    face_id_i = face_ids[global_idx]
+                # Find all above-threshold pairs via numpy (GIL-releasing),
+                # then filter to upper triangle (j > global_idx) to avoid
+                # duplicate pairs.  This replaces the O(chunk × n_faces)
+                # pure-Python nested loop with a single np.where call.
+                local_rows, cols = np.where(similarities >= threshold)
+                chunk_pairs = 0  # [PERF-LOG]
+                for local_idx, j in zip(local_rows, cols):
+                    global_idx = i + int(local_idx)
+                    if j > global_idx:
+                        uf.union_ids(face_ids[global_idx], face_ids[int(j)])
+                        chunk_pairs += 1  # [PERF-LOG]
+                total_pairs += chunk_pairs  # [PERF-LOG]
 
-                    # Only check j > global_idx to avoid duplicate pairs
-                    for j in range(global_idx + 1, n_faces):
-                        if similarities[local_idx, j] >= threshold:
-                            face_id_j = face_ids[j]
-                            uf.union_ids(face_id_i, face_id_j)
+                # [PERF-LOG] Log pair counts to aid V&V
+                if chunk_idx % 5 == 0 or chunk_idx == n_chunks - 1:
+                    logger.info(f'    Chunk {chunk_idx + 1}: {chunk_pairs} pairs '
+                                f'from {len(local_rows)} raw matches')
+
+            # [PERF-LOG] Summary
+            logger.info(f'Chunked similarity done: {total_pairs} above-threshold '
+                        f'pairs found across {n_chunks} chunks')
 
             # Extract groups
             logger.info('Extracting groups from UnionFind structure...')
             groups = uf.extract_groups_by_id()
             logger.info(f'Found {len(groups)} distinct clusters')
+
+            # [PERF-LOG] Total COMPUTE phase time
+            _compute_elapsed = time.time() - _compute_start
+            logger.info(f'[PERF] COMPUTE phase: {_compute_elapsed:.2f}s '
+                        f'({n_faces} faces, {n_chunks} chunks, {total_pairs} pairs)')
 
             logger.debug('Async face grouping: COMPUTE phase done')
 
@@ -3039,22 +3062,44 @@ def reassess_unknown_faces_async(
                 candidate_matrix = candidate_matrix / candidate_norms[:, np.newaxis]
 
             # Compute all similarities at once: (num_candidates, num_known)
+            _compute_start = time.time()  # [PERF-LOG]
             similarities = candidate_matrix @ known_matrix.T
 
-            # Find best match for each candidate face
-            matched = []
-            for i, candidate_face_id in enumerate(candidate_ids):
-                best_idx = np.argmax(similarities[i])
-                best_similarity = similarities[i, best_idx]
+            # Vectorized best-match finding.  Replaces a pure-Python loop over
+            # all candidates (50K+ at scale) with bulk numpy operations that
+            # release the GIL during computation.
+            n_candidates = len(candidate_ids)
+            n_known = len(known_ids)
 
-                _, matched_person_id = known_ids[best_idx]
+            # Best match index and score for every candidate (one numpy call)
+            best_indices = np.argmax(similarities, axis=1)              # shape: (N,)
+            best_scores = similarities[np.arange(n_candidates), best_indices]  # shape: (N,)
 
-                # Use per-person threshold if set, otherwise use global default
-                person_threshold = person_thresholds.get(matched_person_id)
-                effective_threshold = person_threshold if person_threshold is not None else threshold
+            # Build per-known-face threshold vector (one entry per column in
+            # similarities).  Looked up from person_thresholds dict, falling
+            # back to global threshold.  Built once, O(M) where M = known faces.
+            known_thresholds = np.array([
+                person_thresholds.get(pid, threshold)
+                for _, pid in known_ids
+            ], dtype=np.float32)  # shape: (M,)
 
-                if best_similarity >= effective_threshold:
-                    matched.append((candidate_face_id, matched_person_id, float(best_similarity)))
+            # Look up effective threshold for each candidate's best match
+            effective_thresholds = known_thresholds[best_indices]  # shape: (N,) — numpy fancy indexing
+
+            # Filter: which candidates beat their threshold?
+            above = best_scores >= effective_thresholds
+            match_indices = np.where(above)[0]
+
+            matched = [
+                (candidate_ids[i], known_ids[best_indices[i]][1], float(best_scores[i]))
+                for i in match_indices
+            ]
+
+            # [PERF-LOG] COMPUTE phase timing and stats
+            _compute_elapsed = time.time() - _compute_start
+            logger.info(f'[PERF] Reassessment COMPUTE: {_compute_elapsed:.2f}s '
+                        f'({n_candidates} candidates × {n_known} known, '
+                        f'{len(matched)} matches)')
 
             logger.debug(f'Async reassessment: COMPUTE phase done - {len(matched)} matches from {len(candidate_ids)} candidates')
 
