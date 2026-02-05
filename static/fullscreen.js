@@ -266,11 +266,12 @@ const Fullscreen = {
         // Unbind event listeners
         this._unbindEvents();
 
-        // Clear overlay timeout
+        // Clear overlay timeout and visibility flag
         if (this._overlayTimeout) {
             clearTimeout(this._overlayTimeout);
             this._overlayTimeout = null;
         }
+        this._overlaysVisible = false;
 
         // Hide the overlay
         this._hide();

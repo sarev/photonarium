@@ -1207,6 +1207,7 @@ def revalidate_person_faces(
                 f'Ejecting face {face_id} from person {person_id}: '
                 f'max similarity {max_sim:.3f} < threshold {threshold:.3f}'
             )
+            ejected_ids.append(face_id)
 
     # Unassign ejected faces (clear manually_tagged so they're candidates for reassessment)
     if ejected_ids:
@@ -3079,7 +3080,7 @@ def reassess_unknown_faces_async(
             # similarities).  Looked up from person_thresholds dict, falling
             # back to global threshold.  Built once, O(M) where M = known faces.
             known_thresholds = np.array([
-                person_thresholds.get(pid, threshold)
+                threshold if person_thresholds.get(pid) is None else person_thresholds[pid]
                 for _, pid in known_ids
             ], dtype=np.float32)  # shape: (M,)
 
