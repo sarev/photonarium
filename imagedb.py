@@ -171,7 +171,12 @@ os.environ['HF_HUB_OFFLINE'] = '1'
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
-from PIL import Image, ImageOps
+from PIL import Image, ImageFile, ImageOps
+
+# Tolerate truncated or mildly corrupt images rather than raising errors.
+# Many real-world JPEGs are missing their EOI marker or have minor structural
+# issues but are perfectly viewable in normal image viewers.
+ImageFile.LOAD_TRUNCATED_IMAGES = True
 from typing import Any, Iterator
 
 import atexit
