@@ -81,78 +81,66 @@ How the module is structured
 
 The module is laid out in sections separated by banners. Roughly:
 
-1) Configuration
-    - DEFAULT_CONFIG_PATH is a YAML file written to disk on first run.
-    - `Config` defines supported keys and validates ranges.
-    - `load_config()` creates the file if missing, then loads and validates.
-
-2) Timestamp extraction utilities
-    - EXIF parsing and robust filename/path parsing helpers.
-    - `derive_timestamp()` applies a priority order so timestamps are stable even
-      when files have been copied between machines.
-
-3) Database schema and initialisation
+1) Database schema and initialisation
     - SQL DDL strings and `init_database()` which enables WAL mode, creates
       tables/indexes, and applies lightweight migrations.
 
-4) Folder management and scanning
+2) Folder management and scanning
     - Canonical path handling.
     - Folder registration helpers.
     - A scanner that walks registered folders and queues discovered image paths.
 
-5) Image CRUD helpers
+3) Image CRUD helpers
     - Thin helpers that read/write dictionaries to/from the `images` table.
     - Soft delete is supported (mark rows as deleted) with an option to delete
       from disk and/or hard-delete the row.
 
-6) Embedding and search helpers
+4) Metadata extraction
+    - Image dimension, checksum, perceptual hash, and sharpness computation.
+    - Delegates timestamp extraction to `timestamps.py`.
+
+5) Ingestion thread
+    - Consumes file paths, extracts metadata, writes rows, and queues image IDs
+      for embedding.
+
+6) Embedding thread (OpenCLIP)
+    - Batches queued image IDs, computes embeddings, stores results in a single
+      executemany+commit per batch.
+
+7) Semantic search
     - `semantic_search()` compares a query embedding with stored embeddings.
     - `get_images_by_similarity()` compares one image to all others.
-    - These functions assume vectors are already normalised, so cosine similarity
-      reduces to a dot product.
+    - Cosine similarity via dot product (vectors are pre-normalised).
 
-7) Thumbnail helpers
-    - Cache path calculation, thumbnail generation, cache cleanup.
+8) Thumbnail generation (stubs)
+    - Database-dependent thumbnail helpers. Most thumbnail logic lives in
+      `thumbnails.py`.
 
-8) SSE events
+9) Event queue and SSE
     - `Event`, `EventQueue`, and `create_sse_generator()`.
 
-9) Background threads
-    - Ingestion thread: consumes file paths, extracts metadata, writes rows, and
-      queues image IDs for embedding when needed.
-    - Embedding thread: batches queued image IDs, computes embeddings using
-      OpenCLIP, stores results, and can trigger duplicate group computation once
-      all queues are drained.
-
 10) `ImageDatabase` public API wrapper
-    - Owns a single SQLite connection (created with thread usage in mind), the
-      queues, and thread control events.
-    - Provides methods intended for external callers:
-        * folder management (add/remove/list)
-        * image listing and updates
-        * thumbnail retrieval
-        * semantic search and similarity
-        * duplicate group retrieval
-        * stats and processing status
-        * SSE stream generator
+    - Owns a single SQLite connection, queues, and thread control events.
+    - Provides methods for external callers: folder management, image CRUD,
+      thumbnail retrieval, semantic search, duplicate groups, stats, and SSE.
 
 11) Graceful shutdown helpers
     - Signal handlers and a context manager to ensure threads stop and the DB is
       closed on exit.
 
-12) Standalone test mode
-    - When executed directly, the module can run a basic automated test suite
-      that creates temporary images, exercises ingestion, and checks key paths.
+Configuration is loaded from `config.py`, timestamps from `timestamps.py`,
+thumbnails from `thumbnails.py`, and face detection/recognition from `faces.py`.
 
 -------------------------------------------------------------------------------
 Threading and safety notes
 -------------------------------------------------------------------------------
 
-- Two worker threads are used by default (ingestion, embedding).
+- Three worker threads run by default: ingestion, embedding, and face detection.
 - Work is coordinated through `queue.Queue` instances.
-- The database connection is shared, so the module uses locking and creates the
-  connection in a way that supports thread usage.
-- "Up to date" means both queues are empty, not necessarily that the filesystem
+- The database connection is shared and protected by `threading.RLock`.
+- Embedding and face detection threads yield the GIL periodically (10ms sleep
+  between batches) to prevent blocking Flask request handling.
+- "Up to date" means all queues are empty, not necessarily that the filesystem
   will never change. Rescans can be queued explicitly.
 
 """

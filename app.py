@@ -1,23 +1,31 @@
 """Flask backend for the Imaginary image catalogue application.
 
 This module provides the REST API that the frontend communicates with.
-It handles HTTP requests and delegates to the imagedb module for
-database operations and image processing.
+It handles HTTP requests and delegates to the imagedb, faces, and
+thumbnails modules for database operations and image processing.
 
 Routes:
-    /api/images         - Image listing and management
+    /api/images         - Image listing, metadata updates, deletion
+    /api/images/:id/thumbnail - Thumbnail retrieval (snapped to 200 or 400px)
+    /api/images/:id/full      - Full-resolution image serving
     /api/folders        - Folder registration and removal
-    /api/status         - Processing status
+    /api/status         - Processing status (indexing, embedding, face queues)
     /api/rescan         - Trigger folder rescan
-    /api/duplicates     - Duplicate group retrieval
-    /api/stats          - Database statistics
+    /api/duplicates     - Duplicate group retrieval by similarity level
+    /api/stats          - Database and cache statistics
+    /api/people         - People CRUD, merge, dissolve
+    /api/people/:id/thumbnail - Preferred face thumbnail for a person
+    /api/faces          - Face listing, batch assign/unassign/suppress
+    /api/faces/:id/thumbnail  - Cropped face thumbnail
+    /api/events         - Backend event polling (faces_reassessed, etc.)
 
 Example:
-    To run the development server::
+    To run the application::
 
         $ python app.py
 
-    The server will start on http://localhost:5000 by default.
+    The server will start on http://localhost:5000 by default,
+    using the waitress WSGI server if available.
 """
 
 # Disable tokenizers parallelism before any imports.

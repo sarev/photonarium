@@ -4,14 +4,20 @@ Face detection and recognition for the Imaginary image database.
 This module provides face detection using MTCNN and face embeddings using
 InceptionResnetV1 from the facenet-pytorch library. It handles:
 
-1. Face detection in images with bounding boxes
+1. Face detection in images with bounding boxes and confidence scores
 2. 512D face embedding generation for recognition
 3. Database schema and CRUD operations for people and faces
 4. Auto-recognition by matching new faces against known people
 5. Face thumbnail generation (200x200 crops from full images)
+6. Background reassessment of unknown faces against known people
+   (vectorised with numpy for GIL-friendly bulk matching)
+7. Unknown face grouping by embedding similarity (union-find clustering)
+8. Person face revalidation (ejecting faces that fall below threshold)
 
 The face detection pipeline integrates with the existing image indexing
 process and runs as an optional phase after OpenCLIP embedding generation.
+Background reassessment and grouping run asynchronously and use optimistic
+locking (updated_at) to avoid overwriting concurrent user edits.
 
 Usage:
     from faces import FaceDetector, init_face_tables
