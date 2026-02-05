@@ -2678,7 +2678,24 @@ if __name__ == '__main__':
         action='store_true',
         help='Output required ML models as JSON and exit (for download_models.py)'
     )
+    parser.add_argument(
+        '-d', '--data-dir',
+        type=str,
+        default=None,
+        help='Directory for user data (database, thumbnails, config). Default: current directory'
+    )
     args = parser.parse_args()
+
+    # Apply --data-dir to path globals (env vars take precedence for individual paths)
+    if args.data_dir is not None:
+        _data_dir = os.path.abspath(args.data_dir)
+        os.makedirs(_data_dir, exist_ok=True)
+        if not os.environ.get('IMAGINARY_DB'):
+            DATABASE_PATH = os.path.join(_data_dir, 'imaginary.db')
+        if not os.environ.get('IMAGINARY_THUMBNAILS'):
+            THUMBNAIL_CACHE_DIR = os.path.join(_data_dir, '.thumbnails')
+        if not os.environ.get('IMAGINARY_CONFIG'):
+            CONFIG_PATH = os.path.join(_data_dir, '.imaginary.yml')
 
     # Handle list-models command (outputs JSON for download_models.py)
     if args.list_models:
