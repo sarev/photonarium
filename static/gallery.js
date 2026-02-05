@@ -908,6 +908,9 @@ const Gallery = {
 
         if (wasHidden) {
             this._positionScrollOverlayAtMouse();
+            // Cache rects when overlay first appears to avoid reflows during scroll
+            this._cachedGridRect = this._els.grid?.getBoundingClientRect();
+            this._cachedOverlayHeight = this._scrollOverlay.getBoundingClientRect().height;
             this._scrollOverlayAnchor = {
                 scrollTop: scrollTop,
                 overlayY: parseFloat(this._scrollOverlay.style.top) || 0
@@ -923,6 +926,8 @@ const Gallery = {
         this._scrollOverlayTimer = setTimeout(() => {
             this._scrollOverlay.hidden = true;
             this._scrollOverlayAnchor = null;
+            this._cachedGridRect = null;
+            this._cachedOverlayHeight = null;
         }, 1000);
     },
 
@@ -962,13 +967,13 @@ const Gallery = {
 
         if (scrollableHeight <= 0) return;
 
-        const gridRect = grid.getBoundingClientRect();
-        const trackHeight = gridRect.height;
+        // Use cached rects to avoid forced reflows on every scroll event
+        const trackHeight = this._cachedGridRect?.height || grid.getBoundingClientRect().height;
         const thumbDelta = (scrollDelta / scrollableHeight) * trackHeight;
 
         const newTop = this._scrollOverlayAnchor.overlayY + thumbDelta;
-        const rect = this._scrollOverlay.getBoundingClientRect();
-        const clampedTop = Math.max(8, Math.min(newTop, window.innerHeight - rect.height - 8));
+        const overlayHeight = this._cachedOverlayHeight || 30;
+        const clampedTop = Math.max(8, Math.min(newTop, window.innerHeight - overlayHeight - 8));
 
         this._scrollOverlay.style.top = clampedTop + 'px';
     },

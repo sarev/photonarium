@@ -2315,6 +2315,7 @@ class EmbeddingThread(threading.Thread):
                 if batch_ids:
                     self._process_batch(batch_ids, batch_paths)
                     self._completion_triggered = False  # Reset completion flag
+                    time.sleep(0.01)  # Yield GIL briefly for Flask request handling
 
                     # Periodic progress logging
                     now = time.time()
@@ -2594,6 +2595,7 @@ class FaceDetectionThread(threading.Thread):
                     if loaded_images:
                         self._process_preloaded_batch(id_to_path, path_to_id, loaded_images)
                     self._completion_triggered = False
+                    time.sleep(0.01)  # Yield GIL briefly for Flask request handling
 
                     # Periodic progress logging
                     now = time.time()

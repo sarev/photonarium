@@ -92,6 +92,21 @@ const Fullscreen = {
     _overlayTimeout: null,
 
     /**
+     * Whether overlays are currently visible (avoids redundant DOM work).
+     * @type {boolean}
+     * @private
+     */
+    _overlaysVisible: false,
+
+    /**
+     * Cached container rect to avoid forced reflows during zoom/pan.
+     * Invalidated on open, close, and window resize.
+     * @type {DOMRect|null}
+     * @private
+     */
+    _cachedContainerRect: null,
+
+    /**
      * Bound event handler references for cleanup.
      * @type {Object}
      * @private
@@ -315,6 +330,19 @@ const Fullscreen = {
     },
 
     /**
+     * Returns the container rect, using a cache to avoid forced reflows
+     * during rapid zoom/pan interactions.
+     * @returns {DOMRect}
+     * @private
+     */
+    _getContainerRect() {
+        if (!this._cachedContainerRect) {
+            this._cachedContainerRect = this._els.container.getBoundingClientRect();
+        }
+        return this._cachedContainerRect;
+    },
+
+    /**
      * Applies current zoom and pan as CSS transform.
      * @private
      */
@@ -341,7 +369,8 @@ const Fullscreen = {
             dblclick: (e) => this._handleDoubleClick(e),
             touchstart: (e) => this._handleTouchStart(e),
             touchmove: (e) => this._handleTouchMove(e),
-            touchend: (e) => this._handleTouchEnd(e)
+            touchend: (e) => this._handleTouchEnd(e),
+            resize: () => { this._cachedContainerRect = null; }
         };
 
         document.addEventListener('keydown', this._handlers.keydown);
@@ -353,6 +382,10 @@ const Fullscreen = {
         this._els.container.addEventListener('touchstart', this._handlers.touchstart, { passive: true });
         this._els.container.addEventListener('touchmove', this._handlers.touchmove, { passive: false });
         this._els.container.addEventListener('touchend', this._handlers.touchend, { passive: true });
+        window.addEventListener('resize', this._handlers.resize);
+
+        // Populate container rect cache now that we're open
+        this._cachedContainerRect = null;
     },
 
     /**
@@ -369,8 +402,10 @@ const Fullscreen = {
         this._els.container.removeEventListener('touchstart', this._handlers.touchstart);
         this._els.container.removeEventListener('touchmove', this._handlers.touchmove);
         this._els.container.removeEventListener('touchend', this._handlers.touchend);
+        window.removeEventListener('resize', this._handlers.resize);
 
         this._handlers = {};
+        this._cachedContainerRect = null;
     },
 
     /* ----------------------------------------------------------------------
@@ -453,26 +488,26 @@ const Fullscreen = {
      * @private
      */
     _showOverlays() {
-        // Show overlays
-        this._els.filename.classList.remove('hidden');
-        this._els.toolbar.classList.remove('hidden');
-        this._els.prevBtn.classList.remove('hidden');
-        this._els.nextBtn.classList.remove('hidden');
+        // Only do DOM work if overlays aren't already visible
+        if (!this._overlaysVisible) {
+            this._els.filename.classList.remove('hidden');
+            this._els.toolbar.classList.remove('hidden');
+            this._els.prevBtn.classList.remove('hidden');
+            this._els.nextBtn.classList.remove('hidden');
+            this._updateTaggingButton();
+            this._overlaysVisible = true;
+        }
 
-        // Update tagging button state
-        this._updateTaggingButton();
-
-        // Clear any existing timeout
+        // Reset the hide timer (lightweight — just timer management)
         if (this._overlayTimeout) {
             clearTimeout(this._overlayTimeout);
         }
-
-        // Schedule hide
         this._overlayTimeout = setTimeout(() => {
             this._els.filename.classList.add('hidden');
             this._els.toolbar.classList.add('hidden');
             this._els.prevBtn.classList.add('hidden');
             this._els.nextBtn.classList.add('hidden');
+            this._overlaysVisible = false;
             this._overlayTimeout = null;
         }, this.FILENAME_DISPLAY_MS);
     },
@@ -581,8 +616,8 @@ const Fullscreen = {
 
         if (newZoom === oldZoom) return;
 
-        // Get container bounds
-        const rect = this._els.container.getBoundingClientRect();
+        // Get container bounds (cached to avoid reflow)
+        const rect = this._getContainerRect();
         const centerX = rect.width / 2;
         const centerY = rect.height / 2;
 
@@ -630,7 +665,7 @@ const Fullscreen = {
         const img = this._getCurrentImage();
         if (!img) return 2;
 
-        const rect = this._els.container.getBoundingClientRect();
+        const rect = this._getContainerRect();
         const scaleX = img.width / rect.width;
         const scaleY = img.height / rect.height;
 
@@ -727,7 +762,7 @@ const Fullscreen = {
             return;
         }
 
-        const rect = this._els.container.getBoundingClientRect();
+        const rect = this._getContainerRect();
         const img = this._els.image;
 
         // Calculate the scaled image dimensions
