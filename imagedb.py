@@ -165,7 +165,7 @@ from PIL import Image, ImageFile, ImageOps
 # Many real-world JPEGs are missing their EOI marker or have minor structural
 # issues but are perfectly viewable in normal image viewers.
 ImageFile.LOAD_TRUNCATED_IMAGES = True
-from typing import Any, Iterator
+from typing import Any, Callable, Iterator
 
 import atexit
 import cv2
@@ -1596,6 +1596,9 @@ class IngestionThread(threading.Thread):
         embedding_queue: queue.Queue[str],
         stop_event: threading.Event,
         db_lock: threading.RLock,
+        checksum_cache: dict[str, str],
+        checksum_cache_lock: threading.Lock,
+        generate_thumbnails: Callable[[Path, str], bool],
         pause_event: threading.Event | None = None,
         num_threads: int = 4,
         max_image_dimension: int = 0,
@@ -1608,6 +1611,9 @@ class IngestionThread(threading.Thread):
             embedding_queue: Queue to add image IDs that need embeddings.
             stop_event: Event to signal thread should stop.
             db_lock: Shared lock for database access (from ImageDatabase).
+            checksum_cache: Shared cache mapping image_id to checksum.
+            checksum_cache_lock: Lock for checksum cache access.
+            generate_thumbnails: Callback to generate thumbnails (path, checksum) -> bool.
             pause_event: Optional event to pause processing (for folder removal).
             num_threads: Number of worker threads for parallel metadata extraction.
             max_image_dimension: Max dimension for image processing (0 to disable).
@@ -1623,6 +1629,9 @@ class IngestionThread(threading.Thread):
         self._processed_count = 0
         self._error_count = 0
         self._db_lock = db_lock  # Shared lock from ImageDatabase
+        self._checksum_cache = checksum_cache  # Shared cache from ImageDatabase
+        self._checksum_cache_lock = checksum_cache_lock  # Shared lock from ImageDatabase
+        self._generate_thumbnails = generate_thumbnails  # Callback from ImageDatabase
         self._pending_count = 0  # Number of items being processed (not just in queue)
         self._pending_lock = threading.Lock()
 
@@ -3376,6 +3385,7 @@ class ImageDatabase:
         # Phase 4 status tracking (post-processing after queues empty)
         self._phase4_status_lock = threading.Lock()
         self._face_embedding_status: dict[str, Any] = {'status': 'idle'}
+        self._face_reassess_status: dict[str, Any] | None = None
 
         # Track if we've been closed
         self._closed = False
@@ -3872,6 +3882,8 @@ class ImageDatabase:
                 # Backfill semantic embeddings for faces that don't have them
                 # (e.g., faces added before this feature existed)
                 self.backfill_face_semantic_embeddings()
+                # Match unknown faces against known people (locked faces)
+                self._reassess_faces_with_status()
             emit_processing_complete(self.event_queue)
 
         # Callback when embedding completes - queue images for face detection
@@ -3890,6 +3902,9 @@ class ImageDatabase:
             embedding_queue=self._embedding_queue,
             stop_event=self._stop_event,
             db_lock=self._db_lock,
+            checksum_cache=self._checksum_cache,
+            checksum_cache_lock=self._checksum_cache_lock,
+            generate_thumbnails=self._generate_thumbnails,
             pause_event=self._pause_event,
             num_threads=self.config.indexing_threads,
             max_image_dimension=self.config.max_image_dimension,
@@ -4650,9 +4665,19 @@ class ImageDatabase:
         cursor = self.conn.execute('SELECT COUNT(*) as count FROM folders')
         total_folders = cursor.fetchone()['count']
 
+        cursor = self.conn.execute('SELECT COUNT(*) as count FROM people')
+        total_people = cursor.fetchone()['count']
+
+        cursor = self.conn.execute(
+            'SELECT COUNT(*) as count FROM faces WHERE suppressed = 0'
+        )
+        total_faces = cursor.fetchone()['count']
+
         return {
             'totalImages': total_images,
             'totalFolders': total_folders,
+            'totalPeople': total_people,
+            'totalFaces': total_faces,
         }
 
     def get_processing_status(self) -> dict[str, Any]:
@@ -4670,22 +4695,32 @@ class ImageDatabase:
         face_grouping_status = get_group_computation_status()
         with self._phase4_status_lock:
             face_embedding_status = self._face_embedding_status.copy()
+            face_reassess_status = self._face_reassess_status.copy() if self._face_reassess_status else None
 
         # Check if any Phase 4 process is active
         duplicates_computing = any(s == 'computing' for s in duplicate_status.values())
         face_grouping_computing = face_grouping_status.get('status') == 'computing'
         face_embedding_computing = face_embedding_status.get('status') == 'computing'
+        face_reassess_computing = face_reassess_status is not None and face_reassess_status.get('status') == 'computing'
 
         # Determine overall status
         queues_empty = (indexing_count == 0 and embedding_count == 0 and face_count == 0)
-        phase4_idle = not (duplicates_computing or face_grouping_computing or face_embedding_computing)
+        phase4_idle = not (duplicates_computing or face_grouping_computing or face_embedding_computing or face_reassess_computing)
         status = 'up_to_date' if (queues_empty and phase4_idle) else 'updating'
 
-        # Get total image count for live updates during indexing
+        # Get counts for live updates during processing
         cursor = self.conn.execute(
             'SELECT COUNT(*) as count FROM images WHERE deleted = 0'
         )
         total_images = cursor.fetchone()['count']
+
+        cursor = self.conn.execute('SELECT COUNT(*) as count FROM people')
+        total_people = cursor.fetchone()['count']
+
+        cursor = self.conn.execute(
+            'SELECT COUNT(*) as count FROM faces WHERE suppressed = 0'
+        )
+        total_faces = cursor.fetchone()['count']
 
         # Build response - only include Phase 4 statuses if they're active
         result = {
@@ -4694,6 +4729,8 @@ class ImageDatabase:
             'embedding_queue': embedding_count,
             'face_queue': face_count,
             'total_images': total_images,
+            'total_people': total_people,
+            'total_faces': total_faces,
             'face_detection_enabled': self.config.face_detection_enabled,
         }
 
@@ -4717,6 +4754,10 @@ class ImageDatabase:
         if face_embedding_computing:
             result['face_embeddings'] = face_embedding_status
 
+        # Include face reassessment status if computing
+        if face_reassess_computing:
+            result['face_reassess'] = face_reassess_status
+
         return result
 
     def get_duplicate_status(self) -> dict[int, str]:
@@ -4739,6 +4780,48 @@ class ImageDatabase:
         - Epoch management
         """
         self._duplicate_manager.compute_all(self.conn)
+
+    def _reassess_faces_with_status(self) -> None:
+        """Match unknown faces against known people (locked faces).
+
+        This is the final phase of face processing - after face detection
+        and grouping, we try to match newly detected unknown faces against
+        the locked (manually tagged) faces of known people.
+
+        Uses synchronous reassessment to ensure completion before
+        emit_processing_complete is called.
+        """
+        from faces import reassess_unknown_faces, get_cached_known_embeddings
+
+        # Check if there are any known people with locked faces to match against
+        with self._db_lock:
+            known_embeddings = get_cached_known_embeddings(self.conn)
+
+        if not known_embeddings:
+            logger.info('Face reassessment: no known faces to match against')
+            return
+
+        logger.info('Face reassessment: matching unknown faces against known people')
+
+        # Set status for progress display
+        with self._phase4_status_lock:
+            self._face_reassess_status = {'status': 'computing'}
+
+        try:
+            with self._db_lock:
+                matches = reassess_unknown_faces(
+                    self.conn,
+                    threshold=self.config.face_recognition_threshold
+                )
+            if matches:
+                logger.info(f'Face reassessment: matched {len(matches)} faces to known people')
+                # Emit event so frontend can refresh
+                self.event_queue.emit('faces_reassessed', {'matched': len(matches)})
+            else:
+                logger.info('Face reassessment: no new matches found')
+        finally:
+            with self._phase4_status_lock:
+                self._face_reassess_status = None
 
     def queue_rescan_all(self) -> None:
         """Queue all registered folders for rescanning and full processing.

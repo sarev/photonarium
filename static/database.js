@@ -109,6 +109,8 @@ const Database = {
             addFolderBtn: App.$('btn-add-folder'),
             rescanBtn: App.$('btn-rescan'),
             statusTotal: App.$('status-total'),
+            statusPeople: App.$('status-people'),
+            statusFaces: App.$('status-faces'),
             processingStatus: App.$('processing-status'),
             statusIndicator: App.$('status-indicator'),
             statusText: App.$('status-text'),
@@ -125,6 +127,8 @@ const Database = {
             duplicatesStatus: App.$('duplicates-status'),
             faceGroupingRow: App.$('face-grouping-row'),
             faceGroupingStatus: App.$('face-grouping-status'),
+            faceReassessRow: App.$('face-reassess-row'),
+            faceReassessStatus: App.$('face-reassess-status'),
             faceEmbeddingsRow: App.$('face-embeddings-row'),
             faceEmbeddingsStatus: App.$('face-embeddings-status'),
         };
@@ -141,8 +145,16 @@ const Database = {
                 // Handle stats update
                 if (event.type === 'changed' && event.property === 'stats') {
                     const stats = AppState.folders.getStats();
-                    if (stats && typeof stats.totalImages === 'number') {
-                        this._els.statusTotal.textContent = String(stats.totalImages);
+                    if (stats) {
+                        if (typeof stats.totalImages === 'number') {
+                            this._els.statusTotal.textContent = String(stats.totalImages);
+                        }
+                        if (typeof stats.totalPeople === 'number') {
+                            this._els.statusPeople.textContent = String(stats.totalPeople);
+                        }
+                        if (typeof stats.totalFaces === 'number') {
+                            this._els.statusFaces.textContent = String(stats.totalFaces);
+                        }
                     }
                 }
                 // Handle databaseChanged event (processing completed)
@@ -359,6 +371,7 @@ const Database = {
      * @param {number} status.total_images - Total images in database
      * @param {Object} [status.duplicates] - Duplicate detection status (if computing)
      * @param {Object} [status.face_grouping] - Face grouping status (if computing)
+     * @param {Object} [status.face_reassess] - Face reassessment status (if computing)
      * @param {Object} [status.face_embeddings] - Face CLIP embedding status (if computing)
      * @private
      */
@@ -375,6 +388,7 @@ const Database = {
         // Phase 4 statuses (only present when active)
         const duplicates = status.duplicates;
         const faceGrouping = status.face_grouping;
+        const faceReassess = status.face_reassess;
         const faceEmbeddings = status.face_embeddings;
 
         // Update indicator class
@@ -383,9 +397,15 @@ const Database = {
         // Update status text
         this._els.statusText.textContent = isUpdating ? 'Updating' : 'Up to date';
 
-        // Update total images count (always, so it updates during indexing)
+        // Update counts (always, so they update during processing)
         if (typeof status.total_images === 'number') {
             this._els.statusTotal.textContent = String(status.total_images);
+        }
+        if (typeof status.total_people === 'number') {
+            this._els.statusPeople.textContent = String(status.total_people);
+        }
+        if (typeof status.total_faces === 'number') {
+            this._els.statusFaces.textContent = String(status.total_faces);
         }
 
         // Determine if any processing is active
@@ -453,6 +473,16 @@ const Database = {
                 }
             }
 
+            // Show/hide face reassessment row
+            if (this._els.faceReassessRow) {
+                if (faceReassess) {
+                    this._els.faceReassessRow.hidden = false;
+                    this._els.faceReassessStatus.textContent = 'computing';
+                } else {
+                    this._els.faceReassessRow.hidden = true;
+                }
+            }
+
             // Show/hide face embeddings row
             if (this._els.faceEmbeddingsRow) {
                 if (faceEmbeddings) {
@@ -479,6 +509,7 @@ const Database = {
             if (this._els.faceQueueRow) this._els.faceQueueRow.hidden = true;
             if (this._els.duplicatesRow) this._els.duplicatesRow.hidden = true;
             if (this._els.faceGroupingRow) this._els.faceGroupingRow.hidden = true;
+            if (this._els.faceReassessRow) this._els.faceReassessRow.hidden = true;
             if (this._els.faceEmbeddingsRow) this._els.faceEmbeddingsRow.hidden = true;
         }
     },

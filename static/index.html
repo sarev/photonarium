@@ -394,7 +394,11 @@
                 <section class="database-section">
                     <h2>Database Status</h2>
                     <div id="db-status" class="db-status">
-                        <p><span class="status-label">Total Images:</span> <span id="status-total">0</span></p>
+                        <table class="stats-table">
+                            <tr><td>Images</td><td id="status-total">0</td></tr>
+                            <tr><td>People</td><td id="status-people">0</td></tr>
+                            <tr><td>Faces</td><td id="status-faces">0</td></tr>
+                        </table>
                     </div>
                     <!-- Processing status indicator -->
                     <div id="processing-status" class="processing-status">
@@ -408,6 +412,7 @@
                             <p id="face-queue-row" hidden><span class="queue-label">Face Detection:</span> <span id="face-count">0</span> remaining<span id="face-eta" class="queue-eta"></span></p>
                             <p id="duplicates-row" hidden><span class="queue-label">Finding Duplicates:</span> <span id="duplicates-status">level 0</span></p>
                             <p id="face-grouping-row" hidden><span class="queue-label">Grouping Faces:</span> <span id="face-grouping-status">computing</span></p>
+                            <p id="face-reassess-row" hidden><span class="queue-label">Matching Faces:</span> <span id="face-reassess-status">computing</span></p>
                             <p id="face-embeddings-row" hidden><span class="queue-label">Face Search Index:</span> <span id="face-embeddings-status">0/0</span></p>
                         </div>
                     </div>

@@ -2432,6 +2432,25 @@ a:hover {
     color: var(--color-text-secondary);
 }
 
+.stats-table {
+    width: 100%;
+    border-collapse: collapse;
+}
+
+.stats-table td {
+    padding: 0.25rem 0;
+    color: var(--color-text-primary);
+}
+
+.stats-table td:first-child {
+    color: var(--color-text-secondary);
+}
+
+.stats-table td:last-child {
+    text-align: right;
+    font-variant-numeric: tabular-nums;
+}
+
 /* Scan controls */
 .scan-controls {
     margin-bottom: 1rem;
