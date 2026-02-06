@@ -2763,7 +2763,7 @@ a:hover {
 
 /* People picker dialog */
 #dialog-people-picker {
-    width: min(900px, 90vw);
+    width: min(1200px, 90vw);
     max-width: 90vw;
 }
 
@@ -2793,6 +2793,10 @@ a:hover {
     border: 1px solid var(--color-border);
     border-radius: 6px;
     overflow: hidden;
+}
+
+.people-picker-panel:first-child {
+    flex: 2;
 }
 
 .people-picker-search {
