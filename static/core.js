@@ -1771,6 +1771,56 @@ const App = {
         return el;
     },
 
+    /**
+     * Adds a hover tooltip to a range slider showing the value at cursor position.
+     * @param {HTMLInputElement} slider - The range input element
+     * @param {Object} [options] - Configuration options
+     * @param {string} [options.suffix='%'] - Suffix to append to value (e.g., '%')
+     * @param {Function} [options.formatValue] - Custom formatter function(value) => string
+     */
+    addSliderHoverTooltip(slider, options = {}) {
+        const { suffix = '%', formatValue } = options;
+
+        const tooltip = document.createElement('div');
+        tooltip.className = 'slider-hover-tooltip';
+        document.body.appendChild(tooltip);
+
+        slider.addEventListener('mouseenter', () => {
+            tooltip.style.opacity = '1';
+        });
+
+        slider.addEventListener('mouseleave', () => {
+            tooltip.style.opacity = '0';
+        });
+
+        slider.addEventListener('mousemove', (e) => {
+            const rect = slider.getBoundingClientRect();
+            const min = parseFloat(slider.min);
+            const max = parseFloat(slider.max);
+            // Account for thumb width (~16px)
+            const thumbHalf = 8;
+            const trackWidth = rect.width - thumbHalf * 2;
+            const x = Math.max(0, Math.min(trackWidth, e.clientX - rect.left - thumbHalf));
+            const ratio = x / trackWidth;
+            const value = Math.round(min + ratio * (max - min));
+
+            // Format the display value
+            const displayValue = formatValue ? formatValue(value) : `${value}${suffix}`;
+            tooltip.textContent = displayValue;
+
+            // Position tooltip - above slider, but below if too close to top
+            const tooltipHeight = 24;
+            const margin = 8;
+            let top = rect.top - tooltipHeight - margin;
+            if (top < margin) {
+                // Position below slider with extra offset to clear cursor
+                top = rect.bottom + margin + 16;
+            }
+            tooltip.style.left = `${e.clientX}px`;
+            tooltip.style.top = `${top}px`;
+        });
+    },
+
     /* ----------------------------------------------------------------------
        MODULE REGISTRATION & INITIALIZATION
 

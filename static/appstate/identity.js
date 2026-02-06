@@ -617,6 +617,16 @@ AppState.faces = (function() {
         async fetchForPerson(personId) {
             const faces = (await App.apiGet(`/people/${personId}/faces`)).data;
 
+            // Debug: Log API response to diagnose lock state issues
+            if (faces?.length) {
+                console.debug('[fetchForPerson] API response:',
+                    faces.map(f => ({
+                        id: f.id.slice(0, 8),
+                        mt: f.manually_tagged,
+                        type: typeof f.manually_tagged
+                    })));
+            }
+
             // Add fetched faces to cache (ensures setPreferredFace can validate them)
             if (faces?.length) {
                 const wasEmpty = !_cache;

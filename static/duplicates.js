@@ -309,6 +309,12 @@ const Duplicates = {
             this._setLevel(level);
         });
 
+        // Add hover tooltip showing similarity level label
+        App.addSliderHoverTooltip(this._els.slider, {
+            suffix: '',
+            formatValue: (value) => this.SIMILARITY_LABELS[value] || ''
+        });
+
         // Sort mode buttons
         this._els.btnSortSize.addEventListener('click', () => this._setSortMode('size'));
         this._els.btnSortSemantic.addEventListener('click', () => this._setSortMode('semantic'));

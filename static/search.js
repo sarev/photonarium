@@ -200,6 +200,9 @@ const Search = {
             }
         });
 
+        // Add hover tooltip to similarity slider
+        App.addSliderHoverTooltip(this._els.similaritySlider);
+
         // Emoji picker button
         this._els.emojiBtn.addEventListener('click', () => {
             App.showEmojiPicker((emoji) => {
@@ -725,7 +728,7 @@ const Search = {
         if (filter && filter.text) {
             AppState.loading.show('search', 'Searching…');
             try {
-                const response = await AppState.search.execute(filter.text, threshold, 500);
+                const response = await AppState.search.execute(filter.text, threshold, 10000);
 
                 if (response && response.results) {
                     // Store matching image IDs, scores, and threshold in the filter

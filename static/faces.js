@@ -523,6 +523,14 @@
                 const inputState = this.captureInputState(pickerGridContainer);
 
                 pickPreferredFaces = AppState.faces.getForPerson(pickPreferredPersonId);
+
+                // Debug: Log manually_tagged values to diagnose lock state issues
+                console.debug('[onFacesChanged] From cache:',
+                    pickPreferredFaces.map(f => ({
+                        id: f.id.slice(0, 8),
+                        mt: f.manually_tagged,
+                        type: typeof f.manually_tagged
+                    })));
                 if (pickerSelection) pickerSelection.pruneToValidIds();
                 renderPickerContent();
                 requestAnimationFrame(() => this.restoreInputState(pickerGridContainer, inputState));
@@ -762,6 +770,41 @@
         // Save on change (mouse release)
         pickerThresholdSlider.addEventListener('change', () => handleThresholdChange(pickerThresholdSlider.value));
 
+        // Hover preview tooltip - shows value at cursor position before clicking
+        const hoverTooltip = document.createElement('div');
+        hoverTooltip.className = 'faces-threshold-hover';
+
+        pickerThresholdSlider.addEventListener('mouseenter', () => {
+            hoverTooltip.style.opacity = '1';
+        });
+
+        pickerThresholdSlider.addEventListener('mouseleave', () => {
+            hoverTooltip.style.opacity = '0';
+        });
+
+        pickerThresholdSlider.addEventListener('mousemove', (e) => {
+            const rect = pickerThresholdSlider.getBoundingClientRect();
+            const min = parseInt(pickerThresholdSlider.min, 10);
+            const max = parseInt(pickerThresholdSlider.max, 10);
+            // Calculate value at cursor position (account for thumb width ~16px)
+            const thumbHalf = 8;
+            const trackWidth = rect.width - thumbHalf * 2;
+            const x = Math.max(0, Math.min(trackWidth, e.clientX - rect.left - thumbHalf));
+            const ratio = x / trackWidth;
+            const value = Math.round(min + ratio * (max - min));
+            hoverTooltip.textContent = `${value}%`;
+            // Position tooltip - above slider, but below if too close to top
+            const tooltipHeight = 24;
+            const margin = 8;
+            let top = rect.top - tooltipHeight - margin;
+            if (top < margin) {
+                // Position below slider with extra offset to clear cursor
+                top = rect.bottom + margin + 16;
+            }
+            hoverTooltip.style.left = `${e.clientX}px`;
+            hoverTooltip.style.top = `${top}px`;
+        });
+
         // Reset to default button
         const resetBtn = document.createElement('button');
         resetBtn.className = 'faces-threshold-reset';
@@ -773,6 +816,8 @@
         thresholdControl.appendChild(pickerThresholdSlider);
         thresholdControl.appendChild(pickerThresholdValue);
         thresholdControl.appendChild(resetBtn);
+        // Append tooltip to body for fixed positioning
+        document.body.appendChild(hoverTooltip);
         titleRow.appendChild(thresholdControl);
 
         pickerHeader.appendChild(titleRow);
@@ -911,9 +956,19 @@
 
         pickPreferredGrid = VirtualGrid.create({
             container: pickerGridContainer,
-            getItems: () => showLockedFaces
-                ? pickPreferredFaces
-                : pickPreferredFaces.filter(f => !f.manually_tagged),
+            getItems: () => {
+                if (showLockedFaces) {
+                    return pickPreferredFaces;
+                }
+                // Filter to only show unlocked faces
+                const filtered = pickPreferredFaces.filter(f => !f.manually_tagged);
+                // Debug: Log filter results
+                console.debug('[getItems] showLockedFaces:', showLockedFaces,
+                    'total:', pickPreferredFaces.length,
+                    'filtered:', filtered.length,
+                    'faces:', pickPreferredFaces.map(f => ({ id: f.id.slice(0, 8), mt: f.manually_tagged })));
+                return filtered;
+            },
             getItemId: (face) => face.id,
             createItem: (face, index, blobUrl) => createPickPreferredFaceCard(face, blobUrl),
             getThumbnailId: (face) => face.id,
@@ -1460,7 +1515,16 @@
         // Focus picker view for keyboard navigation
         if (pickerView) pickerView.focus({ preventScroll: true });
 
-        // Load person details and faces in background
+        // Use cached faces immediately (handles race condition with pending identify)
+        // The cache is updated synchronously by identify() before API calls complete
+        const cachedFaces = AppState.faces.getForPerson(personId);
+        if (cachedFaces.length > 0) {
+            pickPreferredFaces = cachedFaces;
+            pickerDataLoaded = true;
+            renderPickerContent();
+        }
+
+        // Fetch authoritative data from backend (for threshold and any server-side changes)
         Promise.all([
             AppState.people.fetchById(personId),       // For recognition_threshold
             AppState.faces.fetchForPerson(personId)    // All faces for this person
@@ -1468,6 +1532,7 @@
             // Only update if still in pick-preferred mode for this person
             if (viewMode !== 'pick-preferred' || pickPreferredPersonId !== personId) return;
 
+            // Update with fetched data (may include faces not yet in cache, or fix any stale data)
             pickPreferredFaces = faces || [];
             pickPreferredPersonThreshold = personResult?.recognition_threshold ?? null;
             pickerDataLoaded = true; // Fetch complete
@@ -1477,6 +1542,10 @@
         }).catch(error => {
             console.error('Failed to load person data:', error);
             pickerDataLoaded = true; // Mark loaded even on error to stop spinner
+            // If we have cached data, keep showing it
+            if (pickPreferredFaces.length === 0) {
+                renderPickerContent(); // Show empty state
+            }
         });
     }
 
@@ -1684,7 +1753,9 @@
 
         // Add padlock overlay for manual tag status
         const padlock = document.createElement('div');
-        const isManuallyTagged = face.manually_tagged;
+        // Coerce to boolean - handles 0, 1, null, undefined
+        const isManuallyTagged = Boolean(face.manually_tagged);
+        console.debug('[createCard]', face.id.slice(0, 8), 'mt:', face.manually_tagged, '→', isManuallyTagged);
         padlock.className = 'face-card-padlock' + (isManuallyTagged ? '' : ' unlocked');
         padlock.dataset.faceId = face.id;
         padlock.innerHTML = `<span class="material-symbols-outlined">${isManuallyTagged ? 'lock' : 'lock_open'}</span>`;
@@ -2295,6 +2366,14 @@
                         const faces = await AppState.faces.fetchForPerson(pickPreferredPersonId);
                         pickPreferredFaces = faces || [];
 
+                        // Debug: Log manually_tagged values to diagnose lock state issues
+                        console.debug('[handleThresholdChange] Fetched faces:',
+                            pickPreferredFaces.map(f => ({
+                                id: f.id.slice(0, 8),
+                                mt: f.manually_tagged,
+                                type: typeof f.manually_tagged
+                            })));
+
                         // Clear any pending reload flag (we're handling the update ourselves)
                         reloadPending = false;
 
@@ -2303,11 +2382,16 @@
                             facesSelection.clear();
                         }
 
-                        // Update header
+                        // Update header (account for showLockedFaces filter)
                         const titleH3 = facesGrid.querySelector('.faces-pick-preferred-header h3');
                         if (titleH3) {
-                            const faceCount = pickPreferredFaces.length;
-                            const countText = faceCount === 1 ? '1 image' : `${faceCount} images`;
+                            const displayedFaceCount = showLockedFaces
+                                ? pickPreferredFaces.length
+                                : pickPreferredFaces.filter(f => !f.manually_tagged).length;
+                            const totalCount = pickPreferredFaces.length;
+                            const countText = showLockedFaces
+                                ? (displayedFaceCount === 1 ? '1 image' : `${displayedFaceCount} images`)
+                                : `${displayedFaceCount} of ${totalCount} images`;
                             titleH3.innerHTML = `${App.escapeHtml(pickPreferredPersonName)} <span class="face-count">(${countText})</span>`;
                         }
 

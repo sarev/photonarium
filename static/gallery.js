@@ -1022,6 +1022,9 @@ const Gallery = {
             if (searchValue) searchValue.textContent = value + '%';
         });
 
+        // Add hover tooltip
+        App.addSliderHoverTooltip(this._els.similaritySlider);
+
         this._els.similaritySlider.addEventListener('change', async () => {
             const filter = App.getFilter();
             if (!filter || filter.type !== 'semantic' || !filter.text) return;
@@ -1033,7 +1036,7 @@ const Gallery = {
 
                 this._showLoading('Searching…');
                 try {
-                    const response = await AppState.search.execute(filter.text, threshold, 500);
+                    const response = await AppState.search.execute(filter.text, threshold, 10000);
 
                     if (response && response.results) {
                         filter.threshold = threshold;
@@ -1043,7 +1046,7 @@ const Gallery = {
                             filter.scores[r.id] = r.score;
                         });
 
-                        App.setFilter(filter, { silent: true });
+                        App.setFilter(filter);
                         this._renderGrid();
                     }
                 } catch (error) {
