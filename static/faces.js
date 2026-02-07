@@ -657,6 +657,7 @@
         searchInput.type = 'text';
         searchInput.className = 'faces-search-input';
         searchInput.placeholder = 'Search faces...';
+        searchInput.title = "Semantic search: describe what you're looking for. Use -word to exclude. More terms = better results (e.g. 'happy smiling -glasses -sunglasses').";
         searchInput.value = unknownFacesSearchQuery;
         searchInput.addEventListener('blur', (e) => executeSearch(e.target));
         searchInput.addEventListener('keydown', (e) => {
@@ -3392,6 +3393,7 @@
         searchInput.type = 'text';
         searchInput.className = 'faces-search-input';
         searchInput.placeholder = 'Search faces...';
+        searchInput.title = "Semantic search: describe what you're looking for. Use -word to exclude. More terms = better results (e.g. 'happy smiling -glasses -sunglasses').";
         searchInput.value = unknownFacesSearchQuery;
 
         // Execute search when input loses focus

@@ -1643,8 +1643,8 @@ def get_faces_list():
     # If search query provided, do semantic search on unknown faces
     if search_query:
         try:
-            # Encode query with CLIP
-            query_embedding = db._get_clip_model().encode_text(search_query)
+            # Encode query with CLIP (supports negative terms like "beach -face")
+            query_embedding = db._get_clip_model().encode_semantic_query(search_query)
             # Search unknown faces by semantic similarity
             faces = search_unknown_faces_semantic(db.conn, query_embedding)
             return success_response(faces)

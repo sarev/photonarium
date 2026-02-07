@@ -2167,6 +2167,103 @@ class OpenCLIPModel:
 
         return v.cpu().numpy().flatten()
 
+    def encode_semantic_query(self, query: str, negative_weight: float = 0.5) -> np.ndarray:
+        """Encode a semantic query with support for negative terms.
+
+        Parses the query for negative terms (prefixed with '-' at start or after space)
+        and computes a combined embedding: normalize(positive - weight * negative).
+
+        Examples:
+            "beach -face" -> positive: "beach", negative: "face"
+            "-beach lake" -> positive: "lake", negative: "beach"
+            "red train -steam-engine" -> positive: "red train", negative: "steam-engine"
+            "double-blind" -> positive: "double-blind" (hyphen within word preserved)
+
+        Args:
+            query: Text query with optional negative terms.
+            negative_weight: Weight for negative embedding subtraction (default 0.5).
+
+        Returns:
+            Normalised combined embedding as numpy array.
+        """
+        positive_parts, negative_parts = parse_semantic_query(query)
+
+        if not positive_parts and not negative_parts:
+            # Empty query - return zero vector
+            return np.zeros(self.model.visual.output_dim, dtype=np.float32)
+
+        # Encode positive parts
+        if positive_parts:
+            positive_text = ' '.join(positive_parts)
+            positive_embedding = self.encode_text(positive_text)
+        else:
+            positive_embedding = None
+
+        # Encode negative parts
+        if negative_parts:
+            negative_text = ' '.join(negative_parts)
+            negative_embedding = self.encode_text(negative_text)
+        else:
+            negative_embedding = None
+
+        # Combine embeddings
+        if positive_embedding is not None and negative_embedding is not None:
+            # Subtract weighted negative from positive
+            combined = positive_embedding - negative_weight * negative_embedding
+            # Re-normalize
+            norm = np.linalg.norm(combined)
+            if norm > 0:
+                combined = combined / norm
+            return combined
+        elif positive_embedding is not None:
+            return positive_embedding
+        else:
+            # Only negative terms - invert the embedding
+            return -negative_embedding
+
+
+def parse_semantic_query(query: str) -> tuple[list[str], list[str]]:
+    """Parse a semantic query into positive and negative terms.
+
+    A token is negative if it starts with '-' (e.g., "-face").
+    Hyphens within words (like "double-blind") are preserved as positive
+    because they don't start with '-'.
+
+    Examples:
+        "beach -face" -> (["beach"], ["face"])
+        "-beach lake" -> (["lake"], ["beach"])
+        "red train -steam-engine" -> (["red", "train"], ["steam-engine"])
+        "double-blind" -> (["double-blind"], [])
+
+    Args:
+        query: Raw query string.
+
+    Returns:
+        Tuple of (positive_parts, negative_parts) where each is a list of terms.
+    """
+    if not query or not query.strip():
+        return [], []
+
+    positive_parts = []
+    negative_parts = []
+
+    # Split by whitespace and classify each token
+    tokens = query.split()
+
+    for token in tokens:
+        if token.startswith('-') and len(token) > 1:
+            # Token starts with '-' and has content after it -> negative
+            word = token[1:]
+            negative_parts.append(word)
+        elif token == '-':
+            # Bare '-' is ignored
+            continue
+        else:
+            # Regular token -> positive
+            positive_parts.append(token)
+
+    return positive_parts, negative_parts
+
 
 class EmbeddingThread(threading.Thread):
     """Background thread for computing image embeddings.
@@ -4481,7 +4578,8 @@ class ImageDatabase:
         """Search for images using semantic similarity.
 
         Encodes the query text using OpenCLIP and finds images with similar
-        embeddings (both image content and descriptions).
+        embeddings (both image content and descriptions). Supports negative
+        terms prefixed with '-' (e.g., "beach -face" finds beaches without faces).
 
         Args:
             query: Text query to search for.
@@ -4491,8 +4589,8 @@ class ImageDatabase:
         Returns:
             List of matching images with 'score' field, sorted by similarity.
         """
-        # Encode the query text
-        query_embedding = self._get_clip_model().encode_text(query)
+        # Encode the query text (with support for negative terms)
+        query_embedding = self._get_clip_model().encode_semantic_query(query)
 
         # Perform semantic search
         return semantic_search(self.conn, query_embedding, threshold, limit)
@@ -4505,6 +4603,7 @@ class ImageDatabase:
         """Get semantic similarity scores for specific images.
 
         Used for sorting duplicate groups by similarity to a query.
+        Supports negative terms prefixed with '-'.
 
         Args:
             query: Text query to compare against.
@@ -4516,9 +4615,9 @@ class ImageDatabase:
         if not image_ids:
             return []
 
-        # Encode the query text
-        query_embedding = self._get_clip_model().encode_text(query)
-        query_embedding = query_embedding / (np.linalg.norm(query_embedding) or 1)
+        # Encode the query text (with support for negative terms)
+        # encode_semantic_query returns a normalized embedding
+        query_embedding = self._get_clip_model().encode_semantic_query(query)
 
         # Get embeddings for the specified images
         placeholders = ','.join('?' * len(image_ids))

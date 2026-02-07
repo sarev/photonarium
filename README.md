@@ -177,6 +177,7 @@ When you hover a face box, you may see:
 - **Grey circle with `-`**: mark this face as ignored
 - **Green circle with `x`**: remove the name, returning it to the unknown faces list
 - **Red circle with `x`**: remove the bounding box (it is not a face)
+- **Sparkle button**: open Quick Match to see likely people matches (for unknown faces)
 
 ### Naming a face
 
@@ -208,6 +209,18 @@ This is semantic, so it matches meaning, not filenames.
   - Lower similarity finds broader matches.
   - Higher similarity is more strict.
 - Press **Enter** in the description box to apply.
+
+#### Negative terms
+
+You can exclude concepts from your search by prefixing words with `-`:
+
+- `beach -people` finds beaches without people
+- `-indoor sunset` finds sunsets that aren't indoors
+- `red train -steam-engine` finds red trains but not steam engines
+
+Hyphens within words are preserved: `double-blind` searches for the phrase "double-blind", not "double" minus "blind".
+
+**Tip:** More terms give better results. A simple query like `beach -people` may still return beach photos with people in them. For stronger exclusion, be more specific: `beach sand sea waves blue skies sunshine -people -man -woman -child -person -crowd` does a much better job of finding empty beaches. The same applies to positive terms: adding synonyms and related words helps the model understand exactly what you want.
 
 ### Date range
 
@@ -285,6 +298,21 @@ What you can do:
 - Hover a face to reveal:
   - Grey `-` to mark the face as ignored
   - Red `x` to remove the bounding box (it is not a face)
+  - Sparkle button to open Quick Match (see below)
+
+#### Quick Match
+
+Once you have a few people established with locked faces, Quick Match becomes a powerful way to rapidly identify unknown faces. Click the sparkle button on any unknown face (or select multiple faces and click the sparkle on any of them) to see a card showing the top matching people from your library.
+
+- The card shows up to 5 people, ranked by how closely their locked faces match the selected face(s)
+- Click a person to assign all selected faces to them instantly
+- Click outside the card or press **Escape** to dismiss without making changes
+
+This is especially useful when you have a large backlog of unknown faces and many established people. Instead of scrolling through the Known People list or remembering names, Quick Match shows you the most likely candidates based on face similarity.
+
+#### Semantic search for faces
+
+The "Search faces..." input at the top of the Unknown Faces grid uses the same semantic search as the main Search screen. You can describe what you're looking for (e.g., "smiling", "glasses", "outdoor") to filter unknown faces. Negative terms work here too: `outdoor -sunglasses` finds outdoor faces without sunglasses.
 
 Useful workflow:
 - When starting from scratch, name a few clear examples of a person, then move on to a different person. Having several people set up before refining any one person helps recognition and reduces mix-ups.
@@ -299,6 +327,7 @@ Open a person to manage them in more detail. This mode is for improving one pers
   - Press **Delete** to move a face back to Unknown Faces.
   - Use grey `-` to ignore a face.
   - Use green `x` to un-name it and return it to Unknown Faces.
+- Use the sparkle button to Quick Match a face to a different person if it was mis-assigned.
 - Double click a face to open the source image in the full-screen viewer.
 
 Matching threshold:
@@ -467,8 +496,10 @@ Settings are stored in `.imaginary.yml` (created automatically on first run). Ex
 * Large imports and database rescans take time. Let it run and come back later.
 * Face recognition improves as you tag more clear examples of the same person.
 * Add multiple people before refining any one person, this tends to reduce false matches.
-* If two people get mixed up, increase that person’s recognition threshold.
+* Once you have several people established, use Quick Match (sparkle button) to rapidly identify unknown faces. It shows you the most likely matches based on face similarity.
+* If two people get mixed up, increase that person's recognition threshold.
 * Emoji ratings work well for quick favourites, and make filtering pleasant.
+* Use negative terms in search (`beach -people`) to exclude concepts from results.
 
 ## Licence
 
