@@ -1438,6 +1438,15 @@ const GridSelection = {
              */
             _handleRightClick(e) {
                 e.preventDefault();
+
+                // After a right-button drag, contextmenu fires on the item under
+                // the cursor. _handleDragEnd already toggled it, so skip here to
+                // avoid double-toggling it back to its original state.
+                if (this._justDragged) {
+                    this._justDragged = false;
+                    return;
+                }
+
                 const id = this._getItemId(e.target);
                 if (id) {
                     this.toggle(id);
