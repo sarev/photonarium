@@ -867,7 +867,8 @@
 
         const onMouseMove = (e) => {
             const delta = e.clientY - startY;
-            const newHeight = Math.max(100, Math.min(startHeight + delta, window.innerHeight - 200));
+            const maxHeight = Math.min(window.innerHeight * 0.5, window.innerHeight - 200);
+            const newHeight = Math.max(100, Math.min(startHeight + delta, maxHeight));
             section.style.height = `${newHeight}px`;
         };
 
@@ -1610,6 +1611,18 @@
      */
     function renderPickerContent() {
         if (!pickerView || !pickerTitleEl) return;
+
+        // Sync is_preferred on face objects from the person's preferred_face_id.
+        // Cached faces (from getForPerson) don't have is_preferred — it's only
+        // computed by backend SQL. The people cache always has preferred_face_id
+        // (set synchronously by identify → setPreferred), so derive it here.
+        if (pickPreferredPersonId && pickPreferredFaces.length > 0) {
+            const person = AppState.people._internal.get(pickPreferredPersonId);
+            const prefId = person?.preferred_face_id;
+            for (const face of pickPreferredFaces) {
+                face.is_preferred = (face.id === prefId);
+            }
+        }
 
         // Update title with name and count (reflect filtered count when hiding locked)
         const displayedFaceCount = showLockedFaces
@@ -3124,6 +3137,12 @@
         // Update unknown section - VirtualGrid.render() preserves scroll
         updateUnknownSection();
 
+        // Re-apply semantic search if active (identification removed a face but
+        // the search query should remain in effect with its sort order)
+        if (unknownFacesSearchQuery) {
+            searchUnknownFaces(unknownFacesSearchQuery);
+        }
+
         // Prune selection to remove any IDs that no longer exist
         if (facesSelection) {
             facesSelection.pruneToValidIds();
@@ -3861,6 +3880,20 @@
         }
 
         container.appendChild(autocomplete);
+
+        // Post-render: adjust position if the autocomplete extends off-viewport.
+        // Uses rAF so layout is finalized and getBoundingClientRect is accurate.
+        requestAnimationFrame(() => {
+            if (!autocomplete.isConnected) return;
+            const rect = autocomplete.getBoundingClientRect();
+
+            // Bottom overflow: flip upward (above the card instead of below)
+            if (rect.bottom > window.innerHeight) {
+                autocomplete.style.top = 'auto';
+                autocomplete.style.bottom = '100%';
+                autocomplete.style.marginBottom = '2px';
+            }
+        });
     }
 
     /**
@@ -4147,7 +4180,7 @@
 
         // Restore value and selection
         input.value = state.value;
-        input.focus();
+        input.focus({ preventScroll: true });
         if (input.setSelectionRange) {
             input.setSelectionRange(state.selectionStart, state.selectionEnd);
         }
@@ -4230,6 +4263,23 @@
         for (const face of faces) {
             const faceBox = createFaceBox(face, baseWidth, baseHeight);
             faceOverlay.appendChild(faceBox);
+        }
+
+        // Post-render: flip labels that extend past the viewport bottom.
+        // Uses rAF so the browser has laid out the elements and getBoundingClientRect
+        // returns accurate values. Only applies at zoom=1 (panned/zoomed state makes
+        // viewport checks unreliable and the user can scroll to see labels).
+        if (zoom === 1) {
+            requestAnimationFrame(() => {
+                const belowLabels = faceOverlay.querySelectorAll('.face-label.below');
+                for (const label of belowLabels) {
+                    const rect = label.getBoundingClientRect();
+                    if (rect.bottom > window.innerHeight) {
+                        label.classList.remove('below');
+                        label.classList.add('above');
+                    }
+                }
+            });
         }
 
         // Restore input state after render (if we had a focused input)
@@ -4413,6 +4463,33 @@
             // Quick match stays centered (CSS handles it)
         }
 
+        // Clamp buttons inward when face box is near the image edge so
+        // buttons don't extend outside the visible overlay area
+        const outerOffset = (width < minWidthNeeded) ? (minWidthNeeded - width) / 2 : 0;
+        const btnEdge = 2; // minimum px from image edge
+
+        // Top edge: all three buttons sit at top: -10px by default
+        if (top < BUTTON_OFFSET + btnEdge) {
+            const clampedTop = Math.max(btnEdge, top) - top + btnEdge;
+            if (ignoreBtn) ignoreBtn.style.top = `${clampedTop}px`;
+            actionBtn.style.top = `${clampedTop}px`;
+            quickMatchBtn.style.top = `${clampedTop}px`;
+        }
+
+        // Left edge: ignore button extends left by BUTTON_OFFSET (+ outerOffset)
+        if (ignoreBtn) {
+            const btnLeft = left - BUTTON_OFFSET - outerOffset;
+            if (btnLeft < 0) {
+                ignoreBtn.style.left = `${-left + btnEdge}px`;
+            }
+        }
+
+        // Right edge: action button extends right by BUTTON_OFFSET (+ outerOffset)
+        const btnRight = left + width + BUTTON_OFFSET + outerOffset;
+        if (btnRight > imgWidth) {
+            actionBtn.style.right = `${-(imgWidth - left - width) + btnEdge}px`;
+        }
+
         // Create label
         const label = createFaceLabel(face, top, imgHeight);
         box.appendChild(label);
@@ -4435,12 +4512,12 @@
                 // Focus will happen after showNameInput creates the input
                 setTimeout(() => {
                     const input = label.querySelector('.face-input');
-                    if (input) input.focus();
+                    if (input) input.focus({ preventScroll: true });
                 }, 0);
             } else {
                 // For unknown faces, just focus the existing input
                 const input = label.querySelector('.face-input');
-                if (input) input.focus();
+                if (input) input.focus({ preventScroll: true });
             }
         });
 
@@ -4630,6 +4707,37 @@
             more.textContent = `...${matches.length - maxResults} more`;
             activeAutocomplete.appendChild(more);
         }
+
+        // Post-render: adjust position if the autocomplete extends off-viewport.
+        // Uses rAF so layout is finalized and getBoundingClientRect is accurate.
+        requestAnimationFrame(() => {
+            if (!activeAutocomplete) return;
+            const rect = activeAutocomplete.getBoundingClientRect();
+
+            // Bottom overflow: flip upward (above the label instead of below)
+            if (rect.bottom > window.innerHeight) {
+                activeAutocomplete.style.top = 'auto';
+                activeAutocomplete.style.bottom = '100%';
+                activeAutocomplete.style.marginTop = '0';
+                activeAutocomplete.style.marginBottom = '2px';
+            }
+
+            // Right overflow: shift left by the overflow amount
+            const reRect = activeAutocomplete.getBoundingClientRect();
+            if (reRect.right > window.innerWidth) {
+                const shift = reRect.right - window.innerWidth;
+                activeAutocomplete.style.left = `${-shift}px`;
+                activeAutocomplete.style.right = 'auto';
+            }
+
+            // Left overflow: shift right by the overflow amount
+            const finalRect = activeAutocomplete.getBoundingClientRect();
+            if (finalRect.left < 0) {
+                const currentLeft = parseFloat(activeAutocomplete.style.left) || 0;
+                activeAutocomplete.style.left = `${currentLeft - finalRect.left}px`;
+                activeAutocomplete.style.right = 'auto';
+            }
+        });
     }
 
     /**
@@ -4959,27 +5067,12 @@
         };
         document.addEventListener('keydown', quickMatchKeyHandler, { capture: true });
 
-        // Create the card element
+        // Build and show the card immediately with source face + loading state,
+        // then fill in matches when the API responds
         const card = document.createElement('div');
         card.className = 'quick-match-card';
         quickMatchCard = card;
 
-        // Fetch matches from backend (based on primary face)
-        let matches = [];
-        try {
-            const response = await App.apiGet(`/faces/${primaryFaceId}/matches?limit=5`);
-            matches = response.data || [];
-        } catch (error) {
-            console.error('Failed to fetch face matches:', error);
-        }
-
-        // Check if we were dismissed during the fetch (race condition)
-        if (quickMatchFaceId !== primaryFaceId) {
-            // Another invocation happened or we were dismissed - bail out
-            return;
-        }
-
-        // Build card content
         // Source face at top
         const sourceDiv = document.createElement('div');
         sourceDiv.className = 'quick-match-source';
@@ -5004,7 +5097,36 @@
 
         card.appendChild(sourceDiv);
 
-        // Matches section
+        // Placeholder while matches load — reuse empty style with ellipsis animation
+        const loadingEl = document.createElement('div');
+        loadingEl.className = 'quick-match-empty';
+        loadingEl.textContent = 'Searching\u2026';
+        card.appendChild(loadingEl);
+
+        // Show card immediately (matches will appear when ready)
+        document.body.appendChild(card);
+        positionQuickMatchCard(card, anchor);
+        requestAnimationFrame(() => {
+            card.classList.add('visible');
+        });
+
+        // Fetch matches from backend (card is already visible)
+        let matches = [];
+        try {
+            const response = await App.apiGet(`/faces/${primaryFaceId}/matches?limit=5`);
+            matches = response.data || [];
+        } catch (error) {
+            console.error('Failed to fetch face matches:', error);
+        }
+
+        // Check if we were dismissed during the fetch (race condition)
+        if (quickMatchFaceId !== primaryFaceId) {
+            return;
+        }
+
+        // Replace loading placeholder with results
+        loadingEl.remove();
+
         if (matches.length > 0) {
             const matchesDiv = document.createElement('div');
             matchesDiv.className = 'quick-match-matches';
@@ -5054,16 +5176,8 @@
             card.appendChild(empty);
         }
 
-        // Add card to document (backdrop already added)
-        document.body.appendChild(card);
-
-        // Position the card centered over the anchor
+        // Reposition now that card content has changed size
         positionQuickMatchCard(card, anchor);
-
-        // Show card with animation (backdrop already visible)
-        requestAnimationFrame(() => {
-            card.classList.add('visible');
-        });
     }
 
     /**
@@ -5189,10 +5303,13 @@
             e.stopPropagation();
             e.preventDefault();
 
-            // Selection model: if this face is selected, apply to all selected
+            // Selection model: if this face is selected, apply to all selected.
+            // The clicked face must be first — showQuickMatch uses faceIds[0]
+            // as the primary face for matching.
             let faceIds;
             if (selection && selection.isSelected(faceId)) {
-                faceIds = selection.getSelected();
+                const selected = selection.getSelected();
+                faceIds = [faceId, ...selected.filter(id => id !== faceId)];
             } else {
                 faceIds = [faceId];
             }

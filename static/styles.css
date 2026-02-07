@@ -1641,6 +1641,7 @@ a:hover {
     flex-shrink: 0;  /* Don't shrink known section */
     overflow-y: auto;
     min-height: 100px;  /* Minimum height constraint */
+    max-height: 50vh;   /* Cap height so unknown section stays visible on first visit */
 }
 
 /* Draggable divider between known and unknown sections */
