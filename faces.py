@@ -2373,64 +2373,92 @@ def reassess_unknown_faces(
     else:
         known_embeddings = get_cached_known_embeddings(conn)
 
-    unknown_embeddings = get_all_unknown_face_embeddings(conn)
+    # Get candidate embeddings: unknown faces AND unlocked faces
+    # This allows faces to be reassigned to better-matching people
+    cursor = conn.execute(
+        '''SELECT id, embedding, person_id
+           FROM faces
+           WHERE (person_id IS NULL OR manually_tagged = 0)
+             AND suppressed = 0 AND embedding IS NOT NULL'''
+    )
+    candidate_embeddings = []
+    candidate_person_ids: dict[str, str | None] = {}  # face_id -> current person_id
+    for row in cursor.fetchall():
+        embedding = np.frombuffer(row['embedding'], dtype=np.float32)
+        candidate_embeddings.append((row['id'], embedding))
+        candidate_person_ids[row['id']] = row['person_id']
 
-    if not known_embeddings or not unknown_embeddings:
+    if not known_embeddings or not candidate_embeddings:
         return []
 
     # Diagnostic: check embedding health
     diagnose_embeddings('Known', known_embeddings)
-    diagnose_embeddings('Unknown (sample)', unknown_embeddings[:100])  # Sample to avoid log spam
+    diagnose_embeddings('Candidates (sample)', candidate_embeddings[:100])  # Sample to avoid log spam
 
     # Build matrices for vectorized comparison
     # known_matrix: (num_known, 512)
-    # unknown_matrix: (num_unknown, 512)
+    # candidate_matrix: (num_candidates, 512)
     known_ids = [(fid, pid) for fid, pid, _ in known_embeddings]
     known_matrix = np.vstack([emb for _, _, emb in known_embeddings])
 
-    unknown_ids = [fid for fid, _ in unknown_embeddings]
-    unknown_matrix = np.vstack([emb for _, emb in unknown_embeddings])
+    candidate_ids = [fid for fid, _ in candidate_embeddings]
+    candidate_matrix = np.vstack([emb for _, emb in candidate_embeddings])
 
     # Verify embeddings are L2-normalized (norms should be ~1.0)
     known_norms = np.linalg.norm(known_matrix, axis=1)
-    unknown_norms = np.linalg.norm(unknown_matrix, axis=1)
+    candidate_norms = np.linalg.norm(candidate_matrix, axis=1)
     if not np.allclose(known_norms, 1.0, atol=0.01):
         logger.warning(f'Known embeddings not normalized! norms: min={known_norms.min():.3f}, max={known_norms.max():.3f}')
         # Re-normalize
         known_matrix = known_matrix / known_norms[:, np.newaxis]
-    if not np.allclose(unknown_norms, 1.0, atol=0.01):
-        logger.warning(f'Unknown embeddings not normalized! norms: min={unknown_norms.min():.3f}, max={unknown_norms.max():.3f}')
+    if not np.allclose(candidate_norms, 1.0, atol=0.01):
+        logger.warning(f'Candidate embeddings not normalized! norms: min={candidate_norms.min():.3f}, max={candidate_norms.max():.3f}')
         # Re-normalize
-        unknown_matrix = unknown_matrix / unknown_norms[:, np.newaxis]
+        candidate_matrix = candidate_matrix / candidate_norms[:, np.newaxis]
 
-    # Compute all similarities at once: (num_unknown, num_known)
+    # Compute all similarities at once: (num_candidates, num_known)
     # Embeddings are L2-normalized, so dot product = cosine similarity
-    similarities = unknown_matrix @ known_matrix.T
+    similarities = candidate_matrix @ known_matrix.T
 
-    # Find best match for each unknown face
+    # Find best match for each candidate face
     matched = []
-    for i, unknown_face_id in enumerate(unknown_ids):
+    unmatched = []  # Faces that need to be unassigned (below all thresholds)
+    for i, candidate_face_id in enumerate(candidate_ids):
         best_idx = np.argmax(similarities[i])
         best_similarity = similarities[i, best_idx]
 
         _, matched_person_id = known_ids[best_idx]
+        current_person_id = candidate_person_ids.get(candidate_face_id)
 
         # Use per-person threshold if set, otherwise use global default
         person_threshold = person_thresholds.get(matched_person_id)
         effective_threshold = person_threshold if person_threshold is not None else threshold
 
         if best_similarity >= effective_threshold:
-            matched.append((unknown_face_id, matched_person_id, float(best_similarity)))
+            # Skip if already assigned to this person (no change needed)
+            if current_person_id != matched_person_id:
+                matched.append((candidate_face_id, matched_person_id, float(best_similarity)))
+        else:
+            # Face doesn't meet any threshold - unassign if currently assigned
+            if current_person_id is not None:
+                unmatched.append(candidate_face_id)
 
     # Log summary (single INFO line)
-    if matched:
-        sims = [m[2] for m in matched]
+    if matched or unmatched:
+        log_parts = []
+        if matched:
+            sims = [m[2] for m in matched]
+            log_parts.append(
+                f'matched {len(matched)} (similarity {min(sims):.2f}-{max(sims):.2f})'
+            )
+        if unmatched:
+            log_parts.append(f'unassigned {len(unmatched)}')
         logger.info(
-            f'Face reassessment: auto-matched {len(matched)} of {len(unknown_ids)} unknown faces '
-            f'(similarity {min(sims):.2f}-{max(sims):.2f}, threshold={threshold:.2f})'
+            f'Face reassessment: {", ".join(log_parts)} '
+            f'of {len(candidate_ids)} candidates (threshold={threshold:.2f})'
         )
     else:
-        logger.debug(f'Face reassessment: no matches from {len(unknown_ids)} unknown faces')
+        logger.debug(f'Face reassessment: no changes from {len(candidate_ids)} candidate faces')
 
     # Apply matches (auto-matched, not manually tagged)
     for face_id, matched_person_id, similarity in matched:
@@ -2440,8 +2468,13 @@ def reassess_unknown_faces(
         )
         update_face_person(conn, face_id, matched_person_id, manually_tagged=False)
 
-    # Invalidate cache if we made matches
-    if matched:
+    # Unassign faces that no longer meet any threshold
+    for face_id in unmatched:
+        logger.debug(f'Unassigned face {face_id} (below all thresholds)')
+        update_face_person(conn, face_id, None, manually_tagged=False)
+
+    # Invalidate cache if we made changes
+    if matched or unmatched:
         invalidate_embedding_cache()
 
     return matched
@@ -3017,25 +3050,30 @@ def reassess_unknown_faces_async(
                 # match better. Locked faces (manually_tagged = 1) are never candidates.
                 if person_id:
                     cursor = db.conn.execute(
-                        '''SELECT id, embedding, updated_at
+                        '''SELECT id, embedding, updated_at, person_id
                            FROM faces
                            WHERE (person_id IS NULL OR (person_id != ? AND manually_tagged = 0))
                              AND suppressed = 0 AND embedding IS NOT NULL''',
                         (person_id,)
                     )
                 else:
-                    # General reassessment: only unknown faces (no person_id target to exclude)
+                    # Full sweep reassessment: unknown faces AND unlocked faces
+                    # This allows faces to be reassigned to better-matching people
+                    # or ejected to unknown if they no longer meet any threshold
                     cursor = db.conn.execute(
-                        '''SELECT id, embedding, updated_at
+                        '''SELECT id, embedding, updated_at, person_id
                            FROM faces
-                           WHERE person_id IS NULL AND suppressed = 0 AND embedding IS NOT NULL'''
+                           WHERE (person_id IS NULL OR manually_tagged = 0)
+                             AND suppressed = 0 AND embedding IS NOT NULL'''
                     )
                 candidate_embeddings = []
                 face_timestamps: dict[str, str | None] = {}  # face_id -> updated_at
+                candidate_person_ids: dict[str, str | None] = {}  # face_id -> current person_id
                 for row in cursor.fetchall():
                     embedding = np.frombuffer(row['embedding'], dtype=np.float32)
                     candidate_embeddings.append((row['id'], embedding))
                     face_timestamps[row['id']] = row['updated_at']
+                    candidate_person_ids[row['id']] = row['person_id'] if 'person_id' in row.keys() else None
 
                 logger.debug(f'Async reassessment: READ phase done - {len(known_embeddings)} known, {len(candidate_embeddings)} candidates')
 
@@ -3043,7 +3081,7 @@ def reassess_unknown_faces_async(
             if not known_embeddings or not candidate_embeddings:
                 logger.debug('Async reassessment: no embeddings to compare')
                 with _reassess_lock:
-                    _reassess_result = {'matched_count': 0, 'person_id': person_id}
+                    _reassess_result = {'matched_count': 0, 'unassigned_count': 0, 'person_id': person_id}
                 if callback:
                     callback(0)
                 return
@@ -3097,10 +3135,28 @@ def reassess_unknown_faces_async(
             above = best_scores >= effective_thresholds
             match_indices = np.where(above)[0]
 
-            matched = [
-                (candidate_ids[i], known_ids[best_indices[i]][1], float(best_scores[i]))
-                for i in match_indices
-            ]
+            matched = []
+            for i in match_indices:
+                face_id = candidate_ids[i]
+                new_person_id = known_ids[best_indices[i]][1]
+                current_person_id = candidate_person_ids.get(face_id)
+                # Skip if already assigned to this person (no change needed)
+                if current_person_id == new_person_id:
+                    continue
+                matched.append((face_id, new_person_id, float(best_scores[i])))
+
+            # Build list of faces that need to be unassigned (currently assigned but
+            # no longer meet any threshold). Only applicable for full sweep.
+            unmatched = []
+            if not person_id:  # Full sweep mode
+                below = ~above
+                below_indices = np.where(below)[0]
+                for i in below_indices:
+                    face_id = candidate_ids[i]
+                    current_person_id = candidate_person_ids.get(face_id)
+                    # Only unassign if currently assigned to someone
+                    if current_person_id is not None:
+                        unmatched.append(face_id)
 
             # [PERF-LOG] COMPUTE phase timing and stats
             _compute_elapsed = time.time() - _compute_start
@@ -3152,13 +3208,39 @@ def reassess_unknown_faces_async(
                     else:
                         skipped_modified += 1
 
+                # Unassign faces that no longer meet any threshold (full sweep only)
+                actually_unassigned = []
+                for face_id in unmatched:
+                    original_timestamp = face_timestamps.get(face_id)
+
+                    if original_timestamp is not None:
+                        cursor = db.conn.execute(
+                            '''UPDATE faces
+                               SET person_id = NULL, manually_tagged = 0, updated_at = datetime('now')
+                               WHERE id = ? AND updated_at = ?''',
+                            (face_id, original_timestamp)
+                        )
+                    else:
+                        cursor = db.conn.execute(
+                            '''UPDATE faces
+                               SET person_id = NULL, manually_tagged = 0, updated_at = datetime('now')
+                               WHERE id = ? AND manually_tagged = 0 AND suppressed = 0''',
+                            (face_id,)
+                        )
+
+                    if cursor.rowcount > 0:
+                        logger.debug(f'Unassigned face {face_id} (below all thresholds)')
+                        actually_unassigned.append(face_id)
+                    else:
+                        skipped_modified += 1
+
                 db.conn.commit()
 
                 if skipped_modified:
                     logger.debug(f'Async reassessment: skipped {skipped_modified} faces (modified since READ)')
 
                 # Invalidate cache if we made changes
-                if actually_updated:
+                if actually_updated or actually_unassigned:
                     invalidate_embedding_cache()
 
                 # Build updated_faces list for frontend event (only actually updated faces)
@@ -3179,32 +3261,49 @@ def reassess_unknown_faces_async(
                             'person_name': person_names.get(pid, ''),
                         })
 
+                # Add unassigned faces to the event (person_id = None)
+                for face_id in actually_unassigned:
+                    updated_faces.append({
+                        'face_id': face_id,
+                        'person_id': None,
+                        'person_name': None,
+                    })
+
                 logger.debug('Async reassessment: WRITE phase done')
 
             # Update matched to reflect what was actually updated (for logging/callback)
             matched = actually_updated
 
             # Log summary
-            if matched:
-                sims = [m[2] for m in matched]
+            if matched or actually_unassigned:
+                log_parts = []
+                if matched:
+                    sims = [m[2] for m in matched]
+                    log_parts.append(
+                        f'matched {len(matched)} (similarity {min(sims):.2f}-{max(sims):.2f})'
+                    )
+                if actually_unassigned:
+                    log_parts.append(f'unassigned {len(actually_unassigned)}')
                 logger.info(
-                    f'Async face reassessment: auto-matched {len(matched)} of {len(candidate_ids)} candidate faces '
-                    f'(similarity {min(sims):.2f}-{max(sims):.2f}, threshold={threshold:.2f})'
+                    f'Async face reassessment: {", ".join(log_parts)} '
+                    f'of {len(candidate_ids)} candidates (threshold={threshold:.2f})'
                 )
 
             # Store result
             with _reassess_lock:
                 _reassess_result = {
                     'matched_count': len(matched),
+                    'unassigned_count': len(actually_unassigned),
                     'person_id': person_id,
                 }
 
-            logger.debug(f'Async reassessment complete: {len(matched)} faces matched')
+            logger.debug(f'Async reassessment complete: {len(matched)} matched, {len(actually_unassigned)} unassigned')
 
             # Emit event so frontend can update
             if hasattr(db, 'event_queue') and db.event_queue:
                 db.event_queue.emit('faces_reassessed', {
                     'matched_count': len(matched),
+                    'unassigned_count': len(actually_unassigned),
                     'person_id': person_id,
                     'updated_faces': updated_faces,
                 })

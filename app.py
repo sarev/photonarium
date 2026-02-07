@@ -1459,11 +1459,12 @@ def update_person_endpoint(person_id):
 
     # DESIGN: Auto-trigger reassessment - the purpose of changing threshold is to re-evaluate
     # faces, so this avoids requiring a separate API call (see design-audit.md 1.8)
+    # Use full sweep (person_id=None) so ejected faces can be reassigned to other people
     if threshold_changed and threshold_value is not None:
         reassess_unknown_faces_async(
             db,
-            threshold=threshold_value,
-            person_id=person_id,
+            threshold=db.config.face_recognition_threshold,
+            person_id=None,  # Full sweep
         )
 
     # DESIGN: Response flags report cascade results so frontend can update correctly
@@ -2032,6 +2033,26 @@ def identify_faces_batch():
     }
     logger.info(f'[FacesFlow] identify-batch SUCCESS: person_id={result["person"]["id"]}, identified={len(result["faces"])} faces')
     return success_response(response_data)
+
+
+@app.route('/api/faces/reassess', methods=['POST'])
+def trigger_full_reassessment():
+    """Trigger a full face reassessment sweep.
+
+    Performs a full sweep over ALL unknown and unlocked faces, comparing against
+    ALL locked faces across all people. Each candidate is assigned to the
+    best-matching person that meets that person's threshold.
+
+    Returns:
+        JSON object with 'reassessment_triggered' flag.
+    """
+    db = get_db()
+    reassess_unknown_faces_async(
+        db,
+        threshold=db.config.face_recognition_threshold,
+        person_id=None,  # Full sweep
+    )
+    return success_response({'reassessment_triggered': True})
 
 
 @app.route('/api/faces/reassess-status', methods=['GET'])
