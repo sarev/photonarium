@@ -196,8 +196,8 @@ As more photos are tagged, Imaginary can recognise that person in other images.
 Search lets you narrow a large library down to “just the photos I mean”. It builds a filter, then the Gallery shows only the matching images.
 
 You can combine multiple filters at once, for example:
-- “Photos of Sam” + “taken last summer” + “⭐️⭐️⭐️”
-- “Anything with ‘concert’ in the description” + “after 2022”
+- “summer holiday” + “⭐️⭐️⭐️” + People ("Sam")
+- “Red steam train on sunny day”
 
 ### Text search (description)
 
@@ -305,6 +305,29 @@ Matching threshold:
 - You can adjust the “Matching threshold” slider to re-evaluate which faces belong to this person. Lowering it tends to add more matches, raising it tends to remove weaker matches.
 - Locked faces are used as reliable examples when re-evaluating, and changes can add or remove faces for this person.
 
+### Advice on tagging faces
+
+When you first add a folder of images to Imaginary, it will try to spot all of the faces in the images (which can take some time!). This will normally result in the Faces screen showing a lot of 'unknown' faces. Try to find a face for a person you know and enter their name against their image. This will create your first 'person' for the People list. Then, name a few more examples of their face, ideally in different poses and lighting conditions. At this point, you can move onto another person. Follow these steps for a reasonable selection of the people you want to tag (a few images of each). You can drag-and-drop unknown faces onto a person (even multiple at once) to quickly name them.
+
+As you come across faces of people that you're not bothered about naming, you can name them '-'. This is a special name that tells Imaginary that this person is someone you want to ignore.  Clicking on the grey circle with a '-' in it that appears as you hover over an unknown face marks them as a face to ignore. If you have multiple unknown faces selected, they will all be ignored with one click. Moving people under the ignore name is helpful for reducing clutter in the unknown faces list.
+
+Occasionally, you'll come across images in the unknown faces list that aren't faces. These are incorrect detections by the face detection model. You can click the red circle 'x' control that appears when you hover over it to remove this from the faces list altogether (it is essentially forgotten).
+
+When you name (or ignore) a face, it will be 'locked' to the name you've given it. This means two things:
+
+1. Imaginary uses this face to try to find other similar faces and match them to the same name
+2. Imaginary won't automatically match this face to any other person, even if it's very similar
+
+In the background, while you are naming faces, or marking them as ignored, Imaginary will work to see if any of the remaining unknown and unlocked faces can be moved under any of the named people. When it does this, the faces will be named appropriately but *unlocked*, so that they might be automatically moved later as it becomes clearer what each person looks like (more locked faces with that name).
+
+Double-clicking on a person's face in the list of people will open a view where you see all of the faces that have been given that name. The ones with a green padlock symbol are locked, clicking this will unlock the face. Clicking a grey (unlocked) padlock symbol will lock the face. Hovering over a face, you'll see the grey '-' (ignore) and the green 'x' (unname) controls appear. This helps you to fine-tune the faces under this person. You can also select the star badge (turns gold) to choose a single face that Imaginary will use as the 'preferred' face for this person - this is the one it uses elsewhere in the app when referencing that person.
+
+A useful trick is to click the open padlock button in the toolbar to show only the unlocked faces for this person (if any). These are all the ones that were automatically assigned. By lowering the "match threshold" slider (and wait a few seconds - this can take a little time), Imaginary will review all unknown and unlocked faces to see if any can move across under this name. A lower threshold means faces don't have to be quite as similar to be considered a match. You can then lock the faces that you are happy really *do* belong to that person, before raising the matching threshold back up to a more strict level.
+
+Clicking the "Focus on one person" button in the toolbar returns you to the main Faces screen.
+
+Finally, once you're reasonably happy you've built up a good cross-section of faces for each person, you can go into the faces list for the 'ignored' list (double-click the '-' entry in the people list), and look for people who you missed (should actually be named). If you find any, just unlock them and you can (hopefully) get Imaginary to automatically move them across to the right place.
+
 ---
 
 ## Database
@@ -329,9 +352,10 @@ Supported image types include: `.jpg`, `.jpeg`, `.png`, `.gif`, `.bmp`, `.tiff`,
 ## Setup
 
 1. **Create a virtual environment**
+
    ```bash
    python -m venv env
-````
+  ```
 
 2. **Activate it**
 
@@ -363,7 +387,20 @@ Supported image types include: `.jpg`, `.jpeg`, `.png`, `.gif`, `.bmp`, `.tiff`,
 
    Note: you may see pip warnings about facenet-pytorch version conflicts with numpy, Pillow, and torch. These can usually be ignored.
 
-4. **Download ML models**
+4. **Initialise the configuration**
+
+  This step is optional.
+
+  Imaginary has various aspects of its behaviour which may be tuned. To do this, you might want to run it once just to create the default configuration file. This contains all of the standard settings along with comments to explain how they work.
+
+  ```bash
+  # Start the app to display the default models it is configured to use, then automatically quits
+  python app.py --list-models
+  ```
+
+  This will create the `.imaginary.yml` configuration file. You can load this into a text editor and make changes, if you'd like. For example, you may want to select different 'models' to be used for things like generating image descriptions.
+
+5. **Download ML models**
 
    ```bash
    python download_models.py
@@ -373,13 +410,13 @@ Supported image types include: `.jpg`, `.jpeg`, `.png`, `.gif`, `.bmp`, `.tiff`,
 
 ## Running Imaginary
 
-```bash
-python app.py
-```
+  ```bash
+  python app.py
+  ```
 
-Then open `http://localhost:5000`
+  Then open `http://localhost:5000`
 
-The app runs entirely offline after models are downloaded.
+  The app runs entirely offline after models are downloaded.
 
 ### Command line options
 
