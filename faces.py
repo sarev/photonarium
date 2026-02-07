@@ -55,6 +55,7 @@ import uuid
 from facenet_pytorch import MTCNN, InceptionResnetV1
 
 from duplicates import UnionFind
+from rawimage import open_image as raw_open_image
 
 if TYPE_CHECKING:
     from imagedb import ImageDatabase
@@ -303,146 +304,144 @@ class FaceDetector:
         image_path = Path(image_path)
 
         try:
-            # Load and preprocess image
-            with Image.open(image_path) as img:
-                # Handle EXIF orientation
-                img = ImageOps.exif_transpose(img)
+            # Load and preprocess image (handles both standard and RAW formats)
+            img = raw_open_image(image_path)
 
-                # Convert to RGB
-                if img.mode != 'RGB':
-                    img = img.convert('RGB')
+            # Convert to RGB
+            if img.mode != 'RGB':
+                img = img.convert('RGB')
 
-                original_width, original_height = img.size
+            original_width, original_height = img.size
 
-                # Downscale if needed for performance
-                scale = 1.0
-                if max(original_width, original_height) > max_dimension:
-                    scale = max_dimension / max(original_width, original_height)
-                    new_size = (int(original_width * scale), int(original_height * scale))
-                    img = img.resize(new_size, Image.Resampling.LANCZOS)
-                    logger.debug(f'Downscaled image from {original_width}x{original_height} to {new_size[0]}x{new_size[1]}')
+            # Downscale if needed for performance
+            scale = 1.0
+            if max(original_width, original_height) > max_dimension:
+                scale = max_dimension / max(original_width, original_height)
+                new_size = (int(original_width * scale), int(original_height * scale))
+                img = img.resize(new_size, Image.Resampling.LANCZOS)
+                logger.debug(f'Downscaled image from {original_width}x{original_height} to {new_size[0]}x{new_size[1]}')
 
-                # Detect faces using MTCNN
-                # Returns: boxes (N x 4), probs (N,), landmarks (N x 5 x 2)
-                boxes, probs = self.mtcnn.detect(img)
+            # Detect faces using MTCNN
+            # Returns: boxes (N x 4), probs (N,), landmarks (N x 5 x 2)
+            boxes, probs = self.mtcnn.detect(img)
 
-                if boxes is None or len(boxes) == 0:
-                    return []
+            if boxes is None or len(boxes) == 0:
+                return []
 
-                # Filter by confidence FIRST, then extract only valid faces
-                # This ensures index correspondence between boxes and face tensors
-                valid_mask = [
-                    prob is not None and prob >= self.min_confidence
-                    for prob in probs
-                ]
-                valid_boxes = boxes[valid_mask]
-                valid_probs = probs[valid_mask]
+            # Filter by confidence FIRST, then extract only valid faces
+            # This ensures index correspondence between boxes and face tensors
+            valid_mask = [
+                prob is not None and prob >= self.min_confidence
+                for prob in probs
+            ]
+            valid_boxes = boxes[valid_mask]
+            valid_probs = probs[valid_mask]
 
-                if len(valid_boxes) == 0:
-                    return []
+            if len(valid_boxes) == 0:
+                return []
 
-                # Extract aligned face crops ONLY for valid boxes
-                # Using mtcnn.extract() with specific boxes guarantees correspondence
-                faces_tensor = self.mtcnn.extract(img, valid_boxes, save_path=None)
+            # Extract aligned face crops ONLY for valid boxes
+            # Using mtcnn.extract() with specific boxes guarantees correspondence
+            faces_tensor = self.mtcnn.extract(img, valid_boxes, save_path=None)
 
-                if faces_tensor is None:
-                    return []
+            if faces_tensor is None:
+                return []
 
-                # Ensure tensor is in correct format
-                if len(faces_tensor.shape) == 3:
-                    # Single face - add batch dimension
-                    faces_tensor = faces_tensor.unsqueeze(0)
+            # Ensure tensor is in correct format
+            if len(faces_tensor.shape) == 3:
+                # Single face - add batch dimension
+                faces_tensor = faces_tensor.unsqueeze(0)
 
-                # Sanity check: boxes and faces should now match
-                if len(valid_boxes) != len(faces_tensor):
-                    logger.error(
-                        f'INDEX MISMATCH after extract! boxes={len(valid_boxes)}, '
-                        f'faces_tensor={len(faces_tensor)} for {image_path.name}'
-                    )
+            # Sanity check: boxes and faces should now match
+            if len(valid_boxes) != len(faces_tensor):
+                logger.error(
+                    f'INDEX MISMATCH after extract! boxes={len(valid_boxes)}, '
+                    f'faces_tensor={len(faces_tensor)} for {image_path.name}'
+                )
 
-                processed_width, processed_height = img.size
+            processed_width, processed_height = img.size
 
-                # Process each valid face - indices now guaranteed to match
-                valid_faces = []  # List of (tensor_idx, norm_box, confidence)
-                for i in range(len(faces_tensor)):
-                    box = valid_boxes[i]
-                    prob = valid_probs[i]
+            # Process each valid face - indices now guaranteed to match
+            valid_faces = []  # List of (tensor_idx, norm_box, confidence)
+            for i in range(len(faces_tensor)):
+                box = valid_boxes[i]
+                prob = valid_probs[i]
 
-                    # Convert box from pixels to normalized coordinates (0-1)
-                    # MTCNN returns [x1, y1, x2, y2] format
-                    x1, y1, x2, y2 = box
+                # Convert box from pixels to normalized coordinates (0-1)
+                # MTCNN returns [x1, y1, x2, y2] format
+                x1, y1, x2, y2 = box
 
-                    # Make box square (use larger dimension)
-                    box_width = x2 - x1
-                    box_height = y2 - y1
-                    box_size = max(box_width, box_height)
+                # Make box square (use larger dimension)
+                box_width = x2 - x1
+                box_height = y2 - y1
+                box_size = max(box_width, box_height)
 
-                    # Center the square box
-                    center_x = (x1 + x2) / 2
-                    center_y = (y1 + y2) / 2
+                # Center the square box
+                center_x = (x1 + x2) / 2
+                center_y = (y1 + y2) / 2
 
-                    # Calculate square box coordinates
-                    sq_x1 = center_x - box_size / 2
-                    sq_y1 = center_y - box_size / 2
+                # Calculate square box coordinates
+                sq_x1 = center_x - box_size / 2
+                sq_y1 = center_y - box_size / 2
 
-                    # Normalize to 0-1 (relative to processed image size)
-                    norm_x = sq_x1 / processed_width
-                    norm_y = sq_y1 / processed_height
-                    norm_w = box_size / processed_width
-                    norm_h = box_size / processed_height
+                # Normalize to 0-1 (relative to processed image size)
+                norm_x = sq_x1 / processed_width
+                norm_y = sq_y1 / processed_height
+                norm_w = box_size / processed_width
+                norm_h = box_size / processed_height
 
-                    # Clamp to valid range
-                    norm_x = max(0.0, min(1.0, norm_x))
-                    norm_y = max(0.0, min(1.0, norm_y))
-                    norm_w = max(0.0, min(1.0 - norm_x, norm_w))
-                    norm_h = max(0.0, min(1.0 - norm_y, norm_h))
+                # Clamp to valid range
+                norm_x = max(0.0, min(1.0, norm_x))
+                norm_y = max(0.0, min(1.0, norm_y))
+                norm_w = max(0.0, min(1.0 - norm_x, norm_w))
+                norm_h = max(0.0, min(1.0 - norm_y, norm_h))
 
-                    # Check minimum face size (in original pixels)
-                    # Use smaller dimension - both edges must meet minimum
-                    min_box_dim = min(box_width, box_height)
-                    face_pixels = min_box_dim / scale if scale != 1.0 else min_box_dim
-                    if face_pixels < self.min_face_size:
-                        logger.debug(f'Skipping small face: {face_pixels:.0f}px')
-                        continue
+                # Check minimum face size (in original pixels)
+                # Use smaller dimension - both edges must meet minimum
+                min_box_dim = min(box_width, box_height)
+                face_pixels = min_box_dim / scale if scale != 1.0 else min_box_dim
+                if face_pixels < self.min_face_size:
+                    logger.debug(f'Skipping small face: {face_pixels:.0f}px')
+                    continue
 
-                    valid_faces.append((
-                        i,  # tensor index
-                        (norm_x, norm_y, norm_w, norm_h),  # normalized box
-                        float(prob),  # confidence
-                    ))
+                valid_faces.append((
+                    i,  # tensor index
+                    (norm_x, norm_y, norm_w, norm_h),  # normalized box
+                    float(prob),  # confidence
+                ))
 
-                if not valid_faces:
-                    return []
+            if not valid_faces:
+                return []
 
-                # Batch compute embeddings for all valid faces at once
-                tensor_indices = [vf[0] for vf in valid_faces]
-                batch_tensor = faces_tensor[tensor_indices].to(self.device)
-                # Note: MTCNN with post_process=True already standardizes to [-1, 1] for ResNet
+            # Batch compute embeddings for all valid faces at once
+            tensor_indices = [vf[0] for vf in valid_faces]
+            batch_tensor = faces_tensor[tensor_indices].to(self.device)
+            # Note: MTCNN with post_process=True already standardizes to [-1, 1] for ResNet
 
-                with torch.no_grad():
-                    embeddings_batch = self.resnet(batch_tensor)
-                    embeddings_batch = embeddings_batch.cpu().numpy()
+            with torch.no_grad():
+                embeddings_batch = self.resnet(batch_tensor)
+                embeddings_batch = embeddings_batch.cpu().numpy()
 
-                # Normalize all embeddings (L2 normalization for cosine similarity)
-                norms = np.linalg.norm(embeddings_batch, axis=1, keepdims=True)
-                norms[norms == 0] = 1  # Avoid division by zero
-                embeddings_batch = embeddings_batch / norms
+            # Normalize all embeddings (L2 normalization for cosine similarity)
+            norms = np.linalg.norm(embeddings_batch, axis=1, keepdims=True)
+            norms[norms == 0] = 1  # Avoid division by zero
+            embeddings_batch = embeddings_batch / norms
 
-                # Build detected faces list
-                detected_faces = []
-                for idx, (_, norm_box, confidence) in enumerate(valid_faces):
-                    norm_x, norm_y, norm_w, norm_h = norm_box
-                    detected_faces.append(DetectedFace(
-                        box_x=float(norm_x),
-                        box_y=float(norm_y),
-                        box_w=float(norm_w),
-                        box_h=float(norm_h),
-                        confidence=confidence,
-                        embedding=embeddings_batch[idx],
-                    ))
+            # Build detected faces list
+            detected_faces = []
+            for idx, (_, norm_box, confidence) in enumerate(valid_faces):
+                norm_x, norm_y, norm_w, norm_h = norm_box
+                detected_faces.append(DetectedFace(
+                    box_x=float(norm_x),
+                    box_y=float(norm_y),
+                    box_w=float(norm_w),
+                    box_h=float(norm_h),
+                    confidence=confidence,
+                    embedding=embeddings_batch[idx],
+                ))
 
-                logger.debug(f'Detected {len(detected_faces)} faces in {image_path.name}')
-                return detected_faces
+            logger.debug(f'Detected {len(detected_faces)} faces in {image_path.name}')
+            return detected_faces
 
         except Exception as e:
             logger.error(f'Face detection failed for {image_path}: {e}')
@@ -476,20 +475,19 @@ class FaceDetector:
             """Load and preprocess image on CPU."""
             image_path = Path(image_path)
             try:
-                with Image.open(image_path) as img:
-                    img = ImageOps.exif_transpose(img)
-                    if img.mode != 'RGB':
-                        img = img.convert('RGB')
+                # raw_open_image handles both standard and RAW formats
+                img = raw_open_image(image_path)
+                if img.mode != 'RGB':
+                    img = img.convert('RGB')
 
-                    original_width, original_height = img.size
-                    scale = 1.0
-                    if max(original_width, original_height) > max_dimension:
-                        scale = max_dimension / max(original_width, original_height)
-                        new_size = (int(original_width * scale), int(original_height * scale))
-                        img = img.resize(new_size, Image.Resampling.LANCZOS)
+                original_width, original_height = img.size
+                scale = 1.0
+                if max(original_width, original_height) > max_dimension:
+                    scale = max_dimension / max(original_width, original_height)
+                    new_size = (int(original_width * scale), int(original_height * scale))
+                    img = img.resize(new_size, Image.Resampling.LANCZOS)
 
-                    # Return a copy since we're inside a context manager
-                    return image_path, img.copy(), scale
+                return image_path, img, scale
             except Exception as e:
                 logger.error(f'Failed to load image {image_path}: {e}')
                 return image_path, None, None
@@ -870,16 +868,15 @@ def generate_face_thumbnail(
         # Ensure destination directory exists
         dest_path.parent.mkdir(parents=True, exist_ok=True)
 
-        with Image.open(source_path) as img:
-            # Handle EXIF orientation
-            img = ImageOps.exif_transpose(img)
+        # raw_open_image handles both standard and RAW formats with EXIF rotation
+        img = raw_open_image(source_path)
 
-            # Convert to RGB
-            if img.mode != 'RGB':
-                img = img.convert('RGB')
+        # Convert to RGB
+        if img.mode != 'RGB':
+            img = img.convert('RGB')
 
-            thumb = _create_face_thumbnail(img, box_x, box_y, box_w, box_h, size)
-            thumb.save(dest_path, 'JPEG', quality=quality, optimize=True)
+        thumb = _create_face_thumbnail(img, box_x, box_y, box_w, box_h, size)
+        thumb.save(dest_path, 'JPEG', quality=quality, optimize=True)
 
         logger.debug(f'Generated face thumbnail: {dest_path}')
         return True
@@ -916,34 +913,33 @@ def generate_face_thumbnails_for_image(
         return 0
 
     try:
-        with Image.open(source_path) as img:
-            # Handle EXIF orientation
-            img = ImageOps.exif_transpose(img)
+        # raw_open_image handles both standard and RAW formats with EXIF rotation
+        img = raw_open_image(source_path)
 
-            # Convert to RGB
-            if img.mode != 'RGB':
-                img = img.convert('RGB')
+        # Convert to RGB
+        if img.mode != 'RGB':
+            img = img.convert('RGB')
 
-            count = 0
-            for face in faces:
-                dest_path = get_face_thumbnail_path(face['face_id'], thumbnail_dir)
-                dest_path.parent.mkdir(parents=True, exist_ok=True)
+        count = 0
+        for face in faces:
+            dest_path = get_face_thumbnail_path(face['face_id'], thumbnail_dir)
+            dest_path.parent.mkdir(parents=True, exist_ok=True)
 
-                try:
-                    thumb = _create_face_thumbnail(
-                        img,
-                        face['box_x'],
-                        face['box_y'],
-                        face['box_w'],
-                        face['box_h'],
-                        size,
-                    )
-                    thumb.save(dest_path, 'JPEG', quality=quality, optimize=True)
-                    count += 1
-                except Exception as e:
-                    logger.warning(f'Failed to generate thumbnail for face {face["face_id"]}: {e}')
+            try:
+                thumb = _create_face_thumbnail(
+                    img,
+                    face['box_x'],
+                    face['box_y'],
+                    face['box_w'],
+                    face['box_h'],
+                    size,
+                )
+                thumb.save(dest_path, 'JPEG', quality=quality, optimize=True)
+                count += 1
+            except Exception as e:
+                logger.warning(f'Failed to generate thumbnail for face {face["face_id"]}: {e}')
 
-            return count
+        return count
 
     except Exception as e:
         logger.error(f'Failed to load image {source_path}: {e}')

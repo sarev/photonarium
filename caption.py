@@ -38,6 +38,7 @@ os.environ['HF_HUB_OFFLINE'] = '1'
 
 import torch
 from PIL import Image
+from rawimage import open_image as raw_open_image
 
 
 def _is_blip2_model(model_name: str) -> bool:
@@ -294,8 +295,8 @@ class CaptionGenerator:
             Generated caption string, or None if generation fails.
         """
         try:
-            # Load and preprocess image
-            image = Image.open(image_path).convert('RGB')
+            # Load and preprocess image (handles both standard and RAW formats)
+            image = raw_open_image(image_path).convert('RGB')
             inputs = self.processor(images=image, return_tensors='pt').to(
                 self.device, torch.float16 if self.device == 'cuda' else torch.float32
             )

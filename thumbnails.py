@@ -42,6 +42,8 @@ import threading
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
+from rawimage import is_raw_format, open_image as raw_open_image
+
 # Configure module logger
 logger = logging.getLogger(__name__)
 
@@ -142,16 +144,20 @@ def generate_thumbnail(
         # Ensure destination directory exists
         dest_path.parent.mkdir(parents=True, exist_ok=True)
 
-        # Load image
-        with Image.open(source_path) as img:
-            # For very large images, use draft mode to load at reduced resolution
-            # This is much faster and uses much less memory
+        # RAW files are fully decoded by rawpy (no draft mode possible),
+        # standard formats can use Pillow's draft mode for large images.
+        if is_raw_format(source_path):
+            # raw_open_image returns a fully-decoded RGB PIL Image
+            img = raw_open_image(source_path)
+        else:
+            img = Image.open(source_path)
+
+            # For very large standard images, use draft mode to load at reduced
+            # resolution — much faster and uses much less memory
             if max_source_dimension > 0:
                 w, h = img.size
                 max_dim = max(w, h)
                 if max_dim > max_source_dimension:
-                    # Calculate scale to bring down to max dimension
-                    # Then further reduce to thumbnail size for efficiency
                     target_size = max(size * 2, 1024)  # Load at 2x thumbnail size for quality
                     scale = target_size / max_dim
                     draft_size = (int(w * scale), int(h * scale))
@@ -166,28 +172,28 @@ def generate_thumbnail(
                     except Exception:
                         pass  # Draft not supported for this format
 
-            # Handle EXIF orientation
+            # Handle EXIF orientation (already applied by raw_open_image for RAW)
             img = ImageOps.exif_transpose(img)
 
-            # Convert to RGB (handles RGBA, palette, etc.)
-            if img.mode in ('RGBA', 'LA', 'P'):
-                # Create white background for transparent images
-                background = Image.new('RGB', img.size, (255, 255, 255))
-                if img.mode == 'P':
-                    img = img.convert('RGBA')
-                background.paste(img, mask=img.split()[-1] if img.mode in ('RGBA', 'LA') else None)
-                img = background
-            elif img.mode != 'RGB':
-                img = img.convert('RGB')
+        # Convert to RGB (handles RGBA, palette, etc.)
+        if img.mode in ('RGBA', 'LA', 'P'):
+            # Create white background for transparent images
+            background = Image.new('RGB', img.size, (255, 255, 255))
+            if img.mode == 'P':
+                img = img.convert('RGBA')
+            background.paste(img, mask=img.split()[-1] if img.mode in ('RGBA', 'LA') else None)
+            img = background
+        elif img.mode != 'RGB':
+            img = img.convert('RGB')
 
-            # Resize maintaining aspect ratio
-            img.thumbnail((size, size), Image.Resampling.LANCZOS)
+        # Resize maintaining aspect ratio
+        img.thumbnail((size, size), Image.Resampling.LANCZOS)
 
-            # Apply subtle sharpening to counteract downscale blur
-            img = img.filter(ImageFilter.UnsharpMask(radius=1.0, percent=60, threshold=3))
+        # Apply subtle sharpening to counteract downscale blur
+        img = img.filter(ImageFilter.UnsharpMask(radius=1.0, percent=60, threshold=3))
 
-            # Save as JPEG
-            img.save(dest_path, 'JPEG', quality=quality, optimize=True)
+        # Save as JPEG
+        img.save(dest_path, 'JPEG', quality=quality, optimize=True)
 
         logger.debug(f'Generated thumbnail: {dest_path}')
         return True
@@ -218,6 +224,12 @@ def rotate_image_file(
 
     if not path.exists():
         logger.error(f'Image file not found: {path}')
+        return False
+
+    # RAW files cannot be rotated — they are read-only sensor data.
+    # The frontend disables rotation controls for RAW images.
+    if is_raw_format(path):
+        logger.warning(f'Cannot rotate RAW file (not supported): {path}')
         return False
 
     # Normalise degrees to 0-360 range

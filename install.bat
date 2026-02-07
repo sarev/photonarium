@@ -223,7 +223,7 @@ if !errorlevel! neq 0 goto :error
 
 echo.
 echo --- Installing remaining dependencies ---
-"%VENV_PIP%" install pillow opencv-python imagehash numpy pyyaml flask waitress orjson requests "transformers==4.44.*"
+"%VENV_PIP%" install pillow opencv-python imagehash numpy pyyaml flask waitress orjson requests "transformers==4.44.*" rawpy exifread
 if !errorlevel! neq 0 goto :error
 
 :: ---------------------------------------------------------------------------

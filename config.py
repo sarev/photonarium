@@ -49,6 +49,26 @@ image_extensions:
   - .tiff
   - .tif
   - .webp
+  # Camera RAW formats (require rawpy)
+  - .cr2
+  - .cr3
+  - .nef
+  - .nrw
+  - .arw
+  - .srf
+  - .dng
+  - .raf
+  - .rw2
+  - .orf
+  - .pef
+  - .srw
+  - .x3f
+  - .3fr
+  - .iiq
+  - .rwl
+  - .kdc
+  - .dcr
+  - .erf
 
 # JPEG quality for generated thumbnails (1-100, higher = better quality, larger files)
 thumbnail_quality: 85
@@ -243,7 +263,11 @@ class Config:
     """
 
     image_extensions: set[str] = field(default_factory=lambda: {
-        '.jpg', '.jpeg', '.png', '.gif', '.bmp', '.tiff', '.tif', '.webp'
+        '.jpg', '.jpeg', '.png', '.gif', '.bmp', '.tiff', '.tif', '.webp',
+        # Camera RAW formats (require rawpy)
+        '.cr2', '.cr3', '.nef', '.nrw', '.arw', '.srf', '.dng', '.raf',
+        '.rw2', '.orf', '.pef', '.srw', '.x3f', '.3fr', '.iiq', '.rwl',
+        '.kdc', '.dcr', '.erf',
     })
     thumbnail_quality: int = 85
     max_image_dimension: int = 16384

@@ -71,6 +71,7 @@ def jsonify(data):
 
 from caption import CaptionGenerator
 from imagedb import ImageDatabase, register_signal_handlers
+from rawimage import is_raw_format, open_image as raw_open_image
 from thumbnails import (
     get_thumbnail_cache_path,
     generate_thumbnail,
@@ -710,6 +711,19 @@ def get_full_image(image_id):
     path = image['path']
     if not os.path.exists(path):
         return error_response('Image file not found on disk', 404)
+
+    # Browsers cannot render camera RAW formats natively, so we decode
+    # the RAW file on the fly and serve it as JPEG
+    if is_raw_format(path):
+        try:
+            img = raw_open_image(path).convert('RGB')
+            buf = io.BytesIO()
+            img.save(buf, 'JPEG', quality=92)
+            buf.seek(0)
+            return send_file(buf, mimetype='image/jpeg')
+        except Exception as e:
+            logger.error(f'Failed to convert RAW image {path}: {e}')
+            return error_response('Failed to decode RAW image', 500)
 
     return send_file(path)
 

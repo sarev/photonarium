@@ -33,6 +33,8 @@ import logging
 import os
 import re
 
+from rawimage import is_raw_format, extract_raw_exif
+
 # Configure module logger
 logger = logging.getLogger(__name__)
 
@@ -147,6 +149,10 @@ def extract_exif_timestamp(path: Path | str) -> datetime | None:
         datetime object if EXIF timestamp found, None otherwise.
     """
     path = Path(path)
+
+    # Pillow cannot read EXIF from camera RAW formats — use exifread instead
+    if is_raw_format(path):
+        return extract_raw_exif(path)
 
     try:
         with Image.open(path) as img:

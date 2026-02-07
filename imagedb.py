@@ -223,6 +223,13 @@ from timestamps import (
     derive_timestamp_with_confidence,
     CONFIDENCE_UNKNOWN,
 )
+from rawimage import (
+    RAW_EXTENSIONS,
+    is_raw_format,
+    open_image as raw_open_image,
+    open_image_as_numpy as raw_open_image_as_numpy,
+    get_raw_dimensions,
+)
 
 # Configure module logger
 logger = logging.getLogger(__name__)
@@ -1324,8 +1331,9 @@ def get_images_in_folder(
 # METADATA EXTRACTION
 # =============================================================================
 
-# Lossless image formats (by extension)
-LOSSLESS_EXTENSIONS = {'.png', '.bmp', '.tiff', '.tif', '.gif'}
+# Lossless image formats (by extension).
+# RAW files are technically lossless sensor data, so they're included here.
+LOSSLESS_EXTENSIONS = {'.png', '.bmp', '.tiff', '.tif', '.gif'} | RAW_EXTENSIONS
 
 
 def compute_checksum(path: Path | str, algorithm: str = 'sha256') -> str:
@@ -1371,22 +1379,23 @@ def compute_perceptual_hash(
         or None if the image cannot be processed.
     """
     try:
-        with Image.open(path) as img:
-            # Downsample if oversized
-            if max_dimension > 0:
-                w, h = img.size
-                max_dim = max(w, h)
-                if max_dim > max_dimension:
-                    scale = max_dimension / max_dim
-                    new_w = int(w * scale)
-                    new_h = int(h * scale)
-                    logger.info(
-                        f'Downsampling oversized image for phash {path}: '
-                        f'{w}x{h} -> {new_w}x{new_h}'
-                    )
-                    img = img.resize((new_w, new_h), Image.Resampling.LANCZOS)
-            phash = imagehash.phash(img)
-            return str(phash)
+        img = raw_open_image(path)
+
+        # Downsample if oversized
+        if max_dimension > 0:
+            w, h = img.size
+            max_dim = max(w, h)
+            if max_dim > max_dimension:
+                scale = max_dimension / max_dim
+                new_w = int(w * scale)
+                new_h = int(h * scale)
+                logger.info(
+                    f'Downsampling oversized image for phash {path}: '
+                    f'{w}x{h} -> {new_w}x{new_h}'
+                )
+                img = img.resize((new_w, new_h), Image.Resampling.LANCZOS)
+        phash = imagehash.phash(img)
+        return str(phash)
     except Exception as e:
         logger.warning(f'Failed to compute perceptual hash for {path}: {e}')
         return None
@@ -1409,9 +1418,9 @@ def compute_laplacian_variance(
         Variance of the Laplacian, or None if image cannot be processed.
     """
     try:
-        img = cv2.imread(str(path))
+        img = raw_open_image_as_numpy(path)
         if img is None:
-            logger.warning(f'OpenCV failed to read image: {path}')
+            logger.warning(f'Failed to read image for Laplacian: {path}')
             return None
 
         # Downsample if oversized
@@ -1462,6 +1471,13 @@ def get_image_dimensions(path: Path | str) -> tuple[int, int] | None:
         Tuple of (width, height) in pixels, or None if image cannot be read.
     """
     try:
+        # For RAW files, read dimensions from the header without full decode
+        # (much faster than demosaicing a 40MP sensor image)
+        if is_raw_format(path):
+            dims = get_raw_dimensions(path)
+            if dims is not None:
+                return dims
+
         with Image.open(path) as img:
             return img.size  # (width, height)
     except Exception as e:
@@ -1980,8 +1996,9 @@ class OpenCLIPModel:
             PIL Image in RGB mode, or None if loading failed.
         """
         try:
-            img = Image.open(path)
-            img = ImageOps.exif_transpose(img)
+            # raw_open_image handles both standard and RAW formats,
+            # and applies EXIF orientation correction
+            img = raw_open_image(path)
 
             # Check if downsampling is needed
             if self.max_dimension > 0:

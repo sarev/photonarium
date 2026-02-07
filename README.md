@@ -377,7 +377,7 @@ Database is where you tell Imaginary where your photos live, and where you can s
 - Rescan folders to pick up changes
 - Watch progress for indexing, embeddings, and face work (with ETAs when possible)
 
-Supported image types include: `.jpg`, `.jpeg`, `.png`, `.gif`, `.bmp`, `.tiff`, `.tif`, `.webp`.
+Supported image types include: `.jpg`, `.jpeg`, `.png`, `.gif`, `.bmp`, `.tiff`, `.tif`, `.webp`, and camera RAW formats (`.cr2`, `.cr3`, `.nef`, `.nrw`, `.arw`, `.srf`, `.dng`, `.raf`, `.rw2`, `.orf`, `.pef`, `.srw`, `.x3f`, `.3fr`, `.iiq`, `.rwl`, `.kdc`, `.dcr`, `.erf`). RAW support requires the `rawpy` package. Note that RAW files cannot be rotated within Imaginary. RAW files are also slower to process than standard formats — each file requires full demosaicing of the sensor data, so indexing and opening full-screen images will take a little longer than with JPEGs.
 
 ---
 
@@ -451,7 +451,7 @@ If you prefer to install manually, or the installer script doesn't suit your set
    # Other dependencies (install facenet-pytorch with --no-deps to avoid replacing CUDA torch)
    pip install open_clip_torch
    pip install --no-deps facenet-pytorch
-   pip install pillow numpy pyyaml opencv-python imagehash flask waitress requests orjson transformers==4.44.*
+   pip install pillow numpy pyyaml opencv-python imagehash flask waitress requests orjson transformers==4.44.* rawpy exifread
    ```
 
    Note: you may see pip warnings about facenet-pytorch version conflicts with numpy, Pillow, and torch. These can usually be ignored.

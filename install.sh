@@ -258,7 +258,7 @@ echo "--- Installing face detection (facenet-pytorch) ---"
 
 echo ""
 echo "--- Installing remaining dependencies ---"
-"$VENV_PIP" install pillow opencv-python imagehash numpy pyyaml flask waitress orjson requests "transformers==4.44.*"
+"$VENV_PIP" install pillow opencv-python imagehash numpy pyyaml flask waitress orjson requests "transformers==4.44.*" rawpy exifread
 
 # ---------------------------------------------------------------------------
 # Step 3/4: Initialise configuration

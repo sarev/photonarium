@@ -90,7 +90,7 @@ The five key criteria from above: **(a)** semantic search, **(b)** face recognit
 | **Mobile app** | No | No | Yes | No | No | No | Yes | Yes | No |
 | **Multi-user** | No | No | Yes | Paid tier | No | No | Yes | Yes (Family) | No |
 | **Install complexity** | Low (Python + pip) | Medium (KDE) | Medium-high (Docker) | Medium-high (Docker) | Low-medium | Low | None (cloud) | None (bundled) | Low |
-| **RAW support** | No | Excellent | Good | Good | Excellent | Excellent | Good | Good | Excellent |
+| **RAW support** | Good | Excellent | Good | Good | Excellent | Excellent | Good | Good | Excellent |
 | **Non-destructive editing** | No | Yes | Basic | Yes | No | No | Yes | Yes | No |
 
 \* These apps offer semantic search but do not support negative terms (e.g. "beach -sunset") to exclude concepts from results. Imaginary does.
@@ -99,7 +99,7 @@ The five key criteria from above: **(a)** semantic search, **(b)** face recognit
 
 Imaginary occupies a niche that none of the above quite covers: a lightweight, fully offline desktop tool that combines CLIP semantic search, face detection and recognition, multi-level duplicate detection, and BLIP image captioning — all accessible via a browser-based UI, without requiring Docker infrastructure, a database server, KDE frameworks, or a cloud account. It's the simplest install of any AI-powered option (just Python and pip), and it runs on Windows, Mac, and Linux with zero telemetry under a permissive Apache-2.0 license.
 
-The trade-offs are: no mobile apps or phone backup, no multi-user support, no RAW file handling, and no non-destructive editing. It's also new so has a much smaller community than the established projects! But if what you want is to point a tool at your photo folders and immediately start searching them semantically, finding duplicates, and tagging faces — all without sending a single byte off your machine — Imaginary is designed for exactly that.
+The trade-offs are: no mobile apps or phone backup, no multi-user support, and no non-destructive editing. It's also new so has a much smaller community than the established projects! But if what you want is to point a tool at your photo folders and immediately start searching them semantically, finding duplicates, and tagging faces — all without sending a single byte off your machine — Imaginary is designed for exactly that.
 
 ## The Great 'AI' Debate
 

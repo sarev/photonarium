@@ -57,6 +57,18 @@
    ========================================================================== */
 
 /**
+ * Camera RAW file extensions that cannot be rendered natively by browsers.
+ * Used to disable rotation controls and show appropriate UI for RAW images.
+ * Matches the RAW_EXTENSIONS frozenset in rawimage.py.
+ * @type {Set<string>}
+ */
+const RAW_EXTENSIONS = new Set([
+    '.cr2', '.cr3', '.nef', '.nrw', '.arw', '.srf', '.dng', '.raf',
+    '.rw2', '.orf', '.pef', '.srw', '.x3f', '.3fr', '.iiq', '.rwl',
+    '.kdc', '.dcr', '.erf',
+]);
+
+/**
  * Global application object.
  * All modules interact through this object.
  * @namespace
@@ -1064,17 +1076,28 @@ const App = {
             return;
         }
 
+        // Defense-in-depth: filter out RAW files (toolbar should already be
+        // disabled, but protect against programmatic calls)
+        const rotatableIds = selectedIds.filter(id => {
+            const img = AppState.images.getById(id);
+            return !img || !App.isRawFile(img.basename);
+        });
+        if (rotatableIds.length === 0) {
+            this.showError('RAW files cannot be rotated.');
+            return;
+        }
+
         try {
-            // Rotate all selected images in one batch request
+            // Rotate all rotatable images in one batch request
             // Note: Backend emits images_modified event for gallery thumbnail updates
             const result = await this.apiPost('/images/rotate', {
-                image_ids: selectedIds,
+                image_ids: rotatableIds,
                 degrees: degrees
             });
 
             // Report any failures
             if (result && result.results) {
-                const failed = selectedIds.filter(id => !result.results[id]);
+                const failed = rotatableIds.filter(id => !result.results[id]);
                 if (failed.length > 0) {
                     console.error('Failed to rotate images:', failed);
                     this.showError(`Failed to rotate ${failed.length} image(s).`);
@@ -1120,14 +1143,25 @@ const App = {
             revealBtn.disabled = selCount !== 1;
         }
 
-        // Rotate buttons: enabled when at least one image selected
+        // Rotate buttons: disabled when nothing selected OR any selected image
+        // is a RAW file (RAW files cannot be rotated — they are read-only sensor data)
         const rotateCcwBtn = document.getElementById('btn-rotate-ccw');
         const rotateCwBtn = document.getElementById('btn-rotate-cw');
+        const anySelectedIsRaw = selCount > 0 && this.state.selectedImages.some(id => {
+            const img = AppState.images.getById(id);
+            return img && App.isRawFile(img.basename);
+        });
+        const rotateDisabled = selCount === 0 || anySelectedIsRaw;
+        const rotateTitle = anySelectedIsRaw
+            ? 'Cannot rotate RAW files'
+            : '';
         if (rotateCcwBtn) {
-            rotateCcwBtn.disabled = selCount === 0;
+            rotateCcwBtn.disabled = rotateDisabled;
+            rotateCcwBtn.title = rotateTitle || rotateCcwBtn.getAttribute('data-default-title') || 'Rotate left';
         }
         if (rotateCwBtn) {
-            rotateCwBtn.disabled = selCount === 0;
+            rotateCwBtn.disabled = rotateDisabled;
+            rotateCwBtn.title = rotateTitle || rotateCwBtn.getAttribute('data-default-title') || 'Rotate right';
         }
     },
 
@@ -1741,6 +1775,19 @@ const App = {
         const div = document.createElement('div');
         div.textContent = str;
         return div.innerHTML;
+    },
+
+    /**
+     * Check whether a filename has a camera RAW extension.
+     * Used to disable rotation controls and adjust UI for RAW images.
+     * @param {string} basename - Filename (e.g. "IMG_1234.CR2")
+     * @returns {boolean} True if the file is a RAW image
+     */
+    isRawFile(basename) {
+        if (!basename) return false;
+        const dot = basename.lastIndexOf('.');
+        if (dot < 0) return false;
+        return RAW_EXTENSIONS.has(basename.slice(dot).toLowerCase());
     },
 
     /**

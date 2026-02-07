@@ -169,6 +169,24 @@ const Fullscreen = {
     },
 
     /**
+     * Updates fullscreen rotate button states based on the current image.
+     * RAW files cannot be rotated, so the buttons are disabled with a tooltip.
+     * @param {Object} [metadata] - Image metadata with basename property
+     * @private
+     */
+    _updateRotateButtons(metadata) {
+        const isRaw = metadata && App.isRawFile(metadata.basename);
+        if (this._els.rotateLeftBtn) {
+            this._els.rotateLeftBtn.disabled = isRaw;
+            this._els.rotateLeftBtn.title = isRaw ? 'Cannot rotate RAW files' : 'Rotate left (Ctrl+L)';
+        }
+        if (this._els.rotateRightBtn) {
+            this._els.rotateRightBtn.disabled = isRaw;
+            this._els.rotateRightBtn.title = isRaw ? 'Cannot rotate RAW files' : 'Rotate right (Ctrl+R)';
+        }
+    },
+
+    /**
      * Opens the fullscreen overlay with the specified image.
      * @param {string} imageId - ID of the image to display
      * @param {Object} [options] - Optional settings
@@ -454,6 +472,9 @@ const Fullscreen = {
         // try to get it from AppState.images cache
         const metadata = img.basename ? img : (AppState.images.getById(imageId) || img);
         this._showFilename(metadata.basename, metadata.width, metadata.height);
+
+        // Disable rotate buttons for RAW files (which cannot be modified)
+        this._updateRotateButtons(metadata);
 
         // Preload adjacent images
         this._preloadAdjacent();
@@ -1203,6 +1224,13 @@ const Fullscreen = {
     async _rotateImage(degrees) {
         const imageId = this.state.currentId;
         if (!imageId) return;
+
+        // RAW files cannot be rotated — show error and bail
+        const img = this._getCurrentImage();
+        if (img && App.isRawFile(img.basename)) {
+            App.showError('RAW files cannot be rotated.');
+            return;
+        }
 
         console.log('[Fullscreen._rotateImage]', imageId, degrees + '°');
 
