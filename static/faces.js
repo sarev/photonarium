@@ -1781,7 +1781,6 @@
         const padlock = document.createElement('div');
         // Coerce to boolean - handles 0, 1, null, undefined
         const isManuallyTagged = Boolean(face.manually_tagged);
-        console.debug('[createCard]', face.id.slice(0, 8), 'mt:', face.manually_tagged, '→', isManuallyTagged);
         padlock.className = 'face-card-padlock' + (isManuallyTagged ? '' : ' unlocked');
         padlock.dataset.faceId = face.id;
         padlock.innerHTML = `<span class="material-symbols-outlined">${isManuallyTagged ? 'lock' : 'lock_open'}</span>`;
