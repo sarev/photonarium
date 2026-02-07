@@ -4933,6 +4933,30 @@
         const primaryFaceId = faceIds[0];
         quickMatchFaceId = primaryFaceId;
 
+        // Create backdrop immediately (before async call) to prevent race conditions
+        const backdrop = document.createElement('div');
+        backdrop.className = 'quick-match-backdrop';
+        backdrop.addEventListener('click', () => {
+            hideQuickMatch();
+        });
+        quickMatchBackdrop = backdrop;
+        document.body.appendChild(backdrop);
+
+        // Show backdrop immediately
+        requestAnimationFrame(() => {
+            backdrop.classList.add('visible');
+        });
+
+        // Set up Escape key handler early
+        quickMatchKeyHandler = (e) => {
+            if (e.key === 'Escape') {
+                e.stopPropagation();
+                e.preventDefault();
+                hideQuickMatch();
+            }
+        };
+        document.addEventListener('keydown', quickMatchKeyHandler, { capture: true });
+
         // Create the card element
         const card = document.createElement('div');
         card.className = 'quick-match-card';
@@ -4945,6 +4969,12 @@
             matches = response.data || [];
         } catch (error) {
             console.error('Failed to fetch face matches:', error);
+        }
+
+        // Check if we were dismissed during the fetch (race condition)
+        if (quickMatchFaceId !== primaryFaceId) {
+            // Another invocation happened or we were dismissed - bail out
+            return;
         }
 
         // Build card content
@@ -5022,36 +5052,16 @@
             card.appendChild(empty);
         }
 
-        // Create backdrop
-        const backdrop = document.createElement('div');
-        backdrop.className = 'quick-match-backdrop';
-        backdrop.addEventListener('click', () => {
-            hideQuickMatch();
-        });
-        quickMatchBackdrop = backdrop;
-
-        // Add to document (backdrop first, then card on top)
-        document.body.appendChild(backdrop);
+        // Add card to document (backdrop already added)
         document.body.appendChild(card);
 
         // Position the card centered over the anchor
         positionQuickMatchCard(card, anchor);
 
-        // Show with animation
+        // Show card with animation (backdrop already visible)
         requestAnimationFrame(() => {
-            backdrop.classList.add('visible');
             card.classList.add('visible');
         });
-
-        // Set up Escape key handler
-        quickMatchKeyHandler = (e) => {
-            if (e.key === 'Escape') {
-                e.stopPropagation();
-                e.preventDefault();
-                hideQuickMatch();
-            }
-        };
-        document.addEventListener('keydown', quickMatchKeyHandler, { capture: true });
     }
 
     /**
