@@ -35,6 +35,9 @@ AppState.nav = (function() {
     /** @type {string|null} Image ID shown in fullscreen, null if closed */
     let _fullscreenImageId = null;
 
+    /** @type {string|null} Last image viewed in fullscreen (consumed by Gallery on enter) */
+    let _lastViewedImageId = null;
+
     /** @type {Object.<string, number>} Scroll positions by screen name */
     let _scrollPositions = {};
 
@@ -153,7 +156,21 @@ AppState.nav = (function() {
 
             console.log('[AppState.nav.setFullscreenImageId]', _fullscreenImageId, '->', imageId);
             _fullscreenImageId = imageId;
+            // Track last viewed image so Gallery can select it on entry
+            if (imageId) _lastViewedImageId = imageId;
             broadcast({ type: 'changed', property: 'fullscreenImageId' });
+        },
+
+        /**
+         * Consume the last viewed fullscreen image ID.
+         * Returns the ID and clears it (one-shot). Gallery calls this on
+         * entry to select and scroll to the last viewed image.
+         * @returns {string|null}
+         */
+        consumeLastViewedImageId() {
+            const id = _lastViewedImageId;
+            _lastViewedImageId = null;
+            return id;
         },
 
         /**

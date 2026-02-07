@@ -149,6 +149,10 @@
     /* Focus indicator for keyboard navigation */
     --color-section-focus: rgba(255, 96, 192, 0.08);
 
+    /* Attention throb animation */
+    --color-throb: #dc3232;
+    --color-throb-glow: rgba(220, 50, 50, 0.5);
+
     /* Chip/tag button backgrounds (on dark chip backgrounds) */
     --color-chip-button: rgba(255, 255, 255, 0.3);
     --color-chip-button-hover: rgba(255, 255, 255, 0.5);
@@ -249,6 +253,10 @@
 
     /* Focus indicator for keyboard navigation */
     --color-section-focus: rgba(255, 96, 192, 0.04);
+
+    /* Attention throb animation */
+    --color-throb: #dc3232;
+    --color-throb-glow: rgba(220, 50, 50, 0.5);
 
     /* Chip/tag button backgrounds (on dark chip backgrounds) */
     --color-chip-button: rgba(255, 255, 255, 0.3);
@@ -796,6 +804,21 @@ a:hover {
     background-color: var(--color-selection);
 }
 
+/* Single throb to draw attention to a newly-selected thumbnail.
+   Uses transform: scale() so the element grows visually without
+   affecting layout or causing neighbours to reflow. */
+.gallery-item.throb {
+    animation: thumbnailThrob 1.4s ease-in-out;
+    z-index: 10;
+}
+
+@keyframes thumbnailThrob {
+    0%   { transform: scale(1);    box-shadow: 0 0 0 0   transparent;                border-color: var(--color-selection-border); }
+    35%  { transform: scale(1.08); box-shadow: 0 0 12px 4px var(--color-throb-glow); border-color: var(--color-throb); }
+    65%  { transform: scale(1.08); box-shadow: 0 0 12px 4px var(--color-throb-glow); border-color: var(--color-throb); }
+    100% { transform: scale(1);    box-shadow: 0 0 0 0   transparent;                border-color: var(--color-selection-border); }
+}
+
 .gallery-item img {
     width: 100%;
     aspect-ratio: 1;
@@ -1272,7 +1295,7 @@ a:hover {
 /* Face tagging toggle active state */
 #fullscreen-tagging.active {
     background: var(--color-accent);
-    color: white;
+    color: var(--color-overlay-text);
 }
 
 /* Navigation button overlays (prev/next) */
@@ -1478,7 +1501,7 @@ a:hover {
     border: none;
     border-radius: 50%;
     background: var(--color-danger);
-    color: white;
+    color: var(--color-overlay-text);
     cursor: pointer;
     display: flex;
     align-items: center;
@@ -1513,7 +1536,7 @@ a:hover {
     border: none;
     border-radius: 50%;
     background: var(--color-ignore);
-    color: white;
+    color: var(--color-overlay-text);
     cursor: pointer;
     display: flex;
     align-items: center;
@@ -1850,7 +1873,7 @@ a:hover {
     border: none;
     border-radius: 50%;
     background: var(--color-danger);
-    color: white;
+    color: var(--color-overlay-text);
     cursor: pointer;
     display: flex;
     align-items: center;
@@ -1879,7 +1902,7 @@ a:hover {
     border: none;
     border-radius: 50%;
     background: var(--color-success);
-    color: white;
+    color: var(--color-overlay-text);
     cursor: pointer;
     display: flex;
     align-items: center;
@@ -1908,7 +1931,7 @@ a:hover {
     border: none;
     border-radius: 50%;
     background: var(--color-ignore);
-    color: white;
+    color: var(--color-overlay-text);
     cursor: pointer;
     display: flex;
     align-items: center;
@@ -1938,7 +1961,7 @@ a:hover {
     border: none;
     border-radius: 50%;
     background: var(--color-pastel-teal-fg);
-    color: white;
+    color: var(--color-overlay-text);
     cursor: pointer;
     display: flex;
     align-items: center;
@@ -1968,7 +1991,7 @@ a:hover {
     border: none;
     border-radius: 50%;
     background: var(--color-pastel-teal-fg);
-    color: white;
+    color: var(--color-overlay-text);
     cursor: pointer;
     display: flex;
     align-items: center;
@@ -2337,7 +2360,7 @@ a:hover {
     color: var(--color-text-primary);
     border: 1px solid var(--color-border);
     border-radius: 4px;
-    box-shadow: 0 2px 4px rgba(0, 0, 0, 0.15);
+    box-shadow: var(--shadow-sm);
     pointer-events: none;
     opacity: 0;
     transition: opacity 0.1s;
@@ -2912,7 +2935,7 @@ a:hover {
     gap: 0.25rem;
     padding: 0.25rem 0.5rem;
     background-color: var(--color-face-known);
-    color: white;
+    color: var(--color-overlay-text);
     border-radius: 12px;
     font-size: 0.8rem;
     font-weight: 500;

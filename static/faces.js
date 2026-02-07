@@ -817,8 +817,8 @@
         thresholdControl.appendChild(pickerThresholdSlider);
         thresholdControl.appendChild(pickerThresholdValue);
         thresholdControl.appendChild(resetBtn);
-        // Append tooltip to body for fixed positioning
-        document.body.appendChild(hoverTooltip);
+        // Append tooltip to #app so it inherits theme CSS variables
+        App.$('app').appendChild(hoverTooltip);
         titleRow.appendChild(thresholdControl);
 
         pickerHeader.appendChild(titleRow);
@@ -1629,9 +1629,13 @@
             ? pickPreferredFaces.length
             : pickPreferredFaces.filter(f => !f.manually_tagged).length;
         const totalCount = pickPreferredFaces.length;
-        const countText = showLockedFaces
+        const unlockedCount = pickPreferredFaces.filter(f => !f.manually_tagged).length;
+        let countText = showLockedFaces
             ? (displayedFaceCount === 1 ? '1 image' : `${displayedFaceCount} images`)
             : `${displayedFaceCount} of ${totalCount} images`;
+        if (unlockedCount > 0) {
+            countText += `, ${unlockedCount} unlocked`;
+        }
         pickerTitleEl.innerHTML = `${App.escapeHtml(pickPreferredPersonName || '')} <span class="face-count">(${countText})</span>`;
 
         // Update threshold slider/value (preserve focus if user is interacting)
@@ -3188,8 +3192,26 @@
 
         // Update divider visibility
         const divider = normalView?.querySelector('.faces-divider');
+        const hasUnknowns = displayedFaces.length > 0;
         if (divider) {
-            divider.hidden = !showPeople || displayedFaces.length === 0;
+            divider.hidden = !showPeople || !hasUnknowns;
+        }
+
+        // When there are no unknown faces (and thus no divider), let the people
+        // section fill the full available height. When unknowns reappear (e.g.
+        // from backend processing), restore the constrained layout.
+        if (showPeople) {
+            if (!hasUnknowns) {
+                // No unknowns — unconstrain so the section fills available space
+                peopleSection.style.maxHeight = 'none';
+                peopleSection.style.height = '';
+            } else {
+                // Unknowns present — re-apply CSS cap and saved divider height
+                peopleSection.style.maxHeight = '';
+                if (knownSectionHeight) {
+                    peopleSection.style.height = `${knownSectionHeight}px`;
+                }
+            }
         }
 
         if (!showPeople) return;
@@ -5050,7 +5072,8 @@
             hideQuickMatch();
         });
         quickMatchBackdrop = backdrop;
-        document.body.appendChild(backdrop);
+        // Append to #app so it inherits theme CSS variables
+        App.$('app').appendChild(backdrop);
 
         // Show backdrop immediately
         requestAnimationFrame(() => {
@@ -5104,7 +5127,7 @@
         card.appendChild(loadingEl);
 
         // Show card immediately (matches will appear when ready)
-        document.body.appendChild(card);
+        App.$('app').appendChild(card);
         positionQuickMatchCard(card, anchor);
         requestAnimationFrame(() => {
             card.classList.add('visible');

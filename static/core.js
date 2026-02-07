@@ -1269,7 +1269,8 @@ const App = {
             toast = document.createElement('div');
             toast.id = 'error-toast';
             toast.className = 'error-toast';
-            document.body.appendChild(toast);
+            // Append to #app so it inherits theme CSS variables
+            (document.getElementById('app') || document.body).appendChild(toast);
         }
         toast.textContent = message;
         toast.classList.add('visible');
@@ -1830,7 +1831,8 @@ const App = {
 
         const tooltip = document.createElement('div');
         tooltip.className = 'slider-hover-tooltip';
-        document.body.appendChild(tooltip);
+        // Append to #app so it inherits theme CSS variables
+        (document.getElementById('app') || document.body).appendChild(tooltip);
 
         slider.addEventListener('mouseenter', () => {
             tooltip.style.opacity = '1';

@@ -102,6 +102,14 @@ const Gallery = {
     _fullscreenUnsub: null,
 
     /**
+     * Image ID to throb when its thumbnail is created (one-shot).
+     * Set by onEnter, consumed by onItemCreated.
+     * @type {string|null}
+     * @private
+     */
+    _throbTargetId: null,
+
+    /**
      * Scroll indicator overlay element.
      * @type {HTMLElement|null}
      * @private
@@ -285,6 +293,12 @@ const Gallery = {
                 if (this._selection && this._selection.isSelected(id)) {
                     el.classList.add('selected');
                 }
+                // Trigger one-shot throb if this is the target thumbnail
+                if (this._throbTargetId && id === this._throbTargetId) {
+                    this._throbTargetId = null;
+                    el.classList.add('throb');
+                    el.addEventListener('animationend', () => el.classList.remove('throb'), { once: true });
+                }
             }
         });
 
@@ -355,6 +369,41 @@ const Gallery = {
         this._selection.bind();
         // Update duplicate group nav button state
         this._updateDupGroupNavState();
+
+        // If fullscreen was viewing an image, select it in the gallery
+        // (if it's in the current display list) so the user returns to it.
+        // consumeLastViewedImageId() is one-shot — returns null on subsequent calls.
+        const lastViewedId = AppState.nav.consumeLastViewedImageId();
+        let throbId = null;
+        if (lastViewedId) {
+            const displayList = AppState.images.getDisplayList();
+            const inList = displayList.some(img => img.id === lastViewedId);
+            if (inList) {
+                this._selection.select(lastViewedId);
+                throbId = lastViewedId;
+            }
+        }
+
+        // Scroll the first selected thumbnail into view so the user can
+        // see their selection when returning from another screen
+        const selected = this._selection.getSelected();
+        if (selected.length > 0) {
+            this._grid.scrollToId(selected[0], 'instant');
+        }
+
+        // Throb the thumbnail so it's easy to spot after cross-screen navigation.
+        // The element may not exist yet (thumbnails load asynchronously), so we
+        // set a target ID that onItemCreated checks when the element is added.
+        // Also try immediately in case it's already rendered.
+        if (throbId) {
+            this._throbTargetId = throbId;
+            const el = this._grid._innerContainer?.querySelector(`[data-id="${throbId}"]`);
+            if (el) {
+                this._throbTargetId = null;
+                el.classList.add('throb');
+                el.addEventListener('animationend', () => el.classList.remove('throb'), { once: true });
+            }
+        }
     },
 
     /**
@@ -1369,6 +1418,11 @@ const Gallery = {
                     this._selection.select(newId);
                 }
             } else if (event.property === 'fullscreenClosing') {
+                // Consume lastViewedImageId so onEnter doesn't re-apply it —
+                // this subscription already handled selection + scroll for
+                // the Gallery-initiated fullscreen path
+                AppState.nav.consumeLastViewedImageId();
+
                 // Fullscreen is closing - check if we need to refresh
                 if (this.state.needsRefresh) {
                     // Images were modified while fullscreen was open - do full refresh
