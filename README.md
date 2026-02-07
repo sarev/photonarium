@@ -260,13 +260,21 @@ Duplicates helps you clean up your library by grouping photos that are the same,
 
 ### What you can do
 
-- Review duplicate “stacks” (groups) of related images.
+- Review duplicate "stacks" (groups) of related images.
 - Adjust how strict duplicate matching should be:
   - **Related**, **Similar**, **Near-identical**, **Identical**
 - Double click a stack (or press **Enter**) to open that group in the Gallery.
 - While viewing a group in the Gallery, use **Alt + Left / Right** to move between groups.
 
-You can also sort stacks, including a semantic sort mode where you type something like “blurry” to surface low-quality duplicates.
+### Semantic sorting
+
+You can sort stacks by similarity to a concept using the semantic sort button. This helps surface particular types of duplicates:
+
+- `blurry` surfaces out-of-focus shots
+- `dark underexposed` finds poorly lit images
+- `cropped tight` finds heavily cropped versions
+
+Negative terms work here too. Use `blurry -sharp` or `dark -bright -colorful` to push good images down and bad ones up, making it easier to pick which duplicates to delete.
 
 ---
 
