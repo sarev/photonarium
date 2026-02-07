@@ -10,14 +10,16 @@ Most photo apps push you towards the cloud. That is great until you care about p
 
 Imaginary keeps your library local and helps you do the three things people actually want:
 
-- **Find** photos quickly, even when you cannot remember filenames
+- **Find** photos quickly, even when you cannot remember filenames, and exclude what you don't want
 - **Tidy** a messy collection, especially duplicates and near-duplicates
 - **Organise** around people, favourites, and your own notes
+
+Find out more about the motivations behind Imaginary in [`BACKGROUND.md`](BACKGROUND.md).
 
 ## What it can do
 
 - **Fast browsing** with a thumbnail grid that stays smooth on large libraries
-- **AI search** that understands what you type (for example: “sunset over mountains”, “birthday cake”)
+- **AI search** that understands what you type (for example: "sunset over mountains", "birthday cake"), with negative terms to exclude concepts (e.g. "beach -people")
 - **Face workflows**: detect faces, group unknowns, name people, and use those names later
 - **Duplicate finding** at multiple strictness levels (identical, near-identical, similar, related)
 - **Ratings and descriptions** so you can build your own “favourites” system
