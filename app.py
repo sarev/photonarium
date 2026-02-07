@@ -90,6 +90,7 @@ from faces import (
     get_faces_for_image,
     get_faces_for_images,
     get_faces_for_person,
+    get_face_matches,
     update_face_person,
     toggle_face_manual_tag,
     suppress_face,
@@ -1670,6 +1671,31 @@ def get_single_face(face_id):
     if not face:
         return error_response('Face not found', 404)
     return success_response(dict(face))
+
+
+@app.route('/api/faces/<face_id>/matches', methods=['GET'])
+def get_face_matches_endpoint(face_id):
+    """Get top matching people for a face.
+
+    Compares the face's embedding against all locked faces and returns
+    the top N matching people with their best-matching face.
+
+    Query Parameters:
+        limit: Maximum matches to return (default: 5)
+
+    Returns:
+        JSON array of match objects with:
+        - person_id: ID of the matching person
+        - person_name: Name of the matching person
+        - face_id: ID of their best-matching locked face
+        - similarity: Cosine similarity score (0-1)
+    """
+    db = get_db()
+    limit = request.args.get('limit', 5, type=int)
+    limit = max(1, min(limit, 10))  # Clamp to 1-10
+
+    matches = get_face_matches(db.conn, face_id, limit=limit)
+    return success_response(matches)
 
 
 # =============================================================================

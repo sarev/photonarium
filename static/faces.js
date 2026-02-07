@@ -1715,8 +1715,9 @@
         card.appendChild(unassignBtn);
 
         // Ignore button (assign to "-" person) - but not when already viewing "-" person
+        let ignoreBtn = null;
         if (pickPreferredPersonName !== '-') {
-            const ignoreBtn = document.createElement('button');
+            ignoreBtn = document.createElement('button');
             ignoreBtn.className = 'face-card-ignore';
             ignoreBtn.title = 'Move to ignored list';
             ignoreBtn.innerHTML = '<span class="material-symbols-outlined">remove</span>';
@@ -1738,6 +1739,13 @@
             });
             card.appendChild(ignoreBtn);
         }
+
+        // Quick Match button (centered) - for reassigning to different person
+        const quickMatchBtn = createQuickMatchButton(face.id, card, pickerSelection);
+        card.appendChild(quickMatchBtn);
+
+        // Repel buttons if thumbnail is too small
+        repelFaceCardButtons(facesThumbnailSize, ignoreBtn, quickMatchBtn, unassignBtn);
 
         // Add star overlay (outside thumb to avoid circular clip)
         const star = document.createElement('div');
@@ -3550,9 +3558,16 @@
             }
         });
 
+        // Quick Match button (centered)
+        const quickMatchBtn = createQuickMatchButton(face.id, card, facesSelection);
+
         card.appendChild(thumb);
         card.appendChild(suppressBtn);
         card.appendChild(ignoreBtn);
+        card.appendChild(quickMatchBtn);
+
+        // Repel buttons if thumbnail is too small
+        repelFaceCardButtons(facesThumbnailSize, ignoreBtn, quickMatchBtn, suppressBtn);
 
         // Create editable name input
         const input = document.createElement('input');
@@ -4311,8 +4326,9 @@
 
         // Create ignore button (assign to "-" person) - only for non-ignored faces
         const isIgnored = face.person_id && face.person_name === '-';
+        let ignoreBtn = null;
         if (!isIgnored) {
-            const ignoreBtn = document.createElement('button');
+            ignoreBtn = document.createElement('button');
             ignoreBtn.className = 'face-ignore-btn';
             ignoreBtn.innerHTML = '<span class="material-symbols-outlined">remove</span>';
             ignoreBtn.title = 'Move to ignored list';
@@ -4366,24 +4382,33 @@
                 }
             });
             box.appendChild(ignoreBtn);
+        }
 
-            // Repel buttons if they would overlap on small bboxes
-            // Both buttons are 20px wide, positioned -10px from edges
-            // They overlap when box width < 40px (need 20+20 with some gap)
-            const MIN_BUTTON_GAP = 4;
-            const BUTTON_SIZE = 20;
-            const minWidthNeeded = BUTTON_SIZE * 2 + MIN_BUTTON_GAP;
+        // Quick Match button (centered) - shows on all face types
+        const quickMatchBtn = createQuickMatchButtonForOverlay(face.id, box, face);
+        box.appendChild(quickMatchBtn);
 
-            if (width < minWidthNeeded) {
-                // Calculate how much each button needs to move outward
-                const overflow = minWidthNeeded - width;
-                const offset = overflow / 2;
+        // Repel buttons if they would overlap on small bboxes
+        // Layout: ignore (left, -10px), quickmatch (center), action (right, -10px)
+        // Each button is 20px wide. Quickmatch is centered via CSS transform.
+        // Overlap happens when width < 48px (need 10+4+20+4+10 from center to edges)
+        const MIN_BUTTON_GAP = 4;
+        const BUTTON_SIZE = 20;
+        const BUTTON_OFFSET = 10;  // How far buttons extend beyond box edge
+        // Minimum: half-button + gap + half-center-button on each side = 10+4+10 = 24 per side = 48 total
+        const minWidthNeeded = (BUTTON_OFFSET + MIN_BUTTON_GAP + BUTTON_SIZE / 2) * 2;
 
-                // Move ignore button further left
-                ignoreBtn.style.left = `${-10 - offset}px`;
-                // Move action button further right
-                actionBtn.style.right = `${-10 - offset}px`;
+        if (width < minWidthNeeded) {
+            // Calculate how much each outer button needs to move outward
+            const overflow = minWidthNeeded - width;
+            const outerOffset = overflow / 2;
+
+            // Move outer buttons further out, center button stays centered
+            if (ignoreBtn) {
+                ignoreBtn.style.left = `${-BUTTON_OFFSET - outerOffset}px`;
             }
+            actionBtn.style.right = `${-BUTTON_OFFSET - outerOffset}px`;
+            // Quick match stays centered (CSS handles it)
         }
 
         // Create label
@@ -4873,6 +4898,353 @@
         } finally {
             suppressOverlayReload = false;
         }
+    }
+
+    // =========================================================================
+    // QUICK MATCH CARD
+    // =========================================================================
+
+    /** @type {HTMLElement|null} Currently open quick match card */
+    let quickMatchCard = null;
+
+    /** @type {HTMLElement|null} Backdrop behind quick match card */
+    let quickMatchBackdrop = null;
+
+    /** @type {string|null} Face ID for currently open quick match card */
+    let quickMatchFaceId = null;
+
+    /** @type {function|null} Bound keydown handler for Escape */
+    let quickMatchKeyHandler = null;
+
+    /**
+     * Show the Quick Match card for one or more faces.
+     * Fetches top matches and displays them in a popup anchored to the face thumbnail.
+     *
+     * @param {string[]} faceIds - Face IDs to assign (first one used for matching)
+     * @param {HTMLElement} anchor - Element to anchor the card to
+     * @param {Object} options - Additional options
+     * @param {function} [options.onAssign] - Callback when a match is selected (faceIds, personId, personName)
+     */
+    async function showQuickMatch(faceIds, anchor, options = {}) {
+        // Close any existing card first
+        hideQuickMatch();
+
+        // Use first face for matching
+        const primaryFaceId = faceIds[0];
+        quickMatchFaceId = primaryFaceId;
+
+        // Create the card element
+        const card = document.createElement('div');
+        card.className = 'quick-match-card';
+        quickMatchCard = card;
+
+        // Fetch matches from backend (based on primary face)
+        let matches = [];
+        try {
+            const response = await App.apiGet(`/faces/${primaryFaceId}/matches?limit=5`);
+            matches = response.data || [];
+        } catch (error) {
+            console.error('Failed to fetch face matches:', error);
+        }
+
+        // Build card content
+        // Source face at top
+        const sourceDiv = document.createElement('div');
+        sourceDiv.className = 'quick-match-source';
+        sourceDiv.title = 'Click to dismiss';
+
+        const sourceImg = document.createElement('img');
+        sourceImg.src = FaceThumbnails.getUrl(primaryFaceId);
+        sourceImg.alt = 'This face';
+        sourceDiv.appendChild(sourceImg);
+
+        const sourceLabel = document.createElement('span');
+        sourceLabel.className = 'quick-match-source-label';
+        sourceLabel.textContent = faceIds.length > 1
+            ? `Find match for ${faceIds.length} faces`
+            : 'Find match for this face';
+        sourceDiv.appendChild(sourceLabel);
+
+        sourceDiv.addEventListener('click', (e) => {
+            e.stopPropagation();
+            hideQuickMatch();
+        });
+
+        card.appendChild(sourceDiv);
+
+        // Matches section
+        if (matches.length > 0) {
+            const matchesDiv = document.createElement('div');
+            matchesDiv.className = 'quick-match-matches';
+
+            for (const match of matches) {
+                const item = document.createElement('div');
+                item.className = 'quick-match-item';
+
+                const img = document.createElement('img');
+                // Use person's preferred face thumbnail, not the matched face
+                img.src = `/api/people/${match.person_id}/thumbnail`;
+                img.alt = match.person_name;
+                item.appendChild(img);
+
+                const name = document.createElement('span');
+                name.className = 'name';
+                name.textContent = match.person_name;
+                item.appendChild(name);
+
+                item.addEventListener('click', async (e) => {
+                    e.stopPropagation();
+                    hideQuickMatch();
+
+                    // Assign all faces to this person
+                    if (options.onAssign) {
+                        options.onAssign(faceIds, match.person_id, match.person_name);
+                    } else {
+                        // Default: use AppState.faces.identify
+                        try {
+                            await AppState.faces.identify(faceIds, match.person_name);
+                        } catch (error) {
+                            console.error('Failed to assign faces:', error);
+                            App.showError('Failed to assign faces');
+                        }
+                    }
+                });
+
+                matchesDiv.appendChild(item);
+            }
+
+            card.appendChild(matchesDiv);
+        } else {
+            // No matches
+            const empty = document.createElement('div');
+            empty.className = 'quick-match-empty';
+            empty.textContent = 'No similar faces found';
+            card.appendChild(empty);
+        }
+
+        // Create backdrop
+        const backdrop = document.createElement('div');
+        backdrop.className = 'quick-match-backdrop';
+        backdrop.addEventListener('click', () => {
+            hideQuickMatch();
+        });
+        quickMatchBackdrop = backdrop;
+
+        // Add to document (backdrop first, then card on top)
+        document.body.appendChild(backdrop);
+        document.body.appendChild(card);
+
+        // Position the card centered over the anchor
+        positionQuickMatchCard(card, anchor);
+
+        // Show with animation
+        requestAnimationFrame(() => {
+            backdrop.classList.add('visible');
+            card.classList.add('visible');
+        });
+
+        // Set up Escape key handler
+        quickMatchKeyHandler = (e) => {
+            if (e.key === 'Escape') {
+                e.stopPropagation();
+                e.preventDefault();
+                hideQuickMatch();
+            }
+        };
+        document.addEventListener('keydown', quickMatchKeyHandler, { capture: true });
+    }
+
+    /**
+     * Position the Quick Match card centered over the anchor, respecting viewport bounds.
+     * @param {HTMLElement} card - The card element
+     * @param {HTMLElement} anchor - The anchor element
+     */
+    function positionQuickMatchCard(card, anchor) {
+        const anchorRect = anchor.getBoundingClientRect();
+        const cardRect = card.getBoundingClientRect();
+
+        // Target: centered horizontally over anchor, above it vertically
+        let left = anchorRect.left + (anchorRect.width / 2) - (cardRect.width / 2);
+        let top = anchorRect.top - cardRect.height - 8;
+
+        // If card would go above viewport, position below anchor instead
+        if (top < 8) {
+            top = anchorRect.bottom + 8;
+        }
+
+        // Keep within horizontal viewport bounds
+        const padding = 8;
+        if (left < padding) {
+            left = padding;
+        } else if (left + cardRect.width > window.innerWidth - padding) {
+            left = window.innerWidth - cardRect.width - padding;
+        }
+
+        // Keep within vertical viewport bounds
+        if (top + cardRect.height > window.innerHeight - padding) {
+            top = window.innerHeight - cardRect.height - padding;
+        }
+
+        card.style.left = `${left}px`;
+        card.style.top = `${top}px`;
+    }
+
+    /**
+     * Repel face card buttons if they would overlap on small thumbnails.
+     * Moves outer buttons further out while keeping center button centered.
+     *
+     * @param {number} cardWidth - Width of the card/thumbnail in pixels
+     * @param {HTMLElement|null} leftBtn - Left button (ignore), or null
+     * @param {HTMLElement} centerBtn - Center button (quickmatch)
+     * @param {HTMLElement} rightBtn - Right button (suppress/unassign)
+     */
+    function repelFaceCardButtons(cardWidth, leftBtn, centerBtn, rightBtn) {
+        const BUTTON_SIZE = 22;      // Face card buttons are 22px
+        const BUTTON_INSET = 4;      // 0.25rem = 4px from edge
+        const MIN_GAP = 4;           // Minimum gap between buttons
+
+        // Calculate minimum width needed:
+        // Left side: inset + button + gap + half of center button
+        // Right side: same
+        // Total: 2 * (4 + 22 + 4 + 11) = 2 * 41 = 82px for 3 buttons
+        // For 2 buttons: inset + button + gap + half-center on right side only matters
+        const numButtons = leftBtn ? 3 : 2;
+        const halfCenter = BUTTON_SIZE / 2;
+        const minWidthNeeded = numButtons === 3
+            ? 2 * (BUTTON_INSET + BUTTON_SIZE + MIN_GAP + halfCenter)
+            : BUTTON_INSET + BUTTON_SIZE + MIN_GAP + halfCenter + halfCenter + MIN_GAP + BUTTON_SIZE + BUTTON_INSET;
+
+        if (cardWidth < minWidthNeeded) {
+            const overflow = minWidthNeeded - cardWidth;
+            const outerOffset = overflow / 2;
+
+            // Move outer buttons further out (negative position moves them outside card)
+            if (leftBtn) {
+                leftBtn.style.left = `${BUTTON_INSET - outerOffset}px`;
+            }
+            rightBtn.style.right = `${BUTTON_INSET - outerOffset}px`;
+            // Center button stays centered (CSS handles it)
+        }
+    }
+
+    /**
+     * Hide and remove the Quick Match card and backdrop.
+     */
+    function hideQuickMatch() {
+        if (!quickMatchCard) return;
+
+        const card = quickMatchCard;
+        const backdrop = quickMatchBackdrop;
+        quickMatchCard = null;
+        quickMatchBackdrop = null;
+        quickMatchFaceId = null;
+
+        // Remove keydown handler
+        if (quickMatchKeyHandler) {
+            document.removeEventListener('keydown', quickMatchKeyHandler, { capture: true });
+            quickMatchKeyHandler = null;
+        }
+
+        // Animate out
+        card.classList.remove('visible');
+        card.classList.add('closing');
+        if (backdrop) {
+            backdrop.classList.remove('visible');
+            backdrop.classList.add('closing');
+        }
+
+        setTimeout(() => {
+            card.remove();
+            if (backdrop) backdrop.remove();
+        }, 100);
+    }
+
+    /**
+     * Create a Quick Match button for a face card.
+     * @param {string} faceId - Face ID
+     * @param {HTMLElement} card - Card element (used as anchor)
+     * @param {Object} selection - GridSelection instance (optional)
+     * @returns {HTMLElement}
+     */
+    function createQuickMatchButton(faceId, card, selection) {
+        const btn = document.createElement('button');
+        btn.className = 'face-card-quickmatch';
+        btn.title = 'Find matching person';
+        // Use auto_awesome icon with magic unicode fallback
+        btn.innerHTML = '<span class="material-symbols-outlined">auto_awesome</span>';
+
+        btn.addEventListener('click', async (e) => {
+            e.stopPropagation();
+            e.preventDefault();
+
+            // Selection model: if this face is selected, apply to all selected
+            let faceIds;
+            if (selection && selection.isSelected(faceId)) {
+                faceIds = selection.getSelected();
+            } else {
+                faceIds = [faceId];
+            }
+
+            await showQuickMatch(faceIds, card.querySelector('.face-card-thumb') || card);
+        });
+
+        return btn;
+    }
+
+    /**
+     * Create a Quick Match button for a fullscreen overlay face box.
+     * @param {string} faceId - Face ID
+     * @param {HTMLElement} box - Face box element (used as anchor)
+     * @param {Object} face - Face object
+     * @returns {HTMLElement}
+     */
+    function createQuickMatchButtonForOverlay(faceId, box, face) {
+        const btn = document.createElement('button');
+        btn.className = 'face-quickmatch-btn';
+        btn.title = 'Find matching person';
+        btn.innerHTML = '<span class="material-symbols-outlined">auto_awesome</span>';
+
+        btn.addEventListener('click', async (e) => {
+            e.stopPropagation();
+            e.preventDefault();
+            await showQuickMatch([faceId], box, {
+                onAssign: async (faceIds, personId, personName) => {
+                    // Update the face box label (only one face in fullscreen overlay)
+                    const label = box.querySelector('.face-label');
+                    if (label) {
+                        // Clear and show new name
+                        label.innerHTML = '';
+                        const nameSpan = document.createElement('span');
+                        nameSpan.className = 'face-name';
+                        nameSpan.textContent = personName;
+                        nameSpan.addEventListener('click', () => {
+                            showNameInput(label, { ...face, person_id: personId, person_name: personName });
+                        });
+                        label.appendChild(nameSpan);
+                    }
+
+                    // Update box styling
+                    box.classList.remove('unknown', 'ignored');
+                    box.classList.add('known');
+
+                    // Call API
+                    suppressOverlayReload = true;
+                    try {
+                        await AppState.faces.identify(faceIds, personName);
+                    } catch (error) {
+                        console.error('Failed to assign face:', error);
+                        App.showError('Failed to assign face');
+                        // Reload overlay on error
+                        const imageId = Fullscreen.state.currentId;
+                        if (imageId) loadFacesForImage(imageId);
+                    } finally {
+                        suppressOverlayReload = false;
+                    }
+                }
+            });
+        });
+
+        return btn;
     }
 
     // =========================================================================

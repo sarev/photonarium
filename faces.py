@@ -1697,6 +1697,92 @@ def get_all_known_face_embeddings(
     return results
 
 
+def get_face_matches(
+    conn: sqlite3.Connection,
+    face_id: str,
+    limit: int = 5,
+) -> list[dict[str, Any]]:
+    """Get top matching people for a face based on similarity to locked faces.
+
+    Compares the given face's embedding against all locked (manually_tagged=1)
+    faces and returns the top N people with their best-matching face.
+
+    Args:
+        conn: Database connection.
+        face_id: The face to find matches for.
+        limit: Maximum number of matches to return.
+
+    Returns:
+        List of dicts with:
+        - person_id: ID of the matching person
+        - person_name: Name of the matching person
+        - face_id: ID of their best-matching locked face
+        - similarity: Cosine similarity score (0-1)
+    """
+    # Get the target face's embedding
+    cursor = conn.execute(
+        'SELECT embedding FROM faces WHERE id = ? AND suppressed = 0',
+        (face_id,)
+    )
+    row = cursor.fetchone()
+    if not row or not row['embedding']:
+        return []
+
+    target_embedding = np.frombuffer(row['embedding'], dtype=np.float32)
+
+    # Get all locked face embeddings with person info
+    cursor = conn.execute(
+        '''SELECT f.id, f.person_id, f.embedding, p.name as person_name
+           FROM faces f
+           JOIN people p ON f.person_id = p.id
+           WHERE f.suppressed = 0 AND f.manually_tagged = 1
+             AND p.name != '-' '''
+    )
+
+    # Build list of (face_id, person_id, person_name, embedding)
+    locked_faces = []
+    for row in cursor.fetchall():
+        embedding = np.frombuffer(row['embedding'], dtype=np.float32)
+        locked_faces.append((row['id'], row['person_id'], row['person_name'], embedding))
+
+    if not locked_faces:
+        return []
+
+    # Compute similarities
+    locked_matrix = np.vstack([emb for _, _, _, emb in locked_faces])
+
+    # Ensure L2-normalized
+    target_norm = np.linalg.norm(target_embedding)
+    if not np.isclose(target_norm, 1.0, atol=0.01):
+        target_embedding = target_embedding / target_norm
+    locked_norms = np.linalg.norm(locked_matrix, axis=1)
+    if not np.allclose(locked_norms, 1.0, atol=0.01):
+        locked_matrix = locked_matrix / locked_norms[:, np.newaxis]
+
+    # Dot product = cosine similarity for L2-normalized vectors
+    similarities = target_embedding @ locked_matrix.T
+
+    # Group by person, keeping only the best match per person
+    person_best: dict[str, tuple[str, str, float]] = {}  # person_id -> (face_id, name, similarity)
+    for i, (fid, pid, pname, _) in enumerate(locked_faces):
+        sim = float(similarities[i])
+        if pid not in person_best or sim > person_best[pid][2]:
+            person_best[pid] = (fid, pname, sim)
+
+    # Sort by similarity descending and take top N
+    sorted_matches = sorted(person_best.items(), key=lambda x: x[1][2], reverse=True)[:limit]
+
+    return [
+        {
+            'person_id': pid,
+            'person_name': data[1],
+            'face_id': data[0],
+            'similarity': data[2],
+        }
+        for pid, data in sorted_matches
+    ]
+
+
 def update_face_person(
     conn: sqlite3.Connection,
     face_id: str,
