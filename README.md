@@ -388,7 +388,34 @@ Supported image types include: `.jpg`, `.jpeg`, `.png`, `.gif`, `.bmp`, `.tiff`,
 - Python 3.11 or later
 - A CUDA-capable GPU is recommended for faster processing, but not required
 
-## Setup
+## Quick install (recommended)
+
+The installer scripts create a virtual environment, install all dependencies in the correct order, initialise the configuration, and download the ML models. They will ask where to store your data (database, thumbnails, config) and confirm before making changes.
+
+**Windows:**
+
+Open the Imaginary folder in File Explorer and double-click `install.bat`. If Windows SmartScreen shows a "Windows protected your PC" warning, click **More info** then **Run anyway** — the script only installs Python packages and downloads ML models.
+
+Alternatively, open Command Prompt, navigate to the Imaginary folder, and run:
+
+```
+install.bat
+```
+
+**Linux / macOS:**
+
+Open a terminal, navigate to the Imaginary folder, and run:
+
+```bash
+chmod +x install.sh
+./install.sh
+```
+
+The `chmod` command only needs to be run once (it marks the script as executable).
+
+## Manual installation
+
+If you prefer to install manually, or the installer script doesn't suit your setup, follow these steps.
 
 1. **Create a virtual environment**
 
@@ -416,7 +443,10 @@ Supported image types include: `.jpg`, `.jpeg`, `.png`, `.gif`, `.bmp`, `.tiff`,
    python -m pip install --upgrade pip
 
    # PyTorch (with CUDA support for GPU acceleration)
+   # Windows / Linux:
    pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu124
+   # macOS (use default PyPI — the cu124 index has no macOS wheels):
+   # pip install torch torchvision torchaudio
 
    # Other dependencies (install facenet-pytorch with --no-deps to avoid replacing CUDA torch)
    pip install open_clip_torch
