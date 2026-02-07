@@ -399,6 +399,8 @@ loading.js → events.js → index.js
 
 ### Domain Files
 
+Business logic and core application state in the frontend is handled by `static/appstate`. This performs an 'optimistic cacheing' strategy to maintain RAM-based copies of state which may be rolled-back if something goes wrong in the backend that invalidates any optimistic assumptions. It provides mechanisms for subscribers (across the frontend) to be notified via events when key state domains are updated, so (for example) they can refresh.
+
 | File | Domain(s) | Persistence | Description |
 |------|-----------|-------------|-------------|
 | `view.js` | view | localStorage | Theme (light/dark), thumbnail size, sort settings |
@@ -413,3 +415,27 @@ loading.js → events.js → index.js
 | `images.js` | images | Backend | Image metadata cache with delta sync (epoch-based), display list (lazily recomputed from images + sort + filter) |
 | `loading.js` | loading | Memory | Loading overlay with ownership tracking (only the current owner can hide it) |
 | `events.js` | events | N/A | Polls `/api/events` every 2s, dispatches `faces_reassessed`, `folder_added`, `folder_removed`, `processing_complete`, `image_ingested`, `error` to relevant domains |
+
+---
+
+## Key Principles For Developing Imaginary
+
+The following rules apply to all submissions to the Imaginary codebase:
+
+1. Must be compatible with the terms of the Apache 2.0 FOSS license.
+2. Aside from `download_models.py` and the speculative downloading of the Google Material-Symbols fonts, Imaginary should be able to run offline indefinitely.
+3. Imaginary should work correctly on (recent) Windows, Mac, and Linux machines.
+4. Imaginary does not collect user/performance data to be sent anywhere for analysis.
+5. While Imaginary prefers NVIDIA GPUs with CUDA cores for performance reasons, it should still be able to function in a pure CPU environment.
+6. Must respect the pre-existing Imaginary coding styles and formatting.
+7. Must attempt to extend/adapt existing Imaginary code over re-inventing the wheel, duplicating.
+8. The UI/UX design should be clean, elegant, obvious, non-technical, and themically/semantically consistent.
+9. All frontend operations that act upon images/faces/people should be assumed to be batch operations to minimise frontend/backend round-trips and encourage parallelism.
+10. Must be well commented with PEP (Python) and JDoc (JavaScript) comments, covering the *why* as well as the *what* and *how*.
+11. Must try to parallelise computationally-intensive tasks, avoid poor scaling such as O(n*n) patterns or memory explosions with many images/faces/people.
+12. Any 'thready' backend code must be correctly integrated with the 'graceful shutdown' code.
+13. Care should be taken to avoid race conditions.
+14. Never use SSE (server-side events) for passing info from backend to frontend, as they don't play well with Waitress. Use the existing event polling mechanism instead.
+15. Ensure key documents are kept up-to-date (`README.md` and `DEVELOP.md`) and GUI elements have helpful, non-technical tooltips (`title` strings).
+16. Schema changes need proper SQLite migrations so existing databases aren't broken on upgrade.
+17. Avoid adding new dependencies without strong justification, prefer stdlib/existing dependencies.
