@@ -1288,7 +1288,8 @@ a:hover {
     background: var(--color-overlay-button-hover);
 }
 
-.fullscreen-toolbar .fullscreen-btn .material-symbols-outlined {
+.fullscreen-toolbar .fullscreen-btn .material-symbols-outlined,
+.fullscreen-toolbar .fullscreen-btn .icon {
     font-size: 1.5rem;
 }
 
@@ -1322,7 +1323,8 @@ a:hover {
     background: var(--color-overlay-nav-hover);
 }
 
-.fullscreen-nav .material-symbols-outlined {
+.fullscreen-nav .material-symbols-outlined,
+.fullscreen-nav .icon {
     font-size: 2rem;
 }
 

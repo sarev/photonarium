@@ -7,3 +7,5 @@ CLAUDE.md
 __pycache__
 imaginary.db*
 examples
+demo-seed
+tutorials
