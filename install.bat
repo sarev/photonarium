@@ -56,9 +56,18 @@ if not defined PYTHON_CMD (
     echo.
     echo Python 3.11 or later is required but was not found.
     echo.
-    echo Download Python from https://www.python.org/downloads/
-    echo   - Make sure to check "Add Python to PATH" during installation.
-    echo   - If Python is already installed, check that it is on your PATH.
+    echo Download Python 3.11.9 from:
+    echo   https://www.python.org/downloads/release/python-3119/
+    echo.
+    echo   Scroll down to "Files" and download one of:
+    echo     - "Windows installer (64-bit)"   ^(most likely^)
+    echo     - "Windows installer (32-bit)"
+    echo.
+    echo   IMPORTANT: Do NOT use the "Download Python install manager" link
+    echo   at the top of the page — that installs a newer Python which is
+    echo   incompatible with Imaginary's dependencies.
+    echo.
+    echo   During installation, make sure to check "Add Python to PATH".
     echo.
     goto :error
 )
@@ -207,9 +216,18 @@ echo --- Upgrading pip ---
 if !errorlevel! neq 0 goto :error
 
 echo.
-echo --- Installing PyTorch (with CUDA support) ---
-"%VENV_PIP%" install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu124
-if !errorlevel! neq 0 goto :error
+echo --- Installing PyTorch ---
+echo Trying CUDA 12.4 build (for NVIDIA GPU acceleration)...
+"%VENV_PIP%" install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu124 2>nul
+if !errorlevel! neq 0 (
+    echo.
+    echo CUDA build not available for this platform/Python version.
+    echo Installing CPU-only PyTorch instead (Imaginary will still work,
+    echo just without GPU acceleration^).
+    echo.
+    "%VENV_PIP%" install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cpu
+    if !errorlevel! neq 0 goto :error
+)
 
 echo.
 echo --- Installing OpenCLIP ---
@@ -225,6 +243,12 @@ echo.
 echo --- Installing remaining dependencies ---
 "%VENV_PIP%" install pillow opencv-python imagehash numpy pyyaml flask waitress orjson requests "transformers==4.44.*" rawpy exifread
 if !errorlevel! neq 0 goto :error
+
+echo.
+echo NOTE: You may see pip warnings about "facenet-pytorch" dependency
+echo conflicts above. These are safe to ignore — facenet-pytorch declares
+echo strict version bounds that are too tight, so we install it with
+echo --no-deps and provide the correct versions ourselves.
 
 :: ---------------------------------------------------------------------------
 :: Step 3/4: Initialise configuration
@@ -266,12 +290,17 @@ echo   Installation complete!
 echo ============================================================
 echo.
 
-:: GPU availability check
-for /f "delims=" %%g in ('"%VENV_PYTHON%" -c "import torch; print('yes' if torch.cuda.is_available() else 'no')" 2^>nul') do set "CUDA_AVAILABLE=%%g"
+:: GPU availability check — write result to a temp file to avoid
+:: single-quote conflicts between for /f and Python string literals
+"%VENV_PYTHON%" -c "import torch; print(torch.cuda.is_available())" > "%TEMP%\imaginary_cuda.txt" 2>nul
+set /p CUDA_AVAILABLE=<"%TEMP%\imaginary_cuda.txt"
+del "%TEMP%\imaginary_cuda.txt" 2>nul
 
-if "!CUDA_AVAILABLE!"=="yes" (
-    for /f "delims=" %%d in ('"%VENV_PYTHON%" -c "import torch; print(torch.cuda.get_device_name(0))" 2^>nul') do set "CUDA_DEVICE=%%d"
-    echo   GPU: CUDA is available (!CUDA_DEVICE!).
+if "!CUDA_AVAILABLE!"=="True" (
+    "%VENV_PYTHON%" -c "import torch; print(torch.cuda.get_device_name(0))" > "%TEMP%\imaginary_cuda.txt" 2>nul
+    set /p CUDA_DEVICE=<"%TEMP%\imaginary_cuda.txt"
+    del "%TEMP%\imaginary_cuda.txt" 2>nul
+    echo   GPU: CUDA is available ^(!CUDA_DEVICE!^).
 ) else (
     echo   GPU: CUDA is not available. Imaginary will use the CPU.
     echo        For GPU acceleration, install NVIDIA drivers and CUDA toolkit:
@@ -292,6 +321,9 @@ echo   Then open http://localhost:5000 in your browser.
 echo.
 
 set "INSTALL_COMPLETE=1"
+echo.
+echo Press any key to close this window.
+pause >nul
 goto :eof
 
 :: ---------------------------------------------------------------------------
@@ -304,4 +336,6 @@ echo   Installation failed.
 echo   Check the messages above for details.
 echo ============================================================
 echo.
+echo Press any key to close this window.
+pause >nul
 exit /b 1

@@ -244,8 +244,16 @@ if [ "$PLATFORM_NAME" = "macOS" ]; then
     # macOS: install from default PyPI (includes MPS support)
     "$VENV_PIP" install torch torchvision torchaudio
 else
-    # Linux: install with CUDA support (cu124 wheels include CPU fallback)
-    "$VENV_PIP" install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu124
+    # Linux: try CUDA 12.4 build first, fall back to CPU-only if unavailable
+    echo "Trying CUDA 12.4 build (for NVIDIA GPU acceleration)..."
+    if ! "$VENV_PIP" install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu124 2>/dev/null; then
+        echo ""
+        echo "CUDA build not available for this platform/Python version."
+        echo "Installing CPU-only PyTorch instead (Imaginary will still work,"
+        echo "just without GPU acceleration)."
+        echo ""
+        "$VENV_PIP" install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cpu
+    fi
 fi
 
 echo ""
@@ -259,6 +267,12 @@ echo "--- Installing face detection (facenet-pytorch) ---"
 echo ""
 echo "--- Installing remaining dependencies ---"
 "$VENV_PIP" install pillow opencv-python imagehash numpy pyyaml flask waitress orjson requests "transformers==4.44.*" rawpy exifread
+
+echo ""
+echo "NOTE: You may see pip warnings about \"facenet-pytorch\" dependency"
+echo "conflicts above. These are safe to ignore — facenet-pytorch declares"
+echo "strict version bounds that are too tight, so we install it with"
+echo "--no-deps and provide the correct versions ourselves."
 
 # ---------------------------------------------------------------------------
 # Step 3/4: Initialise configuration
