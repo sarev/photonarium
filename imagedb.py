@@ -4185,6 +4185,10 @@ class ImageDatabase:
         with self._db_lock:
             result = add_folder(self.conn, path, self.config)
         if result is not None:
+            # Enable full processing chain — adding a folder via the GUI
+            # should trigger face detection and grouping just like Rescan
+            self._run_face_detection = True
+            self._run_face_grouping = True
             # Queue images for ingestion
             for image_path in result['new_images']:
                 self._ingestion_queue.put(image_path)

@@ -157,6 +157,15 @@ AppState.events = (function() {
             AppState.folders.loadStats();
         }
 
+        // Reload images so the Gallery picks up newly indexed photos.
+        // Without this, Gallery shows empty after first-run indexing because
+        // the cache was populated (empty) before any images were indexed.
+        // The broadcast from load() sets Gallery.needsRefresh if it's not
+        // the active screen, ensuring onEnter fetches fresh data.
+        if (AppState.images?.reload) {
+            AppState.images.reload();
+        }
+
         // Notify folders domain that processing is complete
         // This triggers databaseChanged broadcast for screens that care
         if (AppState.folders?.setStatus) {
