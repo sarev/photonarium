@@ -1,0 +1,155 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Duplicates — Cleaning up your collection — Imaginary Tutorial</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:opsz,wght,FILL,GRAD@24,400,0,0" />
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    font-family: 'Noto Sans', 'Segoe UI', system-ui, sans-serif;
+    line-height: 1.6;
+    color: #2d2826;
+    background: #f5f0ee;
+    max-width: 900px;
+    margin: 0 auto;
+    padding: 2rem 1.5rem;
+  }
+  h1 {
+    font-size: 1.8rem;
+    margin-bottom: 0.5rem;
+    color: #231e1d;
+  }
+  h2 {
+    font-size: 1.3rem;
+    margin-top: 2.5rem;
+    margin-bottom: 0.75rem;
+    color: #4a4340;
+    border-bottom: 1px solid #ccc4bd;
+    padding-bottom: 0.25rem;
+  }
+  .step {
+    margin-bottom: 2rem;
+  }
+  .step h3 {
+    font-size: 1.05rem;
+    margin-bottom: 0.5rem;
+    color: #231e1d;
+  }
+  .step img {
+    width: 100%;
+    border: 1px solid #ccc4bd;
+    border-radius: 6px;
+    margin-bottom: 0.5rem;
+    box-shadow: 0 2px 8px rgba(46, 42, 39, 0.1);
+  }
+  .step .caption {
+    font-size: 0.95rem;
+    color: #4a4340;
+    padding: 0.5rem 0;
+  }
+  .step .caption table {
+    width: 100%;
+    border-collapse: collapse;
+    margin-top: 0.5rem;
+    font-size: 0.9rem;
+  }
+  .step .caption th {
+    text-align: left;
+    padding: 0.3rem 0.6rem;
+    border-bottom: 2px solid #ccc4bd;
+    color: #231e1d;
+  }
+  .step .caption td {
+    padding: 0.25rem 0.6rem;
+    border-bottom: 1px solid #e0dbd8;
+    vertical-align: middle;
+  }
+  .step .caption td.icon-cell {
+    text-align: center;
+    width: 4rem;
+    font-size: 1.2rem;
+  }
+  .step .caption .material-symbols-outlined {
+    font-size: 1.2rem;
+    vertical-align: middle;
+  }
+  nav {
+    margin-bottom: 2rem;
+    padding: 1rem;
+    background: #eae5e3;
+    border-radius: 8px;
+  }
+  nav h2 {
+    margin-top: 0;
+    border: none;
+  }
+  nav ol {
+    padding-left: 1.5rem;
+  }
+  nav li {
+    margin: 0.3rem 0;
+  }
+  nav a {
+    color: #796a57;
+    text-decoration: none;
+  }
+  nav a:hover {
+    text-decoration: underline;
+  }
+  .page-nav {
+    display: flex;
+    justify-content: space-between;
+    margin-top: 2rem;
+    padding-top: 1rem;
+    border-top: 1px solid #ccc4bd;
+  }
+  .page-nav a {
+    color: #796a57;
+    text-decoration: none;
+  }
+  .page-nav a:hover {
+    text-decoration: underline;
+  }
+</style>
+</head>
+<body>
+<h1>Duplicates — Cleaning up your collection</h1>
+<p><a href="index.html">← Back to contents</a></p>
+<div class="step">
+  <h3>4.1. Opening Duplicates</h3>
+  <img src="screenshots/4-1.png" alt="Opening Duplicates" loading="lazy">
+  <div class="caption">Click Duplicates in the toolbar to find photos that look the same or very similar. Each “stack” is a group of photos that Imaginary thinks are duplicates. The number shows how many are in each group.</div>
+</div>
+<div class="step">
+  <h3>4.2. Duplicates toolbar</h3>
+  <img src="screenshots/4-2.png" alt="Duplicates toolbar" loading="lazy">
+  <div class="caption">The duplicates screen has its own toolbar controls.<table><tr><th>Offline</th><th>Online</th><th>Description</th></tr><tr><td class="icon-cell">−</td><td class="icon-cell"><span class="material-symbols-outlined">remove</span></td><td>Smaller thumbnails</td></tr><tr><td class="icon-cell">✚</td><td class="icon-cell"><span class="material-symbols-outlined">add</span></td><td>Larger thumbnails</td></tr><tr><td colspan="2" style="text-align:left">Group slider</td><td>Strictness: Identical → Near-identical → Similar → Related</td></tr><tr><td colspan="2" style="text-align:left">Min size</td><td>Hide groups smaller than this</td></tr><tr><td class="icon-cell">⇅</td><td class="icon-cell"><span class="material-symbols-outlined">sort</span></td><td>Sort by group size</td></tr><tr><td class="icon-cell">👥</td><td class="icon-cell"><span class="material-symbols-outlined">group</span></td><td>Sort by people</td></tr><tr><td class="icon-cell">🔍</td><td class="icon-cell"><span class="material-symbols-outlined">image_search</span></td><td>Sort by semantic similarity</td></tr></table></div>
+</div>
+<div class="step">
+  <h3>4.3. Adjusting strictness</h3>
+  <img src="screenshots/4-3.png" alt="Adjusting strictness" loading="lazy">
+  <div class="caption">Move the slider to change how strict the matching is. “Identical” finds exact copies. “Related” casts a wider net for photos that are similar but not the same.</div>
+</div>
+<div class="step">
+  <h3>4.4. Opening a duplicate group</h3>
+  <img src="screenshots/4-4.png" alt="Opening a duplicate group" loading="lazy">
+  <div class="caption">Double-click a stack to open that group in the Gallery, where you can compare the photos and decide which ones to keep. The one selected is highest resolution with sharpest focus.</div>
+</div>
+<div class="step">
+  <h3>4.5. Reviewing duplicates in Gallery</h3>
+  <img src="screenshots/4-5.png" alt="Reviewing duplicates in Gallery" loading="lazy">
+  <div class="caption">Now you can see the duplicates together. Select the ones you don’t want — you could press Delete to remove them, or just move on to the next group.</div>
+</div>
+<div class="step">
+  <h3>4.6. Moving between groups</h3>
+  <img src="screenshots/4-6.png" alt="Moving between groups" loading="lazy">
+  <div class="caption">Use the toolbar arrow buttons (or Alt+Left / Alt+Right) to move to the next or previous duplicate group without going back to the Duplicates screen.</div>
+</div>
+<div class="page-nav">
+  <a href="section-3.html">← Search — Finding specific photos</a>
+  <a href="section-5.html">Faces — Naming the people in your photos →</a>
+</div>
+</body>
+</html>
