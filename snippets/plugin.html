@@ -1,0 +1,1106 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Imaginary Plugin UI PoC</title>
+  <style>
+    :root {
+      --bg: #0b0c10;
+      --panel: #11131a;
+      --panel2: #151a24;
+      --text: #e8eaf0;
+      --muted: #a9afbf;
+      --border: #2a3142;
+      --accent: #6aa6ff;
+      --danger: #ff6a6a;
+      --ok: #76d28b;
+      --radius: 12px;
+      --font: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial, "Apple Color Emoji", "Segoe UI Emoji";
+      --mono: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+    }
+
+    body {
+      margin: 0;
+      font-family: var(--font);
+      background: radial-gradient(1200px 700px at 30% 10%, #152038 0%, var(--bg) 55%) fixed;
+      color: var(--text);
+    }
+
+    .page {
+      max-width: 1200px;
+      margin: 0 auto;
+      padding: 24px;
+      display: grid;
+      grid-template-columns: 1.2fr 0.8fr;
+      gap: 16px;
+    }
+
+    @media (max-width: 980px) { .page { grid-template-columns: 1fr; } }
+
+    h1 { margin: 0 0 8px; font-size: 20px; }
+    p { margin: 0 0 12px; color: var(--muted); line-height: 1.4; }
+
+    .card {
+      background: rgba(17, 19, 26, 0.92);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      box-shadow: 0 12px 40px rgba(0,0,0,0.35);
+      overflow: hidden;
+    }
+
+    .card-header {
+      padding: 14px 16px;
+      border-bottom: 1px solid var(--border);
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 10px;
+      background: linear-gradient(180deg, rgba(255,255,255,0.03), rgba(255,255,255,0));
+    }
+
+    .card-body { padding: 16px; }
+    .card-footer {
+      padding: 12px 16px;
+      border-top: 1px solid var(--border);
+      background: rgba(255,255,255,0.02);
+      display: flex;
+      gap: 10px;
+      flex-wrap: wrap;
+      align-items: center;
+      justify-content: space-between;
+    }
+
+    textarea {
+      width: 100%;
+      min-height: 420px;
+      font-family: var(--mono);
+      font-size: 12.5px;
+      line-height: 1.45;
+      color: var(--text);
+      background: #0e1016;
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      padding: 10px;
+      resize: vertical;
+      box-sizing: border-box;
+    }
+
+    button {
+      border: 1px solid var(--border);
+      background: rgba(255,255,255,0.03);
+      color: var(--text);
+      border-radius: 10px;
+      padding: 9px 12px;
+      cursor: pointer;
+      transition: transform 0.03s ease;
+    }
+    button:hover { border-color: rgba(106,166,255,0.5); }
+    button:active { transform: translateY(1px); }
+
+    .btn-primary {
+      background: rgba(106,166,255,0.15);
+      border-color: rgba(106,166,255,0.45);
+    }
+
+    .btn-danger {
+      background: rgba(255,106,106,0.12);
+      border-color: rgba(255,106,106,0.45);
+    }
+
+    .btn-row { display: flex; gap: 10px; flex-wrap: wrap; align-items: center; }
+
+    .tiny { font-size: 12px; color: var(--muted); }
+    .mono { font-family: var(--mono); font-size: 12px; }
+
+    .status { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
+
+    .pill {
+      font-size: 12px;
+      border: 1px solid var(--border);
+      border-radius: 999px;
+      padding: 6px 10px;
+      background: rgba(255,255,255,0.02);
+      color: var(--muted);
+    }
+    .pill.ok { border-color: rgba(118,210,139,0.45); color: var(--ok); }
+    .pill.bad { border-color: rgba(255,106,106,0.45); color: var(--danger); }
+
+    /* Modal */
+    .overlay {
+      position: fixed;
+      inset: 0;
+      background: rgba(0,0,0,0.65);
+      display: none;
+      align-items: center;
+      justify-content: center;
+      padding: 18px;
+      z-index: 1000;
+    }
+    .overlay.open { display: flex; }
+
+    .modal {
+      width: min(980px, 100%);
+      max-height: min(90vh, 900px);
+      background: var(--panel);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      box-shadow: 0 20px 80px rgba(0,0,0,0.6);
+      display: grid;
+      grid-template-rows: auto 1fr auto;
+      overflow: hidden;
+    }
+
+    .modal-header, .modal-footer {
+      padding: 14px 16px;
+      border-bottom: 1px solid var(--border);
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      background: linear-gradient(180deg, rgba(255,255,255,0.03), rgba(255,255,255,0));
+    }
+    .modal-footer {
+      border-top: 1px solid var(--border);
+      border-bottom: none;
+      background: rgba(255,255,255,0.02);
+      flex-wrap: wrap;
+      justify-content: space-between;
+    }
+
+    .modal-title { display: grid; gap: 2px; }
+    .modal-title strong { font-size: 16px; }
+    .modal-title span { font-size: 12px; color: var(--muted); }
+
+    .modal-body { padding: 16px; overflow: auto; }
+
+    /* Layout blocks */
+    .ui-section {
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      margin-bottom: 12px;
+      background: rgba(255,255,255,0.02);
+      overflow: hidden;
+    }
+
+    .ui-section > summary {
+      list-style: none;
+      cursor: pointer;
+      padding: 12px 14px;
+      border-bottom: 1px solid var(--border);
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 10px;
+      user-select: none;
+    }
+    .ui-section > summary::-webkit-details-marker { display: none; }
+
+    .ui-section .section-title { display: grid; gap: 2px; }
+    .ui-section .section-title strong { font-size: 14px; }
+    .ui-section .section-title span { font-size: 12px; color: var(--muted); }
+
+    .ui-section .section-body { padding: 12px 14px; }
+
+    .ui-row {
+      display: flex;
+      gap: 12px;
+      flex-wrap: wrap;
+      align-items: flex-end;
+      margin-bottom: 12px;
+    }
+
+    .ui-grid {
+      display: grid;
+      gap: 12px;
+      margin-bottom: 12px;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+    }
+
+    @media (max-width: 720px) {
+      .ui-grid { grid-template-columns: 1fr !important; }
+    }
+
+    .span-2 { grid-column: span 2; }
+    @media (max-width: 720px) { .span-2 { grid-column: auto; } }
+
+    /* Controls */
+    .control {
+      display: grid;
+      gap: 6px;
+      min-width: 220px;
+    }
+    .control.compact { min-width: 160px; }
+
+    .control label {
+      font-size: 12px;
+      color: var(--muted);
+      display: flex;
+      gap: 8px;
+      align-items: baseline;
+      justify-content: space-between;
+    }
+
+    .control label .req {
+      font-size: 11px;
+      color: rgba(255,255,255,0.35);
+      border: 1px solid var(--border);
+      border-radius: 999px;
+      padding: 1px 6px;
+    }
+
+    .control .help {
+      font-size: 12px;
+      color: rgba(233,236,245,0.72);
+      line-height: 1.35;
+    }
+
+    input[type="text"], input[type="number"], select {
+      width: 100%;
+      box-sizing: border-box;
+      background: var(--panel2);
+      color: var(--text);
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      padding: 8px 10px;
+      font-size: 13px;
+      outline: none;
+    }
+
+    input[type="range"] { width: 100%; }
+
+    .radio-group {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 10px;
+      padding: 9px 10px;
+      border-radius: 10px;
+      border: 1px solid var(--border);
+      background: var(--panel2);
+    }
+
+    .radio-item {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      font-size: 13px;
+      color: var(--text);
+      white-space: nowrap;
+    }
+
+    .checkbox-line {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      padding: 9px 10px;
+      border-radius: 10px;
+      border: 1px solid var(--border);
+      background: var(--panel2);
+    }
+
+    .slider-row {
+      display: grid;
+      grid-template-columns: 1fr auto;
+      gap: 10px;
+      align-items: center;
+    }
+
+    .spinner { display: flex; align-items: center; gap: 8px; }
+    .spinner button { padding: 6px 10px; border-radius: 10px; }
+
+    pre {
+      margin: 0;
+      padding: 12px;
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      background: rgba(0,0,0,0.35);
+      overflow: auto;
+      max-height: 360px;
+    }
+
+    .kbd {
+      font-family: var(--mono);
+      font-size: 12px;
+      border: 1px solid var(--border);
+      border-bottom-color: rgba(255,255,255,0.08);
+      border-radius: 8px;
+      padding: 2px 6px;
+      background: rgba(255,255,255,0.03);
+      color: rgba(233,236,245,0.85);
+    }
+  </style>
+</head>
+
+<body>
+  <div class="page">
+    <div class="card">
+      <div class="card-header">
+        <div>
+          <h1>Plugin UI PoC (plain DOM)</h1>
+          <p>Paste a manifest JSON, click <span class="kbd">Render</span>. Presets and advanced sections are supported.</p>
+        </div>
+        <div class="btn-row">
+          <button id="btnLoadSample">Load sample (HDR)</button>
+          <button class="btn-primary" id="btnRender">Render</button>
+        </div>
+      </div>
+      <div class="card-body">
+        <textarea id="manifestInput" spellcheck="false"></textarea>
+      </div>
+      <div class="card-footer">
+        <div class="status">
+          <span class="pill" id="parseStatus">No manifest loaded</span>
+          <span class="tiny">Tip: press <span class="kbd">Esc</span> to close the modal</span>
+        </div>
+        <div class="btn-row">
+          <button id="btnFormat">Format JSON</button>
+        </div>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="card-header">
+        <strong>Rendered output</strong>
+        <span class="tiny">Live as you edit controls</span>
+      </div>
+      <div class="card-body">
+        <div class="tiny" style="margin-bottom: 8px;">Effective params JSON:</div>
+        <pre class="mono" id="paramsOut">{}</pre>
+        <div style="height: 10px;"></div>
+        <div class="tiny" style="margin-bottom: 8px;">Validation errors:</div>
+        <pre class="mono" id="errorsOut">[]</pre>
+      </div>
+      <div class="card-footer">
+        <div class="btn-row">
+          <button id="btnCopyParams">Copy params JSON</button>
+          <button class="btn-danger" id="btnClear">Clear</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Modal -->
+  <div class="overlay" id="overlay" aria-hidden="true">
+    <div class="modal" role="dialog" aria-modal="true" aria-label="Plugin UI">
+      <div class="modal-header">
+        <div class="modal-title">
+          <strong id="modalTitle">Plugin</strong>
+          <span id="modalSubtitle">Generated UI</span>
+        </div>
+
+        <div class="btn-row" style="flex-wrap:nowrap;">
+          <select id="presetSelect" title="Presets" style="min-width: 220px; display:none;">
+            <option value="">Presets…</option>
+          </select>
+          <button id="btnReset">Reset to defaults</button>
+          <button id="btnClose">Close</button>
+        </div>
+      </div>
+
+      <div class="modal-body" id="modalBody"></div>
+
+      <div class="modal-footer">
+        <div class="status">
+          <span class="pill" id="runStatus">Ready</span>
+          <span class="tiny">This PoC simulates “Run” only.</span>
+        </div>
+        <div class="btn-row">
+          <button id="btnSimRun" class="btn-primary">Run (simulate)</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+<script>
+(function() {
+  "use strict";
+
+  // Sample manifest includes presets + an advanced section.
+  const SAMPLE_MANIFEST = {
+    id: "imaginary.hdr_merge",
+    name: "HDR Merge",
+    version: "1.0.0",
+    description: "Combine bracketed exposures into a natural-looking HDR image.",
+    presets: [
+      { id: "natural", label: "Natural", params: { mode: "hdr", hdr_merge: "debevec", align: true, tonemap: "reinhard", gamma: 1.0, intensity: -0.2, light_adapt: 1.0, color_adapt: 0.0 } },
+      { id: "protect_highlights", label: "Protect highlights", params: { mode: "hdr", tonemap: "drago", gamma: 1.0, saturation: 1.05, bias: 0.7 } },
+      { id: "punchy", label: "Punchy", params: { mode: "hdr", tonemap: "mantiuk", gamma: 1.0, saturation: 1.2, scale: 1.1 } },
+      { id: "fusion_default", label: "Fusion (default)", params: { mode: "fusion", contrast_w: 1.0, saturation_w: 1.0, exposure_w: 1.0 } }
+    ],
+
+    params: {
+      mode: { type: "enum", label: "Processing mode", default: "hdr",
+        options: [
+          { value: "hdr", label: "True HDR (radiance + tone mapping)" },
+          { value: "fusion", label: "Exposure fusion (often more natural)" }
+        ],
+        help: "HDR builds a radiance image then tone-maps it. Fusion blends exposures without building a true HDR map."
+      },
+
+      hdr_merge: { type: "enum", label: "HDR merge method", default: "debevec",
+        options: [
+          { value: "debevec", label: "Debevec" },
+          { value: "robertson", label: "Robertson" }
+        ]
+      },
+      align: { type: "bool", label: "Auto-align images", default: true,
+        help: "Recommended even on a tripod to correct tiny shifts."
+      },
+
+      tonemap: { type: "enum", label: "Tone mapping", default: "reinhard",
+        options: [
+          { value: "reinhard", label: "Reinhard (balanced)" },
+          { value: "drago", label: "Drago (protect highlights)" },
+          { value: "mantiuk", label: "Mantiuk (punchy local contrast)" }
+        ]
+      },
+
+      gamma: { type: "float", label: "Gamma", default: 1.1, min: 0.6, max: 2.2, step: 0.05 },
+      intensity: { type: "float", label: "Intensity", default: 0.0, min: -2.0, max: 2.0, step: 0.05 },
+      light_adapt: { type: "float", label: "Light adapt", default: 1.0, min: 0.0, max: 1.0, step: 0.05 },
+      color_adapt: { type: "float", label: "Colour adapt", default: 0.0, min: 0.0, max: 1.0, step: 0.05 },
+
+      saturation: { type: "float", label: "Saturation", default: 1.0, min: 0.0, max: 2.0, step: 0.05 },
+      bias: { type: "float", label: "Bias", default: 0.85, min: 0.1, max: 1.0, step: 0.05 },
+      scale: { type: "float", label: "Scale", default: 0.85, min: 0.1, max: 2.0, step: 0.05 },
+
+      // "Advanced" knobs as a demonstration.
+      // You can remove these and the advanced section collapses away nicely.
+      local_contrast: { type: "float", label: "Local contrast", default: 0.0, min: -1.0, max: 1.0, step: 0.05,
+        help: "Extra local contrast adjustment after tone mapping (example advanced knob)."
+      },
+      colour_boost: { type: "float", label: "Colour boost", default: 0.0, min: -1.0, max: 1.0, step: 0.05,
+        help: "Extra colour adjustment after tone mapping (example advanced knob)."
+      },
+
+      contrast_w: { type: "float", label: "Contrast weight", default: 1.0, min: 0.0, max: 2.0, step: 0.05 },
+      saturation_w: { type: "float", label: "Saturation weight", default: 1.0, min: 0.0, max: 2.0, step: 0.05 },
+      exposure_w: { type: "float", label: "Exposure weight", default: 1.0, min: 0.0, max: 2.0, step: 0.05 }
+    },
+
+    ui: {
+      subtitle: "Preview of a modal plugin UI",
+      layout: [
+        {
+          type: "section",
+          title: "Mode",
+          children: [
+            { type: "row", children: [
+              { type: "control", key: "mode", control: "radio", span: 2 }
+            ]}
+          ]
+        },
+
+        {
+          type: "section",
+          title: "HDR merge",
+          show_if: { mode: "hdr" },
+          children: [
+            { type: "grid", columns: 2, children: [
+              { type: "control", key: "hdr_merge", control: "select" },
+              { type: "control", key: "align", control: "checkbox", compact: true }
+            ]}
+          ]
+        },
+
+        {
+          type: "section",
+          title: "Tone mapping",
+          show_if: { mode: "hdr" },
+          children: [
+            { type: "row", children: [
+              { type: "control", key: "tonemap", control: "radio", span: 2 }
+            ]},
+            { type: "grid", columns: 2, children: [
+              { type: "control", key: "gamma", control: "slider", span: 2 },
+
+              { type: "control", key: "intensity", control: "slider", show_if: { tonemap: "reinhard" } },
+              { type: "control", key: "light_adapt", control: "slider", show_if: { tonemap: "reinhard" } },
+              { type: "control", key: "color_adapt", control: "slider", show_if: { tonemap: "reinhard" }, span: 2 },
+
+              { type: "control", key: "saturation", control: "slider", show_if: { tonemap: ["drago", "mantiuk"] } },
+              { type: "control", key: "bias", control: "slider", show_if: { tonemap: "drago" } },
+              { type: "control", key: "scale", control: "slider", show_if: { tonemap: "mantiuk" } }
+            ]}
+          ]
+        },
+
+        {
+          type: "section",
+          title: "Advanced",
+          advanced: true,
+          show_if: { mode: "hdr" },
+          description: "Optional knobs for fine-tuning.",
+          children: [
+            { type: "grid", columns: 2, children: [
+              { type: "control", key: "local_contrast", control: "slider" },
+              { type: "control", key: "colour_boost", control: "slider" }
+            ]}
+          ]
+        },
+
+        {
+          type: "section",
+          title: "Fusion",
+          show_if: { mode: "fusion" },
+          children: [
+            { type: "grid", columns: 2, children: [
+              { type: "control", key: "contrast_w", control: "slider" },
+              { type: "control", key: "saturation_w", control: "slider" },
+              { type: "control", key: "exposure_w", control: "slider", span: 2 }
+            ]}
+          ]
+        }
+      ]
+    }
+  };
+
+  const el = (tag, attrs = {}, children = []) => {
+    const n = document.createElement(tag);
+    for (const [k, v] of Object.entries(attrs)) {
+      if (k === "class") n.className = v;
+      else if (k === "text") n.textContent = String(v);
+      else if (k.startsWith("on") && typeof v === "function") n.addEventListener(k.slice(2).toLowerCase(), v);
+      else if (v !== undefined && v !== null) n.setAttribute(k, String(v));
+    }
+    for (const c of children) n.appendChild(c);
+    return n;
+  };
+
+  const byId = (id) => document.getElementById(id);
+
+  let manifest = null;
+  let values = {};
+  let controlNodes = {};
+
+  function matchesShowIf(showIf, currentValues) {
+    if (!showIf) return true;
+    for (const [k, expected] of Object.entries(showIf)) {
+      const actual = currentValues[k];
+      if (Array.isArray(expected)) {
+        if (!expected.includes(actual)) return false;
+      } else {
+        if (actual !== expected) return false;
+      }
+    }
+    return true;
+  }
+
+  function setDefaultsFromManifest(m) {
+    values = {};
+    const params = m.params || {};
+    for (const [key, def] of Object.entries(params)) {
+      if (def && Object.prototype.hasOwnProperty.call(def, "default")) values[key] = def.default;
+      else if (def && def.type === "bool") values[key] = false;
+      else values[key] = null;
+    }
+  }
+
+  function normaliseOptions(options) {
+    if (!options) return [];
+    return options.map(o => {
+      if (typeof o === "string") return { value: o, label: o };
+      return { value: o.value, label: o.label ?? String(o.value) };
+    });
+  }
+
+  function validateAll(m, currentValues) {
+    const errs = [];
+    const params = m.params || {};
+
+    for (const [key, p] of Object.entries(params)) {
+      const v = currentValues[key];
+      if (v === null || v === undefined) continue;
+
+      const type = p.type;
+
+      if (type === "int") {
+        if (!Number.isInteger(v)) errs.push({ key, error: "Must be an integer" });
+      } else if (type === "float") {
+        if (typeof v !== "number" || !Number.isFinite(v)) errs.push({ key, error: "Must be a number" });
+      } else if (type === "string") {
+        if (typeof v !== "string") errs.push({ key, error: "Must be text" });
+      } else if (type === "bool") {
+        if (typeof v !== "boolean") errs.push({ key, error: "Must be true/false" });
+      } else if (type === "enum") {
+        const opts = normaliseOptions(p.options);
+        if (!opts.some(o => o.value === v)) errs.push({ key, error: "Invalid selection" });
+      }
+
+      if (typeof v === "number") {
+        if (typeof p.min === "number" && v < p.min) errs.push({ key, error: `Must be ≥ ${p.min}` });
+        if (typeof p.max === "number" && v > p.max) errs.push({ key, error: `Must be ≤ ${p.max}` });
+      }
+    }
+
+    return errs;
+  }
+
+  function labelFromKey(key) {
+    return key.replace(/_/g, " ").replace(/\b\w/g, c => c.toUpperCase());
+  }
+
+  function clamp(n, min, max) {
+    if (typeof min === "number") n = Math.max(min, n);
+    if (typeof max === "number") n = Math.min(max, n);
+    return n;
+  }
+
+  function stepOf(p) {
+    return (typeof p.step === "number" && p.step > 0) ? p.step : (p.type === "int" ? 1 : 0.1);
+  }
+
+  function parseNumber(str, isInt) {
+    const n = Number(str);
+    if (!Number.isFinite(n)) return null;
+    return isInt ? Math.trunc(n) : n;
+  }
+
+  function inferControl(p) {
+    if (p.type === "bool") return "checkbox";
+    if (p.type === "enum") return "select";
+    if (p.type === "int" || p.type === "float") {
+      if (typeof p.min === "number" && typeof p.max === "number") return "slider";
+      return "number";
+    }
+    return "text";
+  }
+
+  function renderControlNode(key, nodeSpec) {
+    const p = manifest.params[key];
+    if (!p) return el("div", { class: "tiny", text: `Unknown param: ${key}` });
+
+    const controlKind = nodeSpec.control || inferControl(p);
+    const labelText = nodeSpec.label || p.label || labelFromKey(key);
+    const helpText = nodeSpec.help || p.help || "";
+
+    const wrap = el("div", { class: "control" + (nodeSpec.compact ? " compact" : "") });
+    wrap.dataset.paramKey = key;
+
+    const lbl = el("label", {}, [
+      el("span", { text: labelText }),
+      el("span", { class: "req", text: p.type })
+    ]);
+
+    wrap.appendChild(lbl);
+
+    if (controlKind === "checkbox") {
+      const line = el("div", { class: "checkbox-line" });
+      const inputEl = el("input", { type: "checkbox" });
+      inputEl.checked = !!values[key];
+
+      const text = el("div", { style: "display:grid; gap:2px;" }, [
+        el("div", { text: labelText, style: "font-size:13px; color: var(--text);" }),
+        helpText ? el("div", { class: "tiny", text: helpText }) : el("div", {})
+      ]);
+
+      wrap.innerHTML = "";
+      line.appendChild(inputEl);
+      line.appendChild(text);
+      wrap.appendChild(line);
+
+      inputEl.addEventListener("change", () => {
+        values[key] = inputEl.checked;
+        updateAll();
+      });
+
+      return wrap;
+    }
+
+    if (controlKind === "select" && p.type === "enum") {
+      const inputEl = el("select");
+      const opts = normaliseOptions(p.options);
+      for (const o of opts) inputEl.appendChild(el("option", { value: o.value, text: o.label }));
+      inputEl.value = values[key];
+
+      inputEl.addEventListener("change", () => {
+        values[key] = inputEl.value;
+        updateAll();
+      });
+
+      wrap.appendChild(inputEl);
+      if (helpText) wrap.appendChild(el("div", { class: "help", text: helpText }));
+      return wrap;
+    }
+
+    if (controlKind === "radio" && p.type === "enum") {
+      const group = el("div", { class: "radio-group" });
+      const opts = normaliseOptions(p.options);
+      const name = "radio_" + key;
+
+      for (const o of opts) {
+        const id = `${name}_${String(o.value).replace(/[^\w-]/g, "_")}`;
+        const r = el("input", { type: "radio", name, id, value: o.value });
+        r.checked = (values[key] === o.value);
+
+        r.addEventListener("change", () => {
+          if (r.checked) {
+            values[key] = r.value;
+            updateAll();
+          }
+        });
+
+        group.appendChild(el("label", { class: "radio-item", for: id }, [
+          r, el("span", { text: o.label })
+        ]));
+      }
+
+      wrap.innerHTML = "";
+      wrap.appendChild(el("div", { class: "tiny", text: labelText }));
+      wrap.appendChild(group);
+      if (helpText) wrap.appendChild(el("div", { class: "help", text: helpText }));
+      return wrap;
+    }
+
+    if (controlKind === "slider" && (p.type === "float" || p.type === "int")) {
+      const isInt = p.type === "int";
+      const step = stepOf(p);
+      const min = (typeof p.min === "number") ? p.min : (isInt ? 0 : 0.0);
+      const max = (typeof p.max === "number") ? p.max : (isInt ? 100 : 1.0);
+
+      const range = el("input", { type: "range", min, max, step });
+      const num = el("input", { type: "number", min, max, step });
+
+      const initial = (typeof values[key] === "number") ? values[key] : p.default;
+      values[key] = clamp(initial, min, max);
+
+      range.value = String(values[key]);
+      num.value = String(values[key]);
+
+      const minus = el("button", { type: "button", text: "−" });
+      const plus = el("button", { type: "button", text: "+" });
+
+      const row = el("div", { class: "slider-row" }, [
+        range,
+        el("div", { class: "spinner" }, [minus, num, plus])
+      ]);
+
+      const sync = (n) => {
+        const clamped = clamp(n, min, max);
+        values[key] = clamped;
+        range.value = String(clamped);
+        num.value = String(clamped);
+        updateAll(false);
+      };
+
+      range.addEventListener("input", () => {
+        const n = parseNumber(range.value, isInt);
+        if (n === null) return;
+        sync(n);
+      });
+
+      num.addEventListener("change", () => {
+        const n = parseNumber(num.value, isInt);
+        if (n === null) return;
+        sync(n);
+      });
+
+      minus.addEventListener("click", () => sync((values[key] ?? 0) - step));
+      plus.addEventListener("click", () => sync((values[key] ?? 0) + step));
+
+      wrap.appendChild(row);
+      if (helpText) wrap.appendChild(el("div", { class: "help", text: helpText }));
+      return wrap;
+    }
+
+    if (controlKind === "number" && (p.type === "float" || p.type === "int")) {
+      const isInt = p.type === "int";
+      const inputEl = el("input", { type: "number" });
+      if (typeof p.min === "number") inputEl.min = String(p.min);
+      if (typeof p.max === "number") inputEl.max = String(p.max);
+      inputEl.step = String(stepOf(p));
+      inputEl.value = String(values[key]);
+
+      inputEl.addEventListener("change", () => {
+        const n = parseNumber(inputEl.value, isInt);
+        if (n !== null) values[key] = n;
+        updateAll();
+      });
+
+      wrap.appendChild(inputEl);
+      if (helpText) wrap.appendChild(el("div", { class: "help", text: helpText }));
+      return wrap;
+    }
+
+    const inputEl = el("input", { type: "text" });
+    inputEl.value = (values[key] ?? "");
+    inputEl.addEventListener("change", () => {
+      values[key] = inputEl.value;
+      updateAll();
+    });
+
+    wrap.appendChild(inputEl);
+    if (helpText) wrap.appendChild(el("div", { class: "help", text: helpText }));
+    return wrap;
+  }
+
+  function renderLayoutNode(node) {
+    if (!matchesShowIf(node.show_if, values)) return null;
+
+    if (node.type === "control") {
+      const wrap = renderControlNode(node.key, node);
+      if (node.span === 2) wrap.classList.add("span-2");
+      if (node.compact) wrap.classList.add("compact");
+      controlNodes[node.key] = wrap;
+      return wrap;
+    }
+
+    if (node.type === "row") {
+      const row = el("div", { class: "ui-row" });
+      for (const child of (node.children || [])) {
+        const c = renderLayoutNode(child);
+        if (c) row.appendChild(c);
+      }
+      return row;
+    }
+
+    if (node.type === "grid") {
+      const cols = Math.max(1, Math.min(3, Number(node.columns || 2)));
+      const grid = el("div", { class: "ui-grid" });
+      grid.style.gridTemplateColumns = `repeat(${cols}, minmax(0, 1fr))`;
+      for (const child of (node.children || [])) {
+        const c = renderLayoutNode(child);
+        if (c) grid.appendChild(c);
+      }
+      return grid;
+    }
+
+    if (node.type === "section") {
+      const details = el("details", { class: "ui-section" });
+
+      // Advanced sections default collapsed unless explicitly open: true
+      const openByDefault = !!node.open || (!node.advanced);
+      if (openByDefault) details.setAttribute("open", "");
+
+      const title = el("div", { class: "section-title" }, [
+        el("strong", { text: node.title || "Section" }),
+        node.description ? el("span", { text: node.description }) : el("span", { text: node.advanced ? "Advanced settings" : "" })
+      ]);
+
+      const summary = el("summary", {}, [
+        title,
+        el("span", { class: "tiny", text: node.advanced ? "Advanced" : "" })
+      ]);
+
+      const body = el("div", { class: "section-body" });
+      for (const child of (node.children || [])) {
+        const c = renderLayoutNode(child);
+        if (c) body.appendChild(c);
+      }
+
+      details.appendChild(summary);
+      details.appendChild(body);
+      return details;
+    }
+
+    return null;
+  }
+
+  function renderModalFromManifest(m) {
+    controlNodes = {};
+
+    byId("modalTitle").textContent = m.name || m.id || "Plugin";
+    byId("modalSubtitle").textContent = (m.ui && m.ui.subtitle) ? m.ui.subtitle : (m.description || "");
+
+    // Presets dropdown
+    setupPresetsDropdown(m);
+
+    const body = byId("modalBody");
+    body.innerHTML = "";
+
+    const layout = (m.ui && Array.isArray(m.ui.layout)) ? m.ui.layout : [];
+    if (!layout.length) {
+      body.appendChild(el("div", { class: "tiny", text: "No ui.layout found in manifest." }));
+      return;
+    }
+
+    for (const node of layout) {
+      const rendered = renderLayoutNode(node);
+      if (rendered) body.appendChild(rendered);
+    }
+  }
+
+  function setupPresetsDropdown(m) {
+    const select = byId("presetSelect");
+    select.innerHTML = "";
+    select.appendChild(el("option", { value: "", text: "Presets…" }));
+
+    const presets = Array.isArray(m.presets) ? m.presets : [];
+    if (!presets.length) {
+      select.style.display = "none";
+      select.onchange = null;
+      return;
+    }
+
+    for (const p of presets) {
+      select.appendChild(el("option", { value: p.id, text: p.label || p.id }));
+    }
+
+    select.style.display = "";
+
+    // Avoid stacking multiple handlers when re-rendering
+    select.onchange = () => {
+      const id = select.value;
+      if (!id) return;
+
+      const preset = presets.find(x => x.id === id);
+      if (!preset || typeof preset.params !== "object") return;
+
+      // Apply preset params over current values
+      // Only apply keys that exist in manifest.params
+      for (const [k, v] of Object.entries(preset.params)) {
+        if (m.params && Object.prototype.hasOwnProperty.call(m.params, k)) {
+          values[k] = v;
+        }
+      }
+
+      // After applying, re-render to update conditional sections
+      updateAll(true);
+
+      // Keep selection on the chosen preset
+      select.value = id;
+    };
+  }
+
+  function updateOutputsUI() {
+    const errs = validateAll(manifest, values);
+    byId("paramsOut").textContent = JSON.stringify(values, null, 2);
+    byId("errorsOut").textContent = JSON.stringify(errs, null, 2);
+
+    const ok = errs.length === 0;
+    byId("runStatus").className = "pill " + (ok ? "ok" : "bad");
+    byId("runStatus").textContent = ok ? "Ready" : "Fix errors";
+  }
+
+  function updateAll(rerender = true) {
+    if (!manifest) return;
+    if (rerender) renderModalFromManifest(manifest);
+    updateOutputsUI();
+  }
+
+  function parseManifest(text) {
+    const m = JSON.parse(text);
+    if (!m || typeof m !== "object") throw new Error("Manifest must be an object");
+    if (!m.params || typeof m.params !== "object") throw new Error("Manifest must contain params");
+    if (!m.ui || !Array.isArray(m.ui.layout)) throw new Error("Manifest must contain ui.layout array");
+
+    for (const [k, p] of Object.entries(m.params)) {
+      if (p.type === "enum" && !p.options) throw new Error(`Enum param '${k}' missing options`);
+      if ((p.type === "float" || p.type === "int") && (typeof p.min !== "number" || typeof p.max !== "number")) {
+        // Not a hard error, but sliders look better bounded. Allow it, just note: (kept simple for PoC)
+      }
+    }
+
+    return m;
+  }
+
+  // Modal open/close
+  const overlay = byId("overlay");
+  function openModal() {
+    overlay.classList.add("open");
+    overlay.setAttribute("aria-hidden", "false");
+  }
+  function closeModal() {
+    overlay.classList.remove("open");
+    overlay.setAttribute("aria-hidden", "true");
+  }
+
+  byId("btnClose").addEventListener("click", closeModal);
+  overlay.addEventListener("click", (e) => { if (e.target === overlay) closeModal(); });
+  document.addEventListener("keydown", (e) => {
+    if (e.key === "Escape" && overlay.classList.contains("open")) {
+      e.preventDefault();
+      closeModal();
+    }
+  });
+
+  // Buttons
+  byId("btnLoadSample").addEventListener("click", () => {
+    byId("manifestInput").value = JSON.stringify(SAMPLE_MANIFEST, null, 2);
+    byId("parseStatus").className = "pill";
+    byId("parseStatus").textContent = "Sample loaded";
+  });
+
+  byId("btnFormat").addEventListener("click", () => {
+    try {
+      const obj = JSON.parse(byId("manifestInput").value);
+      byId("manifestInput").value = JSON.stringify(obj, null, 2);
+      byId("parseStatus").className = "pill ok";
+      byId("parseStatus").textContent = "Formatted";
+    } catch {
+      byId("parseStatus").className = "pill bad";
+      byId("parseStatus").textContent = "JSON parse error";
+    }
+  });
+
+  byId("btnRender").addEventListener("click", () => {
+    try {
+      manifest = parseManifest(byId("manifestInput").value);
+      setDefaultsFromManifest(manifest);
+
+      byId("parseStatus").className = "pill ok";
+      byId("parseStatus").textContent = `Loaded: ${manifest.name || manifest.id || "plugin"}`;
+
+      renderModalFromManifest(manifest);
+      updateOutputsUI();
+      openModal();
+    } catch (e) {
+      manifest = null;
+      values = {};
+      byId("paramsOut").textContent = "{}";
+      byId("errorsOut").textContent = "[]";
+      byId("parseStatus").className = "pill bad";
+      byId("parseStatus").textContent = String(e && e.message ? e.message : e);
+    }
+  });
+
+  byId("btnReset").addEventListener("click", () => {
+    if (!manifest) return;
+    setDefaultsFromManifest(manifest);
+
+    // Reset preset selection
+    const ps = byId("presetSelect");
+    ps.value = "";
+    updateAll(true);
+  });
+
+  byId("btnSimRun").addEventListener("click", () => {
+    if (!manifest) return;
+    const errs = validateAll(manifest, values);
+    if (errs.length) {
+      byId("runStatus").className = "pill bad";
+      byId("runStatus").textContent = "Fix errors";
+      return;
+    }
+    byId("runStatus").className = "pill ok";
+    byId("runStatus").textContent = "Simulated run OK";
+  });
+
+  byId("btnCopyParams").addEventListener("click", async () => {
+    try {
+      await navigator.clipboard.writeText(JSON.stringify(values, null, 2));
+      byId("parseStatus").className = "pill ok";
+      byId("parseStatus").textContent = "Copied params JSON";
+    } catch {
+      byId("parseStatus").className = "pill bad";
+      byId("parseStatus").textContent = "Clipboard failed";
+    }
+  });
+
+  byId("btnClear").addEventListener("click", () => {
+    manifest = null;
+    values = {};
+    byId("manifestInput").value = "";
+    byId("paramsOut").textContent = "{}";
+    byId("errorsOut").textContent = "[]";
+    byId("parseStatus").className = "pill";
+    byId("parseStatus").textContent = "Cleared";
+    closeModal();
+  });
+
+  // Load sample by default
+  byId("btnLoadSample").click();
+})();
+</script>
+</body>
+</html>

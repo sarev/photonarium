@@ -4,7 +4,12 @@ This document is opinionated, but hopefully fair!
 
 # Background
 
-The motivation behind creating Imaginary was born of looking at the pre-existing solutions and coming away feeling dissatisfied. For example, your options broadly divide into two camps:
+My motivations for creating Imaginary were two-fold:
+
+1. Build my dream photo organiser.
+2. See if I could build it using an LLM, rather than me writing most of the code.
+
+The more practical motivation was born of looking at the pre-existing solutions and coming away feeling dissatisfied. Your options broadly divide into two camps:
 
 1. Commercial
 2. Free
@@ -17,13 +22,17 @@ b) Be able to find specific people (ideally with automated face tagging)
 
 c) Be able to easily find duplicates and near duplicates, groups of related images
 
-d) Not have my privacy invaded
+d) Not have my privacy invaded - my data doesn't leave my machine
 
 e) Not have to shell out loads of money!
 
-## The Commercial Horror Show
+## Commercial Trade-offs
+ 
+Commercial tools can be genuinely excellent, but the trade often starts with cost. I'm happy to pay for good software, but subscription models turn "view your own photos" into an ongoing drain, with price rises and bundle reshuffles you can't realistically opt out of. Even if it stays affordable, it still changes the relationship: you're renting access to your own data on terms the vendor can rewrite.
 
-The commercial offerings might be functionally rich, but they are either expensive (high up-front cost), or worse still, adopt a subscription model where you have to keep paying indefinitely for the privilege of looking at your own photos. In addition, these apps are increasingly pushing towards being 'cloud' based, so your images are leaving your personal possession to be stored 'somewhere'. Generally, these offerings come from US-based corporations operating under the famously weak US privacy laws (compared to the EU) where consumer protection is an afterthought. They come with massive, impenetrable licences that you **must** accept in order to use the app, and they often hoover up your personal usage/performance data for who knows what (typically to "improve the services they and their partners offer"). In addition to all this, they are closed-source so if you would like to see a new feature or a change, at best you might be able to raise a ticket somewhere and hope, one day, that they choose to pay attention to it. No thanks!
+Once you put your photo library behind an account, privacy stops being something you own and becomes something you are promised. Maybe the vendor is acting in good faith, but you are still betting against incentives: data wants to be measured, centralised, analysed, and retained. Policies have a habit of evolving in whichever direction makes the numbers go up.
+
+Closed-source tools are, by definition, a black box. You can file tickets and feature requests, but you cannot fix the thing that irritates you, or add the feature you want. You cannot see why it was rejected, and you cannot keep the tool aligned with your workflow when priorities shift. You are not collaborating, you're chatting with a support bot!
 
 ## The Free Landscape
 
@@ -73,7 +82,7 @@ Worth mentioning because it's genuinely free (no subscription required) and has 
 
 ## Comparison Table
 
-The five key criteria from above: **(a)** semantic search, **(b)** face recognition, **(c)** duplicate/similarity detection, **(d)** privacy, **(e)** free/affordable.
+The five key criteria from above: **(a)** semantic search, **(b)** face recognition, **(c)** duplicate/similarity detection, **(d)** data privacy, **(e)** free/affordable.
 
 | | Imaginary | digiKam | Immich | PhotoPrism | darktable | XnView MP | Google Photos | Apple Photos | Adobe Bridge |
 |---|---|---|---|---|---|---|---|---|---|
@@ -83,7 +92,7 @@ The five key criteria from above: **(a)** semantic search, **(b)** face recognit
 | **(a) Semantic search** | Yes (CLIP) | Planned/partial | Yes (CLIP)\* | Yes (TF2 + optional LLM)\* | No | No | Yes (best-in-class)\* | Yes (on-device)\* | No |
 | **(b) Face recognition** | Yes | Yes | Yes | Yes | No | Basic | Yes | Yes (on-device) | No |
 | **(c) Duplicate detection** | Yes (4 levels) | Yes (perceptual hash) | Yes (ML-based) | Basic (checksums only) | Minimal | File-based | Basic | Yes | No |
-| **(d) Privacy (no telemetry)** | Yes | Yes | Yes | Yes | Yes | Yes | No | Mostly | No |
+| **(d) Data stays local** | Yes | Yes¹ | Mostly² | Mostly³ | Yes⁴ | Mostly⁵ | No | No | No |
 | **(e) Truly free** | Yes | Yes | Yes | Partially (paywalled features) | Yes | Personal use only | 15GB free tier | Bundled with hardware | Yes |
 | **Image captioning** | Yes (BLIP/BLIP-2) | No | No | Optional (external LLM) | No | No | Yes | Yes | No |
 | **Web-based UI** | Yes | No | Yes | Yes | No | No | Yes | Limited | No |
@@ -94,6 +103,16 @@ The five key criteria from above: **(a)** semantic search, **(b)** face recognit
 | **Non-destructive editing** | No | Yes | Basic | Yes | No | No | Yes | Yes | No |
 
 \* These apps offer semantic search but do not support negative terms (e.g. "beach -sunset") to exclude concepts from results. Imaginary does.
+
+¹ digiKam: core library is local; map/geolocation views may use external map/tile services.
+
+² Immich: core is self-hosted/local; some features commonly pull external map tiles and some deployments need pre-seeded ML assets to be fully offline.
+
+³ PhotoPrism: core is local; Places (maps/reverse geocoding) typically relies on external services unless disabled.
+
+⁴ darktable: core is local; the map module uses external map providers if you enable it.
+
+⁵ XnView MP: local file manager, but commonly phones home for update checks unless you disable it.
 
 ### Where Imaginary Fits
 
