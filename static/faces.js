@@ -1705,6 +1705,7 @@
         const img = document.createElement('img');
         img.src = blobUrl;
         img.alt = pickPreferredPersonName || 'Face';
+        img.title = 'Double-click to open image ' + (face.image_basename || '');
         thumb.appendChild(img);
 
         // Unassign button (remove face from person)
@@ -3554,6 +3555,7 @@
         const img = document.createElement('img');
         img.src = blobUrl;
         img.alt = 'Unknown face';
+        img.title = 'Double-click to open image ' + (face.image_basename || '');
         thumb.appendChild(img);
 
         // Suppress button (mark as false positive)

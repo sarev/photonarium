@@ -970,6 +970,14 @@ a:hover {
     margin-top: 0.25rem;
 }
 
+.info-path-clickable {
+    cursor: pointer;
+}
+
+.info-path-clickable:hover {
+    color: var(--color-text-blue);
+}
+
 .info-row {
     display: flex;
     justify-content: space-between;

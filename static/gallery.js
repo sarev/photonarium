@@ -273,6 +273,20 @@ const Gallery = {
         // Create scroll indicator overlay
         this._createScrollOverlay();
 
+        // Delegated click handler for info panel path (reveal in file explorer)
+        this._els.infoContent.addEventListener('click', async (e) => {
+            const pathEl = e.target.closest('.info-path-clickable');
+            if (!pathEl) return;
+            const imageId = pathEl.dataset.imageId;
+            if (!imageId) return;
+            try {
+                await App.apiPost(`/images/${imageId}/reveal`, {});
+            } catch (error) {
+                console.error('Failed to open folder:', error);
+                App.showError('Failed to open containing folder.');
+            }
+        });
+
         // Track mouse position for overlay positioning
         this._mouseTracker = (e) => {
             this._mousePos.x = e.clientX;
@@ -834,7 +848,8 @@ const Gallery = {
         // Thumbnail image with blob URL already set
         const thumb = App.createElement('img', {
             src: blobUrl,
-            alt: img.basename
+            alt: img.basename,
+            title: img.path
         });
 
         // Basename label
@@ -1176,7 +1191,7 @@ const Gallery = {
         content.innerHTML = `
             <div class="info-section">
                 <p class="info-filename">${App.escapeHtml(img.basename)}</p>
-                <p class="info-path">${App.escapeHtml(img.path)}</p>
+                <p class="info-path info-path-clickable" title="Open containing folder" data-image-id="${img.id}">${App.escapeHtml(img.path)}</p>
             </div>
 
             <div class="info-section">

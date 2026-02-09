@@ -1576,6 +1576,7 @@ def get_faces_for_person(
     cursor = conn.execute(
         '''SELECT f.*,
                   i.timestamp as image_timestamp,
+                  i.basename as image_basename,
                   CASE WHEN f.id = p.preferred_face_id THEN 1 ELSE 0 END as is_preferred
            FROM faces f
            JOIN images i ON f.image_id = i.id
@@ -1621,6 +1622,7 @@ def get_all_faces(
                       NULL as person_name,
                       0 as is_preferred,
                       i.timestamp as image_timestamp,
+                      i.basename as image_basename,
                       CASE WHEN f.unknown_group_id IS NULL THEN 1
                            ELSE COUNT(*) OVER (PARTITION BY f.unknown_group_id) END as group_size
                FROM faces f
@@ -1640,6 +1642,7 @@ def get_all_faces(
                       p.name as person_name,
                       CASE WHEN f.id = p.preferred_face_id THEN 1 ELSE 0 END as is_preferred,
                       i.timestamp as image_timestamp,
+                      i.basename as image_basename,
                       CASE WHEN f.person_id IS NOT NULL THEN NULL
                            WHEN f.unknown_group_id IS NULL THEN 1
                            ELSE COUNT(*) OVER (PARTITION BY f.unknown_group_id) END as group_size

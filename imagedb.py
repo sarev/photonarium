@@ -791,10 +791,10 @@ def get_all_images_lightweight(conn: sqlite3.Connection) -> list[dict[str, Any]]
 
     Returns:
         List of image dictionaries with minimal fields:
-        id, basename, size, width, height, timestamp, timestamp_confidence, rating, description.
+        id, path, basename, size, width, height, timestamp, timestamp_confidence, rating, description.
     """
     cursor = conn.execute("""
-        SELECT id, basename, size, width, height, timestamp, timestamp_confidence, rating, description
+        SELECT id, path, basename, size, width, height, timestamp, timestamp_confidence, rating, description
         FROM images
         WHERE deleted = 0
         ORDER BY timestamp DESC
@@ -854,7 +854,7 @@ def get_images_delta(
 
     # Get all images changed since the given timestamp
     cursor = conn.execute("""
-        SELECT id, basename, width, height, timestamp, timestamp_confidence, rating, description, deleted, updated_at
+        SELECT id, path, basename, size, width, height, timestamp, timestamp_confidence, rating, description, deleted, updated_at
         FROM images
         WHERE updated_at > ?
         ORDER BY updated_at ASC
