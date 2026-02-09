@@ -273,17 +273,34 @@ const Gallery = {
         // Create scroll indicator overlay
         this._createScrollOverlay();
 
-        // Delegated click handler for info panel path (reveal in file explorer)
+        // Delegated click handler for info panel interactive elements
         this._els.infoContent.addEventListener('click', async (e) => {
+            // Copy filename to clipboard
+            const copyBtn = e.target.closest('.info-copy-btn');
+            if (copyBtn) {
+                e.preventDefault();
+                const text = copyBtn.dataset.copy;
+                if (text) {
+                    try {
+                        await navigator.clipboard.writeText(text);
+                    } catch (err) {
+                        console.error('Failed to copy to clipboard:', err);
+                    }
+                }
+                return;
+            }
+
+            // Reveal in file explorer
             const pathEl = e.target.closest('.info-path-clickable');
-            if (!pathEl) return;
-            const imageId = pathEl.dataset.imageId;
-            if (!imageId) return;
-            try {
-                await App.apiPost(`/images/${imageId}/reveal`, {});
-            } catch (error) {
-                console.error('Failed to open folder:', error);
-                App.showError('Failed to open containing folder.');
+            if (pathEl) {
+                const imageId = pathEl.dataset.imageId;
+                if (!imageId) return;
+                try {
+                    await App.apiPost(`/images/${imageId}/reveal`, {});
+                } catch (error) {
+                    console.error('Failed to open folder:', error);
+                    App.showError('Failed to open containing folder.');
+                }
             }
         });
 
@@ -1190,7 +1207,7 @@ const Gallery = {
 
         content.innerHTML = `
             <div class="info-section">
-                <p class="info-filename">${App.escapeHtml(img.basename)}</p>
+                <p class="info-filename">${App.escapeHtml(img.basename)}<button class="info-copy-btn" title="Copy full path to clipboard" data-copy="${App.escapeHtml(img.path)}"><span class="icon" data-icon="content_copy">\u{1F4CB}</span></button></p>
                 <p class="info-path info-path-clickable" title="Open containing folder" data-image-id="${img.id}">${App.escapeHtml(img.path)}</p>
             </div>
 
@@ -1245,6 +1262,14 @@ const Gallery = {
                 </div>
             </div>
         `;
+
+        // Upgrade Unicode fallback icons to Material Symbols if font is loaded
+        if (document.fonts?.check('24px "Material Symbols Outlined"')) {
+            content.querySelectorAll('.icon[data-icon]').forEach(el => {
+                el.className = 'material-symbols-outlined';
+                el.textContent = el.dataset.icon;
+            });
+        }
 
         this._bindInfoPanelEvents(imageId);
         this._bindHistogramToggles();

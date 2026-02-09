@@ -963,6 +963,25 @@ a:hover {
     color: var(--color-text-blue);
 }
 
+.info-copy-btn {
+    background: none;
+    border: none;
+    padding: 0 0.25rem;
+    cursor: pointer;
+    color: var(--color-text-muted);
+    font-size: 0.85em;
+    vertical-align: middle;
+    line-height: 1;
+}
+
+.info-copy-btn:hover {
+    color: var(--color-text-blue);
+}
+
+.info-copy-btn .material-symbols-outlined {
+    font-size: 16px;
+}
+
 .info-path {
     font-size: 0.8rem;
     color: var(--color-text-muted);
