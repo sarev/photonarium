@@ -284,6 +284,8 @@ _SQL_MIGRATIONS = [
     "ALTER TABLE images ADD COLUMN timestamp_confidence INTEGER NOT NULL DEFAULT 4",
     # Add LAION aesthetic score (dot product of CLIP embedding with LAION aesthetic head)
     "ALTER TABLE images ADD COLUMN aesthetic_laion REAL",
+    # Add NIMA aesthetic score (VGG16-AVA weighted mean, range 1-10)
+    "ALTER TABLE images ADD COLUMN aesthetic_nima REAL",
 ]
 
 # SQL schema for the duplicate_groups table
@@ -806,11 +808,11 @@ def get_all_images_lightweight(conn: sqlite3.Connection) -> list[dict[str, Any]]
     Returns:
         List of image dictionaries with minimal fields:
         id, path, basename, size, width, height, timestamp, timestamp_confidence,
-        rating, description, aesthetic_laion, laplacian_var.
+        rating, description, aesthetic_laion, aesthetic_nima, laplacian_var.
     """
     cursor = conn.execute("""
         SELECT id, path, basename, size, width, height, timestamp, timestamp_confidence,
-               rating, description, aesthetic_laion, laplacian_var
+               rating, description, aesthetic_laion, aesthetic_nima, laplacian_var
         FROM images
         WHERE deleted = 0
         ORDER BY timestamp DESC
@@ -861,7 +863,7 @@ def get_images_delta(
         Dictionary with:
         - epoch: Current max updated_at timestamp (for next delta request)
         - updated: List of added/modified images (lightweight fields including
-          aesthetic_laion, laplacian_var, + deleted flag)
+          aesthetic_laion, aesthetic_nima, laplacian_var, + deleted flag)
         - deleted_ids: List of IDs for images that are now deleted
     """
     # Get current epoch (max updated_at)
@@ -872,7 +874,8 @@ def get_images_delta(
     # Get all images changed since the given timestamp
     cursor = conn.execute("""
         SELECT id, path, basename, size, width, height, timestamp, timestamp_confidence,
-               rating, description, aesthetic_laion, laplacian_var, deleted, updated_at
+               rating, description, aesthetic_laion, aesthetic_nima, laplacian_var,
+               deleted, updated_at
         FROM images
         WHERE updated_at > ?
         ORDER BY updated_at ASC
@@ -976,7 +979,7 @@ def get_image_by_path(conn: sqlite3.Connection, path: Path | str) -> dict[str, A
         SELECT id, path, basename, size, width, height, timestamp,
                timestamp_confidence, checksum, perceptual_hash, laplacian_var,
                lossless, description, rating, embedding, deleted, created_at,
-               updated_at, mtime
+               updated_at, mtime, aesthetic_nima
         FROM images
         WHERE path = ?
     """, (path_str,))
@@ -1636,6 +1639,7 @@ class IngestionThread(threading.Thread):
         pause_event: threading.Event | None = None,
         num_threads: int = 4,
         max_image_dimension: int = 0,
+        nima_queue: queue.Queue[str] | None = None,
     ):
         """Initialise the ingestion thread.
 
@@ -1651,6 +1655,7 @@ class IngestionThread(threading.Thread):
             pause_event: Optional event to pause processing (for folder removal).
             num_threads: Number of worker threads for parallel metadata extraction.
             max_image_dimension: Max dimension for image processing (0 to disable).
+            nima_queue: Optional queue for NIMA aesthetic scoring.
         """
         super().__init__(name='IngestionThread', daemon=True)
         self.conn = conn
@@ -1666,6 +1671,7 @@ class IngestionThread(threading.Thread):
         self._checksum_cache = checksum_cache  # Shared cache from ImageDatabase
         self._checksum_cache_lock = checksum_cache_lock  # Shared lock from ImageDatabase
         self._generate_thumbnails = generate_thumbnails  # Callback from ImageDatabase
+        self._nima_queue = nima_queue  # Optional NIMA scoring queue
         self._pending_count = 0  # Number of items being processed (not just in queue)
         self._pending_lock = threading.Lock()
 
@@ -1862,7 +1868,10 @@ class IngestionThread(threading.Thread):
                 if needs_embedding:
                     self.embedding_queue.put(existing['id'])
                     logger.debug(f'Queued existing image for embedding: {path}')
-                else:
+                # Queue for NIMA scoring if missing (independent of embedding)
+                if self._nima_queue is not None and existing.get('aesthetic_nima') is None:
+                    self._nima_queue.put(existing['id'])
+                if not needs_embedding:
                     logger.debug(f'Skipping unchanged image: {path}')
                 return
 
@@ -1899,8 +1908,10 @@ class IngestionThread(threading.Thread):
             if metadata.checksum:
                 self._generate_thumbnails(path, metadata.checksum)
 
-            # Queue for embedding (metadata cleared embedding)
+            # Queue for embedding (metadata cleared embedding) and NIMA
             self.embedding_queue.put(existing['id'])
+            if self._nima_queue is not None:
+                self._nima_queue.put(existing['id'])
             logger.debug(f'Queued changed image for embedding: {path}')
 
         else:
@@ -1941,8 +1952,10 @@ class IngestionThread(threading.Thread):
             if metadata.checksum:
                 self._generate_thumbnails(path, metadata.checksum)
 
-            # Queue for embedding
+            # Queue for embedding and NIMA scoring
             self.embedding_queue.put(image_id)
+            if self._nima_queue is not None:
+                self._nima_queue.put(image_id)
             logger.debug(f'Ingested new image: {path}')
 
 
@@ -2982,6 +2995,261 @@ class FaceDetectionThread(threading.Thread):
                     logger.error(f'Error in face detection completion callback: {e}')
 
 
+class NimaThread(threading.Thread):
+    """Background thread for NIMA aesthetic scoring.
+
+    Processes image IDs from the NIMA queue, loads 400px thumbnails from
+    disk, scores them with the MobileNetV2-AVA NIMA model, and stores results.
+
+    Runs concurrently with (not chained into) the embedding and face
+    detection pipelines.  GPU memory for MobileNetV2 (~9MB) plus CLIP ViT-B-32
+    (~350MB) plus MTCNN+InceptionResnet (~100MB) totals ~460MB, fitting
+    comfortably on 2GB+ GPUs.  Disable via ``nima_enabled: false`` on
+    machines with limited VRAM.
+
+    The model is loaded lazily on first batch (thread-safe double-checked
+    locking).  If the checkpoint is missing the thread logs a warning and
+    sits idle.
+    """
+
+    def __init__(
+        self,
+        conn: sqlite3.Connection,
+        nima_queue: queue.Queue[str],
+        ingestion_thread: IngestionThread,
+        stop_event: threading.Event,
+        db_lock: threading.RLock,
+        config: Config,
+        data_dir: Path | str = '.',
+        thumbnail_dir: Path | str = '.thumbnails',
+        event_queue: EventQueue | None = None,
+    ):
+        """Initialise the NIMA scoring thread.
+
+        Args:
+            conn: Database connection (check_same_thread=False).
+            nima_queue: Queue of image IDs to score.
+            ingestion_thread: Ingestion thread (for idle checks).
+            stop_event: Event to signal thread should stop.
+            db_lock: Shared lock for database access.
+            config: Application configuration.
+            data_dir: Directory containing the NIMA checkpoint.
+            thumbnail_dir: Directory containing cached thumbnails.
+            event_queue: Optional event queue for completion notifications.
+        """
+        super().__init__(name='NimaThread', daemon=True)
+        self.conn = conn
+        self.nima_queue = nima_queue
+        self.ingestion_thread = ingestion_thread
+        self.stop_event = stop_event
+        self._db_lock = db_lock
+        self.config = config
+        self._data_dir = Path(data_dir)
+        self._thumbnail_dir = Path(thumbnail_dir)
+        self._event_queue = event_queue
+
+        self._model = None
+        self._device: str | None = None
+        self._model_lock = threading.Lock()
+        self._model_loaded = False  # Track whether we've attempted loading
+
+        self._processed_count = 0
+        self._error_count = 0
+        self._completion_triggered = False
+
+    @property
+    def processed_count(self) -> int:
+        """Number of images successfully scored."""
+        return self._processed_count
+
+    def _load_model(self) -> bool:
+        """Lazily load the NIMA model (thread-safe, only attempts once).
+
+        Returns:
+            True if model is available, False otherwise.
+        """
+        if self._model_loaded:
+            return self._model is not None
+
+        with self._model_lock:
+            if self._model_loaded:
+                return self._model is not None
+            self._model_loaded = True
+
+            checkpoint_path = self._data_dir / '.nima-mobilenetv2-ava.pth'
+            if not checkpoint_path.exists():
+                logger.warning(
+                    'NIMA checkpoint not found — aesthetic scoring disabled. '
+                    'Run "python download_models.py" to download it.'
+                )
+                return False
+
+            try:
+                from nima import load_nima_model
+
+                # Use CUDA if available, otherwise CPU
+                device = 'cuda' if torch.cuda.is_available() else 'cpu'
+                self._model = load_nima_model(str(checkpoint_path), device=device)
+                self._device = device
+                logger.info(f'NIMA model loaded on {device}')
+                return True
+            except Exception as e:
+                logger.warning(f'Failed to load NIMA model: {e}')
+                return False
+
+    def run(self) -> None:
+        """Main thread loop — score images from the queue."""
+        logger.info('NIMA scoring thread started')
+
+        # Don't do anything if NIMA scoring is disabled
+        if not self.config.nima_enabled:
+            logger.info('NIMA scoring disabled in config — thread idle')
+            while not self.stop_event.is_set():
+                time.sleep(1.0)
+                self._check_completion()
+            logger.info('NIMA scoring thread stopped (was disabled)')
+            return
+
+        batch_size = self.config.nima_batch_size
+        last_progress_time = time.time()
+        progress_interval = 5.0
+
+        while not self.stop_event.is_set():
+            # Collect a batch of image IDs
+            batch_ids: list[str] = []
+            try:
+                # Block briefly for the first item
+                image_id = self.nima_queue.get(timeout=0.1)
+                batch_ids.append(image_id)
+                # Drain up to batch_size - 1 more without blocking
+                while len(batch_ids) < batch_size:
+                    try:
+                        image_id = self.nima_queue.get_nowait()
+                        batch_ids.append(image_id)
+                    except queue.Empty:
+                        break
+            except queue.Empty:
+                # No work available — check completion
+                self._check_completion()
+                continue
+
+            # Process the batch
+            try:
+                self._process_batch(batch_ids)
+            except Exception as e:
+                logger.error(f'Error processing NIMA batch: {e}')
+                self._error_count += len(batch_ids)
+            finally:
+                for _ in batch_ids:
+                    self.nima_queue.task_done()
+
+            # Progress logging
+            now = time.time()
+            if now - last_progress_time >= progress_interval:
+                remaining = self.nima_queue.qsize()
+                logger.info(
+                    f'NIMA scoring: {self._processed_count} done, '
+                    f'{remaining} remaining'
+                )
+                last_progress_time = now
+
+            # Yield GIL briefly to avoid blocking Flask request handling
+            time.sleep(0.01)
+
+        logger.info(
+            f'NIMA scoring thread stopped '
+            f'(scored {self._processed_count}, errors {self._error_count})'
+        )
+
+    def _process_batch(self, image_ids: list[str]) -> None:
+        """Score a batch of images using their 400px thumbnails.
+
+        Resolves image IDs to checksums, loads thumbnails from disk,
+        runs NIMA inference, and writes scores to the database.
+
+        Args:
+            image_ids: List of image IDs to score.
+        """
+        # Ensure model is loaded
+        if not self._load_model():
+            return
+
+        # Look up checksums for these image IDs
+        with self._db_lock:
+            placeholders = ','.join('?' * len(image_ids))
+            cursor = self.conn.execute(
+                f'SELECT id, checksum FROM images WHERE id IN ({placeholders})',
+                image_ids
+            )
+            rows = {row['id']: row['checksum'] for row in cursor.fetchall()}
+
+        # Load 400px thumbnails from disk
+        valid_ids = []
+        pil_images = []
+        for image_id in image_ids:
+            checksum = rows.get(image_id)
+            if not checksum:
+                logger.debug(f'No checksum for image {image_id}, skipping NIMA')
+                continue
+
+            thumb_path = get_thumbnail_cache_path(
+                checksum, 400, thumbnail_dir=self._thumbnail_dir
+            )
+            if not Path(thumb_path).exists():
+                logger.debug(f'No 400px thumbnail for {image_id}, skipping NIMA')
+                continue
+
+            try:
+                img = Image.open(thumb_path).convert('RGB')
+                valid_ids.append(image_id)
+                pil_images.append(img)
+            except Exception as e:
+                logger.warning(f'Failed to load thumbnail for NIMA: {image_id}: {e}')
+
+        if not pil_images:
+            return
+
+        # Score the batch
+        from nima import score_images_batch
+        scores = score_images_batch(self._model, pil_images, device=self._device)
+
+        # Batch commit to database
+        now = datetime.now().isoformat()
+        updates = [(score, now, vid) for score, vid in zip(scores, valid_ids)]
+
+        with self._db_lock:
+            self.conn.executemany(
+                'UPDATE images SET aesthetic_nima = ?, updated_at = ? WHERE id = ?',
+                updates
+            )
+            self.conn.commit()
+
+        self._processed_count += len(updates)
+
+    def _check_completion(self) -> None:
+        """Check if all scoring is complete and emit completion event.
+
+        Completion requires:
+        - IngestionThread is idle (no more images coming in)
+        - NIMA queue is empty
+        - At least one image has been scored (avoids spurious events on
+          startup when the queue hasn't been populated yet)
+        """
+        if self._completion_triggered:
+            return
+
+        if (self._processed_count > 0
+                and self.ingestion_thread.is_idle
+                and self.nima_queue.empty()):
+            self._completion_triggered = True
+            logger.info('NIMA scoring complete')
+
+            if self._event_queue:
+                self._event_queue.emit(EVENT_NIMA_COMPLETE, {
+                    'scored_count': self._processed_count,
+                })
+
+
 def get_metadata(conn: sqlite3.Connection, key: str) -> str | None:
     """Get a metadata value by key.
 
@@ -3326,6 +3594,7 @@ EVENT_PROCESSING_COMPLETE = 'processing_complete'
 EVENT_ERROR = 'error'
 EVENT_FACES_REASSESSED = 'faces_reassessed'
 EVENT_IMAGES_MODIFIED = 'images_modified'
+EVENT_NIMA_COMPLETE = 'nima_complete'
 
 
 @dataclass
@@ -3584,11 +3853,13 @@ class ImageDatabase:
         self._ingestion_queue: queue.Queue[Path] = queue.Queue()
         self._embedding_queue: queue.Queue[str] = queue.Queue()
         self._face_queue: queue.Queue[str] = queue.Queue()
+        self._nima_queue: queue.Queue[str] = queue.Queue()
 
         # Thread references (created when started)
         self._ingestion_thread: IngestionThread | None = None
         self._embedding_thread: EmbeddingThread | None = None
         self._face_thread: FaceDetectionThread | None = None
+        self._nima_thread: NimaThread | None = None
 
         # Phase 4 status tracking (post-processing after queues empty)
         self._phase4_status_lock = threading.Lock()
@@ -3664,6 +3935,12 @@ class ImageDatabase:
 
         # Backfill LAION aesthetic scores for images with embeddings but no score
         self._backfill_aesthetic_laion()
+
+        # NIMA model invalidation — wipe stale scores if model identity changed
+        self._invalidate_nima_model()
+
+        # Queue existing images for NIMA scoring (backfill)
+        self._queue_images_for_nima()
 
         logger.info('-' * 60)
         logger.info('Database initialisation complete')
@@ -4143,6 +4420,51 @@ class ImageDatabase:
             for row in rows:
                 self._face_queue.put(row['id'])
 
+    def _queue_images_for_nima(self) -> None:
+        """Queue all images that need NIMA aesthetic scoring.
+
+        Finds images with a checksum (so thumbnails exist) but no NIMA score.
+        Called during startup for backfill of existing images.
+        """
+        if not self.config.nima_enabled:
+            return
+
+        cursor = self.conn.execute('''
+            SELECT id FROM images
+            WHERE aesthetic_nima IS NULL AND deleted = 0 AND checksum IS NOT NULL
+        ''')
+        rows = cursor.fetchall()
+
+        if rows:
+            logger.info(f'Queueing {len(rows)} images for NIMA scoring')
+            for row in rows:
+                self._nima_queue.put(row['id'])
+
+    def _invalidate_nima_model(self) -> None:
+        """Check if the NIMA model identity has changed and wipe stale scores.
+
+        Stores the current NIMA model name in the metadata table.  If the
+        stored value differs from the config, all aesthetic_nima scores are
+        cleared and images re-queued for scoring.
+        """
+        current_model = 'mobilenetv2-ava'  # Only one model currently; future-proofing
+        stored_model = get_metadata(self.conn, 'nima_model')
+
+        if stored_model == current_model:
+            return  # No change
+
+        if stored_model is not None:
+            # Model has changed — wipe all NIMA scores
+            logger.info(
+                f'NIMA model changed ({stored_model} → {current_model}), '
+                'clearing existing scores for re-computation'
+            )
+            with self._db_lock:
+                self.conn.execute('UPDATE images SET aesthetic_nima = NULL')
+                self.conn.commit()
+
+        set_metadata(self.conn, 'nima_model', current_model)
+
     def start_threads(self) -> None:
         """Start the background processing threads."""
         if self._ingestion_thread is not None and self._ingestion_thread.is_alive():
@@ -4196,6 +4518,7 @@ class ImageDatabase:
             pause_event=self._pause_event,
             num_threads=self.config.indexing_threads,
             max_image_dimension=self.config.max_image_dimension,
+            nima_queue=self._nima_queue,
         )
         self._ingestion_thread.start()
 
@@ -4226,6 +4549,20 @@ class ImageDatabase:
         )
         self._face_thread.start()
 
+        # Start NIMA scoring thread (runs concurrently, not chained)
+        self._nima_thread = NimaThread(
+            conn=self.conn,
+            nima_queue=self._nima_queue,
+            ingestion_thread=self._ingestion_thread,
+            stop_event=self._stop_event,
+            db_lock=self._db_lock,
+            config=self.config,
+            data_dir=self.db_path.parent,
+            thumbnail_dir=self.thumbnail_dir,
+            event_queue=self.event_queue,
+        )
+        self._nima_thread.start()
+
         logger.info('Background threads started')
 
     def stop_threads(self, timeout: float = 5.0) -> None:
@@ -4251,6 +4588,11 @@ class ImageDatabase:
             self._face_thread.join(timeout=timeout)
             if self._face_thread.is_alive():
                 logger.warning('Face detection thread did not stop in time')
+
+        if self._nima_thread is not None:
+            self._nima_thread.join(timeout=timeout)
+            if self._nima_thread.is_alive():
+                logger.warning('NIMA scoring thread did not stop in time')
 
         logger.info('Background threads stopped')
 
@@ -5033,6 +5375,7 @@ class ImageDatabase:
         indexing_count = self._ingestion_queue.qsize()
         embedding_count = self._embedding_queue.qsize()
         face_count = self._face_queue.qsize()
+        nima_count = self._nima_queue.qsize() if self._nima_queue else 0
 
         # Get Phase 4 statuses
         duplicate_status = self._duplicate_manager.get_status()
@@ -5047,8 +5390,9 @@ class ImageDatabase:
         face_embedding_computing = face_embedding_status.get('status') == 'computing'
         face_reassess_computing = face_reassess_status is not None and face_reassess_status.get('status') == 'computing'
 
-        # Determine overall status
-        queues_empty = (indexing_count == 0 and embedding_count == 0 and face_count == 0)
+        # Determine overall status (NIMA queue also contributes to 'updating')
+        queues_empty = (indexing_count == 0 and embedding_count == 0
+                        and face_count == 0 and nima_count == 0)
         phase4_idle = not (duplicates_computing or face_grouping_computing or face_embedding_computing or face_reassess_computing)
         status = 'up_to_date' if (queues_empty and phase4_idle) else 'updating'
 
@@ -5072,10 +5416,12 @@ class ImageDatabase:
             'indexing_queue': indexing_count,
             'embedding_queue': embedding_count,
             'face_queue': face_count,
+            'nima_queue': nima_count,
             'total_images': total_images,
             'total_people': total_people,
             'total_faces': total_faces,
             'face_detection_enabled': self.config.face_detection_enabled,
+            'nima_enabled': self.config.nima_enabled,
         }
 
         # Include duplicate status if computing

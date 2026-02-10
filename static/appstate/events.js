@@ -92,6 +92,14 @@ AppState.events = (function() {
                 await handleImagesModified(data);
                 break;
 
+            case 'nima_complete':
+                // NIMA aesthetic scoring finished — reload images so quality
+                // sort picks up the new aesthetic_nima values
+                // data: { scored_count }
+                console.log('[AppState.events] NIMA scoring complete, reloading images');
+                AppState.images.load();
+                break;
+
             default:
                 console.warn('[AppState.events.processEvent] Unknown event type:', type);
         }

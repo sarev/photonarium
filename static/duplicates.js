@@ -1090,6 +1090,7 @@ Duplicates._createStackElement = function(group, index, blobUrl) {
     stack.className = 'duplicate-stack loaded';
     stack.dataset.groupIndex = index;
     stack.dataset.groupHash = group.group_hash;
+    stack.title = 'Double-click to view this stack in the Gallery';
 
     // Best image preview (thumbnail) with blob URL already set
     const img = document.createElement('img');

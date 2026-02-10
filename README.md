@@ -290,6 +290,25 @@ You can sort stacks by similarity to a concept using the semantic sort button. T
 
 Negative terms work here too. Use `blurry -sharp` or `dark -bright -colorful` to push good images down and bad ones up, making it easier to pick which duplicates to delete.
 
+### Quality sorting
+
+When you open a group in the Gallery, images are automatically sorted by **Quality** with the best image pre-selected. The quality score is a blend of several factors:
+
+- **Aesthetic appeal** (60%) — how visually pleasing the image is, scored by two neural networks (NIMA and LAION) that were trained on large datasets of human aesthetic judgements.
+- **Sharpness** (20%) — how well-focused the image is, measured by Laplacian variance.
+- **Resolution** (15%) — total pixel count (higher resolution = better).
+- **Compression quality** (5%) — bits per pixel, which favours less-compressed originals over heavily compressed copies.
+
+Each factor is ranked within the group (percentile), so the scores are always relative — a "good" score in one group doesn't necessarily equal the same absolute quality as in another.
+
+These weights can be adjusted in `.imaginary.yml` to suit your preferences:
+
+- `quality_weight_aesthetic`, `quality_weight_sharpness`, `quality_weight_pixels`, `quality_weight_bpp` — the four component weights (should sum to 1.0).
+- `quality_alpha` — controls how the two aesthetic models are blended (0.0 = LAION only, 1.0 = NIMA only, default 0.60 = a mix of both, leaning more to NIMA).
+- `nima_enabled` — set to `false` to skip NIMA scoring entirely (quality falls back to LAION with sharpness and resolution).
+
+NIMA and LAION approach aesthetics differently. NIMA was trained on hundreds of thousands of photos rated by people, so it has a good sense of what makes a photograph look appealing — composition, lighting, colour. LAION is faster and lighter but more impressionistic; it can favour vibrant or striking images even if they're technically flawed. Blending the two gives more balanced results than either alone, which is why both are used by default.
+
 ---
 
 ## Faces

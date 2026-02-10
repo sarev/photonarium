@@ -1,11 +1,12 @@
 env
 env.bak
+__pycache__
 .claude
 CLAUDE.md
 /.imaginary.yml
-/.laion-aesthetic-head.pth
+.laion-aesthetic-head.pth
+.nima-mobilenetv2-ava.pth
 /.thumbnails
 /imaginary.db*
-__pycache__
 /examples
 /tutorials

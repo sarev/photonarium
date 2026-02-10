@@ -93,6 +93,14 @@ const Database = {
     _faceHistory: [],
 
     /**
+     * History of NIMA scoring queue samples for ETA calculation.
+     * Each entry is {count, timestamp}.
+     * @type {Array<{count: number, timestamp: number}>}
+     * @private
+     */
+    _nimaHistory: [],
+
+    /**
      * Maximum number of samples to keep for ETA calculation.
      * @type {number}
      * @private
@@ -122,6 +130,9 @@ const Database = {
             faceQueueRow: App.$('face-queue-row'),
             faceCount: App.$('face-count'),
             faceEta: App.$('face-eta'),
+            nimaQueueRow: App.$('nima-queue-row'),
+            nimaCount: App.$('nima-count'),
+            nimaEta: App.$('nima-eta'),
             // Phase 4 status elements
             duplicatesRow: App.$('duplicates-row'),
             duplicatesStatus: App.$('duplicates-status'),
@@ -384,6 +395,7 @@ const Database = {
         const indexing = status.indexing_queue || 0;
         const embedding = status.embedding_queue || 0;
         const faces = status.face_queue || 0;
+        const nima = status.nima_queue || 0;
 
         // Phase 4 statuses (only present when active)
         const duplicates = status.duplicates;
@@ -409,7 +421,7 @@ const Database = {
         }
 
         // Determine if any processing is active
-        const hasQueueWork = indexing > 0 || embedding > 0 || faces > 0;
+        const hasQueueWork = indexing > 0 || embedding > 0 || faces > 0 || nima > 0;
         const hasPhase4Work = duplicates || faceGrouping || faceEmbeddings;
         const hasAnyWork = hasQueueWork || hasPhase4Work;
 
@@ -448,6 +460,19 @@ const Database = {
                     this._els.faceQueueRow.hidden = true;
                     this._faceHistory = [];
                     if (this._els.faceEta) this._els.faceEta.textContent = '';
+                }
+            }
+
+            // Show/hide NIMA aesthetic scoring row
+            if (this._els.nimaQueueRow && this._els.nimaCount) {
+                if (nima > 0) {
+                    this._els.nimaQueueRow.hidden = false;
+                    this._els.nimaCount.textContent = nima;
+                    this._updateNimaEta(nima);
+                } else {
+                    this._els.nimaQueueRow.hidden = true;
+                    this._nimaHistory = [];
+                    if (this._els.nimaEta) this._els.nimaEta.textContent = '';
                 }
             }
 
@@ -500,13 +525,16 @@ const Database = {
             this._indexingHistory = [];
             this._embeddingHistory = [];
             this._faceHistory = [];
+            this._nimaHistory = [];
             this._els.indexingEta.textContent = '';
             this._els.embeddingEta.textContent = '';
             if (this._els.faceEta) this._els.faceEta.textContent = '';
+            if (this._els.nimaEta) this._els.nimaEta.textContent = '';
             // Hide all rows
             this._els.indexingCount.parentElement.hidden = false; // Reset to default structure
             this._els.embeddingCount.parentElement.hidden = false;
             if (this._els.faceQueueRow) this._els.faceQueueRow.hidden = true;
+            if (this._els.nimaQueueRow) this._els.nimaQueueRow.hidden = true;
             if (this._els.duplicatesRow) this._els.duplicatesRow.hidden = true;
             if (this._els.faceGroupingRow) this._els.faceGroupingRow.hidden = true;
             if (this._els.faceReassessRow) this._els.faceReassessRow.hidden = true;
@@ -662,6 +690,50 @@ const Database = {
 
         // Format ETA
         this._els.faceEta.textContent = ' (' + this._formatEta(etaSeconds) + ')';
+    },
+
+    /**
+     * Updates the NIMA aesthetic scoring ETA based on processing rate.
+     * @param {number} currentCount - Current NIMA queue size
+     * @private
+     */
+    _updateNimaEta(currentCount) {
+        if (!this._els.nimaEta) return;
+
+        const now = Date.now();
+
+        // Add current sample to history
+        this._nimaHistory.push({ count: currentCount, timestamp: now });
+
+        // Keep only recent samples
+        if (this._nimaHistory.length > this._maxHistorySamples) {
+            this._nimaHistory.shift();
+        }
+
+        // Need at least 2 samples to calculate rate
+        if (this._nimaHistory.length < 2) {
+            this._els.nimaEta.textContent = '';
+            return;
+        }
+
+        // Calculate processing rate from oldest to newest sample
+        const oldest = this._nimaHistory[0];
+        const newest = this._nimaHistory[this._nimaHistory.length - 1];
+        const countDiff = oldest.count - newest.count;
+        const timeDiff = (newest.timestamp - oldest.timestamp) / 1000; // seconds
+
+        // If no progress or queue growing, can't estimate
+        if (countDiff <= 0 || timeDiff <= 0) {
+            this._els.nimaEta.textContent = '';
+            return;
+        }
+
+        // Calculate rate (images per second) and ETA
+        const rate = countDiff / timeDiff;
+        const etaSeconds = currentCount / rate;
+
+        // Format ETA
+        this._els.nimaEta.textContent = ' (' + this._formatEta(etaSeconds) + ')';
     }
 };
 

@@ -1020,15 +1020,14 @@ def get_status():
 def get_config():
     """Get frontend configuration values.
 
-    Returns configuration values needed by the frontend, particularly
-    for thumbnail loading behaviour.
+    Returns configuration values needed by the frontend for thumbnail
+    loading behaviour and quality scoring weights.
 
     Returns:
-        JSON object with:
-            - thumbnail_concurrent_requests: Max concurrent fetches
-            - thumbnail_extra_rows: Buffer rows above/below viewport
-            - thumbnail_timeout_ms: Fetch timeout in milliseconds
-            - thumbnail_scroll_throttle_ms: Scroll throttle in milliseconds
+        JSON object with thumbnail settings (concurrent_requests, extra_rows,
+        timeout_ms, scroll_throttle_ms) and quality scoring weights
+        (quality_weight_aesthetic, quality_weight_sharpness, quality_weight_pixels,
+        quality_weight_bpp, quality_alpha, nima_enabled).
     """
     config = get_db().config
     return success_response({
@@ -1036,6 +1035,12 @@ def get_config():
         'thumbnail_extra_rows': config.thumbnail_extra_rows,
         'thumbnail_timeout_ms': config.thumbnail_timeout_ms,
         'thumbnail_scroll_throttle_ms': config.thumbnail_scroll_throttle_ms,
+        'quality_weight_aesthetic': config.quality_weight_aesthetic,
+        'quality_weight_sharpness': config.quality_weight_sharpness,
+        'quality_weight_pixels': config.quality_weight_pixels,
+        'quality_weight_bpp': config.quality_weight_bpp,
+        'quality_alpha': config.quality_alpha,
+        'nima_enabled': config.nima_enabled,
     })
 
 
@@ -2928,6 +2933,10 @@ if __name__ == '__main__':
             'laion_head': {
                 'model': config.openclip_model,
                 'pretrained': config.openclip_pretrained,
+                'data_dir': _model_data_dir,
+            },
+            'nima': {
+                'enabled': config.nima_enabled,
                 'data_dir': _model_data_dir,
             },
         }

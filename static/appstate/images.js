@@ -50,6 +50,9 @@ AppState.images = (function() {
     /** @type {Object|null} imageId → comma-separated people names */
     let _peopleNames = null;
 
+    /** @type {Map<string, Object>|null} imageId → quality score breakdown (debug) */
+    let _qualityBreakdown = null;
+
     /** Domain reference for transaction system */
     const domainRef = { _name: 'images', _notify: notify };
 
@@ -63,6 +66,7 @@ AppState.images = (function() {
      */
     function _markDisplayListDirty() {
         _displayListDirty = true;
+        _qualityBreakdown = null;
     }
 
     /**
@@ -91,9 +95,11 @@ AppState.images = (function() {
         const { by, direction } = AppState.view.getSort();
         const sorted = [...images];
 
-        // Quality sort: within-group percentile ranking
+        // Quality sort: percentile ranking within the current image set
+        // (works for both group views and the full gallery).
+        // Higher scores = better quality.  'desc' (default) = best first.
         if (by === 'quality') {
-            const dir = direction === 'asc' ? 1 : -1;
+            const dir = direction === 'desc' ? 1 : -1;
             const scores = _computeQualityScores(sorted);
             sorted.sort((a, b) => {
                 const qa = scores.get(a.id) || 0;
@@ -132,11 +138,14 @@ AppState.images = (function() {
     }
 
     /**
-     * Compute composite quality scores for a set of images using within-group
-     * percentile ranking. Combines LAION aesthetic score, sharpness (log Laplacian
-     * variance), pixel count, and bits-per-pixel into a weighted composite.
+     * Compute composite quality scores for a set of images using percentile
+     * ranking. Works on any image set (group or full gallery). Blends NIMA +
+     * LAION aesthetic scores (when available),
+     * sharpness (log Laplacian variance), pixel count, and bits-per-pixel into
+     * a weighted composite.  Weights and NIMA/LAION blend ratio come from the
+     * backend configuration (``/api/config``).
      *
-     * @param {Array} images - Array of image objects with aesthetic_laion, laplacian_var, width, height, size
+     * @param {Array} images - Array of image objects with aesthetic_laion, aesthetic_nima, laplacian_var, width, height, size
      * @returns {Map<string, number>} Map of image ID to quality score [0..1]
      * @private
      */
@@ -145,22 +154,56 @@ AppState.images = (function() {
         if (n === 0) return new Map();
         if (n === 1) return new Map([[images[0].id, 0.5]]);
 
-        // Extract raw values for each component
-        const aestheticRaw = images.map(i => i.aesthetic_laion ?? 0);
-        const sharpnessRaw = images.map(i => Math.log1p(i.laplacian_var || 0));
-        const pixelsRaw = images.map(i => i.width * i.height);
-        const bppRaw = images.map(i => 8 * i.size / Math.max(1, i.width * i.height));
+        // Read quality config (weights + NIMA/LAION blend alpha)
+        const qc = App.getQualityConfig();
+        const wA = qc.weightAesthetic;
+        const wS = qc.weightSharpness;
+        const wP = qc.weightPixels;
+        const wB = qc.weightBpp;
+        const alpha = qc.alpha;
 
-        // Convert to within-group percentile ranks [0..1] (average-rank, tie-safe)
-        const A = _percentileRanks(aestheticRaw);
-        const S = _percentileRanks(sharpnessRaw);
-        const P = _percentileRanks(pixelsRaw);
-        const B = _percentileRanks(bppRaw);
+        // Blend NIMA and LAION into a single aesthetic raw value.
+        // NIMA scores are in [1, 10] while LAION scores are unbounded
+        // (~1.5-8 typical), so we percentile-rank them independently before
+        // blending.  If no images have NIMA scores, fall back to LAION only.
+        const hasNima = images.some(i => i.aesthetic_nima != null);
 
-        // Combine: quality = 0.60*aesthetic + 0.20*sharpness + 0.15*pixels + 0.05*bpp
+        let aestheticRaw;
+        if (hasNima) {
+            // Percentile-rank each signal independently, then blend
+            const laionRanks = _percentileRanks(images.map(i => i.aesthetic_laion ?? 0));
+            const nimaRanks = _percentileRanks(images.map(i => i.aesthetic_nima ?? 0));
+            aestheticRaw = laionRanks.map((lr, idx) => {
+                // If this specific image lacks a NIMA score, use LAION only
+                if (images[idx].aesthetic_nima == null) return lr;
+                return alpha * nimaRanks[idx] + (1 - alpha) * lr;
+            });
+            // Re-rank the blended values so they're on the same [0..1] scale
+            aestheticRaw = _percentileRanks(aestheticRaw);
+        } else {
+            aestheticRaw = _percentileRanks(images.map(i => i.aesthetic_laion ?? 0));
+        }
+
+        // Other components — percentile-ranked
+        const S = _percentileRanks(images.map(i => Math.log1p(i.laplacian_var || 0)));
+        const P = _percentileRanks(images.map(i => i.width * i.height));
+        const B = _percentileRanks(images.map(i => 8 * i.size / Math.max(1, i.width * i.height)));
+
+        // Combine with configurable weights and store breakdown for debugging
         const scores = new Map();
+        _qualityBreakdown = new Map();
         for (let i = 0; i < n; i++) {
-            scores.set(images[i].id, 0.60 * A[i] + 0.20 * S[i] + 0.15 * P[i] + 0.05 * B[i]);
+            const total = wA * aestheticRaw[i] + wS * S[i] + wP * P[i] + wB * B[i];
+            scores.set(images[i].id, total);
+            _qualityBreakdown.set(images[i].id, {
+                total,
+                aesthetic: aestheticRaw[i],
+                sharpness: S[i],
+                pixels: P[i],
+                bpp: B[i],
+                rawLaion: images[i].aesthetic_laion,
+                rawNima: images[i].aesthetic_nima,
+            });
         }
         return scores;
     }
@@ -490,6 +533,16 @@ AppState.images = (function() {
         getDisplayList() {
             _ensureDisplayList();
             return _displayList;
+        },
+
+        /**
+         * Get quality score breakdown for a given image (available after quality sort).
+         * @param {string} id - Image ID
+         * @returns {Object|null} Breakdown with total, aesthetic, sharpness, pixels, bpp, rawLaion, rawNima
+         */
+        getQualityBreakdown(id) {
+            _ensureDisplayList();
+            return _qualityBreakdown?.get(id) || null;
         },
 
         // --- Mutations ---

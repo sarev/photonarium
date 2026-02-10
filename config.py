@@ -223,6 +223,44 @@ caption_num_beams: 5
 # Convert American English spellings to British English in generated captions.
 # Handles common differences like color→colour, center→centre, gray→grey, etc.
 caption_british_english: false
+
+# ------------------------------------------------------------------------------
+# NIMA Aesthetic Scoring
+# ------------------------------------------------------------------------------
+# NIMA (Neural IMage Assessment) provides a second aesthetic quality signal
+# alongside the LAION aesthetic predictor. The two scores are blended for
+# the Quality sort in Gallery and best-image ranking in duplicate groups.
+
+# Enable NIMA aesthetic scoring during image indexing.
+# When disabled, the NIMA thread sits idle and quality ranking falls back to
+# LAION-only. Existing NIMA scores are preserved.
+nima_enabled: true
+
+# Batch size for NIMA scoring (1-64).
+# Higher values are faster but use more VRAM (~500MB base for VGG16).
+nima_batch_size: 16
+
+# ------------------------------------------------------------------------------
+# Quality Scoring Weights
+# ------------------------------------------------------------------------------
+# These weights control how the composite quality score is computed in the
+# frontend. They are applied at sort time and do not affect stored data.
+
+# Component weights (should sum to ~1.0):
+#   aesthetic - blended NIMA+LAION aesthetic score (percentile rank)
+#   sharpness - log Laplacian variance (percentile rank)
+#   pixels    - total pixel count (percentile rank)
+#   bpp       - bits per pixel (percentile rank)
+quality_weight_aesthetic: 0.60
+quality_weight_sharpness: 0.20
+quality_weight_pixels: 0.15
+quality_weight_bpp: 0.05
+
+# Blend ratio for NIMA vs LAION aesthetic scores.
+# A = alpha * NIMA_normalised + (1 - alpha) * LAION
+# Set to 0.0 to use LAION only, 1.0 for NIMA only.
+# Range: 0.0-1.0
+quality_alpha: 0.60
 """
 
 
@@ -260,6 +298,13 @@ class Config:
         caption_min_length: Minimum caption length in tokens (1-50).
         caption_num_beams: Beam search width for generation (1-10).
         caption_british_english: Convert US spellings to UK in captions.
+        nima_enabled: Whether to run NIMA aesthetic scoring during indexing.
+        nima_batch_size: Batch size for NIMA scoring (1-64).
+        quality_weight_aesthetic: Weight for aesthetic component in quality sort.
+        quality_weight_sharpness: Weight for sharpness component in quality sort.
+        quality_weight_pixels: Weight for pixel count component in quality sort.
+        quality_weight_bpp: Weight for bits-per-pixel component in quality sort.
+        quality_alpha: Blend ratio for NIMA vs LAION aesthetic scores (0-1).
     """
 
     image_extensions: set[str] = field(default_factory=lambda: {
@@ -295,6 +340,13 @@ class Config:
     caption_min_length: int = 10
     caption_num_beams: int = 5
     caption_british_english: bool = False
+    nima_enabled: bool = True
+    nima_batch_size: int = 16
+    quality_weight_aesthetic: float = 0.60
+    quality_weight_sharpness: float = 0.20
+    quality_weight_pixels: float = 0.15
+    quality_weight_bpp: float = 0.05
+    quality_alpha: float = 0.60
 
     def __post_init__(self) -> None:
         """Validate configuration values after initialisation."""
@@ -391,6 +443,23 @@ class Config:
             raise ValueError(f'caption_num_beams must be 1-10, got {self.caption_num_beams}')
         if not isinstance(self.caption_british_english, bool):
             raise ValueError('caption_british_english must be a boolean')
+
+        # Validate NIMA settings
+        if not isinstance(self.nima_enabled, bool):
+            raise ValueError('nima_enabled must be a boolean')
+        if not 1 <= self.nima_batch_size <= 64:
+            raise ValueError(f'nima_batch_size must be 1-64, got {self.nima_batch_size}')
+
+        # Validate quality scoring weights
+        weight_sum = (self.quality_weight_aesthetic + self.quality_weight_sharpness
+                      + self.quality_weight_pixels + self.quality_weight_bpp)
+        if abs(weight_sum - 1.0) > 0.05:
+            logger.warning(
+                f'Quality weights sum to {weight_sum:.3f} (expected ~1.0). '
+                'Rankings may behave unexpectedly.'
+            )
+        if not 0.0 <= self.quality_alpha <= 1.0:
+            raise ValueError(f'quality_alpha must be 0.0-1.0, got {self.quality_alpha}')
 
 
 def load_config(config_path: Path | str | None = None) -> Config:
@@ -510,6 +579,27 @@ def load_config(config_path: Path | str | None = None) -> Config:
 
     if 'caption_british_english' in config_data:
         kwargs['caption_british_english'] = bool(config_data['caption_british_english'])
+
+    if 'nima_enabled' in config_data:
+        kwargs['nima_enabled'] = bool(config_data['nima_enabled'])
+
+    if 'nima_batch_size' in config_data:
+        kwargs['nima_batch_size'] = int(config_data['nima_batch_size'])
+
+    if 'quality_weight_aesthetic' in config_data:
+        kwargs['quality_weight_aesthetic'] = float(config_data['quality_weight_aesthetic'])
+
+    if 'quality_weight_sharpness' in config_data:
+        kwargs['quality_weight_sharpness'] = float(config_data['quality_weight_sharpness'])
+
+    if 'quality_weight_pixels' in config_data:
+        kwargs['quality_weight_pixels'] = float(config_data['quality_weight_pixels'])
+
+    if 'quality_weight_bpp' in config_data:
+        kwargs['quality_weight_bpp'] = float(config_data['quality_weight_bpp'])
+
+    if 'quality_alpha' in config_data:
+        kwargs['quality_alpha'] = float(config_data['quality_alpha'])
 
     return Config(**kwargs)
 

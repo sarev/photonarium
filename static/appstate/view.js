@@ -31,8 +31,8 @@ AppState.view = (function() {
     /** @type {string} Sort field: 'date', 'rating', 'content', 'people', 'quality' */
     let _sortBy = storage.get('sortBy', 'date');
 
-    // Validate persisted sort — 'quality' is ephemeral (group-view only), not persisted
-    if (!['date', 'rating', 'content', 'people'].includes(_sortBy)) {
+    // Validate persisted sort value
+    if (!['date', 'rating', 'content', 'people', 'quality'].includes(_sortBy)) {
         _sortBy = 'date';
     }
 
@@ -167,10 +167,7 @@ AppState.view = (function() {
             if (_sortBy === by) return;
 
             _sortBy = by;
-            // Don't persist 'quality' — it's ephemeral (only valid in group context)
-            if (by !== 'quality') {
-                storage.set('sortBy', by);
-            }
+            storage.set('sortBy', by);
             broadcast({ type: 'changed', property: 'sortBy' });
         },
 

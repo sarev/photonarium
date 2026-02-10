@@ -146,6 +146,48 @@ def download_laion_head(model: str, pretrained: str, data_dir: str = '.') -> boo
         return True  # Non-fatal — app works without it
 
 
+def download_nima_model(data_dir: str = '.') -> bool:
+    """Download the NIMA MobileNetV2-AVA aesthetic scoring checkpoint.
+
+    NIMA (Neural IMage Assessment) uses a MobileNetV2 backbone trained on the
+    AVA dataset to predict aesthetic quality distributions.  The checkpoint is
+    ~9MB and stored as ``<data_dir>/.nima-mobilenetv2-ava.pth``.
+
+    Source: truskovskiyk/nima.pytorch (MIT licence), hosted on AWS S3.
+
+    Args:
+        data_dir: Directory to store the downloaded checkpoint.
+
+    Returns:
+        True if downloaded (or already present), False on fatal error.
+    """
+    # Publicly-hosted checkpoint from truskovskiyk/nima.pytorch (v1 branch, MIT licence)
+    _NIMA_URL = 'https://s3-us-west-1.amazonaws.com/models-nima/pretrain-model.pth'
+
+    print(f'\n{"=" * 60}')
+    print('Downloading NIMA aesthetic model (MobileNetV2-AVA)')
+    print('=' * 60)
+
+    dest = os.path.join(data_dir, '.nima-mobilenetv2-ava.pth')
+    if os.path.exists(dest):
+        print(f'NIMA checkpoint already exists: {dest}')
+        return True
+
+    try:
+        print(f'Downloading from: {_NIMA_URL}')
+        urllib.request.urlretrieve(_NIMA_URL, dest)
+        file_size = os.path.getsize(dest)
+        print(f'NIMA checkpoint downloaded successfully ({file_size:,} bytes)')
+        return True
+    except Exception as e:
+        print(f'Error downloading NIMA checkpoint: {e}', file=sys.stderr)
+        print('NIMA aesthetic scoring will be disabled — quality ranking will use LAION only.')
+        # Clean up partial download
+        if os.path.exists(dest):
+            os.remove(dest)
+        return True  # Non-fatal — app works without it
+
+
 def main():
     import argparse
     parser = argparse.ArgumentParser(description='Download required ML models for Imaginary.')
@@ -191,6 +233,12 @@ def main():
             laion_info['pretrained'],
             data_dir=data_dir,
         )
+
+    # Download NIMA checkpoint (non-fatal if unavailable)
+    nima_info = models.get('nima', {})
+    if nima_info and nima_info.get('enabled', True):
+        data_dir = nima_info.get('data_dir', '.')
+        download_nima_model(data_dir=data_dir)
 
     print()
     print('=' * 60)

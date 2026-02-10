@@ -877,10 +877,35 @@ const App = {
                 timeoutMs: data.thumbnail_timeout_ms,
                 scrollThrottleMs: data.thumbnail_scroll_throttle_ms
             };
+            // Quality scoring weights (used by AppState.images for Quality sort)
+            this._qualityConfig = {
+                weightAesthetic: data.quality_weight_aesthetic ?? 0.60,
+                weightSharpness: data.quality_weight_sharpness ?? 0.20,
+                weightPixels: data.quality_weight_pixels ?? 0.15,
+                weightBpp: data.quality_weight_bpp ?? 0.05,
+                alpha: data.quality_alpha ?? 0.60,
+                nimaEnabled: data.nima_enabled ?? false,
+            };
         } catch (error) {
             console.warn('Failed to load thumbnail config, using defaults:', error);
         }
         return this._thumbnailConfig;
+    },
+
+    /**
+     * Gets the quality scoring configuration.
+     * Returns cached config (defaults until loadThumbnailConfig completes).
+     * @returns {Object} Quality config with weightAesthetic, weightSharpness, weightPixels, weightBpp, alpha, nimaEnabled
+     */
+    getQualityConfig() {
+        return this._qualityConfig || {
+            weightAesthetic: 0.60,
+            weightSharpness: 0.20,
+            weightPixels: 0.15,
+            weightBpp: 0.05,
+            alpha: 0.60,
+            nimaEnabled: false,
+        };
     },
 
     /* ----------------------------------------------------------------------

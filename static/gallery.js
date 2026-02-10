@@ -754,10 +754,12 @@ const Gallery = {
             }
             App.setSortBy('quality');
             App.setSortDirection('desc');
-        } else if (AppState.view.getSortBy() === 'quality') {
-            // Leaving group view — restore previous sort
-            App.setSortBy(this.state.prevSort?.by || 'date');
-            App.setSortDirection(this.state.prevSort?.direction || 'desc');
+        } else if (this.state.prevSort) {
+            // Leaving group view — restore the sort that was active before we
+            // auto-switched to quality.  Only fires if prevSort was set by the
+            // isDupFilter branch above (not when the user chose quality manually).
+            App.setSortBy(this.state.prevSort.by || 'date');
+            App.setSortDirection(this.state.prevSort.direction || 'desc');
             this.state.prevSort = null;
         }
 
@@ -906,11 +908,28 @@ const Gallery = {
             dataId: img.id
         });
 
-        // Thumbnail image with blob URL already set
+        // Thumbnail tooltip: always show path + raw aesthetic scores (zero cost,
+        // data is already in the image object).  When quality-sorted, also show
+        // the full percentile breakdown.
+        let title = img.path;
+        const hasScores = img.aesthetic_laion != null || img.aesthetic_nima != null;
+        if (hasScores) {
+            title += '\nLAION: ' + (img.aesthetic_laion != null ? img.aesthetic_laion.toFixed(2) : '–')
+                + '  NIMA: ' + (img.aesthetic_nima != null ? img.aesthetic_nima.toFixed(2) : '–');
+        }
+        const qb = AppState.images.getQualityBreakdown(img.id);
+        if (qb) {
+            const pct = v => (v * 100).toFixed(0);
+            title += `\n\nQuality: ${pct(qb.total)}%`
+                + `  (aesthetic ${pct(qb.aesthetic)}%`
+                + `, sharpness ${pct(qb.sharpness)}%`
+                + `, pixels ${pct(qb.pixels)}%`
+                + `, bpp ${pct(qb.bpp)}%)`;
+        }
         const thumb = App.createElement('img', {
             src: blobUrl,
             alt: img.basename,
-            title: img.path
+            title
         });
 
         // Basename label
@@ -1657,9 +1676,9 @@ const Gallery = {
             this._els.btnRemoveFromGroup.disabled = !isCustomGroup;
         }
 
-        // Show Quality sort button only when viewing a group
+        // Quality sort is always available (works on any set of images)
         const qualityBtn = document.getElementById('btn-sort-quality');
-        if (qualityBtn) qualityBtn.hidden = !isDupFilter;
+        if (qualityBtn) qualityBtn.hidden = false;
     },
 
     /**
