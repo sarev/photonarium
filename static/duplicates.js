@@ -1,9 +1,10 @@
 /**
- * @fileoverview Duplicates detection screen module for the Imaginary application.
+ * @fileoverview Groups screen module for the Imaginary application.
  *
- * This module handles the Duplicates screen where users find and manage
- * duplicate or near-duplicate images. It registers with the core App module
- * and provides a specialised view for duplicate group management.
+ * This module handles the Groups screen where users find and manage
+ * duplicate or near-duplicate images, as well as user-curated custom groups
+ * (albums). It registers with the core App module and provides a specialised
+ * view for group management.
  *
  * Uses shared infrastructure from thumbnails.js:
  * - VirtualGrid: Virtual scrolling with absolute positioning
@@ -12,10 +13,11 @@
  *
  * RESPONSIBILITIES:
  *
- * Duplicate Detection Levels:
+ * Duplicate Detection Levels (0-3):
  *   The similarity slider controls the strictness of duplicate matching.
  *   Slider moves from loose (left) to strict (right), matching filter sliders:
- *   - Related (left): Lower OpenCLIP similarity threshold
+ *   - Custom (leftmost): User-curated groups/albums
+ *   - Related: Lower OpenCLIP similarity threshold
  *     (catches thematically related images)
  *   - Similar: High OpenCLIP embedding cosine similarity
  *     (catches shot sequences, similar compositions)
@@ -23,16 +25,24 @@
  *     (catches rescaled images, different compression levels)
  *   - Identical (right): Same file size and SHA256 checksum
  *
+ * Custom Groups (Level 4):
+ *   - User-curated named collections (albums)
+ *   - Images can belong to multiple groups (overlap allowed)
+ *   - Groups persist even when empty
+ *   - CRUD: create, rename, delete groups; add/remove images
+ *   - Alphabetical sorting and name-based filtering
+ *
  * Stack Display:
  *   - Shows duplicate groups as stacked thumbnail cards
  *   - Each stack shows the "best" image as the top thumbnail
  *   - Stack displays count of images in the group (e.g., "3 images")
- *   - Stacks are sorted by group size (largest groups first)
- *   - Empty state message when no duplicates found at current level
+ *   - Level 4 stacks show the group name as primary label
+ *   - Stacks are sorted by group size (largest groups first) or alphabetically
+ *   - Empty state message when no groups found at current level
  *
  * Best Image Selection:
  *   The "best" image in each group is determined by:
- *   1. Highest resolution (width × height)
+ *   1. Highest resolution (width * height)
  *   2. Best Laplacian variance score (most in focus)
  *   3. Lossless compression preferred over lossy
  *   This image appears on top of the stack and is pre-selected when
@@ -42,7 +52,7 @@
  *   - Click to select stacks (single, Ctrl+click, Shift+click, drag-box)
  *   - Double-click stack opens Gallery filtered to show only that group
  *   - Gallery pre-selects the "best" image in the group
- *   - Returning from Gallery restores Duplicates scroll position
+ *   - Returning from Gallery restores Groups scroll position
  *   - Thumbnail size controls (smaller/larger) adjust stack preview size
  *   - Keyboard navigation: arrows, Ctrl+A, Escape, Enter
  *
@@ -80,48 +90,49 @@
 const Duplicates = {
     /**
      * Similarity level labels for the slider (ordered loose to strict).
-     * Index 0 = leftmost (loosest), Index 3 = rightmost (strictest).
+     * Index 0 = leftmost (loosest/custom), Index 4 = rightmost (strictest).
      * @type {string[]}
      * @constant
      */
-    SIMILARITY_LABELS: ['Related', 'Similar', 'Near-identical', 'Identical'],
+    SIMILARITY_LABELS: ['Custom', 'Related', 'Similar', 'Near-identical', 'Identical'],
 
     /**
      * Converts slider position to similarity level.
-     * Slider: 0 (left/loose) to 3 (right/strict)
-     * Level: 3 (related) to 0 (identical)
-     * @param {number} sliderValue - Slider position (0-3)
-     * @returns {number} Similarity level (0-3)
+     * Slider: 0 (left/custom) to 4 (right/strict)
+     * Level: 4 (custom) to 0 (identical)
+     * @param {number} sliderValue - Slider position (0-4)
+     * @returns {number} Similarity level (0-4)
      * @private
      */
     _sliderToLevel(sliderValue) {
-        return 3 - sliderValue;
+        return 4 - sliderValue;
     },
 
     /**
      * Converts similarity level to slider position.
-     * @param {number} level - Similarity level (0-3)
-     * @returns {number} Slider position (0-3)
+     * @param {number} level - Similarity level (0-4)
+     * @returns {number} Slider position (0-4)
      * @private
      */
     _levelToSlider(level) {
-        return 3 - level;
+        return 4 - level;
     },
 
     /**
      * Local state for the duplicates screen.
      * Note: Group caching is handled by AppState.duplicates.
      * @type {Object}
-     * @property {number} currentLevel - Current similarity level (0-3)
+     * @property {number} currentLevel - Current similarity level (0-4)
      * @property {Array<Object>} groups - Current duplicate groups for display (filtered)
      * @property {Array<Object>} allGroups - All groups before min size filtering
      * @property {string} currentStatus - Status of current level ('pending', 'computing', 'done')
      * @property {number} scrollTop - Saved scroll position
      * @property {boolean} needsRefresh - Whether data needs to reload
-     * @property {string} sortMode - Current sort mode: 'size' or 'semantic'
+     * @property {string} sortMode - Current sort mode: 'size', 'semantic', 'people', or 'alpha'
      * @property {string} semanticQuery - Current semantic query for sorting
      * @property {number} minGroupSize - Minimum group size to display
      * @property {Array<string>} selectedGroups - Currently selected group hashes
+     * @property {string} groupFilter - Current name filter for custom groups
      */
     state: {
         // Note: groupCache, statusCache, epochCache moved to AppState.duplicates
@@ -134,7 +145,8 @@ const Duplicates = {
         sortMode: 'size',
         semanticQuery: '',
         minGroupSize: 2,
-        selectedGroups: []
+        selectedGroups: [],
+        groupFilter: ''
     },
 
     /**
@@ -173,10 +185,16 @@ const Duplicates = {
             btnSmaller: App.$('btn-dup-thumb-smaller'),
             btnLarger: App.$('btn-dup-thumb-larger'),
             btnSortSize: App.$('btn-dup-sort-size'),
+            btnSortAlpha: App.$('btn-dup-sort-alpha'),
             btnSortSemantic: App.$('btn-dup-sort-semantic'),
             btnSortPeople: App.$('btn-dup-sort-people'),
             semanticQuery: App.$('dup-semantic-query'),
-            minGroupSize: App.$('dup-min-group-size')
+            minGroupSize: App.$('dup-min-group-size'),
+            // Custom group controls
+            btnGroupNew: App.$('btn-group-new'),
+            btnGroupRename: App.$('btn-group-rename'),
+            btnGroupDelete: App.$('btn-group-delete'),
+            groupFilter: App.$('dup-group-filter'),
         };
 
         // Create VirtualGrid instance
@@ -188,9 +206,9 @@ const Duplicates = {
             getThumbnailId: (group) => group.best_image?.id,
             itemSelector: '.duplicate-stack',
             getItemHeight: (thumbSize, itemWidth) => {
-                // Stack height: thumbnail (square) + count label + padding
+                // Stack height: thumbnail (square) + count label + optional name label + padding
                 const thumbnailHeight = itemWidth;
-                const labelHeight = 24;
+                const labelHeight = this.state.currentLevel === 4 ? 44 : 24;
                 return thumbnailHeight + labelHeight + 16;
             },
             onItemCreated: (id, el) => {
@@ -209,10 +227,16 @@ const Duplicates = {
             itemSelector: '.duplicate-stack',
             onSelectionChanged: (hashes) => {
                 this.state.selectedGroups = hashes;
+                this._updateCustomGroupButtons();
             },
             onItemActivated: (hash) => this._openGroupInGallery(hash),
-            // No delete handler for duplicate groups
-            enableDeleteKey: false
+            // Delete key triggers group deletion at level 4
+            enableDeleteKey: false,
+            onDeleteKey: () => {
+                if (this.state.currentLevel === 4 && this.state.selectedGroups.length > 0) {
+                    this._onDeleteGroup();
+                }
+            }
         });
 
         // Bind events
@@ -230,22 +254,24 @@ const Duplicates = {
      * Fetches groups if needed and restores scroll position.
      */
     onEnter() {
-        // Sync slider with current level (invert: level 0=strict, slider 3=strict)
+        // Sync slider with current level (invert: level 0=strict, slider 4=strict)
         const sliderPos = this._levelToSlider(this.state.currentLevel);
         this._els.slider.value = sliderPos;
         this._els.sliderLabel.textContent = this.SIMILARITY_LABELS[sliderPos];
 
+        // Show/hide level-specific controls
+        this._updateLevelUI(this.state.currentLevel);
+
         // Sync sort mode UI
-        this._els.btnSortSize.classList.toggle('active', this.state.sortMode === 'size');
-        this._els.btnSortSemantic.classList.toggle('active', this.state.sortMode === 'semantic');
-        if (this._els.btnSortPeople) {
-            this._els.btnSortPeople.classList.toggle('active', this.state.sortMode === 'people');
-        }
-        this._els.semanticQuery.disabled = (this.state.sortMode !== 'semantic');
-        this._els.semanticQuery.value = this.state.semanticQuery;
+        this._syncSortModeUI();
 
         // Sync min group size dropdown
         this._els.minGroupSize.value = String(this.state.minGroupSize);
+
+        // Sync group filter
+        if (this._els.groupFilter) {
+            this._els.groupFilter.value = this.state.groupFilter;
+        }
 
         // Bind selection handlers
         this._selection.bind();
@@ -301,7 +327,7 @@ const Duplicates = {
      * @private
      */
     _bindEvents() {
-        // Similarity slider (inverted: left=loose/related, right=strict/identical)
+        // Similarity slider (inverted: left=loose/custom, right=strict/identical)
         this._els.slider.addEventListener('input', () => {
             const sliderPos = parseInt(this._els.slider.value, 10);
             const level = this._sliderToLevel(sliderPos);
@@ -317,6 +343,9 @@ const Duplicates = {
 
         // Sort mode buttons
         this._els.btnSortSize.addEventListener('click', () => this._setSortMode('size'));
+        if (this._els.btnSortAlpha) {
+            this._els.btnSortAlpha.addEventListener('click', () => this._setSortMode('alpha'));
+        }
         this._els.btnSortSemantic.addEventListener('click', () => this._setSortMode('semantic'));
         if (this._els.btnSortPeople) {
             this._els.btnSortPeople.addEventListener('click', () => this._setSortMode('people'));
@@ -333,6 +362,26 @@ const Duplicates = {
 
         // Min group size dropdown
         this._els.minGroupSize.addEventListener('change', () => this._onMinGroupSizeChange());
+
+        // Custom group controls
+        if (this._els.btnGroupNew) {
+            this._els.btnGroupNew.addEventListener('click', () => this._onNewGroup());
+        }
+        if (this._els.btnGroupRename) {
+            this._els.btnGroupRename.addEventListener('click', () => this._onRenameGroup());
+        }
+        if (this._els.btnGroupDelete) {
+            this._els.btnGroupDelete.addEventListener('click', () => this._onDeleteGroup());
+        }
+
+        // Group name filter
+        if (this._els.groupFilter) {
+            this._els.groupFilter.addEventListener('input', () => this._onGroupFilterChanged());
+            this._els.groupFilter.addEventListener('keydown', (e) => {
+                // Prevent keyboard nav while typing
+                e.stopPropagation();
+            });
+        }
     },
 
     /**
@@ -346,7 +395,17 @@ const Duplicates = {
         // Subscribe to AppState.duplicates for centralized state management
         // Reactive: refresh when data changes
         AppState.duplicates.onChanged((event) => {
-            if (App.getScreen() === 'duplicates' && event.level === this.state.currentLevel) {
+            // event.level is set explicitly by loadLevel(); CRUD mutations use
+            // markDirty() which omits level, so treat missing level as matching
+            const levelMatch = (event.level === undefined) || (event.level === this.state.currentLevel);
+
+            if (App.getScreen() !== 'duplicates') {
+                // Not viewing this screen — flag for refresh on next visit
+                if (levelMatch) this.state.needsRefresh = true;
+                return;
+            }
+
+            if (levelMatch) {
                 // Data changed in AppState - copy for sorting and re-render
                 // DESIGN: Local presentation state - we maintain a sorted copy because sort
                 // criteria (user preference, search query) are local UI state that AppState
@@ -359,6 +418,9 @@ const Duplicates = {
 
                 // Apply current sort order and render
                 this._applySortOrder();
+
+                // Update button state (selection may have changed due to reload)
+                this._updateCustomGroupButtons();
             }
         });
 
@@ -415,11 +477,103 @@ const Duplicates = {
     markNeedsRefresh() {
         this.state.needsRefresh = true;
         // Invalidate all levels in AppState cache
-        for (let level = 0; level <= 3; level++) {
+        for (let level = 0; level <= 4; level++) {
             AppState.duplicates.invalidate(level);
         }
         this.state.allGroups = [];
         this.state.groups = [];
+    },
+
+    /**
+     * Shows or hides level-specific UI controls based on the current level.
+     *
+     * Level 4 (custom groups): shows New/Rename/Delete buttons, alphabetical sort,
+     * group name filter. Hides min-group-size, size sort, semantic query.
+     *
+     * Levels 0-3 (auto): shows min-group-size, size sort, semantic query.
+     * Hides custom group controls.
+     *
+     * @param {number} level - The current similarity level
+     * @private
+     */
+    _updateLevelUI(level) {
+        const isCustom = level === 4;
+        const container = document.querySelector('[data-for-screen="duplicates"]');
+        if (!container) return;
+
+        // Toggle auto-level controls (min-group-size, size sort)
+        container.querySelectorAll('.auto-level-control').forEach(el => {
+            el.hidden = isCustom;
+        });
+
+        // Toggle custom-group controls (new/rename/delete, alpha sort, name filter)
+        container.querySelectorAll('.custom-group-control').forEach(el => {
+            el.hidden = !isCustom;
+        });
+
+        // Also toggle in the right-side toolbar
+        const rightToolbar = document.querySelector('.toolbar-right [data-for-screen="duplicates"]');
+        if (rightToolbar) {
+            rightToolbar.querySelectorAll('.auto-level-control').forEach(el => {
+                el.hidden = isCustom;
+            });
+            rightToolbar.querySelectorAll('.custom-group-control').forEach(el => {
+                el.hidden = !isCustom;
+            });
+        }
+
+        // Also toggle in the left toolbar
+        const leftToolbar = document.querySelector('.toolbar-left [data-for-screen="duplicates"]');
+        if (leftToolbar) {
+            leftToolbar.querySelectorAll('.auto-level-control').forEach(el => {
+                el.hidden = isCustom;
+            });
+            leftToolbar.querySelectorAll('.custom-group-control').forEach(el => {
+                el.hidden = !isCustom;
+            });
+        }
+
+        // Update custom group buttons based on selection state
+        this._updateCustomGroupButtons();
+
+        // Enable delete key only for level 4
+        if (this._selection) {
+            this._selection.enableDeleteKey = isCustom;
+        }
+    },
+
+    /**
+     * Updates the enabled/disabled state of custom group Rename and Delete buttons
+     * based on the current selection.
+     * @private
+     */
+    _updateCustomGroupButtons() {
+        if (this.state.currentLevel !== 4) return;
+
+        const count = this.state.selectedGroups.length;
+        if (this._els.btnGroupRename) {
+            this._els.btnGroupRename.disabled = count !== 1;
+        }
+        if (this._els.btnGroupDelete) {
+            this._els.btnGroupDelete.disabled = count === 0;
+        }
+    },
+
+    /**
+     * Syncs the sort mode UI buttons to the current sort mode state.
+     * @private
+     */
+    _syncSortModeUI() {
+        this._els.btnSortSize.classList.toggle('active', this.state.sortMode === 'size');
+        if (this._els.btnSortAlpha) {
+            this._els.btnSortAlpha.classList.toggle('active', this.state.sortMode === 'alpha');
+        }
+        this._els.btnSortSemantic.classList.toggle('active', this.state.sortMode === 'semantic');
+        if (this._els.btnSortPeople) {
+            this._els.btnSortPeople.classList.toggle('active', this.state.sortMode === 'people');
+        }
+        this._els.semanticQuery.disabled = (this.state.sortMode !== 'semantic');
+        this._els.semanticQuery.value = this.state.semanticQuery;
     }
 };
 
@@ -436,7 +590,7 @@ const Duplicates = {
  * @private
  */
 Duplicates._loadGroups = async function() {
-    this._showLoading('Loading duplicates…');
+    this._showLoading('Loading groups\u2026');
 
     try {
         // Load via AppState (handles caching and polling internally)
@@ -450,10 +604,10 @@ Duplicates._loadGroups = async function() {
         this.state.currentStatus = statusObj?.status || 'done';
         this.state.needsRefresh = false;
 
-        // Apply current sort mode (also applies min group size filter)
+        // Apply current sort mode (also applies min group size / name filter)
         await this._applySortOrder();
     } catch (err) {
-        App.showError('Failed to load duplicates: ' + err.message);
+        App.showError('Failed to load groups: ' + err.message);
     } finally {
         this._hideLoading();
     }
@@ -461,7 +615,7 @@ Duplicates._loadGroups = async function() {
 
 /**
  * Changes the similarity level and updates the display.
- * @param {number} level - New similarity level (0-3)
+ * @param {number} level - New similarity level (0-4)
  * @private
  */
 Duplicates._setLevel = async function(level) {
@@ -469,17 +623,37 @@ Duplicates._setLevel = async function(level) {
         return;
     }
 
+    // Monotonic counter to detect stale loads when the user moves the slider
+    // faster than the backend can respond (each call gets its own token)
+    this._levelLoadSeq = (this._levelLoadSeq || 0) + 1;
+    const mySeq = this._levelLoadSeq;
+
     this.state.currentLevel = level;
     AppState.duplicates.setCurrentLevel(level);
 
     // Clear selection when changing level
     this._selection.clear();
 
-    this._showLoading('Loading duplicates…');
+    // Update level-specific UI (show/hide controls)
+    this._updateLevelUI(level);
+
+    // Set appropriate default sort mode when switching to level 4
+    if (level === 4 && this.state.sortMode === 'size') {
+        this.state.sortMode = 'alpha';
+        this._syncSortModeUI();
+    } else if (level !== 4 && this.state.sortMode === 'alpha') {
+        this.state.sortMode = 'size';
+        this._syncSortModeUI();
+    }
+
+    this._showLoading('Loading groups\u2026');
 
     try {
         // Load via AppState (handles caching and polling internally)
         await AppState.duplicates.loadLevel(level);
+
+        // If the user moved the slider while we were loading, discard this result
+        if (mySeq !== this._levelLoadSeq) return;
 
         // Copy from AppState for local sorting (sort mutates)
         const groups = AppState.duplicates.getGroups(level);
@@ -488,34 +662,30 @@ Duplicates._setLevel = async function(level) {
         this.state.allGroups = [...groups];  // Copy for sorting
         this.state.currentStatus = statusObj?.status || 'done';
 
-        // Apply current sort mode (also applies min group size filter)
+        // Apply current sort mode (also applies min group size / name filter)
         await this._applySortOrder();
     } catch (err) {
-        App.showError('Failed to load duplicates: ' + err.message);
+        // Only show error if this is still the active load
+        if (mySeq === this._levelLoadSeq) {
+            App.showError('Failed to load groups: ' + err.message);
+        }
     } finally {
-        this._hideLoading();
+        if (mySeq === this._levelLoadSeq) {
+            this._hideLoading();
+        }
     }
 };
 
 /**
  * Sets the sort mode for duplicate groups.
- * @param {string} mode - 'size', 'semantic', or 'people'
+ * @param {string} mode - 'size', 'alpha', 'semantic', or 'people'
  * @private
  */
 Duplicates._setSortMode = function(mode) {
     if (mode === this.state.sortMode) return;
 
     this.state.sortMode = mode;
-
-    // Update button states
-    this._els.btnSortSize.classList.toggle('active', mode === 'size');
-    this._els.btnSortSemantic.classList.toggle('active', mode === 'semantic');
-    if (this._els.btnSortPeople) {
-        this._els.btnSortPeople.classList.toggle('active', mode === 'people');
-    }
-
-    // Enable/disable semantic input
-    this._els.semanticQuery.disabled = (mode !== 'semantic');
+    this._syncSortModeUI();
 
     if (mode === 'semantic') {
         // Focus the input when switching to semantic mode
@@ -527,6 +697,10 @@ Duplicates._setSortMode = function(mode) {
     } else if (mode === 'people') {
         // Sort by people names
         this._sortGroupsByPeople();
+    } else if (mode === 'alpha') {
+        // Sort alphabetically by name
+        this._sortGroupsByAlpha();
+        this._renderGroups();
     } else {
         // Sort by size (default)
         this._sortGroupsBySize();
@@ -570,11 +744,43 @@ Duplicates._onMinGroupSizeChange = function() {
 
 /**
  * Applies the min group size filter to allGroups and stores result in groups.
+ * Only applies for levels 0-3. Level 4 uses name filter instead.
  * @private
  */
 Duplicates._applyMinGroupSizeFilter = function() {
+    if (this.state.currentLevel === 4) {
+        this._applyGroupNameFilter();
+        return;
+    }
     const minSize = this.state.minGroupSize;
     this.state.groups = this.state.allGroups.filter(g => g.count >= minSize);
+};
+
+/**
+ * Applies the group name filter for level 4 custom groups.
+ * Uses case-insensitive substring matching.
+ * @private
+ */
+Duplicates._applyGroupNameFilter = function() {
+    const filter = this.state.groupFilter.toLowerCase().trim();
+    if (!filter) {
+        this.state.groups = [...this.state.allGroups];
+        return;
+    }
+    this.state.groups = this.state.allGroups.filter(g => {
+        const name = (g.name || '').toLowerCase();
+        return name.includes(filter);
+    });
+};
+
+/**
+ * Handles changes to the group name filter input.
+ * @private
+ */
+Duplicates._onGroupFilterChanged = function() {
+    this.state.groupFilter = this._els.groupFilter.value;
+    this._applyGroupNameFilter();
+    this._renderGroups();
 };
 
 /**
@@ -586,6 +792,20 @@ Duplicates._applyMinGroupSizeFilter = function() {
 Duplicates._sortGroupsBySize = function() {
     this.state.allGroups.sort((a, b) => b.count - a.count);
     this._applyMinGroupSizeFilter();
+};
+
+/**
+ * Sorts groups alphabetically by name.
+ * Used for level 4 custom groups.
+ * @private
+ */
+Duplicates._sortGroupsByAlpha = function() {
+    this.state.allGroups.sort((a, b) => {
+        const nameA = a.name || '';
+        const nameB = b.name || '';
+        return nameA.localeCompare(nameB, undefined, { sensitivity: 'base' });
+    });
+    this._applyGroupNameFilter();
 };
 
 /**
@@ -663,6 +883,9 @@ Duplicates._applySortOrder = async function() {
         await this._applySemanticSort();
     } else if (this.state.sortMode === 'people') {
         await this._sortGroupsByPeople();
+    } else if (this.state.sortMode === 'alpha') {
+        this._sortGroupsByAlpha();
+        this._renderGroups();
     } else {
         this._sortGroupsBySize();
         this._renderGroups();
@@ -689,7 +912,7 @@ Duplicates._applySemanticSort = async function() {
     if (groupImageIds.length === 0) return;
 
     try {
-        this._showLoading('Sorting by similarity…');
+        this._showLoading('Sorting by similarity\u2026');
 
         // Call backend to get similarity scores via AppState
         const scores = await AppState.duplicates.sortSemantic(
@@ -722,6 +945,79 @@ Duplicates._applySemanticSort = async function() {
 };
 
 /* ==========================================================================
+   CUSTOM GROUP ACTIONS (Level 4)
+
+   Create, rename, delete custom groups.
+   ========================================================================== */
+
+/**
+ * Creates a new custom group.
+ * Prompts for a name, then creates via AppState.
+ * @private
+ */
+Duplicates._onNewGroup = async function() {
+    const name = await App.prompt('New Group', 'Enter a name for the new group:');
+    if (!name || !name.trim()) return;
+
+    try {
+        await AppState.duplicates.createGroup(name.trim());
+    } catch (err) {
+        App.showError('Failed to create group: ' + err.message);
+    }
+};
+
+/**
+ * Renames the selected custom group.
+ * Requires exactly one group selected.
+ * @private
+ */
+Duplicates._onRenameGroup = async function() {
+    if (this.state.selectedGroups.length !== 1) return;
+
+    const hash = this.state.selectedGroups[0];
+    const groups = this.state.allGroups;
+    const group = groups.find(g => g.group_hash === hash);
+    if (!group) return;
+
+    const name = await App.prompt('Rename Group', 'Enter a new name:', group.name || '');
+    if (name === null || !name.trim()) return;
+
+    try {
+        await AppState.duplicates.renameGroup(hash, name.trim());
+    } catch (err) {
+        App.showError('Failed to rename group: ' + err.message);
+    }
+};
+
+/**
+ * Deletes the selected custom group(s).
+ * Shows a danger confirmation dialog.
+ * @private
+ */
+Duplicates._onDeleteGroup = async function() {
+    const hashes = this.state.selectedGroups;
+    if (hashes.length === 0) return;
+
+    const plural = hashes.length > 1 ? `${hashes.length} groups` : 'this group';
+    const confirmed = await App.confirm(
+        'Delete Group',
+        `Are you sure you want to delete ${plural}? The images will not be affected.`,
+        { danger: true, okText: 'Delete' }
+    );
+
+    if (!confirmed) return;
+
+    try {
+        for (const hash of hashes) {
+            await AppState.duplicates.deleteGroup(hash);
+        }
+        this._selection.clear();
+    } catch (err) {
+        App.showError('Failed to delete group: ' + err.message);
+    }
+};
+
+/* ==========================================================================
    RENDERING & DISPLAY
 
    Stack grid rendering, thumbnails, and visual updates.
@@ -735,8 +1031,9 @@ Duplicates._renderGroups = function() {
     const grid = this._els.grid;
     const empty = this._els.empty;
 
+    const level = this.state.currentLevel;
     const status = this.state.currentStatus;
-    const sliderPos = this._levelToSlider(this.state.currentLevel);
+    const sliderPos = this._levelToSlider(level);
     const levelLabel = this.SIMILARITY_LABELS[sliderPos].toLowerCase();
 
     // Show empty/status state if no groups
@@ -746,10 +1043,17 @@ Duplicates._renderGroups = function() {
 
         const p = empty.querySelector('p');
         if (p) {
-            if (status === 'computing') {
-                p.textContent = `Computing ${levelLabel} duplicates... This may take a while for large collections.`;
+            if (level === 4) {
+                // Custom groups empty state
+                if (this.state.groupFilter) {
+                    p.textContent = 'No groups match the current filter.';
+                } else {
+                    p.textContent = 'No custom groups yet. Select images in the Gallery and use the group button to create one.';
+                }
+            } else if (status === 'computing') {
+                p.textContent = `Computing ${levelLabel} duplicates\u2026 This may take a while for large collections.`;
             } else if (status === 'pending') {
-                p.textContent = `Waiting to compute ${levelLabel} duplicates...`;
+                p.textContent = `Waiting to compute ${levelLabel} duplicates\u2026`;
             } else {
                 p.textContent = `No ${levelLabel} duplicates found.`;
             }
@@ -773,6 +1077,8 @@ Duplicates._renderGroups = function() {
 
 /**
  * Creates a stack element for a duplicate group with thumbnail already loaded.
+ * For level 4 (custom groups), shows the group name as primary label and count below.
+ * For levels 0-3, shows the count as the primary label.
  * @param {Object} group - The duplicate group (lightweight format)
  * @param {number} index - Group index for data attribute
  * @param {string} blobUrl - Blob URL for the thumbnail
@@ -787,16 +1093,32 @@ Duplicates._createStackElement = function(group, index, blobUrl) {
 
     // Best image preview (thumbnail) with blob URL already set
     const img = document.createElement('img');
-    img.src = blobUrl;
-    img.alt = group.best_image?.basename || 'Duplicate group preview';
+    if (blobUrl) {
+        img.src = blobUrl;
+    }
+    img.alt = group.name || group.best_image?.basename || 'Group preview';
     img.dataset.imageId = group.best_image?.id || '';
     stack.appendChild(img);
 
-    // Count label
-    const count = document.createElement('div');
-    count.className = 'duplicate-stack-count';
-    count.textContent = `${group.count} images`;
-    stack.appendChild(count);
+    if (this.state.currentLevel === 4) {
+        // Custom groups: show name as primary label, count as subtitle
+        const nameEl = document.createElement('div');
+        nameEl.className = 'duplicate-stack-name';
+        nameEl.textContent = group.name || 'Untitled';
+        nameEl.title = group.name || 'Untitled';
+        stack.appendChild(nameEl);
+
+        const countEl = document.createElement('div');
+        countEl.className = 'duplicate-stack-count-sub';
+        countEl.textContent = group.count === 1 ? '1 image' : `${group.count} images`;
+        stack.appendChild(countEl);
+    } else {
+        // Auto levels: show count label
+        const count = document.createElement('div');
+        count.className = 'duplicate-stack-count';
+        count.textContent = `${group.count} images`;
+        stack.appendChild(count);
+    }
 
     return stack;
 };

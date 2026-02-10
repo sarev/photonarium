@@ -1090,16 +1090,16 @@ def get_duplicates():
     level = request.args.get('level', 0, type=int)
     since = request.args.get('since')
 
-    # Validate level
-    if level < 0 or level > 3:
-        return error_response('Level must be between 0 and 3')
+    # Validate level (0-3 = auto-detected, 4 = custom groups)
+    if level < 0 or level > 4:
+        return error_response('Level must be between 0 and 4')
 
     db = get_db()
-    status = db.get_duplicate_status().get(level, 'pending')
+    status = db.get_duplicate_status().get(level, 'done')
     epoch = db.get_duplicate_epoch()
 
-    # If client has current data, return minimal response
-    if since and since == epoch and status == 'done':
+    # Custom groups (level 4) skip epoch caching — always return fresh data
+    if level != 4 and since and since == epoch and status == 'done':
         return success_response({
             'groups': [],
             'status': status,
@@ -1150,6 +1150,150 @@ def sort_duplicates_semantic():
     except Exception as e:
         logger.exception('Semantic sort failed')
         return error_response(f'Semantic sort failed: {str(e)}', 500)
+
+
+# =============================================================================
+# Custom Group Endpoints (Albums)
+# =============================================================================
+
+@app.route('/api/groups', methods=['POST'])
+def create_group():
+    """Create a custom group (album) with optional initial images.
+
+    Request Body:
+        JSON object with:
+            - group_hash: Frontend-generated UUID for the group
+            - name: Display name for the group (non-empty, max 255 chars)
+            - image_ids: Optional array of image IDs to include initially
+
+    Returns:
+        Success response on creation.
+    """
+    data = request.get_json()
+    if not data:
+        return error_response('Request body is required')
+
+    group_hash = data.get('group_hash', '').strip()
+    if not group_hash:
+        return error_response('group_hash is required')
+
+    name = data.get('name', '').strip()
+    if not name:
+        return error_response('Group name is required')
+    if len(name) > 255:
+        return error_response('Group name must be 255 characters or fewer')
+
+    image_ids = data.get('image_ids', [])
+
+    try:
+        get_db().create_custom_group(group_hash, name, image_ids)
+        return success_response(message='Group created')
+    except Exception as e:
+        logger.exception('Failed to create custom group')
+        return error_response(f'Failed to create group: {str(e)}', 500)
+
+
+@app.route('/api/groups/<group_hash>', methods=['PATCH'])
+def rename_group(group_hash):
+    """Rename a custom group.
+
+    Request Body:
+        JSON object with:
+            - name: New display name (non-empty, max 255 chars)
+
+    Returns:
+        Success response on rename.
+    """
+    data = request.get_json()
+    if not data:
+        return error_response('Request body is required')
+
+    name = data.get('name', '').strip()
+    if not name:
+        return error_response('Group name is required')
+    if len(name) > 255:
+        return error_response('Group name must be 255 characters or fewer')
+
+    try:
+        get_db().rename_custom_group(group_hash, name)
+        return success_response(message='Group renamed')
+    except Exception as e:
+        logger.exception('Failed to rename custom group')
+        return error_response(f'Failed to rename group: {str(e)}', 500)
+
+
+@app.route('/api/groups/<group_hash>', methods=['DELETE'])
+def delete_group(group_hash):
+    """Delete a custom group and all its image associations.
+
+    The images themselves are not deleted — only the group membership.
+
+    Returns:
+        Success response on deletion.
+    """
+    try:
+        get_db().delete_custom_group(group_hash)
+        return success_response(message='Group deleted')
+    except Exception as e:
+        logger.exception('Failed to delete custom group')
+        return error_response(f'Failed to delete group: {str(e)}', 500)
+
+
+@app.route('/api/groups/<group_hash>/images', methods=['POST'])
+def add_images_to_group(group_hash):
+    """Add images to an existing custom group.
+
+    Request Body:
+        JSON object with:
+            - image_ids: Array of image IDs to add
+
+    Returns:
+        Success response on addition.
+    """
+    data = request.get_json()
+    if not data:
+        return error_response('Request body is required')
+
+    image_ids = data.get('image_ids', [])
+    if not image_ids:
+        return error_response('image_ids array is required')
+
+    try:
+        get_db().add_images_to_custom_group(group_hash, image_ids)
+        return success_response(message='Images added to group')
+    except Exception as e:
+        logger.exception('Failed to add images to custom group')
+        return error_response(f'Failed to add images: {str(e)}', 500)
+
+
+@app.route('/api/groups/<group_hash>/images/remove', methods=['POST'])
+def remove_images_from_group(group_hash):
+    """Remove images from a custom group (group persists even if empty).
+
+    Uses POST instead of DELETE to avoid DELETE-with-body issues.
+    Matches existing pattern (e.g. /api/faces/unassign-batch).
+
+    Request Body:
+        JSON object with:
+            - image_ids: Array of image IDs to remove
+
+    Returns:
+        Success response on removal.
+    """
+    data = request.get_json()
+    if not data:
+        return error_response('Request body is required')
+
+    image_ids = data.get('image_ids', [])
+    if not image_ids:
+        return error_response('image_ids array is required')
+
+    try:
+        get_db().remove_images_from_custom_group(group_hash, image_ids)
+        return success_response(message='Images removed from group')
+    except Exception as e:
+        logger.exception('Failed to remove images from custom group')
+        return error_response(f'Failed to remove images: {str(e)}', 500)
 
 
 # =============================================================================

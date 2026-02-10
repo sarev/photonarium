@@ -21,7 +21,7 @@ Find out more about the motivations behind Imaginary in [`BACKGROUND.md`](BACKGR
 - **Fast browsing** with a thumbnail grid that stays smooth on large libraries
 - **AI search** that understands what you type (for example: "sunset over mountains", "birthday cake"), with negative terms to exclude concepts (e.g. "beach -people")
 - **Face workflows**: detect faces, group unknowns, name people, and use those names later
-- **Duplicate finding** at multiple strictness levels (identical, near-identical, similar, related)
+- **Duplicate finding** at multiple strictness levels (identical, near-identical, similar, related) plus user-curated **custom groups** (albums)
 - **Ratings and descriptions** so you can build your own “favourites” system
 
 Once you have run the model downloader, the models stay on your machine. Everything runs locally.
@@ -33,7 +33,7 @@ Once you have run the model downloader, the models stay on your machine. Everyth
 3. Let it scan. Big libraries take time, especially face detection.
 4. Go back to **Gallery** and start browsing.
 5. Use **Search** when you want to find something specific.
-6. Use **Duplicates** when you want to clean up.
+6. Use **Groups** when you want to clean up duplicates or organise images into albums.
 7. Use **Faces** when you want to name people and improve recognition.
 
 ## Getting around
@@ -42,7 +42,7 @@ Use the toolbar buttons, or these shortcuts (ignored while you are typing in a t
 
 - **Ctrl/Cmd + G**: Gallery
 - **Ctrl/Cmd + M**: Manage Database
-- **Ctrl/Cmd + D**: Duplicates
+- **Ctrl/Cmd + D**: Groups
 - **Ctrl/Cmd + S**: Search
 - **Ctrl/Cmd + F**: Faces
 
@@ -123,11 +123,11 @@ When you select a photo, the info panel shows basic details and lets you edit:
 
 Descriptions and ratings help when you search later.
 
-### Reviewing duplicates in the Gallery
+### Reviewing groups in the Gallery
 
-If you opened a duplicate group into the Gallery, you can move between groups without going back:
+If you opened a group into the Gallery, you can move between groups without going back:
 
-- **Alt + Left / Alt + Right** navigates to the previous/next duplicate group.
+- **Alt + Left / Alt + Right** navigates to the previous/next group.
 - The toolbar also shows previous/next group buttons for the same action.
 
 ---
@@ -256,17 +256,28 @@ Tip: You can also leave Search with **Escape**, returning to the Gallery.
 
 ---
 
-## Duplicates
+## Groups
 
-Duplicates helps you clean up your library by grouping photos that are the same, or nearly the same, so you can keep the best version and remove the rest.
+Groups helps you clean up your library by finding duplicates and also lets you organise images into custom albums.
 
-### What you can do
+### Duplicate detection (levels 0-3)
 
 - Review duplicate "stacks" (groups) of related images.
 - Adjust how strict duplicate matching should be:
   - **Related**, **Similar**, **Near-identical**, **Identical**
 - Double click a stack (or press **Enter**) to open that group in the Gallery.
 - While viewing a group in the Gallery, use **Alt + Left / Right** to move between groups.
+
+### Custom groups (albums)
+
+Slide to **Custom** (the leftmost position) to manage your own named groups:
+
+- Create, rename, and delete groups from the toolbar.
+- Add images to groups via the group button that appears when you hover over a Gallery thumbnail.
+- The Group Picker dialog lets you manage which groups an image belongs to.
+- An image can belong to multiple groups (overlap allowed).
+- Groups are kept even when all images are removed.
+- While viewing a custom group in the Gallery, press **Backspace** to remove selected images from the group (does not delete them).
 
 ### Semantic sorting
 

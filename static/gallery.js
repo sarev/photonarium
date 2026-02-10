@@ -267,7 +267,9 @@ const Gallery = {
             // Duplicate group navigation
             btnPrevGroup: App.$('btn-prev-group'),
             btnNextGroup: App.$('btn-next-group'),
-            dupGroupNavSeparator: document.querySelector('.dup-group-nav-separator')
+            dupGroupNavSeparator: document.querySelector('.dup-group-nav-separator'),
+            // Remove from group button
+            btnRemoveFromGroup: App.$('btn-remove-from-group')
         };
 
         // Create scroll indicator overlay
@@ -346,7 +348,13 @@ const Gallery = {
                 this._openFullscreen(id);
             },
             onDeleteRequested: (ids) => {
-                this._deleteImages(ids);
+                // Backspace/Delete in a custom group context removes from group instead of deleting
+                const filter = App.getFilter();
+                if (filter && filter.type === 'duplicates' && filter.sourceLevel === 4 && filter.groupHash) {
+                    this._removeFromGroup();
+                } else {
+                    this._deleteImages(ids);
+                }
             },
             onGroupNavigate: (direction) => {
                 this._navigateDupGroup(direction);
@@ -358,6 +366,12 @@ const Gallery = {
 
         // Set up duplicate group navigation
         this._initDupGroupNav();
+
+        // Set up group picker dialog
+        this._initGroupPicker();
+
+        // Set up remove-from-group button
+        this._initRemoveFromGroup();
 
         // Subscribe to app events
         App.on('thumbnailSizeChanged', () => this._onThumbnailSizeChanged());
@@ -872,8 +886,33 @@ const Gallery = {
         // Basename label
         const label = App.createElement('span', { className: 'gallery-item-label' }, img.basename);
 
+        // Group hover button (opens group picker on click)
+        const groupBtn = App.createElement('button', {
+            className: 'gallery-item-group-btn',
+            title: 'Manage groups'
+        });
+        // Use Material Symbol if available, otherwise Unicode fallback
+        if (document.fonts?.check('24px "Material Symbols Outlined"')) {
+            const icon = document.createElement('span');
+            icon.className = 'material-symbols-outlined';
+            icon.textContent = 'photo_prints';
+            groupBtn.appendChild(icon);
+        } else {
+            groupBtn.textContent = '\u{1F5C2}';
+        }
+        groupBtn.addEventListener('click', (e) => {
+            e.stopPropagation();
+            // Blur so the button loses :focus and its opacity returns to 0
+            groupBtn.blur();
+            const selectedIds = App.getSelectedImages();
+            const imageIds = selectedIds.length > 0 && selectedIds.includes(img.id)
+                ? selectedIds : [img.id];
+            this._openGroupPicker(imageIds);
+        });
+
         item.appendChild(thumb);
         item.appendChild(label);
+        item.appendChild(groupBtn);
 
         // Check if this item has a pending selection
         if (this.state.pendingSelection?.has(img.id)) {
@@ -1566,6 +1605,7 @@ const Gallery = {
     _updateDupGroupNavState() {
         const filter = App.getFilter();
         const isDupFilter = filter && filter.type === 'duplicates' && filter.groupHash;
+        const isCustomGroup = isDupFilter && filter.sourceLevel === 4;
 
         // Show/hide buttons and separator
         const show = isDupFilter;
@@ -1579,6 +1619,12 @@ const Gallery = {
         }
         if (this._els.dupGroupNavSeparator) {
             this._els.dupGroupNavSeparator.hidden = !show;
+        }
+
+        // Show remove-from-group button only when viewing a custom group
+        if (this._els.btnRemoveFromGroup) {
+            this._els.btnRemoveFromGroup.hidden = !isCustomGroup;
+            this._els.btnRemoveFromGroup.disabled = !isCustomGroup;
         }
     },
 
@@ -1613,6 +1659,378 @@ const Gallery = {
         const newGroup = groups[newIndex];
         if (newGroup && typeof Duplicates !== 'undefined') {
             Duplicates.navigateToGroup(newGroup.group_hash);
+        }
+    },
+
+    /* ----------------------------------------------------------------------
+       GROUP PICKER DIALOG
+       ---------------------------------------------------------------------- */
+
+    /**
+     * Initialises the group picker dialog event handlers.
+     * @private
+     */
+    _initGroupPicker() {
+        const dialog = document.getElementById('dialog-group-picker');
+        if (!dialog) return;
+
+        const doneBtn = App.$('dialog-group-done');
+        const cancelBtn = App.$('dialog-group-cancel');
+        const newBtn = App.$('group-picker-new');
+        const searchInput = App.$('group-picker-search');
+
+        if (cancelBtn) cancelBtn.addEventListener('click', () => this._closeGroupPicker(false));
+        if (doneBtn) doneBtn.addEventListener('click', () => this._closeGroupPicker(true));
+        if (newBtn) newBtn.addEventListener('click', () => this._onGroupPickerNew());
+
+        if (searchInput) {
+            searchInput.addEventListener('input', () => this._renderGroupPickerAvailable());
+            searchInput.addEventListener('keydown', (e) => e.stopPropagation());
+        }
+
+        // Handle dialog close (Escape)
+        dialog.addEventListener('cancel', (e) => {
+            e.preventDefault();
+            this._closeGroupPicker(false);
+        });
+
+        // Drag support for available panel
+        const availableGrid = App.$('group-picker-available');
+        const selectedGrid = App.$('group-picker-selected');
+
+        if (availableGrid && selectedGrid) {
+            // Drop targets
+            selectedGrid.addEventListener('dragover', (e) => {
+                e.preventDefault();
+                selectedGrid.classList.add('drag-over');
+            });
+            selectedGrid.addEventListener('dragleave', () => {
+                selectedGrid.classList.remove('drag-over');
+            });
+            selectedGrid.addEventListener('drop', (e) => {
+                e.preventDefault();
+                selectedGrid.classList.remove('drag-over');
+                const hash = e.dataTransfer.getData('text/plain');
+                if (hash) this._groupPickerSelect(hash);
+            });
+
+            availableGrid.addEventListener('dragover', (e) => {
+                e.preventDefault();
+                availableGrid.classList.add('drag-over');
+            });
+            availableGrid.addEventListener('dragleave', () => {
+                availableGrid.classList.remove('drag-over');
+            });
+            availableGrid.addEventListener('drop', (e) => {
+                e.preventDefault();
+                availableGrid.classList.remove('drag-over');
+                const hash = e.dataTransfer.getData('text/plain');
+                if (hash) this._groupPickerDeselect(hash);
+            });
+        }
+    },
+
+    /**
+     * Opens the group picker for the given image IDs.
+     * Loads level 4 groups, determines initial membership, and shows modal.
+     * @param {string[]} imageIds - Image IDs to manage group membership for
+     * @private
+     */
+    async _openGroupPicker(imageIds) {
+        if (!imageIds || imageIds.length === 0) return;
+
+        const dialog = document.getElementById('dialog-group-picker');
+        if (!dialog) return;
+
+        // Ensure level 4 is loaded
+        await AppState.duplicates.loadLevel(4);
+
+        // Store state for the picker session
+        this._groupPickerState = {
+            imageIds: imageIds,
+            // Groups that ALL selected images belong to (for batch operations)
+            originalGroups: new Set(
+                AppState.duplicates.getGroupsForImages(imageIds).map(g => g.group_hash)
+            ),
+            selectedGroups: new Set(
+                AppState.duplicates.getGroupsForImages(imageIds).map(g => g.group_hash)
+            )
+        };
+
+        // Update title
+        const titleEl = App.$('group-picker-title');
+        if (titleEl) {
+            titleEl.textContent = imageIds.length > 1
+                ? `Manage Groups (${imageIds.length} images)`
+                : 'Manage Groups';
+        }
+
+        // Clear search
+        const searchInput = App.$('group-picker-search');
+        if (searchInput) searchInput.value = '';
+
+        // Render panels
+        this._renderGroupPickerAvailable();
+        this._renderGroupPickerSelected();
+
+        dialog.showModal();
+    },
+
+    /**
+     * Closes the group picker, optionally saving changes.
+     * @param {boolean} save - If true, persist group membership changes
+     * @private
+     */
+    async _closeGroupPicker(save) {
+        const dialog = document.getElementById('dialog-group-picker');
+        if (!dialog) return;
+
+        if (save && this._groupPickerState) {
+            const { imageIds, originalGroups, selectedGroups } = this._groupPickerState;
+
+            // Find groups added and removed
+            const added = [...selectedGroups].filter(h => !originalGroups.has(h));
+            const removed = [...originalGroups].filter(h => !selectedGroups.has(h));
+
+            // Apply changes
+            try {
+                for (const hash of added) {
+                    await AppState.duplicates.addImages(hash, imageIds);
+                }
+                for (const hash of removed) {
+                    await AppState.duplicates.removeImages(hash, imageIds);
+                }
+            } catch (err) {
+                App.showError('Failed to update group membership: ' + err.message);
+            }
+        }
+
+        this._groupPickerState = null;
+        dialog.close();
+    },
+
+    /**
+     * Selects a group in the picker (moves from available to selected).
+     * @param {string} groupHash - Group hash to select
+     * @private
+     */
+    _groupPickerSelect(groupHash) {
+        if (!this._groupPickerState) return;
+        this._groupPickerState.selectedGroups.add(groupHash);
+        this._renderGroupPickerAvailable();
+        this._renderGroupPickerSelected();
+    },
+
+    /**
+     * Deselects a group in the picker (moves from selected to available).
+     * @param {string} groupHash - Group hash to deselect
+     * @private
+     */
+    _groupPickerDeselect(groupHash) {
+        if (!this._groupPickerState) return;
+        this._groupPickerState.selectedGroups.delete(groupHash);
+        this._renderGroupPickerAvailable();
+        this._renderGroupPickerSelected();
+    },
+
+    /**
+     * Renders the available (left) panel of the group picker.
+     * Filters out groups that are already selected.
+     * @private
+     */
+    _renderGroupPickerAvailable() {
+        const grid = App.$('group-picker-available');
+        if (!grid || !this._groupPickerState) return;
+
+        const allGroups = AppState.duplicates.getCustomGroups();
+        const selectedHashes = this._groupPickerState.selectedGroups;
+        const searchInput = App.$('group-picker-search');
+        const filter = (searchInput?.value || '').toLowerCase().trim();
+
+        // Filter: not selected, matches search
+        const available = allGroups.filter(g => {
+            if (selectedHashes.has(g.group_hash)) return false;
+            if (filter && !(g.name || '').toLowerCase().includes(filter)) return false;
+            return true;
+        });
+
+        grid.innerHTML = '';
+
+        if (available.length === 0) {
+            const empty = document.createElement('div');
+            empty.className = 'entity-picker-empty';
+            empty.textContent = filter ? 'No groups match the search.' : 'No more groups available.';
+            grid.appendChild(empty);
+            return;
+        }
+
+        for (const group of available) {
+            grid.appendChild(this._createGroupPickerItem(group, 'available'));
+        }
+    },
+
+    /**
+     * Renders the selected (right) panel of the group picker.
+     * @private
+     */
+    _renderGroupPickerSelected() {
+        const grid = App.$('group-picker-selected');
+        if (!grid || !this._groupPickerState) return;
+
+        const allGroups = AppState.duplicates.getCustomGroups();
+        const selectedHashes = this._groupPickerState.selectedGroups;
+
+        const selected = allGroups.filter(g => selectedHashes.has(g.group_hash));
+
+        grid.innerHTML = '';
+
+        if (selected.length === 0) {
+            const empty = document.createElement('div');
+            empty.className = 'entity-picker-empty';
+            empty.textContent = 'Not a member of any group.';
+            grid.appendChild(empty);
+            return;
+        }
+
+        for (const group of selected) {
+            grid.appendChild(this._createGroupPickerItem(group, 'selected'));
+        }
+    },
+
+    /**
+     * Creates a DOM element for a group in the picker.
+     * @param {Object} group - Group data
+     * @param {string} panel - 'available' or 'selected'
+     * @returns {HTMLElement}
+     * @private
+     */
+    _createGroupPickerItem(group, panel) {
+        const item = document.createElement('div');
+        item.className = 'entity-picker-item';
+        item.draggable = true;
+        item.dataset.hash = group.group_hash;
+
+        // Thumbnail or placeholder
+        if (group.best_image?.id) {
+            const img = document.createElement('img');
+            img.alt = group.name || 'Group';
+            // Load thumbnail
+            App.apiGet(`/images/${group.best_image.id}/thumbnail?size=200`).then(async response => {
+                // Use fetch directly to get blob
+            }).catch(() => {});
+            // Use the thumbnail endpoint as src (simple approach)
+            img.src = `/api/images/${group.best_image.id}/thumbnail?size=200`;
+            item.appendChild(img);
+        } else {
+            const placeholder = document.createElement('div');
+            placeholder.className = 'entity-picker-placeholder';
+            placeholder.innerHTML = '<span class="icon" data-icon="photo_library"></span>';
+            item.appendChild(placeholder);
+        }
+
+        // Name
+        const nameEl = document.createElement('div');
+        nameEl.className = 'entity-picker-item-name';
+        nameEl.textContent = group.name || 'Untitled';
+        nameEl.title = group.name || 'Untitled';
+        item.appendChild(nameEl);
+
+        // Count
+        const countEl = document.createElement('div');
+        countEl.className = 'entity-picker-item-count';
+        countEl.textContent = group.count === 1 ? '1 image' : `${group.count} images`;
+        item.appendChild(countEl);
+
+        // Click: toggle between panels
+        item.addEventListener('click', () => {
+            if (panel === 'available') {
+                this._groupPickerSelect(group.group_hash);
+            } else {
+                this._groupPickerDeselect(group.group_hash);
+            }
+        });
+
+        // Drag start
+        item.addEventListener('dragstart', (e) => {
+            e.dataTransfer.setData('text/plain', group.group_hash);
+            e.dataTransfer.effectAllowed = 'move';
+        });
+
+        return item;
+    },
+
+    /**
+     * Handles "New Group..." button in the picker dialog.
+     * Prompts for a name, creates the group, adds selected images, and updates picker.
+     * @private
+     */
+    async _onGroupPickerNew() {
+        if (!this._groupPickerState) return;
+
+        const name = await App.prompt('New Group', 'Enter a name for the new group:');
+        if (!name || !name.trim()) return;
+
+        try {
+            const groupHash = await AppState.duplicates.createGroup(
+                name.trim(),
+                this._groupPickerState.imageIds
+            );
+            // Add to selected set
+            this._groupPickerState.selectedGroups.add(groupHash);
+            // Also add to original so it doesn't get double-added on close
+            this._groupPickerState.originalGroups.add(groupHash);
+            // Re-render panels
+            this._renderGroupPickerAvailable();
+            this._renderGroupPickerSelected();
+        } catch (err) {
+            App.showError('Failed to create group: ' + err.message);
+        }
+    },
+
+    /* ----------------------------------------------------------------------
+       REMOVE FROM GROUP
+       ---------------------------------------------------------------------- */
+
+    /**
+     * Initialises the remove-from-group button.
+     * @private
+     */
+    _initRemoveFromGroup() {
+        if (this._els.btnRemoveFromGroup) {
+            this._els.btnRemoveFromGroup.addEventListener('click', () => this._removeFromGroup());
+        }
+    },
+
+    /**
+     * Removes selected images from the current custom group.
+     * Only active when viewing a level-4 group in the gallery.
+     * @private
+     */
+    async _removeFromGroup() {
+        const filter = App.getFilter();
+        if (!filter || filter.type !== 'duplicates' || filter.sourceLevel !== 4 || !filter.groupHash) return;
+
+        const selectedIds = App.getSelectedImages();
+        if (selectedIds.length === 0) return;
+
+        try {
+            await AppState.duplicates.removeImages(filter.groupHash, selectedIds);
+
+            // Update the filter's image list to reflect removal
+            const group = AppState.duplicates.getCustomGroups().find(g => g.group_hash === filter.groupHash);
+            if (group && group.image_ids.length > 0) {
+                // Update filter with remaining images
+                App.setFilter({
+                    ...filter,
+                    imageIds: group.image_ids
+                });
+            } else {
+                // Group is now empty - return to groups screen
+                App.clearFilter();
+                App.showScreen('duplicates');
+            }
+        } catch (err) {
+            App.showError('Failed to remove from group: ' + err.message);
         }
     },
 

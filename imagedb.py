@@ -297,6 +297,15 @@ CREATE TABLE IF NOT EXISTS duplicate_groups (
 """
 
 # SQL schema for tracking one-time migrations
+_SQL_CREATE_CUSTOM_GROUPS = """
+CREATE TABLE IF NOT EXISTS custom_groups (
+    group_hash  TEXT PRIMARY KEY,
+    name        TEXT NOT NULL,
+    created_at  TEXT NOT NULL,
+    updated_at  TEXT NOT NULL
+)
+"""
+
 _SQL_CREATE_MIGRATIONS = """
 CREATE TABLE IF NOT EXISTS migrations (
     id          TEXT PRIMARY KEY,
@@ -325,6 +334,8 @@ _SQL_CREATE_INDEXES = [
     "CREATE INDEX IF NOT EXISTS idx_dup_updated_at ON duplicate_groups(updated_at)",
     # Index for cascade deletes when an image is removed
     "CREATE INDEX IF NOT EXISTS idx_dup_image_id ON duplicate_groups(image_id)",
+    # Index for custom group name lookups
+    "CREATE INDEX IF NOT EXISTS idx_custom_groups_name ON custom_groups(name)",
 ]
 
 
@@ -377,6 +388,7 @@ def init_database(db_path: Path | str) -> sqlite3.Connection:
     conn.execute(_SQL_CREATE_FOLDERS)
     conn.execute(_SQL_CREATE_IMAGES)
     conn.execute(_SQL_CREATE_DUPLICATE_GROUPS)
+    conn.execute(_SQL_CREATE_CUSTOM_GROUPS)
     conn.execute(_SQL_CREATE_MIGRATIONS)
     conn.execute(_SQL_CREATE_METADATA)
 
@@ -4770,6 +4782,55 @@ class ImageDatabase:
     def get_duplicate_epoch(self) -> str:
         """Get the current epoch timestamp for duplicate groups."""
         return self._duplicate_manager.get_epoch()
+
+    # =========================================================================
+    # Public API - Custom Groups (Albums)
+    # =========================================================================
+
+    def create_custom_group(self, group_hash: str, name: str, image_ids: list[str]) -> None:
+        """Create a custom group (album) with the given images.
+
+        Args:
+            group_hash: Frontend-generated UUID for the group.
+            name: Display name for the group.
+            image_ids: Initial list of image IDs to include.
+        """
+        self._duplicate_manager.create_custom_group(group_hash, name, image_ids)
+
+    def rename_custom_group(self, group_hash: str, name: str) -> None:
+        """Rename a custom group.
+
+        Args:
+            group_hash: The group identifier.
+            name: New display name.
+        """
+        self._duplicate_manager.rename_custom_group(group_hash, name)
+
+    def delete_custom_group(self, group_hash: str) -> None:
+        """Delete a custom group and its image associations.
+
+        Args:
+            group_hash: The group identifier.
+        """
+        self._duplicate_manager.delete_custom_group(group_hash)
+
+    def add_images_to_custom_group(self, group_hash: str, image_ids: list[str]) -> None:
+        """Add images to an existing custom group.
+
+        Args:
+            group_hash: The group identifier.
+            image_ids: Image IDs to add.
+        """
+        self._duplicate_manager.add_images_to_custom_group(group_hash, image_ids)
+
+    def remove_images_from_custom_group(self, group_hash: str, image_ids: list[str]) -> None:
+        """Remove images from a custom group (group persists even if empty).
+
+        Args:
+            group_hash: The group identifier.
+            image_ids: Image IDs to remove.
+        """
+        self._duplicate_manager.remove_images_from_custom_group(group_hash, image_ids)
 
     # =========================================================================
     # Public API - Stats and Status

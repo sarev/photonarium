@@ -1292,9 +1292,12 @@ const App = {
      * Shows a confirmation dialog.
      * @param {string} title - Dialog title
      * @param {string} message - Dialog message
+     * @param {Object} [options] - Optional configuration
+     * @param {boolean} [options.danger=false] - If true, OK button uses danger style (red)
+     * @param {string} [options.okText] - Custom OK button label (e.g. "Delete")
      * @returns {Promise<boolean>} Resolves true if confirmed, false if cancelled
      */
-    confirm(title, message) {
+    confirm(title, message, options = {}) {
         return new Promise(resolve => {
             const dialog = document.getElementById('dialog-confirm');
             const titleEl = document.getElementById('dialog-confirm-title');
@@ -1305,6 +1308,12 @@ const App = {
             titleEl.textContent = title;
             msgEl.textContent = message;
 
+            // Apply danger styling and custom OK text if requested
+            const isDanger = options.danger === true;
+            okBtn.classList.toggle('danger', isDanger);
+            okBtn.classList.toggle('primary', !isDanger);
+            okBtn.textContent = options.okText || 'OK';
+
             let onKeyDown; // Declared here so cleanup can reference it
 
             const cleanup = (result) => {
@@ -1312,6 +1321,10 @@ const App = {
                 cancelBtn.removeEventListener('click', onCancel);
                 dialog.removeEventListener('cancel', onCancel);
                 dialog.removeEventListener('keydown', onKeyDown);
+                // Reset button state for next use
+                okBtn.classList.remove('danger');
+                okBtn.classList.add('primary');
+                okBtn.textContent = 'OK';
                 dialog.close();
                 resolve(result);
             };

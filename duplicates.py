@@ -1545,7 +1545,7 @@ class DuplicateManager:
         self._db_path = db_path
         self._config = config or get_default_config()
         self._status_lock = threading.Lock()
-        self._status: dict[int, str] = {0: 'pending', 1: 'pending', 2: 'pending', 3: 'pending'}
+        self._status: dict[int, str] = {0: 'pending', 1: 'pending', 2: 'pending', 3: 'pending', 4: 'done'}
 
         # In-memory group cache (lazy loaded)
         self._cache_lock = threading.Lock()
@@ -1577,11 +1577,12 @@ class DuplicateManager:
                 return
 
             logger.debug('Loading duplicate group cache from database')
-            self._group_cache = {0: {}, 1: {}, 2: {}, 3: {}}
-            self._image_to_group = {0: {}, 1: {}, 2: {}, 3: {}}
+            self._group_cache = {0: {}, 1: {}, 2: {}, 3: {}, 4: {}}
+            self._image_to_group = {0: {}, 1: {}, 2: {}, 3: {}, 4: {}}
 
             conn = self._get_db()
             try:
+                # Load auto-detected duplicate groups (levels 0-3)
                 for level in range(4):
                     cursor = conn.execute("""
                         SELECT dg.group_hash, dg.image_id
@@ -1598,6 +1599,35 @@ class DuplicateManager:
                             self._group_cache[level][group_hash] = set()
                         self._group_cache[level][group_hash].add(image_id)
                         self._image_to_group[level][image_id] = group_hash
+
+                # Load custom groups (level 4) — images can belong to multiple groups
+                cursor = conn.execute("""
+                    SELECT dg.group_hash, dg.image_id
+                    FROM duplicate_groups dg
+                    JOIN images i ON i.id = dg.image_id
+                    WHERE dg.level = 4 AND i.deleted = 0
+                """)
+                for row in cursor.fetchall():
+                    group_hash = row['group_hash']
+                    image_id = row['image_id']
+                    if group_hash not in self._group_cache[4]:
+                        self._group_cache[4][group_hash] = set()
+                    self._group_cache[4][group_hash].add(image_id)
+                    # Level 4 allows overlap: _image_to_group[4] is not used
+                    # (an image can be in multiple custom groups)
+
+                # Also load empty custom groups (they persist when empty)
+                cursor = conn.execute("""
+                    SELECT cg.group_hash
+                    FROM custom_groups cg
+                    WHERE cg.group_hash NOT IN (
+                        SELECT DISTINCT dg.group_hash
+                        FROM duplicate_groups dg
+                        WHERE dg.level = 4
+                    )
+                """)
+                for row in cursor.fetchall():
+                    self._group_cache[4][row['group_hash']] = set()
 
                 total_groups = sum(len(groups) for groups in self._group_cache.values())
                 total_images = sum(len(imgs) for imgs in self._image_to_group.values())
@@ -1657,6 +1687,10 @@ class DuplicateManager:
                                 self._image_to_group[level].pop(remaining_id, None)
                             del self._group_cache[level][group_hash]
 
+            # Level 4 (custom groups): remove image but never dissolve empty groups
+            for group_hash, members in list(self._group_cache.get(4, {}).items()):
+                members.discard(image_id)
+
     def _remove_image_from_db_groups(self, image_id: str) -> None:
         """Remove an image from all duplicate groups in the database.
 
@@ -1685,6 +1719,10 @@ class DuplicateManager:
 
             # Check each affected group for singleton status
             for level, group_hash in affected_groups:
+                # Custom groups (level 4) persist even when empty — skip dissolution
+                if level == 4:
+                    continue
+
                 cursor = conn.execute(
                     'SELECT COUNT(*) as cnt FROM duplicate_groups WHERE level = ? AND group_hash = ?',
                     (level, group_hash)
@@ -1751,6 +1789,10 @@ class DuplicateManager:
             # Check each affected group for singleton status
             dissolved_count = 0
             for level, group_hash in affected_groups:
+                # Custom groups (level 4) persist even when empty — skip dissolution
+                if level == 4:
+                    continue
+
                 cursor = conn.execute(
                     'SELECT COUNT(*) as cnt FROM duplicate_groups WHERE level = ? AND group_hash = ?',
                     (level, group_hash)
@@ -1788,6 +1830,9 @@ class DuplicateManager:
                     for remaining_id in self._group_cache[level][group_hash]:
                         self._image_to_group[level].pop(remaining_id, None)
                     del self._group_cache[level][group_hash]
+            # Level 4 (custom groups): remove image but never dissolve
+            for group_hash, members in list(self._group_cache.get(4, {}).items()):
+                members.discard(img_id)
 
         if self._cache_loaded:
             with self._cache_lock:
@@ -1895,8 +1940,14 @@ class DuplicateManager:
 
         Uses the in-memory cache for image_ids to avoid per-group DB queries.
         Still queries DB for best_image selection (requires sorting by metadata).
+
+        Level 4 (custom groups) includes the group name and allows empty groups.
         """
         self._ensure_cache_loaded()
+
+        # Level 4: custom groups — different query that includes name and allows empty groups
+        if level == 4:
+            return self._get_custom_groups_lightweight()
 
         conn = self._get_db()
         try:
@@ -1958,6 +2009,79 @@ class DuplicateManager:
                             'id': row['best_id'],
                             'basename': row['best_basename'],
                         },
+                    })
+
+            return groups
+        finally:
+            conn.close()
+
+    def _get_custom_groups_lightweight(self) -> list[dict[str, Any]]:
+        """Get custom groups (level 4) with names, including empty groups.
+
+        Custom groups differ from auto-detected levels:
+        - They have a user-assigned name (from custom_groups table)
+        - Empty groups are preserved (not dissolved)
+        - Sorted alphabetically by name by default
+
+        Returns:
+            List of group dicts with group_hash, name, count, image_ids, best_image.
+        """
+        conn = self._get_db()
+        try:
+            # Get all custom groups with their names
+            cursor = conn.execute("""
+                SELECT cg.group_hash, cg.name
+                FROM custom_groups cg
+                ORDER BY cg.name COLLATE NOCASE ASC
+            """)
+            custom_group_rows = cursor.fetchall()
+
+            if not custom_group_rows:
+                return []
+
+            # Get best image per non-empty group
+            best_images = {}
+            cursor = conn.execute("""
+                WITH ranked AS (
+                    SELECT
+                        dg.group_hash,
+                        i.id,
+                        i.basename,
+                        ROW_NUMBER() OVER (
+                            PARTITION BY dg.group_hash
+                            ORDER BY
+                                (i.width * i.height) DESC,
+                                i.lossless DESC,
+                                i.size DESC,
+                                i.laplacian_var DESC,
+                                i.id ASC
+                        ) as rank
+                    FROM duplicate_groups dg
+                    JOIN images i ON i.id = dg.image_id
+                    WHERE dg.level = 4 AND i.deleted = 0
+                )
+                SELECT group_hash, id, basename
+                FROM ranked
+                WHERE rank = 1
+            """)
+            for row in cursor.fetchall():
+                best_images[row['group_hash']] = {
+                    'id': row['id'],
+                    'basename': row['basename'],
+                }
+
+            groups = []
+            with self._cache_lock:
+                for row in custom_group_rows:
+                    group_hash = row['group_hash']
+                    image_ids = list(self._group_cache[4].get(group_hash, set()))
+
+                    groups.append({
+                        'group_hash': group_hash,
+                        'name': row['name'],
+                        'count': len(image_ids),
+                        'image_ids': image_ids,
+                        'best_image': best_images.get(group_hash),
                     })
 
             return groups
@@ -2146,3 +2270,147 @@ class DuplicateManager:
         finally:
             if should_close:
                 conn.close()
+
+    # =========================================================================
+    # Custom Groups (Level 4 — Albums)
+    # =========================================================================
+
+    def create_custom_group(self, group_hash: str, name: str, image_ids: list[str]) -> None:
+        """Create a custom group (album) with the given images.
+
+        Inserts into both custom_groups (metadata) and duplicate_groups (membership)
+        tables. Custom groups use level 4 in duplicate_groups.
+
+        Args:
+            group_hash: Frontend-generated UUID for the group.
+            name: Display name for the group.
+            image_ids: Initial list of image IDs to include (may be empty).
+        """
+        now = datetime.now().isoformat()
+        conn = self._get_db()
+        try:
+            conn.execute(
+                'INSERT INTO custom_groups (group_hash, name, created_at, updated_at) VALUES (?, ?, ?, ?)',
+                (group_hash, name, now, now)
+            )
+            for image_id in image_ids:
+                conn.execute(
+                    'INSERT OR IGNORE INTO duplicate_groups (level, group_hash, image_id, updated_at) VALUES (4, ?, ?, ?)',
+                    (group_hash, image_id, now)
+                )
+            conn.commit()
+            logger.info(f'Created custom group "{name}" ({group_hash}) with {len(image_ids)} images')
+        finally:
+            conn.close()
+
+        # Update cache
+        self._ensure_cache_loaded()
+        with self._cache_lock:
+            self._group_cache[4][group_hash] = set(image_ids)
+
+    def rename_custom_group(self, group_hash: str, name: str) -> None:
+        """Rename a custom group.
+
+        Args:
+            group_hash: The group identifier.
+            name: New display name.
+        """
+        now = datetime.now().isoformat()
+        conn = self._get_db()
+        try:
+            conn.execute(
+                'UPDATE custom_groups SET name = ?, updated_at = ? WHERE group_hash = ?',
+                (name, now, group_hash)
+            )
+            conn.commit()
+            logger.info(f'Renamed custom group {group_hash} to "{name}"')
+        finally:
+            conn.close()
+
+    def delete_custom_group(self, group_hash: str) -> None:
+        """Delete a custom group and its image associations.
+
+        Removes from both custom_groups and duplicate_groups tables.
+
+        Args:
+            group_hash: The group identifier.
+        """
+        conn = self._get_db()
+        try:
+            conn.execute('DELETE FROM custom_groups WHERE group_hash = ?', (group_hash,))
+            conn.execute(
+                'DELETE FROM duplicate_groups WHERE level = 4 AND group_hash = ?',
+                (group_hash,)
+            )
+            conn.commit()
+            logger.info(f'Deleted custom group {group_hash}')
+        finally:
+            conn.close()
+
+        # Update cache
+        if self._cache_loaded:
+            with self._cache_lock:
+                self._group_cache[4].pop(group_hash, None)
+
+    def add_images_to_custom_group(self, group_hash: str, image_ids: list[str]) -> None:
+        """Add images to an existing custom group.
+
+        Skips images already in the group (INSERT OR IGNORE).
+
+        Args:
+            group_hash: The group identifier.
+            image_ids: Image IDs to add.
+        """
+        now = datetime.now().isoformat()
+        conn = self._get_db()
+        try:
+            for image_id in image_ids:
+                conn.execute(
+                    'INSERT OR IGNORE INTO duplicate_groups (level, group_hash, image_id, updated_at) VALUES (4, ?, ?, ?)',
+                    (group_hash, image_id, now)
+                )
+            conn.execute(
+                'UPDATE custom_groups SET updated_at = ? WHERE group_hash = ?',
+                (now, group_hash)
+            )
+            conn.commit()
+            logger.info(f'Added {len(image_ids)} images to custom group {group_hash}')
+        finally:
+            conn.close()
+
+        # Update cache
+        self._ensure_cache_loaded()
+        with self._cache_lock:
+            if group_hash not in self._group_cache[4]:
+                self._group_cache[4][group_hash] = set()
+            self._group_cache[4][group_hash].update(image_ids)
+
+    def remove_images_from_custom_group(self, group_hash: str, image_ids: list[str]) -> None:
+        """Remove images from a custom group (group persists even if empty).
+
+        Args:
+            group_hash: The group identifier.
+            image_ids: Image IDs to remove.
+        """
+        now = datetime.now().isoformat()
+        conn = self._get_db()
+        try:
+            placeholders = ','.join('?' * len(image_ids))
+            conn.execute(
+                f'DELETE FROM duplicate_groups WHERE level = 4 AND group_hash = ? AND image_id IN ({placeholders})',
+                [group_hash] + image_ids
+            )
+            conn.execute(
+                'UPDATE custom_groups SET updated_at = ? WHERE group_hash = ?',
+                (now, group_hash)
+            )
+            conn.commit()
+            logger.info(f'Removed {len(image_ids)} images from custom group {group_hash}')
+        finally:
+            conn.close()
+
+        # Update cache — group persists even when empty
+        if self._cache_loaded:
+            with self._cache_lock:
+                if group_hash in self._group_cache[4]:
+                    self._group_cache[4][group_hash] -= set(image_ids)

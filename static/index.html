@@ -132,11 +132,14 @@
                         <span class="icon" data-icon="person_add">🏷️</span>
                     </button>
                     <div class="toolbar-separator dup-group-nav-separator" hidden></div>
-                    <button id="btn-prev-group" class="toolbar-btn" title="Previous duplicate group (Alt+Left)" hidden disabled>
+                    <button id="btn-prev-group" class="toolbar-btn" title="Previous group (Alt+Left)" hidden disabled>
                         <span class="icon" data-icon="chevron_left">❮</span>
                     </button>
-                    <button id="btn-next-group" class="toolbar-btn" title="Next duplicate group (Alt+Right)" hidden disabled>
+                    <button id="btn-next-group" class="toolbar-btn" title="Next group (Alt+Right)" hidden disabled>
                         <span class="icon" data-icon="chevron_right">❯</span>
+                    </button>
+                    <button id="btn-remove-from-group" class="toolbar-btn" title="Remove from group (Backspace)" hidden disabled>
+                        <span class="icon" data-icon="playlist_remove">&#x2296;</span>
                     </button>
                 </div>
 
@@ -151,11 +154,11 @@
                     <div class="toolbar-separator"></div>
                     <div class="similarity-control">
                         <label for="similarity-slider">Group:</label>
-                        <input type="range" id="similarity-slider" min="0" max="3" value="0" step="1">
+                        <input type="range" id="similarity-slider" min="0" max="4" value="0" step="1">
                         <span id="similarity-label">Identical</span>
                     </div>
-                    <div class="toolbar-separator"></div>
-                    <div class="min-group-size-control">
+                    <div class="toolbar-separator auto-level-control"></div>
+                    <div class="min-group-size-control auto-level-control">
                         <label for="dup-min-group-size">Min size:</label>
                         <select id="dup-min-group-size">
                             <option value="2">2 (all)</option>
@@ -171,6 +174,17 @@
                             <option value="100">100+</option>
                         </select>
                     </div>
+                    <div class="toolbar-separator custom-group-control" hidden></div>
+                    <button id="btn-group-new" class="toolbar-btn custom-group-control" title="Create new group" hidden>
+                        <span class="icon" data-icon="create_new_folder">+</span>
+                    </button>
+                    <button id="btn-group-rename" class="toolbar-btn custom-group-control" title="Rename selected group" hidden disabled>
+                        <span class="icon" data-icon="edit">&#x270F;</span>
+                    </button>
+                    <button id="btn-group-delete" class="toolbar-btn custom-group-control" title="Delete selected group" hidden disabled>
+                        <span class="icon" data-icon="delete">&#x1F5D1;</span>
+                    </button>
+                    <input type="text" id="dup-group-filter" class="semantic-query-input custom-group-control" placeholder="Filter groups by name..." hidden>
                 </div>
 
                 <!-- Database controls (visible when data-screen="database") -->
@@ -215,7 +229,7 @@
                 <button id="btn-database" class="toolbar-btn" title="Manage database (Ctrl+M)">
                     <span class="icon" data-icon="database">🖥️</span>
                 </button>
-                <button id="btn-duplicates" class="toolbar-btn" title="Find duplicates (Ctrl+D)">
+                <button id="btn-duplicates" class="toolbar-btn" title="Groups (Ctrl+D)">
                     <span class="icon" data-icon="copy_all">⧉</span>
                 </button>
                 <button id="btn-faces" class="toolbar-btn" title="Browse faces (Ctrl+F)">
@@ -272,8 +286,11 @@
                 <!-- Duplicates right controls (visible when data-screen="duplicates") -->
                 <div class="toolbar-group" data-for-screen="duplicates">
                     <div class="dup-sort-controls">
-                        <button id="btn-dup-sort-size" class="toolbar-btn active" title="Sort by group size">
+                        <button id="btn-dup-sort-size" class="toolbar-btn active auto-level-control" title="Sort by group size">
                             <span class="icon" data-icon="sort">⇅</span>
+                        </button>
+                        <button id="btn-dup-sort-alpha" class="toolbar-btn custom-group-control" title="Sort alphabetically" hidden>
+                            <span class="icon" data-icon="sort_by_alpha">AZ</span>
                         </button>
                         <button id="btn-dup-sort-people" class="toolbar-btn" title="Sort by people">
                             <span class="icon" data-icon="group">👥</span>
@@ -281,7 +298,7 @@
                         <button id="btn-dup-sort-semantic" class="toolbar-btn" title="Sort by semantic similarity">
                             <span class="icon" data-icon="image_search">🔍</span>
                         </button>
-                        <input type="text" id="dup-semantic-query" class="semantic-query-input" placeholder="Sort by similarity to..." title="Sort duplicates by similarity to a concept. Use -word to push matches down (e.g. 'blurry -sharp' surfaces low-quality shots)." disabled>
+                        <input type="text" id="dup-semantic-query" class="semantic-query-input" placeholder="Sort by similarity to..." title="Sort groups by similarity to a concept. Use -word to push matches down (e.g. 'blurry -sharp' surfaces low-quality shots)." disabled>
                     </div>
                 </div>
 
@@ -534,7 +551,7 @@
                     <!-- Empty state message -->
                     <div id="duplicates-empty" hidden>
                         <span class="icon" data-icon="check_circle">✓</span>
-                        <p>No duplicates found at the current similarity level.</p>
+                        <p>No groups found at the current level.</p>
                     </div>
                 </div>
             </div>
@@ -610,6 +627,40 @@
                 <div class="dialog-actions">
                     <button id="dialog-people-cancel" class="action-btn">Cancel</button>
                     <button id="dialog-people-done" class="action-btn primary">Done</button>
+                </div>
+            </div>
+        </dialog>
+
+        <!-- Group picker dialog -->
+        <dialog id="dialog-group-picker">
+            <div class="dialog-content entity-picker-content">
+                <h3 id="group-picker-title">Add to Group</h3>
+                <div class="entity-picker-panels">
+                    <!-- Left panel: Available groups -->
+                    <div class="entity-picker-panel">
+                        <div class="entity-picker-search">
+                            <input type="text" id="group-picker-search" placeholder="Search groups...">
+                        </div>
+                        <div id="group-picker-available" class="entity-picker-grid">
+                            <!-- Available group items are inserted here -->
+                        </div>
+                        <div class="entity-picker-actions">
+                            <button id="group-picker-new" class="action-btn">
+                                <span class="icon" data-icon="add">+</span> New Group...
+                            </button>
+                        </div>
+                    </div>
+                    <!-- Right panel: Member of -->
+                    <div class="entity-picker-panel">
+                        <div class="entity-picker-label">Member of</div>
+                        <div id="group-picker-selected" class="entity-picker-grid">
+                            <!-- Selected group items are inserted here -->
+                        </div>
+                    </div>
+                </div>
+                <div class="dialog-actions">
+                    <button id="dialog-group-cancel" class="action-btn">Cancel</button>
+                    <button id="dialog-group-done" class="action-btn primary">Done</button>
                 </div>
             </div>
         </dialog>
