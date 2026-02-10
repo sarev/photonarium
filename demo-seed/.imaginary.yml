@@ -1,0 +1,193 @@
+# Imaginary Configuration File
+# ============================
+# This file controls the behaviour of the Imaginary image database.
+# Edit values as needed. Delete this file to reset to defaults.
+
+# ------------------------------------------------------------------------------
+# Image Processing
+# ------------------------------------------------------------------------------
+
+# File extensions recognised as images (lowercase, with leading dot)
+image_extensions:
+  - .jpg
+  - .jpeg
+  - .png
+  - .gif
+  - .bmp
+  - .tiff
+  - .tif
+  - .webp
+  # Camera RAW formats (require rawpy)
+  - .cr2
+  - .cr3
+  - .nef
+  - .nrw
+  - .arw
+  - .srf
+  - .dng
+  - .raf
+  - .rw2
+  - .orf
+  - .pef
+  - .srw
+  - .x3f
+  - .3fr
+  - .iiq
+  - .rwl
+  - .kdc
+  - .dcr
+  - .erf
+
+# JPEG quality for generated thumbnails (1-100, higher = better quality, larger files)
+thumbnail_quality: 85
+
+# Maximum image dimension (width or height) to process.
+# Images larger than this will be downsampled before embedding/hashing.
+# This prevents memory issues with huge panoramas or scanned images.
+# Set to 0 to disable (not recommended). Range: 0 or 1024-65536
+max_image_dimension: 16384
+
+# ------------------------------------------------------------------------------
+# OpenCLIP Embedding Model
+# ------------------------------------------------------------------------------
+# The model used for semantic image search and similarity detection.
+# Changing these settings will require re-embedding all images.
+
+# Model architecture. Common options:
+#   - ViT-B-32  (fast, good quality, ~400MB VRAM)
+#   - ViT-B-16  (slower, better quality, ~400MB VRAM)
+#   - ViT-L-14  (slow, high quality, ~900MB VRAM)
+openclip_model: ViT-B-32
+
+# Pretrained weights. Common options:
+#   - openai           (original CLIP weights)
+#   - laion2b_s34b_b79k (trained on LAION-2B, often better for photos)
+#   - laion400m_e32    (trained on LAION-400M)
+openclip_pretrained: openai
+
+# Batch size for embedding computation (1-64)
+# Higher values are faster but use more VRAM. Reduce if you get out-of-memory errors.
+embedding_batch_size: 16
+
+# ------------------------------------------------------------------------------
+# Duplicate Detection Thresholds
+# ------------------------------------------------------------------------------
+
+# Perceptual hash hamming distance threshold for "near-identical" (level 1)
+# Range: 0-64, lower = stricter matching. Recommended: 4-8
+perceptual_hash_threshold: 4
+
+# Cosine similarity threshold for "similar" images (level 2)
+# Range: 0.0-1.0, higher = stricter matching. Recommended: 0.93-0.97
+similarity_threshold_level2: 0.93
+
+# Cosine similarity threshold for "related" images (level 3)
+# Range: 0.0-1.0, higher = stricter matching. Recommended: 0.80-0.90
+similarity_threshold_level3: 0.85
+
+# ------------------------------------------------------------------------------
+# Performance
+# ------------------------------------------------------------------------------
+
+# Number of threads for parallel image indexing (1-16)
+# Higher values speed up initial scanning but use more CPU/disk I/O.
+# Recommended: 4-8 for HDD, 8-16 for SSD
+indexing_threads: 8
+
+# Maximum number of new/modified images to process incrementally for duplicates.
+# If more images need checking, falls back to full recomputation which is faster
+# for large batches. Range: 1-10000
+max_incremental_duplicates: 500
+
+# Percentage of total images that triggers full recomputation instead of incremental.
+# If dirty_count > (total_count * threshold), does full rebuild.
+# Range: 5-50, recommended: 15-25
+incremental_threshold_percent: 20
+
+# ------------------------------------------------------------------------------
+# Thumbnail Loading (Frontend)
+# ------------------------------------------------------------------------------
+
+# Maximum concurrent thumbnail fetch requests from the browser.
+# Higher values load thumbnails faster but increase backend load.
+# Range: 1-12, recommended: 4-8
+thumbnail_concurrent_requests: 6
+
+# Extra rows above/below the viewport to prefetch thumbnails for.
+# Higher values reduce blank thumbnails when scrolling but increase memory usage.
+# Range: 1-20, recommended: 3-8
+thumbnail_extra_rows: 5
+
+# Timeout for thumbnail fetch requests in milliseconds.
+# If a request takes longer than this, it's aborted and the slot freed.
+# Range: 1000-60000, recommended: 5000-15000
+thumbnail_timeout_ms: 10000
+
+# Scroll event throttle in milliseconds.
+# How often the thumbnail queue is re-evaluated during scrolling.
+# Lower values = more responsive, higher values = less CPU usage.
+# Range: 50-1000, recommended: 150-300
+thumbnail_scroll_throttle_ms: 250
+
+# RAM cache size for thumbnail bytes in megabytes.
+# Caches recently-accessed thumbnails in memory to avoid disk reads.
+# Set to 0 to disable caching. Range: 0-1000, recommended: 50-200
+thumbnail_cache_size_mb: 100
+
+# ------------------------------------------------------------------------------
+# Face Recognition
+# ------------------------------------------------------------------------------
+
+# Enable face detection during image indexing.
+# When disabled, face-related UI buttons are greyed out.
+face_detection_enabled: true
+
+# MTCNN confidence threshold for face detection.
+# Higher values = fewer false positives, may miss some faces.
+# Range: 0.0-1.0, recommended: 0.90-0.99
+face_detection_min_confidence: 0.95
+
+# Minimum face size in pixels (width/height of bounding box).
+# Faces smaller than this are ignored. Range: 20-200, recommended: 40-80
+face_detection_min_size: 60
+
+# Cosine similarity threshold for auto-matching faces to known people.
+# Higher values = stricter matching (fewer false matches, more unknowns).
+# Range: 0.0-1.0, recommended: 0.65-0.90
+face_recognition_threshold: 0.90
+
+# Batch size for face detection (number of images processed together).
+# Higher values improve GPU utilization but use more VRAM.
+# Reduce if you get out-of-memory errors. Range: 1-64, recommended: 16-32
+face_detection_batch_size: 32
+
+# ------------------------------------------------------------------------------
+# Image Captioning (BLIP/BLIP-2)
+# ------------------------------------------------------------------------------
+
+# BLIP model to use for caption generation. Options:
+#   - Salesforce/blip-image-captioning-base   (~1GB, fast)
+#   - Salesforce/blip-image-captioning-large  (~2GB, better quality)
+#   - Salesforce/blip2-opt-2.7b               (~5GB, BLIP-2, best quality)
+#   - Salesforce/blip2-flan-t5-xl             (~8GB, BLIP-2, most descriptive)
+caption_model: Salesforce/blip-image-captioning-large
+
+# Maximum length of generated captions in tokens.
+# Higher values allow longer, more detailed descriptions.
+# Range: 10-200, recommended: 30-75
+caption_max_length: 50
+
+# Minimum length of generated captions in tokens.
+# Higher values force more descriptive captions.
+# Range: 1-50, recommended: 5-20
+caption_min_length: 10
+
+# Number of beams for beam search during generation.
+# Higher values produce better quality but are slower.
+# Set to 1 for greedy decoding (fastest, lower quality).
+# Range: 1-10, recommended: 3-5
+caption_num_beams: 5
+
+# Convert American English spellings to British English in generated captions.
+# Handles common differences like color→colour, center→centre, gray→grey, etc.
+caption_british_english: false

@@ -1,0 +1,524 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Getting Started with Imaginary</title>
+<link rel="icon" type="image/png" sizes="90x90" href="./favicon90.png">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:opsz,wght,FILL,GRAD@24,400,0,0" />
+<style>
+/* ------------------------------------------------------------------ */
+/* Reset & base                                                       */
+/* ------------------------------------------------------------------ */
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+html, body {
+    width: 100%; height: 100%;
+    overflow: hidden;
+    background: #000;
+    font-family: 'Noto Sans', 'Segoe UI', system-ui, sans-serif;
+    color: #fff;
+}
+
+/* ------------------------------------------------------------------ */
+/* Slide layers (two alternating for cross-fade)                      */
+/* ------------------------------------------------------------------ */
+.slide {
+    position: absolute; inset: 0;
+    display: flex; flex-direction: column;
+    opacity: 0;
+    transition: opacity 0.6s ease;
+    pointer-events: none;
+}
+.slide.active {
+    opacity: 1;
+    pointer-events: auto;
+}
+.slide-img {
+    flex: 1 1 0;
+    min-height: 0;
+    width: 100%;
+    object-fit: contain;
+    background: #000;
+}
+
+/* ------------------------------------------------------------------ */
+/* Header bar (above the screenshot, in normal flow)                  */
+/* ------------------------------------------------------------------ */
+.slide-header {
+    flex: 0 0 auto;
+    background: #111;
+    padding: 0.45rem 1.2rem;
+    display: flex; justify-content: space-between; align-items: baseline;
+    z-index: 2;
+}
+.slide-section {
+    font-size: 0.8rem;
+    color: rgba(255,255,255,0.5);
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+}
+.slide-step {
+    font-size: 0.95rem;
+    font-weight: 600;
+    color: rgba(255,255,255,0.85);
+}
+
+/* ------------------------------------------------------------------ */
+/* Caption overlay (bottom)                                           */
+/* ------------------------------------------------------------------ */
+.slide-overlay-bottom {
+    position: absolute; bottom: 0; left: 0; right: 0;
+    background: linear-gradient(to top, rgba(0,0,0,0.92) 0%, rgba(0,0,0,0.78) 80%, rgba(0,0,0,0) 100%);
+    padding: 2rem 1.5rem 2.2rem;
+    max-height: 45vh;
+    overflow-y: auto;
+    z-index: 2;
+}
+.slide-caption {
+    font-size: 0.95rem;
+    line-height: 1.55;
+    color: rgba(255,255,255,0.92);
+}
+
+/* Caption tables (toolbar overviews) */
+.slide-caption table {
+    width: 100%; border-collapse: collapse;
+    margin-top: 0.6rem; font-size: 0.85rem;
+}
+.slide-caption th {
+    text-align: left; padding: 0.3rem 0.6rem;
+    border-bottom: 2px solid rgba(255,255,255,0.25);
+    color: rgba(255,255,255,0.8);
+}
+.slide-caption td {
+    padding: 0.25rem 0.6rem;
+    border-bottom: 1px solid rgba(255,255,255,0.12);
+    vertical-align: middle;
+    color: rgba(255,255,255,0.85);
+}
+.slide-caption td.icon-cell {
+    text-align: center; width: 4rem; font-size: 1.2rem;
+}
+.slide-caption .material-symbols-outlined {
+    font-size: 1.2rem; vertical-align: middle;
+}
+
+/* ------------------------------------------------------------------ */
+/* Progress bar                                                       */
+/* ------------------------------------------------------------------ */
+#progress-bar {
+    position: fixed; bottom: 0; left: 0; right: 0;
+    height: 3px; background: rgba(255,255,255,0.15);
+    z-index: 10;
+}
+#progress-fill {
+    height: 100%; width: 0;
+    background: rgba(255,255,255,0.6);
+    transition: width 0.3s ease;
+}
+
+/* ------------------------------------------------------------------ */
+/* Speech toggle                                                      */
+/* ------------------------------------------------------------------ */
+#speech-toggle {
+    position: fixed; bottom: 0.35rem; right: 0.6rem;
+    z-index: 20;
+    background: rgba(0,0,0,0.5); border: none;
+    color: #fff; font-size: 1.1rem;
+    width: 1.8rem; height: 1.8rem;
+    border-radius: 50%; cursor: pointer;
+    display: flex; align-items: center; justify-content: center;
+    opacity: 0.7; transition: opacity 0.2s;
+}
+#speech-toggle:hover { opacity: 1; }
+
+/* ------------------------------------------------------------------ */
+/* Slide counter                                                      */
+/* ------------------------------------------------------------------ */
+#slide-counter {
+    position: fixed; bottom: 0.5rem; right: 3rem;
+    z-index: 10;
+    font-size: 0.75rem; color: rgba(255,255,255,0.45);
+    font-variant-numeric: tabular-nums;
+}
+
+/* ------------------------------------------------------------------ */
+/* Table of contents overlay                                          */
+/* ------------------------------------------------------------------ */
+#toc-overlay {
+    position: fixed; inset: 0;
+    background: rgba(0,0,0,0.88);
+    z-index: 50;
+    display: none;
+    flex-direction: column;
+    align-items: center; justify-content: center;
+}
+#toc-overlay.visible {
+    display: flex;
+}
+#toc-overlay h2 {
+    font-size: 1.6rem; margin-bottom: 1.5rem;
+    color: rgba(255,255,255,0.9);
+}
+.toc-list {
+    list-style: none; padding: 0; width: 90%; max-width: 520px;
+}
+.toc-list li {
+    margin: 0.4rem 0;
+}
+.toc-list a {
+    display: flex; justify-content: space-between; align-items: baseline;
+    padding: 0.6rem 0.9rem;
+    border-radius: 6px;
+    color: rgba(255,255,255,0.8);
+    text-decoration: none;
+    transition: background 0.15s;
+}
+.toc-list a:hover {
+    background: rgba(255,255,255,0.1);
+    color: #fff;
+}
+.toc-range {
+    font-size: 0.75rem;
+    color: rgba(255,255,255,0.4);
+    margin-left: 1rem;
+    white-space: nowrap;
+}
+.toc-help {
+    margin-top: 2rem;
+    font-size: 0.8rem;
+    line-height: 1.7;
+    color: rgba(255,255,255,0.35);
+    text-align: center;
+    max-width: 520px;
+}
+.toc-help kbd {
+    display: inline-block;
+    padding: 0.1em 0.45em;
+    border: 1px solid rgba(255,255,255,0.25);
+    border-radius: 3px;
+    font-family: inherit;
+    font-size: 0.85em;
+    color: rgba(255,255,255,0.5);
+}
+</style>
+</head>
+<body>
+
+<!-- Two alternating slide layers for cross-fade -->
+<div id="slide-a" class="slide active">
+    <div class="slide-header">
+        <span class="slide-section"></span>
+        <span class="slide-step"></span>
+    </div>
+    <img class="slide-img" alt="">
+    <div class="slide-overlay-bottom">
+        <div class="slide-caption"></div>
+    </div>
+</div>
+<div id="slide-b" class="slide">
+    <div class="slide-header">
+        <span class="slide-section"></span>
+        <span class="slide-step"></span>
+    </div>
+    <img class="slide-img" alt="">
+    <div class="slide-overlay-bottom">
+        <div class="slide-caption"></div>
+    </div>
+</div>
+
+<!-- Progress bar -->
+<div id="progress-bar"><div id="progress-fill"></div></div>
+
+<!-- Speech toggle -->
+<button id="speech-toggle" title="Toggle narration">&#x1f50a;</button>
+
+<!-- Slide counter -->
+<div id="slide-counter">1 / {{TOTAL}}</div>
+
+<!-- Table of contents overlay -->
+<div id="toc-overlay">
+    <h2>Getting Started with Imaginary</h2>
+    <ul class="toc-list" id="toc-list"></ul>
+    <div class="toc-help">
+        Click or press any key to advance &middot;
+        <kbd>&larr;</kbd> go back &middot;
+        <kbd>Esc</kbd> this menu<br>
+        Click the speaker icon (bottom-right) to toggle narration
+    </div>
+</div>
+
+<script>
+/* ================================================================== */
+/* Slideshow controller                                               */
+/* ================================================================== */
+(function () {
+    'use strict';
+
+    /* -- Data ------------------------------------------------------- */
+    const SLIDES = {{SLIDES_JSON}};
+    const TOC    = {{TOC_JSON}};
+    const TOTAL  = SLIDES.length;
+
+    /* -- DOM refs --------------------------------------------------- */
+    const layerA       = document.getElementById('slide-a');
+    const layerB       = document.getElementById('slide-b');
+    const progressFill = document.getElementById('progress-fill');
+    const counter      = document.getElementById('slide-counter');
+    const speechBtn    = document.getElementById('speech-toggle');
+    const tocOverlay   = document.getElementById('toc-overlay');
+    const tocList      = document.getElementById('toc-list');
+
+    /* -- State ------------------------------------------------------ */
+    let currentIndex = 0;
+    let activeLayer  = layerA;   // the layer currently visible
+    let speechOn     = localStorage.getItem('tutorial-speech') !== 'off';
+
+    /* -- TOC -------------------------------------------------------- */
+    TOC.forEach(function (entry) {
+        const li = document.createElement('li');
+        const a  = document.createElement('a');
+        a.href = '#';
+        a.innerHTML = entry.title +
+            '<span class="toc-range">' + entry.range + '</span>';
+        a.addEventListener('click', function (e) {
+            e.preventDefault();
+            hideToc();
+            goTo(entry.first);
+        });
+        li.appendChild(a);
+        tocList.appendChild(li);
+    });
+
+    function showToc() { tocOverlay.classList.add('visible'); }
+    function hideToc() { tocOverlay.classList.remove('visible'); }
+    function tocVisible() { return tocOverlay.classList.contains('visible'); }
+
+    /* -- Populate a layer ------------------------------------------- */
+    function populate(layer, idx) {
+        const s = SLIDES[idx];
+        layer.querySelector('.slide-section').textContent = 'Imaginary: ' + s.section;
+        layer.querySelector('.slide-step').textContent    = s.stepId + '. ' + s.title;
+        layer.querySelector('.slide-img').src             = s.screenshot;
+        layer.querySelector('.slide-img').alt             = s.title;
+        layer.querySelector('.slide-caption').innerHTML    = s.caption;
+    }
+
+    /* -- Cross-fade ------------------------------------------------- */
+    function swapTo(idx) {
+        if (idx < 0 || idx >= TOTAL) return;
+        currentIndex = idx;
+
+        const inactiveLayer = (activeLayer === layerA) ? layerB : layerA;
+        populate(inactiveLayer, idx);
+
+        // Swap active class — CSS transition handles the cross-fade
+        activeLayer.classList.remove('active');
+        inactiveLayer.classList.add('active');
+        activeLayer = inactiveLayer;
+
+        updateChrome();
+        speak(idx);
+        preload(idx + 1);
+    }
+
+    /* -- Chrome updates --------------------------------------------- */
+    function updateChrome() {
+        const pct = ((currentIndex + 1) / TOTAL) * 100;
+        progressFill.style.width = pct + '%';
+        counter.textContent = (currentIndex + 1) + ' / ' + TOTAL;
+    }
+
+    /* -- Image preloading ------------------------------------------- */
+    function preload(idx) {
+        if (idx >= 0 && idx < TOTAL) {
+            const img = new Image();
+            img.src = SLIDES[idx].screenshot;
+        }
+    }
+
+    /* -- Navigation ------------------------------------------------- */
+    function next() {
+        if (currentIndex < TOTAL - 1) {
+            swapTo(currentIndex + 1);
+        } else {
+            showToc();
+        }
+    }
+
+    function prev() {
+        if (currentIndex > 0) {
+            swapTo(currentIndex - 1);
+        }
+    }
+
+    function goTo(idx) {
+        if (idx >= 0 && idx < TOTAL) {
+            swapTo(idx);
+        }
+    }
+
+    /* -- TTS -------------------------------------------------------- */
+    const synth = window.speechSynthesis;
+    let chosenVoice = null;
+
+    /** Pick the best available English voice. */
+    function pickVoice() {
+        const voices = synth.getVoices();
+        if (!voices.length) return;
+
+        // Priority 1: en-GB "Female" or known neural names
+        const neural = ['Google UK English Female', 'Microsoft Libby Online',
+                        'Libby', 'Sonia'];
+        chosenVoice = voices.find(function (v) {
+            return v.lang.startsWith('en-GB')
+                && neural.some(function (n) { return v.name.indexOf(n) !== -1; });
+        }) || null;
+
+        // Priority 2: any en-GB with "Female" in the name
+        if (!chosenVoice) {
+            chosenVoice = voices.find(function (v) {
+                return v.lang.startsWith('en-GB') && v.name.indexOf('Female') !== -1;
+            }) || null;
+        }
+
+        // Priority 3: any en-GB voice
+        if (!chosenVoice) {
+            chosenVoice = voices.find(function (v) {
+                return v.lang.startsWith('en-GB');
+            }) || null;
+        }
+
+        // Priority 4: any English voice
+        if (!chosenVoice) {
+            chosenVoice = voices.find(function (v) {
+                return v.lang.startsWith('en');
+            }) || null;
+        }
+    }
+
+    // Voices load asynchronously in some browsers
+    if (synth) {
+        pickVoice();
+        if (synth.onvoiceschanged !== undefined) {
+            synth.onvoiceschanged = pickVoice;
+        }
+    }
+
+    /**
+     * Strip HTML to plain text for TTS narration.
+     * Removes <table> blocks entirely (toolbar overviews contain unicode
+     * symbols and Material Symbol ligature names that sound garbled when
+     * read aloud) and then extracts the remaining text content.
+     */
+    function stripHtml(html) {
+        var tmp = document.createElement('div');
+        tmp.innerHTML = html;
+        // Remove tables — they're visual reference, not narration
+        tmp.querySelectorAll('table').forEach(function (t) { t.remove(); });
+        // Remove Material Symbol spans (ligature text like "rotate_left")
+        tmp.querySelectorAll('.material-symbols-outlined').forEach(
+            function (el) { el.remove(); });
+        return (tmp.textContent || tmp.innerText || '').replace(/\s+/g, ' ').trim();
+    }
+
+    /** Speak the current slide's content. */
+    function speak(idx) {
+        if (!synth || !speechOn) return;
+        synth.cancel();
+
+        var parts = [];
+        var s = SLIDES[idx];
+        var prev = idx > 0 ? SLIDES[idx - 1] : null;
+
+        // Announce section title if it changed
+        if (!prev || prev.section !== s.section) {
+            parts.push(s.section + '.');
+        }
+        // Announce step title if it changed
+        if (!prev || prev.title !== s.title) {
+            parts.push(s.title + '.');
+        }
+        // Always speak the caption
+        parts.push(stripHtml(s.caption));
+
+        var text = parts.join(' ');
+        if (!text) return;
+
+        var utter = new SpeechSynthesisUtterance(text);
+        utter.rate  = 1.15;
+        utter.pitch = 1.0;
+        if (chosenVoice) utter.voice = chosenVoice;
+        synth.speak(utter);
+    }
+
+    /* -- Speech toggle ---------------------------------------------- */
+    function updateSpeechBtn() {
+        speechBtn.textContent = speechOn ? '\u{1f50a}' : '\u{1f507}';
+    }
+    updateSpeechBtn();
+
+    speechBtn.addEventListener('click', function (e) {
+        e.stopPropagation();
+        speechOn = !speechOn;
+        localStorage.setItem('tutorial-speech', speechOn ? 'on' : 'off');
+        updateSpeechBtn();
+        if (speechOn) {
+            speak(currentIndex);  // Narrate the current slide immediately
+        } else if (synth) {
+            synth.cancel();
+        }
+    });
+
+    /* -- Keyboard --------------------------------------------------- */
+    document.addEventListener('keydown', function (e) {
+        // If TOC is visible, handle differently
+        if (tocVisible()) {
+            if (e.key !== 'Escape') {
+                hideToc();
+                speak(currentIndex);
+            }
+            // Escape on TOC does nothing (stays on TOC)
+            return;
+        }
+
+        switch (e.key) {
+            case 'ArrowLeft':
+                prev();
+                break;
+            case 'ArrowRight':
+            case ' ':
+                e.preventDefault();
+                next();
+                break;
+            case 'Escape':
+                showToc();
+                break;
+            default:
+                // Any other key advances (ignore modifiers/function keys)
+                if (e.key.length === 1 || e.key === 'Enter') {
+                    next();
+                }
+                break;
+        }
+    });
+
+    /* -- Click navigation (click anywhere to advance) --------------- */
+    document.addEventListener('click', function (e) {
+        // Ignore clicks on controls
+        if (e.target.closest('#speech-toggle, #toc-overlay')) return;
+        next();
+    });
+
+    /* -- Initial render --------------------------------------------- */
+    populate(activeLayer, 0);
+    updateChrome();
+    preload(1);
+
+    // Start on the table of contents so the user can see the overview
+    // and navigation help before the slideshow begins
+    showToc();
+})();
+</script>
+</body>
+</html>

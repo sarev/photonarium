@@ -2,11 +2,10 @@ env
 env.bak
 .claude
 CLAUDE.md
-.imaginary.yml
-.laion-aesthetic-head.pth
-.thumbnails
+/.imaginary.yml
+/.laion-aesthetic-head.pth
+/.thumbnails
+/imaginary.db*
 __pycache__
-imaginary.db*
-examples
-demo-seed
-tutorials
+/examples
+/tutorials

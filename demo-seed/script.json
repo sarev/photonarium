@@ -1,0 +1,338 @@
+{
+    "sections": [
+        {
+            "key": "getting-started",
+            "title": "Getting started \u2014 Adding your first photos"
+        },
+        {
+            "key": "gallery",
+            "title": "Browsing your photos"
+        },
+        {
+            "key": "fullscreen",
+            "title": "Full-screen viewer \u2014 Looking at photos up close"
+        },
+        {
+            "key": "search",
+            "title": "Search \u2014 Finding specific photos"
+        },
+        {
+            "key": "groups",
+            "title": "Groups \u2014 Finding duplicates"
+        },
+        {
+            "key": "custom-groups",
+            "title": "Custom groups \u2014 Organising your photos"
+        },
+        {
+            "key": "faces",
+            "title": "Faces \u2014 Naming people"
+        },
+        {
+            "key": "fullscreen-tagging",
+            "title": "Fullscreen face tagging"
+        },
+        {
+            "key": "gallery-extras",
+            "title": "Gallery extras"
+        }
+    ],
+    "steps": {
+        "first-launch": {
+            "title": "First launch",
+            "caption": "When you first open Imaginary, you see the Database screen in the default light theme. There are no folders or photos yet \u2014 this is where you tell Imaginary where your photos live."
+        },
+        "dark-theme": {
+            "title": "Switching to dark theme",
+            "caption": "Click the sun/moon icon in the top-right corner to switch to the dark theme. Most of the screenshots in this tutorial use the dark theme."
+        },
+        "adding-images": {
+            "title": "Adding images",
+            "caption": "Click Add Folder to open your system\u2019s folder picker. Navigate to the folder that contains your photos and select it. Note: on some systems the folder picker may open \u2018behind\u2019 the browser window \u2014 check your taskbar if nothing seems to happen."
+        },
+        "indexing": {
+            "title": "Indexing",
+            "caption": "Once you\u2019ve selected a folder, Imaginary starts scanning it for images. The status changes to Updating and shows how many files are left to index."
+        },
+        "processing": {
+            "title": "Processing",
+            "caption": "After indexing, Imaginary generates thumbnails and computes embeddings for semantic search. This runs in the background \u2014 you can start browsing as soon as the first thumbnails appear."
+        },
+        "the-gallery": {
+            "title": "The Gallery",
+            "caption": "All your photos appear here as a grid of thumbnails. Scroll to browse, or use the toolbar to sort, search, and manage your collection."
+        },
+        "gallery-toolbar": {
+            "title": "Toolbar",
+            "caption": "The toolbar runs along the top of the screen. Buttons show Unicode symbols by default, or Material Symbols when the font is available.<table><tr><th>Offline</th><th>Online</th><th>Description</th></tr><tr><td class=\"icon-cell\">\u2212</td><td class=\"icon-cell\"><span class=\"material-symbols-outlined\">remove</span></td><td>Smaller thumbnails</td></tr><tr><td class=\"icon-cell\">\u271a</td><td class=\"icon-cell\"><span class=\"material-symbols-outlined\">add</span></td><td>Larger thumbnails</td></tr><tr><td class=\"icon-cell\">\u26f6</td><td class=\"icon-cell\"><span class=\"material-symbols-outlined\">fullscreen</span></td><td>View selected photo full-screen</td></tr><tr><td class=\"icon-cell\">\ud83d\udcc2</td><td class=\"icon-cell\"><span class=\"material-symbols-outlined\">folder_open</span></td><td>Reveal file on disk</td></tr><tr><td class=\"icon-cell\">\u27f2</td><td class=\"icon-cell\"><span class=\"material-symbols-outlined\">rotate_left</span></td><td>Rotate left</td></tr><tr><td class=\"icon-cell\">\u27f3</td><td class=\"icon-cell\"><span class=\"material-symbols-outlined\">rotate_right</span></td><td>Rotate right</td></tr><tr><td class=\"icon-cell\">\ud83c\udff7\ufe0f</td><td class=\"icon-cell\"><span class=\"material-symbols-outlined\">person_add</span></td><td>Toggle face tagging mode</td></tr><tr><td class=\"icon-cell\">\ud83c\udfde\ufe0f</td><td class=\"icon-cell\"><span class=\"material-symbols-outlined\">photo_library</span></td><td>Back to Gallery</td></tr><tr><td class=\"icon-cell\">\ud83d\udda5\ufe0f</td><td class=\"icon-cell\"><span class=\"material-symbols-outlined\">database</span></td><td>Manage folders</td></tr><tr><td class=\"icon-cell\">\u29c9</td><td class=\"icon-cell\"><span class=\"material-symbols-outlined\">copy_all</span></td><td>Find duplicates</td></tr><tr><td class=\"icon-cell\">\ud83d\udc64</td><td class=\"icon-cell\"><span class=\"material-symbols-outlined\">face</span></td><td>Browse faces</td></tr><tr><td class=\"icon-cell\">\ud83d\udd0e</td><td class=\"icon-cell\"><span class=\"material-symbols-outlined\">filter_alt</span></td><td>Search / filter</td></tr><tr><td class=\"icon-cell\">\ud83d\udeab</td><td class=\"icon-cell\"><span class=\"material-symbols-outlined\">filter_alt_off</span></td><td>Clear filter</td></tr><tr><td class=\"icon-cell\">\ud83d\udcc5</td><td class=\"icon-cell\"><span class=\"material-symbols-outlined\">calendar_month</span></td><td>Sort by date</td></tr><tr><td class=\"icon-cell\">\u2605</td><td class=\"icon-cell\"><span class=\"material-symbols-outlined\">star</span></td><td>Sort by rating</td></tr><tr><td class=\"icon-cell\">\ud83d\udc65</td><td class=\"icon-cell\"><span class=\"material-symbols-outlined\">group</span></td><td>Sort by people</td></tr><tr><td class=\"icon-cell\">\ud83d\udd0d</td><td class=\"icon-cell\"><span class=\"material-symbols-outlined\">image_search</span></td><td>Sort by content similarity</td></tr><tr><td class=\"icon-cell\">\u2193</td><td class=\"icon-cell\"><span class=\"material-symbols-outlined\">arrow_downward</span></td><td>Flip sort direction</td></tr><tr><td class=\"icon-cell\">\u25a3</td><td class=\"icon-cell\"><span class=\"material-symbols-outlined\">select_all</span></td><td>Select all</td></tr><tr><td class=\"icon-cell\">\u25a2</td><td class=\"icon-cell\"><span class=\"material-symbols-outlined\">deselect</span></td><td>Clear selection</td></tr><tr><td class=\"icon-cell\">\ud83c\udf19</td><td class=\"icon-cell\"><span class=\"material-symbols-outlined\">dark_mode</span></td><td>Toggle light/dark theme</td></tr></table>"
+        },
+        "selecting-a-photo": {
+            "title": "Selecting a photo",
+            "caption": "Click any thumbnail to select it. A border appears around the selected photo, and the info panel on the right shows its details."
+        },
+        "the-info-panel": {
+            "title": "The info panel",
+            "caption": "This shows the filename, dimensions, date, and file size. You can also add a description and a rating to help you find this photo later."
+        },
+        "adding-a-description": {
+            "title": "Adding a description",
+            "caption": "Type a description and press Enter to save it. Descriptions are searchable, so a few words now saves time later."
+        },
+        "auto-captioning": {
+            "title": "Auto-captioning",
+            "caption": "If you don't feel like typing, click the sparkle button to generate an automatic caption. You can edit it afterwards if you like."
+        },
+        "emojis": {
+            "title": "Emojis",
+            "caption": "Click the emoji button next to the rating field to open the picker. Choose any emoji to rate your photo \u2014 stars, hearts, whatever might help you to find that image later."
+        },
+        "ratings": {
+            "title": "Ratings",
+            "caption": "These can be any text you like. Emoji work well \u2014 try stars for favourites or hearts for the ones you love."
+        },
+        "multiple-selection": {
+            "title": "Multiple selection",
+            "caption": "Hold Shift and click to select a range. You can also Ctrl+click to pick individual photos, or drag a box around a group."
+        },
+        "sort-direction-flip": {
+            "title": "Sort direction",
+            "caption": "By default, photos are sorted by date. Click the arrow button to flip the current sort order."
+        },
+        "sort-direction-restore": {
+            "title": "Sort direction",
+            "caption": "Click again to go back to the original sort order. Use whichever direction suits what you\u2019re looking for."
+        },
+        "similarity-select": {
+            "title": "Similarity",
+            "caption": "Select a single photo to use as the basis for similarity sorting. Then click to sort by similarity. The grid will be rearranged so photos that look the most like the selected image appear first."
+        },
+        "similarity-result": {
+            "title": "Similarity",
+            "caption": "Here is an example of the Gallery sorted by image similarity."
+        },
+        "fullscreen-opening": {
+            "title": "Opening",
+            "caption": "Double-click any thumbnail to see it full-screen."
+        },
+        "fullscreen-controls": {
+            "title": "Controls",
+            "caption": "The full-screen toolbar appears at the top. Click the edges of the screen (or use arrow keys) to move between photos.<table><tr><th>Offline</th><th>Online</th><th>Description</th></tr><tr><td class=\"icon-cell\">\ud83d\udc64</td><td class=\"icon-cell\"><span class=\"material-symbols-outlined\">person_search</span></td><td>Toggle face tagging</td></tr><tr><td class=\"icon-cell\">\ud83d\udeab</td><td class=\"icon-cell\"><span class=\"material-symbols-outlined\">person_off</span></td><td>Ignore all unknown faces</td></tr><tr><td class=\"icon-cell\">\u27f2</td><td class=\"icon-cell\"><span class=\"material-symbols-outlined\">rotate_left</span></td><td>Rotate left</td></tr><tr><td class=\"icon-cell\">\u27f3</td><td class=\"icon-cell\"><span class=\"material-symbols-outlined\">rotate_right</span></td><td>Rotate right</td></tr><tr><td class=\"icon-cell\">\u2715</td><td class=\"icon-cell\"><span class=\"material-symbols-outlined\">close</span></td><td>Close (or press Escape)</td></tr><tr><td class=\"icon-cell\">\u276e</td><td class=\"icon-cell\"><span class=\"material-symbols-outlined\">chevron_left</span></td><td>Previous photo (or Left arrow key)</td></tr><tr><td class=\"icon-cell\">\u276f</td><td class=\"icon-cell\"><span class=\"material-symbols-outlined\">chevron_right</span></td><td>Next photo (or Right arrow key)</td></tr></table>"
+        },
+        "navigating": {
+            "title": "Navigating",
+            "caption": "Use the left and right arrow keys to step through your photos. You can also click the arrow icons at the edges of the screen."
+        },
+        "zooming-and-panning": {
+            "title": "Zooming and Panning",
+            "caption": "User the scroll wheel to zoom in and out, then click and drag to look around. Double-click to toggle between zoomed and normal view."
+        },
+        "fullscreen-closing": {
+            "title": "Closing",
+            "caption": "Press the close icon or the Escape key to return to the Gallery."
+        },
+        "search-opening": {
+            "title": "Opening",
+            "caption": "Click the Search button in the toolbar to build a filter for your photos."
+        },
+        "search-by-description": {
+            "title": "Search by description",
+            "caption": "Type what you\u2019re looking for. This is a smart search \u2014 it understands meaning, not just keywords. The similarity slider controls how strict the matching is: slide right for results that closely match your query, or left for looser matches."
+        },
+        "search-results": {
+            "title": "Search results",
+            "caption": "Pressing Apply shows the results in the Gallery, in order of how strongly they match your search. The toolbar shows that a filter is active."
+        },
+        "negative-terms": {
+            "title": "Negative terms",
+            "caption": "Put a minus sign before a word to exclude it. Here we\u2019re looking for trees and plants, without people."
+        },
+        "negative-results": {
+            "title": "Results",
+            "caption": "The Gallery now preferentially shows nature photos with people excluded. Negative terms are a powerful way to narrow down your search."
+        },
+        "date-ranges": {
+            "title": "Date ranges",
+            "caption": "Narrow your results to a date range. Leave either date blank for an open-ended range."
+        },
+        "combined-filters": {
+            "title": "Combined filters",
+            "caption": "Filters stack up \u2014 here we have a description search and a date range working together. Click Apply to see only the photos that match everything."
+        },
+        "clearing-the-filter": {
+            "title": "Clearing the filter",
+            "caption": "Click the Clear Filter toolbar button to remove all filters and see your full image library again."
+        },
+        "groups-opening": {
+            "title": "Opening",
+            "caption": "Click Groups in the toolbar. The first four slider positions show automatically-detected duplicates at different strictness levels. Each stack is a group of photos that Imaginary thinks are duplicates. The number shows how many are in each group."
+        },
+        "groups-toolbar": {
+            "title": "Toolbar",
+            "caption": "The Groups screen has its own toolbar. The slider selects the strictness level, and Min size filters out small groups.<table><tr><th>Offline</th><th>Online</th><th>Description</th></tr><tr><td class=\"icon-cell\">\u2212</td><td class=\"icon-cell\"><span class=\"material-symbols-outlined\">remove</span></td><td>Smaller thumbnails</td></tr><tr><td class=\"icon-cell\">\u271a</td><td class=\"icon-cell\"><span class=\"material-symbols-outlined\">add</span></td><td>Larger thumbnails</td></tr><tr><td colspan=\"2\" style=\"text-align:left\">Slider</td><td>Identical \u2192 Near-identical \u2192 Similar \u2192 Related \u2192 Custom</td></tr><tr><td colspan=\"2\" style=\"text-align:left\">Min size</td><td>Hide groups smaller than this (auto levels only)</td></tr><tr><td class=\"icon-cell\">\u21c5</td><td class=\"icon-cell\"><span class=\"material-symbols-outlined\">sort</span></td><td>Sort by group size</td></tr><tr><td class=\"icon-cell\">\ud83d\udc65</td><td class=\"icon-cell\"><span class=\"material-symbols-outlined\">group</span></td><td>Sort by people</td></tr><tr><td class=\"icon-cell\">\ud83d\udd0d</td><td class=\"icon-cell\"><span class=\"material-symbols-outlined\">image_search</span></td><td>Sort by semantic similarity</td></tr></table>"
+        },
+        "strictness": {
+            "title": "Strictness",
+            "caption": "Move the slider to change how strict the matching is. Identical finds exact copies. At the other end, Related casts a much wider net for photos that have related contents."
+        },
+        "opening-a-group": {
+            "title": "Opening a group",
+            "caption": "Double-click a thumbnail to open that group in the Gallery, where you can compare the photos and decide which ones to keep. The photos are automatically sorted by quality, and the best one is pre-selected."
+        },
+        "group-in-gallery": {
+            "title": "Group in the Gallery",
+            "caption": "Now you can see the group members together. Select any that you don\u2019t want \u2014 and press Delete to remove them, or just move on to the next group."
+        },
+        "moving-between-groups": {
+            "title": "Moving between groups",
+            "caption": "Use the toolbar arrow buttons (or Alt+Left / Alt+Right) to move to the next or previous group without going back to the Groups screen."
+        },
+        "custom-level": {
+            "title": "Custom level",
+            "caption": "Move the slider all the way to the left to reach the Custom level. Unlike the auto levels, Custom groups are albums that you create and name yourself. The same photo can belong to multiple groups."
+        },
+        "creating-a-group": {
+            "title": "Creating a group",
+            "caption": "Click the New Group button in the toolbar and type a name. The group starts out empty \u2014 you\u2019ll add photos to it next."
+        },
+        "adding-photos-from-gallery": {
+            "title": "Adding photos from the Gallery",
+            "caption": "Back in the Gallery, hover over any thumbnail to reveal a small purple badge. Click it to open the Group Picker, where you can add the photo to existing groups or create new ones. If you have multiple photos selected, they\u2019ll all be added at once."
+        },
+        "the-group-picker": {
+            "title": "The Group Picker",
+            "caption": "Clicking the badge opens the Group Picker. The left panel lists available groups; click one to add the photo (right panel shows current memberships). Photos can belong to multiple groups at once \u2014 just select as many as you like. Click Done to save or Cancel to discard."
+        },
+        "managing-groups": {
+            "title": "Managing groups",
+            "caption": "On the Custom level you can rename or delete groups using the toolbar buttons. When viewing a custom group in the Gallery, select photos and press Backspace to remove them from the group without deleting the photos themselves."
+        },
+        "faces-opening": {
+            "title": "Opening",
+            "caption": "Click the Faces button in the toolbar. This screen is where you name the people Imaginary has found in your photos."
+        },
+        "faces-toolbar": {
+            "title": "Toolbar",
+            "caption": "The Faces toolbar has its own controls.<table><tr><th>Offline</th><th>Online</th><th>Description</th></tr><tr><td class=\"icon-cell\">\u2500</td><td class=\"icon-cell\"><span class=\"material-symbols-outlined\">remove</span></td><td>Smaller face thumbnails</td></tr><tr><td class=\"icon-cell\">\u271a</td><td class=\"icon-cell\"><span class=\"material-symbols-outlined\">add</span></td><td>Larger face thumbnails</td></tr><tr><td class=\"icon-cell\">\u2754</td><td class=\"icon-cell\"><span class=\"material-symbols-outlined\">help</span></td><td>Show only unknown faces</td></tr><tr><td class=\"icon-cell\">\u2295</td><td class=\"icon-cell\"><span class=\"material-symbols-outlined\">center_focus_strong</span></td><td>Focus on one person</td></tr><tr><td class=\"icon-cell\">\ud83d\udd13</td><td class=\"icon-cell\"><span class=\"material-symbols-outlined\">lock_open</span></td><td>Show unlocked faces only (in person view)</td></tr><tr><td class=\"icon-cell\">\u2193</td><td class=\"icon-cell\"><span class=\"material-symbols-outlined\">arrow_downward</span></td><td>Flip sort direction</td></tr></table>"
+        },
+        "unknown-faces": {
+            "title": "Unknown faces",
+            "caption": "When you first arrive here, you see any faces Imaginary has detected. None have names yet \u2014 that\u2019s your job! Each face has a name field below it."
+        },
+        "typing": {
+            "title": "Typing",
+            "caption": "Click on a face and type a name into the field below it."
+        },
+        "naming": {
+            "title": "Naming",
+            "caption": "Press Enter to save. This creates your first person. A Known People section appears at the top of the screen."
+        },
+        "autocomplete": {
+            "title": "Autocomplete",
+            "caption": "As you name more faces, suggestions appear while you type. Pick a suggestion to assign this face to an existing person."
+        },
+        "failed-face-detections": {
+            "title": "Failed face detections",
+            "caption": "Sometimes Imaginary detects something that isn\u2019t really a face. If you spot one, you can click it to select it."
+        },
+        "selecting-multiple": {
+            "title": "Selecting multiple",
+            "caption": "Right-click to add more items to your selection without losing what you\u2019ve already picked. Here we\u2019ve selected eight false detections."
+        },
+        "removing": {
+            "title": "Removing",
+            "caption": "Hover over any selected card and click the red X. Because multiple cards are selected, Imaginary offers to remove them all at once."
+        },
+        "the-ignore-control": {
+            "title": "The ignore control",
+            "caption": "For faces of people you don\u2019t want to name, select them and click the grey minus button. This moves them out of the way without deleting the detection."
+        },
+        "ignoring": {
+            "title": "Ignoring",
+            "caption": "Click the grey minus to ignore the selected faces. You can always rename them later if needed."
+        },
+        "ignored-group": {
+            "title": "Ignored group",
+            "caption": "The ignored faces now belong to a special person in the Known People section. They\u2019re out of the way but not deleted, so you can always find them again."
+        },
+        "quick-match": {
+            "title": "Quick Match",
+            "caption": "Click the sparkle button over a face to see who this face might be. Imaginary shows the closest matches from your named people. With more people named, this becomes a fast way to identify faces \u2014 just click a match to assign."
+        },
+        "naming-another-face": {
+            "title": "Naming another face",
+            "caption": "In this case, we didn\u2019t find a quick match so let\u2019s name this face ourselves."
+        },
+        "more-people": {
+            "title": "More people",
+            "caption": "Press Enter to save. Now we have two named people in our collection, plus a group for all of the 'ignored' faces."
+        },
+        "drag-and-drop": {
+            "title": "Drag and drop",
+            "caption": "You can also drag faces directly onto a person in the Known People section to assign a name to them, including into the Ignore group. This also works with multiple faces selected."
+        },
+        "view-all": {
+            "title": "View all",
+            "caption": "Double-click a person to see all the faces assigned to them in one place. Here you can select - star - a preferred photo (setting their avatar), and lock correct identifications, or remove any faces with the wrong name."
+        },
+        "preferred-face": {
+            "title": "Preferred face",
+            "caption": "Click the star on your favourite image of this person. This becomes their avatar throughout Imaginary."
+        },
+        "locking-and-unlocking": {
+            "title": "Locking and unlocking faces",
+            "caption": "Locked faces (green padlock) are ones you\u2019ve confirmed. Imaginary uses these as reliable examples when trying to recognise this person in other photos. You cannot unlock the preferred face! Unlocked faces may be automatically re-assigned at any time if a better match is found"
+        },
+        "faces-exiting": {
+            "title": "Exiting",
+            "caption": "Click the \u2295 / <span class=\"material-symbols-outlined\">center_focus_strong</span> (Focus on one person) toolbar button, or press Escape, to return to the main Faces screen."
+        },
+        "tagging-opening": {
+            "title": "Opening",
+            "caption": "Let\u2019s find photos of someone we\u2019ve named. Click Search in the toolbar."
+        },
+        "people-picker": {
+            "title": "People picker",
+            "caption": "In the People section, click Select people to choose who you want to filter by."
+        },
+        "people-picker-select": {
+            "title": "People picker",
+            "caption": "Select people by clicking them, or drag them between the lists. You can pick as many as you like."
+        },
+        "applying-people-filter": {
+            "title": "Applying the people filter",
+            "caption": "Click Done, then Apply to see the results. The Gallery now shows only photos that contain Alice."
+        },
+        "tagging-fullscreen": {
+            "title": "Full-screen",
+            "caption": "Double-click a photo to open it full-screen. We know this one has Alice in it because of our filter."
+        },
+        "enabling-face-tagging": {
+            "title": "Enabling face tagging mode",
+            "caption": "Click the face icon (top left) to turn on face tagging. Coloured boxes appear around detected faces. Green means the face is named, red means it\u2019s unknown, grey means ignored, and orange appears when you\u2019re actively typing a name. Hover over a face to see the name."
+        },
+        "tagging-naming": {
+            "title": "Naming",
+            "caption": "Click any face to type or change its name, right on the photo. Autocomplete suggestions appear as you type, and you have access to the sparkle button to access the Quick Match for a face, even if it has already been named or ignored."
+        },
+        "tagging-ignoring": {
+            "title": "Ignoring",
+            "caption": "Hover over a face to see the same controls as the Faces screen. Click the grey minus to ignore, or the red X to remove a false detection. A green X will unname the face."
+        },
+        "sorting-by-people": {
+            "title": "Sorting by people",
+            "caption": "This groups your photos by who\u2019s in them. Photos of the same person appear together."
+        },
+        "switching-themes": {
+            "title": "Switching themes",
+            "caption": "Click the moon/sun icon to switch between light and dark themes."
+        },
+        "larger-thumbnails": {
+            "title": "Larger thumbnails",
+            "caption": "Click the Larger thumbnails button to make the grid bigger. Each photo shows more detail."
+        },
+        "smaller-thumbnails": {
+            "title": "Smaller thumbnails",
+            "caption": "Click the Smaller thumbnails button to shrink them back down. You can see more photos at once this way."
+        }
+    }
+}
