@@ -550,6 +550,14 @@ AppState.duplicates = (function() {
                     const removeSet = new Set(imageIds);
                     group.image_ids = group.image_ids.filter(id => !removeSet.has(id));
                     group.count = group.image_ids.length;
+                    // Replace best_image if it was one of the removed images
+                    // (pick from remaining; the reload below will set the real one)
+                    if (group.best_image && removeSet.has(group.best_image.id)) {
+                        const fallbackId = group.image_ids[0];
+                        group.best_image = fallbackId
+                            ? { id: fallbackId }
+                            : null;
+                    }
                 }
                 markDirty(domainRef);
             });
@@ -557,6 +565,8 @@ AppState.duplicates = (function() {
             // Phase 2: Async API call
             try {
                 await App.apiPost(`/groups/${groupHash}/images/remove`, { image_ids: imageIds });
+                // Reload to get updated best_image from backend
+                await this.loadLevel(4, true);
             } catch (err) {
                 _restoreLevel4(backup);
                 broadcastError(err.message || 'Failed to remove images from group');
