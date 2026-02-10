@@ -70,7 +70,8 @@ const Gallery = {
     state: {
         needsRefresh: true,
         lastImageCount: 0,
-        pendingSelection: null  // Selection to apply when item loads
+        pendingSelection: null,  // Selection to apply when item loads
+        prevSort: null            // Sort to restore when leaving group view
     },
 
     /**
@@ -524,6 +525,17 @@ const Gallery = {
      */
     _applyInitialSelection() {
         const filter = App.getFilter();
+        const isDupFilter = filter && filter.type === 'duplicates' && filter.groupHash;
+
+        // Group view: select the first image (best quality after quality sort)
+        if (isDupFilter) {
+            const displayList = AppState.images.getDisplayList();
+            if (displayList.length > 0) {
+                this.state.pendingSelection = new Set([displayList[0].id]);
+            }
+            return;
+        }
+
         if (filter?.initialSelection?.length) {
             // Store the selection to apply when the item's thumbnail loads
             this.state.pendingSelection = new Set(filter.initialSelection);
@@ -680,6 +692,10 @@ const Gallery = {
             } else {
                 this._renderGrid();
             }
+        } else if (by === 'quality') {
+            // Quality sort uses data already in image objects — just re-render
+            AppState.images.clearSimilarities();
+            this._renderGrid();
         } else {
             // Clear similarity data when switching away from content sort
             AppState.images.clearSimilarities();
@@ -726,9 +742,23 @@ const Gallery = {
         // Update duplicate group navigation button state
         this._updateDupGroupNavState();
 
+        const isDupFilter = filter && filter.type === 'duplicates' && filter.groupHash;
+
         if (isSemanticFilter) {
             App.setSortBy('content');
             App.setSortDirection('desc');
+        } else if (isDupFilter) {
+            // Save current sort so we can restore when leaving the group
+            if (!this.state.prevSort) {
+                this.state.prevSort = { ...App.getSort() };
+            }
+            App.setSortBy('quality');
+            App.setSortDirection('desc');
+        } else if (AppState.view.getSortBy() === 'quality') {
+            // Leaving group view — restore previous sort
+            App.setSortBy(this.state.prevSort?.by || 'date');
+            App.setSortDirection(this.state.prevSort?.direction || 'desc');
+            this.state.prevSort = null;
         }
 
         // Determine if we need to show loading (async operations)
@@ -1626,6 +1656,10 @@ const Gallery = {
             this._els.btnRemoveFromGroup.hidden = !isCustomGroup;
             this._els.btnRemoveFromGroup.disabled = !isCustomGroup;
         }
+
+        // Show Quality sort button only when viewing a group
+        const qualityBtn = document.getElementById('btn-sort-quality');
+        if (qualityBtn) qualityBtn.hidden = !isDupFilter;
     },
 
     /**

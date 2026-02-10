@@ -28,8 +28,13 @@ AppState.view = (function() {
     /** @type {number} Thumbnail size in pixels (100-400) */
     let _thumbnailSize = storage.get('thumbnailSize', 200);
 
-    /** @type {string} Sort field: 'date', 'rating', 'content', 'people' */
+    /** @type {string} Sort field: 'date', 'rating', 'content', 'people', 'quality' */
     let _sortBy = storage.get('sortBy', 'date');
+
+    // Validate persisted sort — 'quality' is ephemeral (group-view only), not persisted
+    if (!['date', 'rating', 'content', 'people'].includes(_sortBy)) {
+        _sortBy = 'date';
+    }
 
     /** @type {string} Sort direction: 'asc' or 'desc' */
     let _sortDirection = storage.get('sortDirection', 'desc');
@@ -146,7 +151,7 @@ AppState.view = (function() {
 
         /**
          * Get sort field.
-         * @returns {string} 'date', 'rating', 'content', or 'people'
+         * @returns {string} 'date', 'rating', 'content', 'people', or 'quality'
          */
         getSortBy() {
             return _sortBy;
@@ -154,15 +159,18 @@ AppState.view = (function() {
 
         /**
          * Set sort field.
-         * @param {string} by - 'date', 'rating', 'content', or 'people'
+         * @param {string} by - 'date', 'rating', 'content', 'people', or 'quality'
          */
         setSortBy(by) {
-            const valid = ['date', 'rating', 'content', 'people'];
+            const valid = ['date', 'rating', 'content', 'people', 'quality'];
             if (!valid.includes(by)) return;
             if (_sortBy === by) return;
 
             _sortBy = by;
-            storage.set('sortBy', by);
+            // Don't persist 'quality' — it's ephemeral (only valid in group context)
+            if (by !== 'quality') {
+                storage.set('sortBy', by);
+            }
             broadcast({ type: 'changed', property: 'sortBy' });
         },
 

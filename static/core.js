@@ -953,6 +953,7 @@ const App = {
         this._bindBtn('btn-sort-rating', () => this.setSortBy('rating'));
         this._bindBtn('btn-sort-content', () => this.setSortBy('content'));
         this._bindBtn('btn-sort-people', () => this.setSortBy('people'));
+        this._bindBtn('btn-sort-quality', () => this.setSortBy('quality'));
         this._bindBtn('btn-sort-direction', () => this.toggleSortDirection());
 
         // Duplicates controls
@@ -1174,7 +1175,7 @@ const App = {
         const direction = AppState.view.getSortDirection();
 
         // Update active states
-        ['date', 'rating', 'content', 'people'].forEach(type => {
+        ['date', 'rating', 'content', 'people', 'quality'].forEach(type => {
             const btn = document.getElementById(`btn-sort-${type}`);
             if (btn) {
                 btn.classList.toggle('active', sortBy === type);

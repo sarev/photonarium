@@ -2915,6 +2915,8 @@ if __name__ == '__main__':
         import json
         from config import load_config
         config = load_config(CONFIG_PATH)
+        # Resolve data directory (same directory as the database file)
+        _model_data_dir = os.path.dirname(os.path.abspath(DATABASE_PATH)) or '.'
         models = {
             'openclip': {
                 'model': config.openclip_model,
@@ -2922,6 +2924,11 @@ if __name__ == '__main__':
             },
             'caption': {
                 'model': config.caption_model,
+            },
+            'laion_head': {
+                'model': config.openclip_model,
+                'pretrained': config.openclip_pretrained,
+                'data_dir': _model_data_dir,
             },
         }
         print(json.dumps(models))

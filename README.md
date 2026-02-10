@@ -93,8 +93,9 @@ The Gallery is where you spend most of your time: browsing your library quickly,
 
 ### Sorting
 
-Sort changes the order of the Gallery. Two especially useful modes:
+Sort changes the order of the Gallery. Three especially useful modes:
 
+- **Sort by quality**: appears when viewing a duplicate group or custom group. Ranks images by aesthetic quality, sharpness, and resolution so the best version is at the top.
 - **Sort by content**: select an image and this button then groups visually similar images, handy for finding related shots.
 - **Sort by people**: groups images based on who appears in them (after face detection has run).
 
@@ -265,7 +266,7 @@ Groups helps you clean up your library by finding duplicates and also lets you o
 - Review duplicate "stacks" (groups) of related images.
 - Adjust how strict duplicate matching should be:
   - **Related**, **Similar**, **Near-identical**, **Identical**
-- Double click a stack (or press **Enter**) to open that group in the Gallery.
+- Double click a stack (or press **Enter**) to open that group in the Gallery, automatically sorted by quality with the best image selected.
 - While viewing a group in the Gallery, use **Alt + Left / Right** to move between groups.
 
 ### Custom groups (albums)
@@ -484,6 +485,12 @@ If you prefer to install manually, or the installer script doesn't suit your set
 
    ```bash
    python download_models.py
+   ```
+
+   If you use a custom data directory, pass it here too so the aesthetic scoring model is stored in the right place:
+
+   ```bash
+   python download_models.py --data-dir /path/to/data
    ```
 
    This downloads the AI models required for image search and captioning. Models are cached locally and only need to be downloaded once (or when you change model settings).

@@ -282,6 +282,8 @@ _SQL_MIGRATIONS = [
     "ALTER TABLE duplicate_groups ADD COLUMN updated_at TEXT",
     # Add timestamp_confidence column (0=user, 1=EXIF, 2=filename, 3=filesystem, 4=unknown)
     "ALTER TABLE images ADD COLUMN timestamp_confidence INTEGER NOT NULL DEFAULT 4",
+    # Add LAION aesthetic score (dot product of CLIP embedding with LAION aesthetic head)
+    "ALTER TABLE images ADD COLUMN aesthetic_laion REAL",
 ]
 
 # SQL schema for the duplicate_groups table
@@ -803,10 +805,12 @@ def get_all_images_lightweight(conn: sqlite3.Connection) -> list[dict[str, Any]]
 
     Returns:
         List of image dictionaries with minimal fields:
-        id, path, basename, size, width, height, timestamp, timestamp_confidence, rating, description.
+        id, path, basename, size, width, height, timestamp, timestamp_confidence,
+        rating, description, aesthetic_laion, laplacian_var.
     """
     cursor = conn.execute("""
-        SELECT id, path, basename, size, width, height, timestamp, timestamp_confidence, rating, description
+        SELECT id, path, basename, size, width, height, timestamp, timestamp_confidence,
+               rating, description, aesthetic_laion, laplacian_var
         FROM images
         WHERE deleted = 0
         ORDER BY timestamp DESC
@@ -856,7 +860,8 @@ def get_images_delta(
     Returns:
         Dictionary with:
         - epoch: Current max updated_at timestamp (for next delta request)
-        - updated: List of added/modified images (lightweight fields + deleted flag)
+        - updated: List of added/modified images (lightweight fields including
+          aesthetic_laion, laplacian_var, + deleted flag)
         - deleted_ids: List of IDs for images that are now deleted
     """
     # Get current epoch (max updated_at)
@@ -866,7 +871,8 @@ def get_images_delta(
 
     # Get all images changed since the given timestamp
     cursor = conn.execute("""
-        SELECT id, path, basename, size, width, height, timestamp, timestamp_confidence, rating, description, deleted, updated_at
+        SELECT id, path, basename, size, width, height, timestamp, timestamp_confidence,
+               rating, description, aesthetic_laion, laplacian_var, deleted, updated_at
         FROM images
         WHERE updated_at > ?
         ORDER BY updated_at ASC
@@ -2318,6 +2324,7 @@ class EmbeddingThread(threading.Thread):
         stop_event: threading.Event,
         db_lock: threading.RLock,
         config: Config | None = None,
+        data_dir: Path | str = '.',
         on_complete: callable | None = None,
     ):
         """Initialise the embedding thread.
@@ -2329,6 +2336,7 @@ class EmbeddingThread(threading.Thread):
             stop_event: Event to signal thread should stop.
             db_lock: Shared lock for database access (from ImageDatabase).
             config: Configuration object. Uses defaults if None.
+            data_dir: Directory containing user data (for LAION aesthetic head).
             on_complete: Optional callback function called when both queues
                 are empty. Used to trigger duplicate group computation.
         """
@@ -2339,12 +2347,21 @@ class EmbeddingThread(threading.Thread):
         self.stop_event = stop_event
         self._db_lock = db_lock  # Shared lock from ImageDatabase
         self.config = config or get_default_config()
+        self._data_dir = Path(data_dir)
         self.on_complete = on_complete
 
         self._clip_model: OpenCLIPModel | None = None
         self._processed_count = 0
         self._error_count = 0
         self._completion_triggered = False
+
+        # LAION aesthetic head weights (loaded lazily on first use).
+        # Protected by _laion_lock because both the main thread (backfill)
+        # and this thread (_process_batch) may call _load_laion_head().
+        self._laion_lock = threading.Lock()
+        self._laion_weight: np.ndarray | None = None
+        self._laion_bias: float | None = None
+        self._laion_loaded = False  # Track whether we've attempted loading
 
     @property
     def clip_model(self) -> OpenCLIPModel:
@@ -2356,6 +2373,61 @@ class EmbeddingThread(threading.Thread):
                 max_dimension=self.config.max_image_dimension,
             )
         return self._clip_model
+
+    def _load_laion_head(self) -> None:
+        """Load the LAION aesthetic predictor head weights.
+
+        The aesthetic head is a nn.Linear(embed_dim, 1) checkpoint that scores
+        image quality via dot product with the L2-normalised CLIP embedding.
+        Loaded lazily on first use — either from the main thread (backfill at
+        startup) or from this thread (_process_batch).
+
+        Thread-safe: guarded by _laion_lock so concurrent callers from different
+        threads don't double-load or see partially-initialised state.
+
+        Sets self._laion_weight (1D numpy array) and self._laion_bias (float),
+        or leaves them as None if the checkpoint is unavailable or incompatible.
+        """
+        # Fast path: already loaded (no lock needed for a boolean read under GIL,
+        # but the lock ensures we see the final weight/bias values)
+        if self._laion_loaded:
+            return
+
+        with self._laion_lock:
+            # Double-check inside lock (another thread may have loaded while we waited)
+            if self._laion_loaded:
+                return
+            self._laion_loaded = True
+
+            head_path = self._data_dir / '.laion-aesthetic-head.pth'
+            if not head_path.exists():
+                logger.warning(
+                    'LAION aesthetic head not found — aesthetic scoring disabled. '
+                    'Run "python download_models.py" to download it.'
+                )
+                return
+
+            try:
+                import torch
+                state_dict = torch.load(str(head_path), map_location='cpu', weights_only=True)
+
+                weight = state_dict['weight'].numpy().flatten()  # shape: (embed_dim,)
+                bias = float(state_dict['bias'].item())
+
+                # Validate dimension matches the CLIP model's output
+                embed_dim = self.clip_model.model.visual.output_dim
+                if len(weight) != embed_dim:
+                    logger.warning(
+                        f'LAION head dimension mismatch: head has {len(weight)}, '
+                        f'CLIP model has {embed_dim}. Aesthetic scoring disabled.'
+                    )
+                    return
+
+                self._laion_weight = weight
+                self._laion_bias = bias
+                logger.info(f'LAION aesthetic head loaded ({len(weight)}D)')
+            except Exception as e:
+                logger.warning(f'Failed to load LAION aesthetic head: {e}')
 
     @property
     def processed_count(self) -> int:
@@ -2433,11 +2505,17 @@ class EmbeddingThread(threading.Thread):
     def _process_batch(self, image_ids: list[str], paths: list[Path]) -> None:
         """Process a batch of images.
 
+        Computes CLIP embeddings and optionally LAION aesthetic scores
+        (dot product of embedding with aesthetic head weights).
+
         Args:
             image_ids: List of image IDs.
             paths: List of corresponding file paths.
         """
         logger.debug(f'Processing embedding batch of {len(paths)} images')
+
+        # Ensure LAION head is loaded (lazy, only attempts once)
+        self._load_laion_head()
 
         # Encode batch
         results = self.clip_model.encode_images_batch(paths)
@@ -2448,7 +2526,11 @@ class EmbeddingThread(threading.Thread):
             try:
                 if embedding is not None:
                     embedding_bytes = embedding.astype(np.float32).tobytes()
-                    updates.append((embedding_bytes, datetime.now().isoformat(), image_id))
+                    # Compute LAION aesthetic score (dot product on L2-normalised embedding)
+                    aesthetic = None
+                    if self._laion_weight is not None:
+                        aesthetic = float(embedding @ self._laion_weight + self._laion_bias)
+                    updates.append((embedding_bytes, aesthetic, datetime.now().isoformat(), image_id))
                     self._processed_count += 1
                 else:
                     self._error_count += 1
@@ -2462,7 +2544,7 @@ class EmbeddingThread(threading.Thread):
         if updates:
             with self._db_lock:
                 self.conn.executemany(
-                    'UPDATE images SET embedding = ?, updated_at = ? WHERE id = ?',
+                    'UPDATE images SET embedding = ?, aesthetic_laion = ?, updated_at = ? WHERE id = ?',
                     updates
                 )
                 self.conn.commit()
@@ -3580,6 +3662,9 @@ class ImageDatabase:
         # Backfill description embeddings for images with descriptions but no embedding
         self._backfill_description_embeddings()
 
+        # Backfill LAION aesthetic scores for images with embeddings but no score
+        self._backfill_aesthetic_laion()
+
         logger.info('-' * 60)
         logger.info('Database initialisation complete')
         logger.info('-' * 60)
@@ -3627,6 +3712,83 @@ class ImageDatabase:
 
         self.conn.commit()
         logger.info(f'        Backfilled {count} description embeddings')
+
+    def _backfill_aesthetic_laion(self) -> None:
+        """Compute LAION aesthetic scores for images with embeddings but no score.
+
+        This is a cheap operation — just dot products on existing embedding blobs,
+        no image I/O required. Uses the has_migration_run/record_migration pattern
+        to run only once per database.
+
+        Respects _stop_event for graceful shutdown. Acquires _db_lock for writes
+        since the embedding thread may be running concurrently.
+
+        Requires the LAION head to be loaded in the embedding thread; skips
+        gracefully if the head is unavailable.
+        """
+        migration_id = 'backfill_aesthetic_laion'
+        if has_migration_run(self.conn, migration_id):
+            return
+
+        # Get LAION head weights from the embedding thread
+        if self._embedding_thread is None:
+            return
+
+        # Trigger lazy loading of the LAION head (thread-safe)
+        self._embedding_thread._load_laion_head()
+        laion_weight = self._embedding_thread._laion_weight
+        laion_bias = self._embedding_thread._laion_bias
+
+        if laion_weight is None:
+            # LAION head not available — record migration anyway to avoid
+            # re-checking every startup (user can re-download and re-run)
+            logger.info('Skipping LAION aesthetic backfill — head not available')
+            record_migration(self.conn, migration_id)
+            return
+
+        cursor = self.conn.execute("""
+            SELECT id, embedding
+            FROM images
+            WHERE embedding IS NOT NULL AND aesthetic_laion IS NULL AND deleted = 0
+        """)
+        rows = cursor.fetchall()
+
+        if not rows:
+            record_migration(self.conn, migration_id)
+            return
+
+        logger.info(f'Backfilling LAION aesthetic scores for {len(rows)} images...')
+
+        updates = []
+        for row in rows:
+            # Check for shutdown between rows
+            if self._stop_event.is_set():
+                logger.info('LAION aesthetic backfill interrupted by shutdown')
+                break
+
+            try:
+                embedding = np.frombuffer(row['embedding'], dtype=np.float32)
+                score = float(embedding @ laion_weight + laion_bias)
+                updates.append((score, datetime.now().isoformat(), row['id']))
+            except Exception as e:
+                logger.warning(f'Failed to compute aesthetic score for {row["id"]}: {e}')
+
+        # Commit whatever we computed (even on early exit from shutdown).
+        # Acquire _db_lock since the embedding thread may be writing concurrently.
+        if updates:
+            with self._db_lock:
+                self.conn.executemany(
+                    'UPDATE images SET aesthetic_laion = ?, updated_at = ? WHERE id = ?',
+                    updates
+                )
+                self.conn.commit()
+
+        # Only record migration as complete if we weren't interrupted
+        if not self._stop_event.is_set():
+            record_migration(self.conn, migration_id)
+            logger.info(f'        Backfilled {len(updates)} LAION aesthetic scores')
+        else:
+            logger.info(f'        Partially backfilled {len(updates)} LAION aesthetic scores (interrupted)')
 
     def backfill_face_semantic_embeddings(self) -> int:
         """Generate semantic embeddings for faces that don't have them.
@@ -4045,6 +4207,7 @@ class ImageDatabase:
             stop_event=self._stop_event,
             db_lock=self._db_lock,
             config=self.config,
+            data_dir=self.db_path.parent,
             on_complete=on_embedding_complete,
         )
         self._embedding_thread.start()

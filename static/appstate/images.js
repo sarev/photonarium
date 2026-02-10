@@ -91,6 +91,25 @@ AppState.images = (function() {
         const { by, direction } = AppState.view.getSort();
         const sorted = [...images];
 
+        // Quality sort: within-group percentile ranking
+        if (by === 'quality') {
+            const dir = direction === 'asc' ? 1 : -1;
+            const scores = _computeQualityScores(sorted);
+            sorted.sort((a, b) => {
+                const qa = scores.get(a.id) || 0;
+                const qb = scores.get(b.id) || 0;
+                if (qa !== qb) return (qb - qa) * dir;
+                // Deterministic tiebreak: pixels, sharpness, file size, ID
+                const pa = a.width * a.height, pb = b.width * b.height;
+                if (pa !== pb) return (pb - pa) * dir;
+                const sa = a.laplacian_var || 0, sb = b.laplacian_var || 0;
+                if (sa !== sb) return (sb - sa) * dir;
+                if (a.size !== b.size) return (b.size - a.size) * dir;
+                return a.id < b.id ? -1 : 1;
+            });
+            return sorted;
+        }
+
         sorted.sort((a, b) => {
             let cmp = 0;
             if (by === 'date') {
@@ -110,6 +129,69 @@ AppState.images = (function() {
         });
 
         return sorted;
+    }
+
+    /**
+     * Compute composite quality scores for a set of images using within-group
+     * percentile ranking. Combines LAION aesthetic score, sharpness (log Laplacian
+     * variance), pixel count, and bits-per-pixel into a weighted composite.
+     *
+     * @param {Array} images - Array of image objects with aesthetic_laion, laplacian_var, width, height, size
+     * @returns {Map<string, number>} Map of image ID to quality score [0..1]
+     * @private
+     */
+    function _computeQualityScores(images) {
+        const n = images.length;
+        if (n === 0) return new Map();
+        if (n === 1) return new Map([[images[0].id, 0.5]]);
+
+        // Extract raw values for each component
+        const aestheticRaw = images.map(i => i.aesthetic_laion ?? 0);
+        const sharpnessRaw = images.map(i => Math.log1p(i.laplacian_var || 0));
+        const pixelsRaw = images.map(i => i.width * i.height);
+        const bppRaw = images.map(i => 8 * i.size / Math.max(1, i.width * i.height));
+
+        // Convert to within-group percentile ranks [0..1] (average-rank, tie-safe)
+        const A = _percentileRanks(aestheticRaw);
+        const S = _percentileRanks(sharpnessRaw);
+        const P = _percentileRanks(pixelsRaw);
+        const B = _percentileRanks(bppRaw);
+
+        // Combine: quality = 0.60*aesthetic + 0.20*sharpness + 0.15*pixels + 0.05*bpp
+        const scores = new Map();
+        for (let i = 0; i < n; i++) {
+            scores.set(images[i].id, 0.60 * A[i] + 0.20 * S[i] + 0.15 * P[i] + 0.05 * B[i]);
+        }
+        return scores;
+    }
+
+    /**
+     * Convert raw values to percentile ranks [0..1] using average-rank for ties.
+     * @param {Array<number>} values - Raw values to rank
+     * @returns {Array<number>} Percentile ranks, same length as input
+     * @private
+     */
+    function _percentileRanks(values) {
+        const n = values.length;
+        if (n === 1) return [0.5];
+
+        // Create (value, originalIndex) pairs, sort ascending
+        const indexed = values.map((v, i) => [v, i]);
+        indexed.sort((a, b) => a[0] - b[0]);
+
+        // Assign average ranks for ties, normalised to [0..1]
+        const ranks = new Array(n);
+        let i = 0;
+        while (i < n) {
+            let j = i;
+            while (j < n && indexed[j][0] === indexed[i][0]) j++;
+            const avgRank = (i + j - 1) / 2;  // 0-based average rank
+            for (let k = i; k < j; k++) {
+                ranks[indexed[k][1]] = avgRank / (n - 1);  // Normalise to [0..1]
+            }
+            i = j;
+        }
+        return ranks;
     }
 
     /**

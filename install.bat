@@ -278,7 +278,11 @@ echo This step downloads large model files and may take a while
 echo depending on your internet connection.
 echo.
 
-"%VENV_PYTHON%" download_models.py
+if "!DATA_DIR_FLAG!"=="" (
+    "%VENV_PYTHON%" download_models.py
+) else (
+    "%VENV_PYTHON%" download_models.py --data-dir "!DATA_DIR!"
+)
 if !errorlevel! neq 0 goto :error
 
 :: ---------------------------------------------------------------------------

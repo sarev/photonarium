@@ -3,6 +3,7 @@ env.bak
 .claude
 CLAUDE.md
 .imaginary.yml
+.laion-aesthetic-head.pth
 .thumbnails
 __pycache__
 imaginary.db*

@@ -18,17 +18,24 @@ The script will:
 from __future__ import annotations
 
 import json
+import os
 import subprocess
 import sys
+import urllib.request
 
 
-def get_required_models() -> dict:
-    """Get required models by querying app.py --list-models."""
-    result = subprocess.run(
-        [sys.executable, 'app.py', '--list-models'],
-        capture_output=True,
-        text=True,
-    )
+def get_required_models(data_dir: str | None = None) -> dict:
+    """Get required models by querying app.py --list-models.
+
+    Args:
+        data_dir: Optional data directory to forward to app.py, so that
+            the returned paths (e.g. laion_head.data_dir) match the
+            actual runtime directory.
+    """
+    cmd = [sys.executable, 'app.py', '--list-models']
+    if data_dir is not None:
+        cmd.extend(['--data-dir', data_dir])
+    result = subprocess.run(cmd, capture_output=True, text=True)
     if result.returncode != 0:
         print(f'Error querying models: {result.stderr}', file=sys.stderr)
         sys.exit(1)
@@ -85,16 +92,80 @@ def download_caption_model(model_name: str) -> bool:
         return False
 
 
+def download_laion_head(model: str, pretrained: str, data_dir: str = '.') -> bool:
+    """Download the LAION aesthetic predictor head for the configured OpenCLIP model.
+
+    The aesthetic head is a lightweight nn.Linear(embed_dim, 1) checkpoint (~2KB)
+    that scores image quality via dot product with the CLIP embedding. Different
+    CLIP model architectures require different checkpoints.
+
+    Args:
+        model: OpenCLIP model architecture name (e.g. 'ViT-B-32').
+        pretrained: OpenCLIP pretrained weights name (e.g. 'openai').
+        data_dir: Directory to store the downloaded checkpoint.
+
+    Returns:
+        True if downloaded successfully, False otherwise.
+    """
+    # Map of model architecture -> checkpoint URL (pretrained weights don't affect head)
+    # The LAION aesthetic predictor heads are nn.Linear(embed_dim, 1) classifiers.
+    # See: https://github.com/LAION-AI/aesthetic-predictor
+    _LAION_HEAD_URLS = {
+        'ViT-B-16': 'https://github.com/LAION-AI/aesthetic-predictor/blob/main/sa_0_4_vit_b_16_linear.pth?raw=true',
+        'ViT-B-32': 'https://github.com/LAION-AI/aesthetic-predictor/blob/main/sa_0_4_vit_b_32_linear.pth?raw=true',
+        'ViT-L-14': 'https://github.com/LAION-AI/aesthetic-predictor/blob/main/sa_0_4_vit_l_14_linear.pth?raw=true',
+    }
+
+    print(f'\n{"=" * 60}')
+    print(f'Downloading LAION aesthetic head for: {model} ({pretrained})')
+    print('=' * 60)
+
+    url = _LAION_HEAD_URLS.get(model)
+    if url is None:
+        print(f'No LAION aesthetic head available for {model} ({pretrained})')
+        print('Aesthetic scoring will be disabled — quality ranking will fall back to sharpness/resolution.')
+        return True  # Not an error, just unsupported
+
+    dest = os.path.join(data_dir, '.laion-aesthetic-head.pth')
+    if os.path.exists(dest):
+        print(f'LAION aesthetic head already exists: {dest}')
+        return True
+
+    try:
+        print(f'Downloading from: {url}')
+        urllib.request.urlretrieve(url, dest)
+        file_size = os.path.getsize(dest)
+        print(f'LAION aesthetic head downloaded successfully ({file_size:,} bytes)')
+        return True
+    except Exception as e:
+        print(f'Error downloading LAION aesthetic head: {e}', file=sys.stderr)
+        print('Aesthetic scoring will be disabled — quality ranking will fall back to sharpness/resolution.')
+        # Clean up partial download
+        if os.path.exists(dest):
+            os.remove(dest)
+        return True  # Non-fatal — app works without it
+
+
 def main():
+    import argparse
+    parser = argparse.ArgumentParser(description='Download required ML models for Imaginary.')
+    parser.add_argument(
+        '-d', '--data-dir',
+        type=str,
+        default=None,
+        help='Directory for user data (forwarded to app.py so paths resolve correctly)'
+    )
+    args = parser.parse_args()
+
     print('Imaginary Model Downloader')
     print('=' * 60)
     print('This script downloads the ML models required by Imaginary.')
     print('Models are cached in the HuggingFace cache directory.')
     print()
 
-    # Get required models from app.py
+    # Get required models from app.py (forward --data-dir so paths match runtime)
     print('Querying required models from configuration...')
-    models = get_required_models()
+    models = get_required_models(data_dir=args.data_dir)
     print(f'OpenCLIP: {models["openclip"]["model"]} ({models["openclip"]["pretrained"]})')
     print(f'Caption:  {models["caption"]["model"]}')
 
@@ -110,6 +181,16 @@ def main():
     # Download caption model
     if not download_caption_model(models['caption']['model']):
         success = False
+
+    # Download LAION aesthetic head (non-fatal if unavailable)
+    laion_info = models.get('laion_head', {})
+    if laion_info:
+        data_dir = laion_info.get('data_dir', '.')
+        download_laion_head(
+            laion_info['model'],
+            laion_info['pretrained'],
+            data_dir=data_dir,
+        )
 
     print()
     print('=' * 60)

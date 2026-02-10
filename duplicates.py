@@ -1385,8 +1385,9 @@ def _get_duplicate_groups(conn: sqlite3.Connection, level: int) -> list[dict[str
 def _get_duplicate_groups_lightweight(conn: sqlite3.Connection, level: int) -> list[dict[str, Any]]:
     """Get duplicate groups with minimal data for efficient grid display.
 
-    The "best" image is selected by: highest resolution, then lossless format,
-    then largest file size, then best focus (Laplacian variance).
+    The "best" image is selected by: highest LAION aesthetic score, then
+    best focus (Laplacian variance), with deterministic ID tiebreak.
+    NULL aesthetic scores sort last (SQLite NULL < any value with DESC).
     """
     cursor = conn.execute("""
         WITH ranked AS (
@@ -1394,17 +1395,10 @@ def _get_duplicate_groups_lightweight(conn: sqlite3.Connection, level: int) -> l
                 dg.group_hash,
                 i.id,
                 i.basename,
-                i.width,
-                i.height,
-                i.size,
-                i.laplacian_var,
-                i.lossless,
                 ROW_NUMBER() OVER (
                     PARTITION BY dg.group_hash
                     ORDER BY
-                        (i.width * i.height) DESC,
-                        i.lossless DESC,
-                        i.size DESC,
+                        i.aesthetic_laion DESC,
                         i.laplacian_var DESC,
                         i.id ASC
                 ) as rank
@@ -1958,17 +1952,10 @@ class DuplicateManager:
                         dg.group_hash,
                         i.id,
                         i.basename,
-                        i.width,
-                        i.height,
-                        i.size,
-                        i.laplacian_var,
-                        i.lossless,
                         ROW_NUMBER() OVER (
                             PARTITION BY dg.group_hash
                             ORDER BY
-                                (i.width * i.height) DESC,
-                                i.lossless DESC,
-                                i.size DESC,
+                                i.aesthetic_laion DESC,
                                 i.laplacian_var DESC,
                                 i.id ASC
                         ) as rank
@@ -2050,9 +2037,7 @@ class DuplicateManager:
                         ROW_NUMBER() OVER (
                             PARTITION BY dg.group_hash
                             ORDER BY
-                                (i.width * i.height) DESC,
-                                i.lossless DESC,
-                                i.size DESC,
+                                i.aesthetic_laion DESC,
                                 i.laplacian_var DESC,
                                 i.id ASC
                         ) as rank

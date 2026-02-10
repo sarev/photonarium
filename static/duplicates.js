@@ -1169,19 +1169,17 @@ Duplicates.navigateToGroup = function(hash) {
     if (!group?.image_ids?.length) return false;
 
     const imageIds = group.image_ids;
-    const bestId = group.best_image?.id;
 
     // Update Duplicates screen selection state (visual sync happens in onEnter)
     this.state.selectedGroups = [hash];
 
     // Set filter to show only this group's images
-    // Include initialSelection so Gallery can apply it after loading
+    // Quality sort determines the best image — no initialSelection needed
     App.setFilter({
         type: 'duplicates',
         imageIds,
         groupHash: hash,
         sourceLevel: this.state.currentLevel,
-        initialSelection: bestId ? [bestId] : [imageIds[0]]
     });
 
     return true;

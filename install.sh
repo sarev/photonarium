@@ -302,7 +302,11 @@ echo "This step downloads large model files and may take a while"
 echo "depending on your internet connection."
 echo ""
 
-"$VENV_PYTHON" download_models.py
+if [ -n "$DATA_DIR_FLAG" ]; then
+    "$VENV_PYTHON" download_models.py --data-dir "$DATA_DIR"
+else
+    "$VENV_PYTHON" download_models.py
+fi
 
 # ---------------------------------------------------------------------------
 # Final summary
