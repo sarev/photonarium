@@ -3594,6 +3594,7 @@ dialog {
     padding: 0;
     border: none;
     border-radius: 12px;
+    color: var(--color-text-primary);
     background-color: var(--color-bg-elevated);
     box-shadow: var(--shadow-lg);
     max-width: 90vw;
@@ -3849,4 +3850,233 @@ dialog::backdrop {
         width: calc(100vw - 2rem);
         max-width: none;
     }
+}
+
+
+/* ============================================================================
+   METADATA DIALOG (EXIF viewer / metadata filter)
+   ============================================================================ */
+
+.dialog-metadata-content {
+    min-width: 400px;
+    max-width: 600px;
+}
+
+.metadata-table-container {
+    max-height: 60vh;
+    overflow-y: auto;
+    margin: 0.75rem 0;
+}
+
+.metadata-empty {
+    color: var(--color-text-muted);
+    font-style: italic;
+    padding: 1rem 0;
+    text-align: center;
+}
+
+.metadata-row {
+    display: flex;
+    align-items: center;
+    padding: 0.375rem 0.25rem;
+    border-bottom: 1px solid var(--color-border);
+    border-radius: 4px;
+}
+
+.metadata-row:last-child {
+    border-bottom: none;
+}
+
+.metadata-key {
+    flex: 0 0 140px;
+    font-weight: 500;
+    color: var(--color-text-secondary);
+    font-size: 0.9rem;
+}
+
+.metadata-value {
+    flex: 1;
+    word-break: break-word;
+    font-size: 0.9rem;
+}
+
+/* Filter icon button — always visible, muted until hovered or selected */
+.metadata-filter-btn {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 28px;
+    height: 28px;
+    border: none;
+    border-radius: 4px;
+    background: transparent;
+    cursor: pointer;
+    color: var(--color-text-muted);
+    opacity: 0.4;
+    transition: opacity 0.15s, color 0.15s, background-color 0.15s;
+    flex-shrink: 0;
+    padding: 0;
+}
+
+.metadata-filter-btn .material-symbols-outlined {
+    font-size: 18px;
+}
+
+.metadata-filter-btn:hover {
+    opacity: 1;
+    color: var(--color-text-secondary);
+    background: var(--color-bg-tertiary);
+}
+
+/* Selected filter row (user clicked the filter icon) */
+.metadata-row.metadata-selected {
+    background: var(--color-accent-light);
+}
+
+.metadata-row.metadata-selected .metadata-filter-btn {
+    opacity: 1;
+    color: var(--color-accent);
+}
+
+/* Info panel metadata button */
+.info-row-clickable {
+    cursor: pointer;
+    border-radius: 4px;
+    transition: background-color 0.15s;
+}
+
+.info-row-clickable:hover {
+    background: var(--color-bg-tertiary);
+}
+
+.info-link {
+    color: var(--color-accent);
+    font-size: 0.85rem;
+}
+
+/* Writable mode — input fields in metadata rows */
+.metadata-input-container {
+    flex: 1;
+    position: relative;
+}
+
+.metadata-input {
+    width: 100%;
+    padding: 0.25rem 0.5rem;
+    border: 1px solid var(--color-border);
+    border-radius: 4px;
+    background: var(--color-bg-primary);
+    color: var(--color-text-primary);
+    font-size: 0.9rem;
+    font-family: inherit;
+    box-sizing: border-box;
+}
+
+.metadata-input:focus {
+    outline: none;
+    border-color: var(--color-accent);
+}
+
+/* Autocomplete dropdown for writable mode */
+.metadata-autocomplete {
+    position: absolute;
+    top: 100%;
+    left: 0;
+    right: 0;
+    max-height: 200px;
+    overflow-y: auto;
+    background: var(--color-bg-elevated);
+    border: 1px solid var(--color-border);
+    border-top: none;
+    border-radius: 0 0 4px 4px;
+    box-shadow: var(--shadow-md);
+    z-index: 100;
+    display: none;
+}
+
+.metadata-autocomplete.visible {
+    display: block;
+}
+
+.metadata-autocomplete-item {
+    padding: 0.375rem 0.5rem;
+    cursor: pointer;
+    font-size: 0.9rem;
+}
+
+.metadata-autocomplete-item:hover,
+.metadata-autocomplete-item.highlighted {
+    background: var(--color-accent-light);
+}
+
+.metadata-autocomplete-item mark {
+    background: none;
+    color: var(--color-accent);
+    font-weight: 600;
+}
+
+/* Metadata filter chips on search screen */
+.metadata-filter {
+    display: flex;
+    gap: 0.5rem;
+}
+
+.metadata-chips {
+    flex: 1;
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.25rem;
+    padding: 0.5rem;
+    min-height: 2.5rem;
+    background-color: var(--color-bg-primary);
+    border: 1px solid var(--color-border);
+    border-radius: 4px;
+    cursor: pointer;
+    align-items: center;
+}
+
+.metadata-chips:hover {
+    border-color: var(--color-accent);
+}
+
+.metadata-placeholder {
+    color: var(--color-text-muted);
+    font-size: 0.9rem;
+    font-style: italic;
+}
+
+.metadata-chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.25rem;
+    padding: 0.25rem 0.5rem;
+    background-color: var(--color-accent);
+    color: var(--color-overlay-text);
+    border-radius: 12px;
+    font-size: 0.8rem;
+    font-weight: 500;
+}
+
+.metadata-chip-key {
+    opacity: 0.8;
+}
+
+.metadata-chip-remove {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 16px;
+    height: 16px;
+    border-radius: 50%;
+    background: var(--color-chip-button);
+    border: none;
+    cursor: pointer;
+    padding: 0;
+    color: var(--color-overlay-text);
+    font-size: 12px;
+    line-height: 1;
+}
+
+.metadata-chip-remove:hover {
+    background: var(--color-chip-button-hover);
 }

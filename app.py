@@ -405,6 +405,23 @@ def get_image(image_id):
     return success_response(image)
 
 
+@app.route('/api/images/<image_id>/exif', methods=['GET'])
+def get_image_exif(image_id):
+    """Get EXIF metadata for a single image.
+
+    Loaded lazily by the frontend when the metadata modal opens,
+    separate from the main image endpoint to keep responses lightweight.
+
+    Args:
+        image_id: The unique identifier of the image.
+
+    Returns:
+        JSON object with exif_data dict, or 404 if image not found.
+    """
+    exif_data = get_db().get_image_exif(image_id)
+    return success_response({'exif_data': exif_data})
+
+
 @app.route('/api/images/<image_id>', methods=['POST'])
 def update_image(image_id):
     """Update editable fields for an image.
@@ -1369,6 +1386,86 @@ def get_similar_images(image_id):
     except Exception as e:
         logger.exception('Similarity search failed')
         return error_response(f'Similarity search failed: {str(e)}', 500)
+
+
+# =============================================================================
+# Metadata Search Endpoints
+# =============================================================================
+
+@app.route('/api/metadata-search', methods=['POST'])
+def metadata_search():
+    """Search for images matching EXIF metadata criteria.
+
+    Uses subsequence matching on indexed metadata key-value pairs.
+    Multiple criteria are ANDed together.
+
+    Request Body:
+        JSON object with:
+            - criteria: Dictionary of {key: query_text} pairs.
+              Each query uses subsequence matching (e.g. "nkn" matches "Nikon").
+
+    Returns:
+        JSON object with:
+            - image_ids: Array of image IDs matching all criteria.
+    """
+    data = request.get_json()
+    if not data or 'criteria' not in data:
+        return error_response('criteria is required')
+
+    criteria = data['criteria']
+    if not isinstance(criteria, dict):
+        return error_response('criteria must be a dictionary')
+
+    try:
+        image_ids = get_db().search_image_metadata(criteria)
+        return success_response({'image_ids': image_ids})
+    except Exception as e:
+        logger.exception('Metadata search failed')
+        return error_response(f'Metadata search failed: {str(e)}', 500)
+
+
+@app.route('/api/metadata-keys', methods=['GET'])
+def metadata_keys():
+    """Get all distinct metadata keys present in the database.
+
+    Used to populate the writable metadata filter modal with available
+    keys the user can search by.
+
+    Returns:
+        JSON object with:
+            - keys: Sorted array of distinct key names.
+    """
+    try:
+        keys = get_db().get_metadata_keys()
+        return success_response({'keys': keys})
+    except Exception as e:
+        logger.exception('Failed to get metadata keys')
+        return error_response(f'Failed to get metadata keys: {str(e)}', 500)
+
+
+@app.route('/api/metadata-values', methods=['GET'])
+def metadata_values():
+    """Get all distinct values for a given metadata key.
+
+    Used for autocomplete dropdowns in the metadata filter modal.
+
+    Query Parameters:
+        key: The metadata key name (e.g. 'Camera').
+
+    Returns:
+        JSON object with:
+            - values: Sorted array of distinct values for the key.
+    """
+    key = request.args.get('key', '').strip()
+    if not key:
+        return error_response('key parameter is required')
+
+    try:
+        values = get_db().get_metadata_values(key)
+        return success_response({'values': values})
+    except Exception as e:
+        logger.exception('Failed to get metadata values')
+        return error_response(f'Failed to get metadata values: {str(e)}', 500)
 
 
 # =============================================================================
@@ -2892,6 +2989,11 @@ if __name__ == '__main__':
         help='Regenerate all face thumbnails with non-distorted rendering and exit'
     )
     parser.add_argument(
+        '-x', '--extract-exif',
+        action='store_true',
+        help='Extract EXIF metadata for all images missing it and exit'
+    )
+    parser.add_argument(
         '-m', '--list-models',
         action='store_true',
         help='Output required ML models as JSON and exit (for download_models.py)'
@@ -2980,6 +3082,71 @@ if __name__ == '__main__':
         count = db.regenerate_face_thumbnails()
         elapsed = time.time() - start_time
         logger.info(f'Regenerated {count} face thumbnails in {elapsed:.1f}s')
+        sys.exit(0)
+
+    # Handle EXIF extraction backfill command
+    if args.extract_exif:
+        from concurrent.futures import as_completed
+
+        db = get_db()
+        logger.info('Extracting EXIF metadata for images missing it...')
+        start_time = time.time()
+
+        # Find images with no EXIF data (NULL = never extracted)
+        rows = db.get_images_without_exif()
+        total = len(rows)
+
+        if total == 0:
+            logger.info('All images already have EXIF data extracted.')
+            sys.exit(0)
+
+        logger.info(f'Found {total} images needing EXIF extraction')
+
+        extracted = 0
+        skipped = 0
+        processed = 0
+        interrupted = False
+        num_workers = db.config.indexing_threads or 4
+        executor = ThreadPoolExecutor(max_workers=num_workers)
+
+        try:
+            futures = {
+                executor.submit(db.extract_exif_for_image, row['id']): row
+                for row in rows
+            }
+
+            for future in as_completed(futures):
+                try:
+                    if future.result():
+                        extracted += 1
+                    else:
+                        skipped += 1
+                except Exception as e:
+                    row = futures[future]
+                    logger.warning(f'EXIF extraction failed for {row["basename"]}: {e}')
+                    skipped += 1
+                processed += 1
+
+                if processed % 100 == 0 or processed == total:
+                    logger.info(
+                        f'  Progress: {processed}/{total} '
+                        f'({extracted} extracted, {skipped} no EXIF)'
+                    )
+
+        except KeyboardInterrupt:
+            logger.warning('Interrupted! Cancelling pending tasks...')
+            interrupted = True
+            for future in futures:
+                future.cancel()
+        finally:
+            executor.shutdown(wait=not interrupted, cancel_futures=interrupted)
+
+        elapsed = time.time() - start_time
+        status = 'interrupted' if interrupted else 'completed'
+        logger.info(
+            f'EXIF extraction {status} in {elapsed:.1f}s: '
+            f'{extracted} extracted, {skipped} no EXIF'
+        )
         sys.exit(0)
 
     # Set module-level flags before initializing database

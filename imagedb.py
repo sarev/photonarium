@@ -218,9 +218,10 @@ from faces import (
     get_faces_without_semantic_embedding,
     get_all_faces_for_thumbnail_regen,
 )
-from timestamps import (
+from metadata import (
     derive_timestamp,
     derive_timestamp_with_confidence,
+    extract_exif_data,
     CONFIDENCE_UNKNOWN,
 )
 from rawimage import (
@@ -264,6 +265,9 @@ CREATE TABLE IF NOT EXISTS images (
     mtime                 REAL,
     description           TEXT NOT NULL DEFAULT '',
     rating                TEXT NOT NULL DEFAULT '',
+    aesthetic_laion        REAL,
+    aesthetic_nima         REAL,
+    exif_data             TEXT,
     embedding             BLOB,
     description_embedding BLOB,
     deleted               INTEGER NOT NULL DEFAULT 0,
@@ -272,23 +276,49 @@ CREATE TABLE IF NOT EXISTS images (
 )
 """
 
-# Migrations to run on existing databases
+# Schema-only migrations for existing databases.
+#
+# IMPORTANT: These are LOW-LEVEL DDL statements (ALTER TABLE / CREATE TABLE)
+# that modify the database schema idempotently.  They run silently on every
+# startup — errors from "column already exists" are swallowed.
+#
+# Schema changes alone are NOT sufficient for a complete migration.  Each entry
+# here MUST have a corresponding _migrate_*() or _backfill_*() method in the
+# ImageDatabase class that:
+#   1. Uses has_migration_run() / record_migration() to run exactly once
+#   2. Logs what it's doing so the user can see the migration happened
+#   3. Handles data backfill if the new column needs populating
+#
+# The mapping is documented below.  When adding new entries, follow the
+# established pattern — don't just add an ALTER TABLE here and call it done.
 _SQL_MIGRATIONS = [
-    # Add description_embedding column if it doesn't exist
+    # → _backfill_description_embeddings() (query-based idempotency, re-checks each startup)
     "ALTER TABLE images ADD COLUMN description_embedding BLOB",
-    # Add mtime column for fast change detection (avoids checksum on every scan)
+    # → backfilled inline in _process_image() during scan (per-image, no startup migration)
     "ALTER TABLE images ADD COLUMN mtime REAL",
-    # Add updated_at column for duplicate epoch tracking
+    # → _migrate_duplicate_epoch_to_metadata()
     "ALTER TABLE duplicate_groups ADD COLUMN updated_at TEXT",
-    # Add timestamp_confidence column (0=user, 1=EXIF, 2=filename, 3=filesystem, 4=unknown)
+    # → _migrate_add_timestamp_confidence()
     "ALTER TABLE images ADD COLUMN timestamp_confidence INTEGER NOT NULL DEFAULT 4",
-    # Add LAION aesthetic score (dot product of CLIP embedding with LAION aesthetic head)
+    # → _backfill_aesthetic_laion()
     "ALTER TABLE images ADD COLUMN aesthetic_laion REAL",
-    # Add NIMA aesthetic score (VGG16-AVA weighted mean, range 1-10)
+    # → _queue_images_for_nima() (queue-based, re-checks each startup)
     "ALTER TABLE images ADD COLUMN aesthetic_nima REAL",
-    # Add source_path for directory groups (NULL = custom group, non-NULL = directory group)
+    # → _migrate_renumber_custom_groups_to_level5(), _migrate_initial_directory_groups()
     "ALTER TABLE custom_groups ADD COLUMN source_path TEXT",
+    # → _migrate_add_exif_metadata()
+    "ALTER TABLE images ADD COLUMN exif_data TEXT",
 ]
+
+# SQL schema for the image_metadata table (indexed EXIF key-value pairs for search)
+_SQL_CREATE_IMAGE_METADATA = """
+CREATE TABLE IF NOT EXISTS image_metadata (
+    image_id TEXT NOT NULL REFERENCES images(id) ON DELETE CASCADE,
+    key      TEXT NOT NULL,
+    value    TEXT NOT NULL,
+    PRIMARY KEY (image_id, key)
+)
+"""
 
 # SQL schema for the duplicate_groups table
 _SQL_CREATE_DUPLICATE_GROUPS = """
@@ -345,6 +375,8 @@ _SQL_CREATE_INDEXES = [
     "CREATE INDEX IF NOT EXISTS idx_custom_groups_name ON custom_groups(name)",
     # Unique index for directory group source paths (partial: only non-NULL)
     "CREATE UNIQUE INDEX IF NOT EXISTS idx_custom_groups_source_path ON custom_groups(source_path) WHERE source_path IS NOT NULL",
+    # Index for searching metadata by key+value (e.g. Camera = 'Nikon D850')
+    "CREATE INDEX IF NOT EXISTS idx_image_metadata_key_value ON image_metadata(key, value COLLATE NOCASE)",
 ]
 
 
@@ -400,6 +432,9 @@ def init_database(db_path: Path | str) -> sqlite3.Connection:
     conn.execute(_SQL_CREATE_CUSTOM_GROUPS)
     conn.execute(_SQL_CREATE_MIGRATIONS)
     conn.execute(_SQL_CREATE_METADATA)
+
+    # Create image metadata table (EXIF key-value pairs for search)
+    conn.execute(_SQL_CREATE_IMAGE_METADATA)
 
     # Create face recognition tables
     init_face_tables(conn)
@@ -923,6 +958,9 @@ def get_current_epoch(conn: sqlite3.Connection) -> str | None:
 def get_image(conn: sqlite3.Connection, image_id: str) -> dict[str, Any] | None:
     """Get a single image by ID.
 
+    Does NOT include exif_data — use get_image_exif() for that (lazy-loaded
+    separately to avoid slowing down the info panel and fullscreen viewer).
+
     Args:
         conn: Database connection.
         image_id: UUID of the image.
@@ -939,7 +977,44 @@ def get_image(conn: sqlite3.Connection, image_id: str) -> dict[str, Any] | None:
         WHERE id = ?
     """, (image_id,))
 
-    return row_to_dict(cursor.fetchone())
+    row = cursor.fetchone()
+    if row is None:
+        return None
+
+    return row_to_dict(row)
+
+
+def get_image_exif(conn: sqlite3.Connection, image_id: str) -> dict[str, str] | None:
+    """Get parsed EXIF metadata for a single image.
+
+    Returns the exif_data JSON blob parsed into a dict, or None if no EXIF
+    data is available. Loaded lazily by the frontend when the metadata modal
+    opens, to avoid including it in every image response.
+
+    Args:
+        conn: Database connection.
+        image_id: UUID of the image.
+
+    Returns:
+        Dictionary of EXIF key-value pairs, or None.
+    """
+    cursor = conn.execute(
+        'SELECT exif_data FROM images WHERE id = ? AND deleted = 0',
+        (image_id,)
+    )
+    row = cursor.fetchone()
+    if row is None:
+        return None
+
+    exif_raw = row[0]
+    if exif_raw and isinstance(exif_raw, str):
+        try:
+            parsed = json.loads(exif_raw)
+            # Return None for empty dicts (image had no EXIF)
+            return parsed if parsed else None
+        except (json.JSONDecodeError, TypeError):
+            return None
+    return None
 
 
 def get_image_thumbnail_info(
@@ -984,7 +1059,7 @@ def get_image_by_path(conn: sqlite3.Connection, path: Path | str) -> dict[str, A
         SELECT id, path, basename, size, width, height, timestamp,
                timestamp_confidence, checksum, perceptual_hash, laplacian_var,
                lossless, description, rating, embedding, deleted, created_at,
-               updated_at, mtime, aesthetic_nima
+               updated_at, mtime, aesthetic_nima, exif_data
         FROM images
         WHERE path = ?
     """, (path_str,))
@@ -1008,6 +1083,7 @@ def create_image(
     mtime: float | None = None,
     description: str = '',
     rating: str = '',
+    exif_data: dict[str, str] | None = None,
 ) -> dict[str, Any]:
     """Create a new image record in the database.
 
@@ -1027,6 +1103,8 @@ def create_image(
         mtime: File modification time (Unix timestamp).
         description: User description (default empty).
         rating: User rating emoji string (default empty).
+        exif_data: Normalised EXIF key-value pairs (stored as JSON blob and
+            indexed in image_metadata table for search).
 
     Returns:
         Dictionary with the created image record.
@@ -1039,18 +1117,25 @@ def create_image(
     basename = path.name
     now = datetime.now().isoformat()
     timestamp_str = timestamp.isoformat() if timestamp else None
+    exif_json = json.dumps(exif_data) if exif_data else None
 
     conn.execute("""
         INSERT INTO images (
             id, path, basename, size, width, height, timestamp, timestamp_confidence,
             checksum, perceptual_hash, laplacian_var, lossless, mtime,
-            description, rating, embedding, deleted, created_at, updated_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, 0, ?, ?)
+            description, rating, embedding, deleted, created_at, updated_at,
+            exif_data
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, 0, ?, ?, ?)
     """, (
         image_id, path_str, basename, size, width, height, timestamp_str, timestamp_confidence,
         checksum, perceptual_hash, laplacian_var, int(lossless), mtime,
-        description, rating, now, now
+        description, rating, now, now, exif_json
     ))
+
+    # Populate indexed metadata table for search
+    if exif_data:
+        _upsert_image_metadata(conn, image_id, exif_data)
+
     conn.commit()
 
     logger.debug(f'Created image record: {image_id} ({path})')
@@ -1161,6 +1246,7 @@ def update_image_metadata(
     laplacian_var: float | None,
     lossless: bool,
     mtime: float | None = None,
+    exif_data: dict[str, str] | None = None,
 ) -> bool:
     """Update all computed metadata fields for an image.
 
@@ -1180,12 +1266,15 @@ def update_image_metadata(
         laplacian_var: Laplacian variance.
         lossless: Whether format is lossless.
         mtime: File modification time (Unix timestamp).
+        exif_data: Normalised EXIF key-value pairs (stored as JSON blob and
+            indexed in image_metadata table for search).
 
     Returns:
         True if image was updated, False if not found.
     """
     timestamp_str = timestamp.isoformat() if timestamp else None
     now = datetime.now().isoformat()
+    exif_json = json.dumps(exif_data) if exif_data else None
 
     cursor = conn.execute("""
         UPDATE images SET
@@ -1199,19 +1288,168 @@ def update_image_metadata(
             laplacian_var = ?,
             lossless = ?,
             mtime = ?,
+            exif_data = ?,
             embedding = NULL,
             updated_at = ?
         WHERE id = ?
     """, (
         size, width, height, timestamp_str, timestamp_confidence, checksum,
-        perceptual_hash, laplacian_var, int(lossless), mtime, now, image_id
+        perceptual_hash, laplacian_var, int(lossless), mtime, exif_json, now, image_id
     ))
+
+    # Update indexed metadata table for search
+    if exif_data is not None:
+        _upsert_image_metadata(conn, image_id, exif_data)
+
     conn.commit()
 
     if cursor.rowcount > 0:
         logger.debug(f'Updated metadata for image: {image_id}')
         return True
     return False
+
+
+def _upsert_image_metadata(
+    conn: sqlite3.Connection,
+    image_id: str,
+    exif_data: dict[str, str],
+) -> None:
+    """Insert or replace indexed EXIF key-value pairs for an image.
+
+    Replaces all existing rows for this image with the new data. This
+    is simpler and safer than per-key upserts when metadata changes.
+
+    Args:
+        conn: Database connection.
+        image_id: UUID of the image.
+        exif_data: Dictionary of normalised EXIF key-value pairs.
+    """
+    # Delete old rows, then insert new ones (atomic within caller's commit)
+    conn.execute('DELETE FROM image_metadata WHERE image_id = ?', (image_id,))
+    if exif_data:
+        conn.executemany(
+            'INSERT INTO image_metadata (image_id, key, value) VALUES (?, ?, ?)',
+            [(image_id, k, v) for k, v in exif_data.items()]
+        )
+
+
+def search_image_metadata(
+    conn: sqlite3.Connection,
+    criteria: dict[str, str],
+) -> list[str]:
+    """Search for images matching EXIF metadata criteria.
+
+    Uses subsequence matching on the image_metadata table: each character
+    in the query must appear in order within the value (case-insensitive).
+    Multiple criteria are ANDed together.
+
+    Args:
+        conn: Database connection.
+        criteria: Dictionary of {key: query_text} pairs. Each query uses
+            subsequence matching against the stored values.
+
+    Returns:
+        List of image IDs matching ALL criteria.
+    """
+    if not criteria:
+        return []
+
+    result_sets: list[set[str]] = []
+
+    for key, query in criteria.items():
+        if not query:
+            continue
+
+        # Build SQL LIKE pattern for subsequence matching:
+        # "nkn" → "%n%k%n%" (each char must appear in order)
+        like_parts = ['%']
+        for ch in query:
+            # Escape SQL LIKE special chars
+            if ch in ('%', '_', '\\'):
+                like_parts.append(f'\\{ch}')
+            else:
+                like_parts.append(ch)
+            like_parts.append('%')
+        like_pattern = ''.join(like_parts)
+
+        cursor = conn.execute(
+            """SELECT image_id FROM image_metadata
+               WHERE key = ? AND value LIKE ? ESCAPE '\\'""",
+            (key, like_pattern)
+        )
+        ids = {row[0] for row in cursor.fetchall()}
+        result_sets.append(ids)
+
+    if not result_sets:
+        return []
+
+    # AND logic: intersect all result sets
+    intersection = result_sets[0]
+    for s in result_sets[1:]:
+        intersection &= s
+
+    return list(intersection)
+
+
+def get_metadata_keys(conn: sqlite3.Connection) -> list[str]:
+    """Get all distinct metadata keys present in the database.
+
+    Used to populate the writable metadata filter modal with available
+    keys the user can search by.
+
+    Args:
+        conn: Database connection.
+
+    Returns:
+        Sorted list of distinct key names (e.g. ['Aperture', 'Camera', ...]).
+    """
+    cursor = conn.execute(
+        'SELECT DISTINCT key FROM image_metadata ORDER BY key'
+    )
+    return [row[0] for row in cursor.fetchall()]
+
+
+def get_metadata_values(
+    conn: sqlite3.Connection,
+    key: str,
+) -> list[str]:
+    """Get all distinct values for a given metadata key.
+
+    Used for autocomplete dropdowns in the metadata filter modal.
+
+    Args:
+        conn: Database connection.
+        key: Metadata key name (e.g. 'Camera').
+
+    Returns:
+        Sorted list of distinct values for the key.
+    """
+    cursor = conn.execute(
+        'SELECT DISTINCT value FROM image_metadata WHERE key = ? ORDER BY value',
+        (key,)
+    )
+    return [row[0] for row in cursor.fetchall()]
+
+
+def get_images_without_exif(conn: sqlite3.Connection) -> list[dict[str, Any]]:
+    """Get all non-deleted images that don't have EXIF data extracted.
+
+    NULL exif_data means never attempted; '{}' means attempted but no EXIF found.
+
+    Args:
+        conn: Database connection.
+
+    Returns:
+        List of image dictionaries (id and basename) missing EXIF data.
+    """
+    cursor = conn.execute("""
+        SELECT id, basename
+        FROM images
+        WHERE deleted = 0 AND exif_data IS NULL
+        ORDER BY created_at ASC
+    """)
+
+    return rows_to_dicts(cursor.fetchall())
 
 
 def delete_image(
@@ -1527,6 +1765,7 @@ class ImageMetadata:
         perceptual_hash: Perceptual hash hex string (may be None).
         laplacian_var: Focus/sharpness score (may be None).
         lossless: Whether the format is lossless.
+        exif_data: Normalised EXIF key-value pairs (may be None).
     """
     path: Path
     size: int
@@ -1539,6 +1778,7 @@ class ImageMetadata:
     perceptual_hash: str | None
     laplacian_var: float | None
     lossless: bool
+    exif_data: dict[str, str] | None = None
 
 
 def extract_image_metadata(
@@ -1590,8 +1830,11 @@ def extract_image_metadata(
     # Compute Laplacian variance (may fail for some images)
     laplacian_var = compute_laplacian_variance(path, max_dimension)
 
-    # Derive timestamp with confidence level
-    timestamp, timestamp_confidence = derive_timestamp_with_confidence(path)
+    # Extract all EXIF metadata in one pass (avoids re-opening the file for timestamp)
+    exif_data = extract_exif_data(path)
+
+    # Derive timestamp with confidence level, reusing pre-read EXIF data
+    timestamp, timestamp_confidence = derive_timestamp_with_confidence(path, exif_data=exif_data)
 
     # Check if lossless format
     lossless = is_lossless_format(path)
@@ -1608,6 +1851,7 @@ def extract_image_metadata(
         perceptual_hash=perceptual_hash,
         laplacian_var=laplacian_var,
         lossless=lossless,
+        exif_data=exif_data,
     )
 
 
@@ -1857,6 +2101,7 @@ class IngestionThread(threading.Thread):
                                 laplacian_var=metadata.laplacian_var,
                                 lossless=metadata.lossless,
                                 mtime=metadata.mtime,
+                                exif_data=metadata.exif_data,
                             )
                         needs_embedding = True
 
@@ -1876,6 +2121,21 @@ class IngestionThread(threading.Thread):
                 # Queue for NIMA scoring if missing (independent of embedding)
                 if self._nima_queue is not None and existing.get('aesthetic_nima') is None:
                     self._nima_queue.put(existing['id'])
+                # Backfill EXIF metadata if missing (lightweight I/O, done inline)
+                if existing.get('exif_data') is None:
+                    exif_data = extract_exif_data(path)
+                    exif_json = json.dumps(exif_data) if exif_data else '{}'
+                    with self._db_lock:
+                        self.conn.execute(
+                            'UPDATE images SET exif_data = ? WHERE id = ?',
+                            (exif_json, existing['id'])
+                        )
+                        if exif_data:
+                            _upsert_image_metadata(
+                                self.conn, existing['id'], exif_data
+                            )
+                        self.conn.commit()
+                    logger.debug(f'Backfilled EXIF data for: {path}')
                 if not needs_embedding:
                     logger.debug(f'Skipping unchanged image: {path}')
                 return
@@ -1902,6 +2162,7 @@ class IngestionThread(threading.Thread):
                     laplacian_var=metadata.laplacian_var,
                     lossless=metadata.lossless,
                     mtime=metadata.mtime,
+                    exif_data=metadata.exif_data,
                 )
 
             # Update checksum cache
@@ -1946,6 +2207,7 @@ class IngestionThread(threading.Thread):
                     laplacian_var=metadata.laplacian_var,
                     lossless=metadata.lossless,
                     mtime=metadata.mtime,
+                    exif_data=metadata.exif_data,
                 )
 
             # Add to checksum cache
@@ -3940,6 +4202,7 @@ class ImageDatabase:
         self._migrate_add_timestamp_confidence()
         self._migrate_renumber_custom_groups_to_level5()
         self._migrate_initial_directory_groups()
+        self._migrate_add_exif_metadata()
 
         # Steps 6-7: Start background threads
         self.start_threads()
@@ -4403,6 +4666,36 @@ class ImageDatabase:
             self._duplicate_manager.sync_directory_groups(self.conn, self._db_lock)
         else:
             logger.debug('No images to create directory groups for')
+
+        record_migration(self.conn, migration_id)
+
+    def _migrate_add_exif_metadata(self) -> None:
+        """One-time migration to note the EXIF metadata schema addition.
+
+        The exif_data column and image_metadata table are created by init_db().
+        This migration logs the change and notes that a rescan will backfill
+        EXIF data for existing images automatically.
+
+        Only runs once; tracked via the migrations table.
+        """
+        migration_id = 'add_exif_metadata_v1'
+
+        if has_migration_run(self.conn, migration_id):
+            return
+
+        # Count images that need EXIF extraction
+        cursor = self.conn.execute(
+            'SELECT COUNT(*) as cnt FROM images WHERE deleted = 0 AND exif_data IS NULL'
+        )
+        count = cursor.fetchone()['cnt']
+
+        if count > 0:
+            logger.info(
+                f'Added EXIF metadata support — {count} images will be '
+                f'backfilled on next rescan (one-time migration)'
+            )
+        else:
+            logger.info('Added EXIF metadata support (one-time migration)')
 
         record_migration(self.conn, migration_id)
 
@@ -4911,6 +5204,62 @@ class ImageDatabase:
     def get_image(self, image_id: str) -> dict[str, Any] | None:
         """Get a single image by ID."""
         return get_image(self.conn, image_id)
+
+    def get_image_exif(self, image_id: str) -> dict[str, str] | None:
+        """Get parsed EXIF metadata for a single image (lazy-loaded)."""
+        return get_image_exif(self.conn, image_id)
+
+    def search_image_metadata(self, criteria: dict[str, str]) -> list[str]:
+        """Search for images matching EXIF metadata criteria."""
+        return search_image_metadata(self.conn, criteria)
+
+    def get_metadata_keys(self) -> list[str]:
+        """Get all distinct metadata keys in the database."""
+        return get_metadata_keys(self.conn)
+
+    def get_metadata_values(self, key: str) -> list[str]:
+        """Get all distinct values for a given metadata key."""
+        return get_metadata_values(self.conn, key)
+
+    def get_images_without_exif(self) -> list[dict[str, Any]]:
+        """Get all non-deleted images missing EXIF data."""
+        return get_images_without_exif(self.conn)
+
+    def extract_exif_for_image(self, image_id: str) -> bool:
+        """Extract and store EXIF data for a single image.
+
+        Thread-safe: acquires _db_lock for the database writes.
+        File I/O (EXIF reading) happens outside the lock.
+        """
+        # Read path under lock (quick DB read)
+        with self._db_lock:
+            cursor = self.conn.execute(
+                'SELECT path FROM images WHERE id = ? AND deleted = 0',
+                (image_id,)
+            )
+            row = cursor.fetchone()
+        if not row:
+            return False
+
+        path = Path(row[0])
+        if not path.exists():
+            return False
+
+        # Extract EXIF outside lock (file I/O)
+        exif_data = extract_exif_data(path)
+        exif_json = json.dumps(exif_data) if exif_data else '{}'
+
+        # Write results under lock
+        with self._db_lock:
+            self.conn.execute(
+                'UPDATE images SET exif_data = ? WHERE id = ?',
+                (exif_json, image_id)
+            )
+            if exif_data:
+                _upsert_image_metadata(self.conn, image_id, exif_data)
+            self.conn.commit()
+
+        return bool(exif_data)
 
     def get_checksum(self, image_id: str) -> str | None:
         """Get checksum for an image from RAM cache.

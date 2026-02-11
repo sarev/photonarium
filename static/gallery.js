@@ -1308,6 +1308,10 @@ const Gallery = {
                     <span class="info-label">File size</span>
                     <span class="info-value">${App.formatFileSize(img.size)}</span>
                 </div>
+                <div class="info-row info-row-clickable" id="info-metadata-btn" title="View full image metadata" data-image-id="${img.id}">
+                    <span class="info-label">Metadata</span>
+                    <span class="info-value info-link">View EXIF data \u2192</span>
+                </div>
                 <div class="info-row">
                     <span class="info-label">Date</span>
                     <input type="datetime-local" id="info-timestamp" class="info-input info-timestamp"
@@ -1374,6 +1378,14 @@ const Gallery = {
         const ratingField = App.$('info-rating');
         const timestampField = App.$('info-timestamp');
         const emojiBtn = App.$('info-emoji-btn');
+
+        // Metadata button — opens read-only EXIF dialog
+        const metadataBtn = App.$('info-metadata-btn');
+        if (metadataBtn) {
+            metadataBtn.addEventListener('click', () => {
+                this._showMetadataDialog(imageId, 'readonly');
+            });
+        }
 
         if (descField) {
             descField.addEventListener('blur', () => {
@@ -1451,6 +1463,203 @@ const Gallery = {
             console.error(`Failed to save ${field}:`, error);
             App.showError(`Failed to save ${field}.`);
         }
+    },
+
+    /* ------------------------------------------------------------------
+       METADATA DIALOG
+
+       Shared dialog for viewing EXIF data (read-only mode from Gallery)
+       and selecting metadata filter criteria (writable mode from Search).
+       In read-only mode, filter icons let users pick values to filter by.
+       ------------------------------------------------------------------ */
+
+    /**
+     * Shows the metadata dialog for an image.
+     * In 'readonly' mode, displays EXIF key-value pairs with filter icons.
+     * In 'writable' mode, shows input fields for search criteria.
+     * @param {string} imageId - Image ID to show metadata for
+     * @param {'readonly'|'writable'} mode - Dialog mode
+     * @param {Object} [prefill] - Pre-filled values for writable mode {key: value}
+     * @private
+     */
+    async _showMetadataDialog(imageId, mode = 'readonly', prefill = null) {
+        const dialog = App.$('dialog-metadata');
+        const title = App.$('dialog-metadata-title');
+        const body = App.$('dialog-metadata-body');
+        const actions = App.$('dialog-metadata-actions');
+        if (!dialog || !body) return;
+
+        title.textContent = mode === 'writable' ? 'Metadata Filter' : 'Image Metadata';
+        body.innerHTML = '<p class="metadata-empty">Loading\u2026</p>';
+
+        // Track selected filter criteria in read-only mode
+        const selectedFilters = new Map();
+
+        // Lazy-load EXIF data from dedicated endpoint (not included in image cache)
+        let exifData = null;
+        try {
+            exifData = await AppState.images.fetchExifData(imageId);
+        } catch (e) {
+            console.error('Failed to load image metadata:', e);
+        }
+
+        if (!exifData || Object.keys(exifData).length === 0) {
+            body.innerHTML = '<p class="metadata-empty">No EXIF metadata found for this image.</p>';
+        } else if (mode === 'readonly') {
+            this._renderReadonlyMetadata(body, exifData, selectedFilters);
+        }
+
+        // Render action buttons
+        this._renderMetadataActions(dialog, actions, mode, selectedFilters);
+
+        dialog.showModal();
+    },
+
+    /**
+     * Renders read-only metadata rows with filter-from-example buttons.
+     * @param {HTMLElement} container - Body element to render into
+     * @param {Object} exifData - Key-value EXIF data
+     * @param {Map} selectedFilters - Map to track selected filter criteria
+     * @private
+     */
+    _renderReadonlyMetadata(container, exifData, selectedFilters) {
+        container.innerHTML = '';
+
+        // Preferred display order — keys not in this list appear at the end
+        const keyOrder = [
+            'Camera', 'Lens', 'Focal Length', 'Aperture', 'Shutter Speed',
+            'ISO', 'Exposure Comp', 'Exposure Program', 'Metering', 'Flash',
+            'White Balance', 'Color Space', 'Software', 'Artist', 'Copyright',
+            'GPS', 'Date Taken'
+        ];
+
+        // Sort keys: ordered keys first, then any extras alphabetically
+        const allKeys = Object.keys(exifData);
+        const ordered = keyOrder.filter(k => allKeys.includes(k));
+        const extras = allKeys.filter(k => !keyOrder.includes(k)).sort();
+        const sortedKeys = [...ordered, ...extras];
+
+        const hasMaterial = document.fonts?.check('24px "Material Symbols Outlined"');
+
+        for (const key of sortedKeys) {
+            const value = exifData[key];
+            const row = document.createElement('div');
+            row.className = 'metadata-row';
+
+            const keyEl = document.createElement('span');
+            keyEl.className = 'metadata-key';
+            keyEl.textContent = key;
+            row.appendChild(keyEl);
+
+            const valueEl = document.createElement('span');
+            valueEl.className = 'metadata-value';
+            valueEl.textContent = value;
+            row.appendChild(valueEl);
+
+            // Filter icon button (skip for Date Taken — use the date filter instead)
+            if (key !== 'Date Taken') {
+                const filterBtn = document.createElement('button');
+                filterBtn.className = 'metadata-filter-btn';
+                filterBtn.title = 'Add to search filter';
+
+                if (hasMaterial) {
+                    const icon = document.createElement('span');
+                    icon.className = 'material-symbols-outlined';
+                    icon.textContent = 'filter_alt';
+                    filterBtn.appendChild(icon);
+                } else {
+                    filterBtn.textContent = '\u2767';
+                }
+
+                filterBtn.addEventListener('click', (e) => {
+                    e.stopPropagation();
+                    if (selectedFilters.has(key)) {
+                        selectedFilters.delete(key);
+                        row.classList.remove('metadata-selected');
+                    } else {
+                        selectedFilters.set(key, value);
+                        row.classList.add('metadata-selected');
+                    }
+                    // Update footer buttons based on selection state
+                    this._renderMetadataActions(
+                        App.$('dialog-metadata'),
+                        App.$('dialog-metadata-actions'),
+                        'readonly',
+                        selectedFilters
+                    );
+                });
+
+                row.appendChild(filterBtn);
+            }
+
+            container.appendChild(row);
+        }
+    },
+
+    /**
+     * Renders the action buttons for the metadata dialog.
+     * In read-only mode: "Close" when nothing selected, "Cancel"+"Done" when filters selected.
+     * In writable mode: always "Cancel"+"Done".
+     * @param {HTMLDialogElement} dialog
+     * @param {HTMLElement} actions - Actions container
+     * @param {'readonly'|'writable'} mode
+     * @param {Map} selectedFilters
+     * @private
+     */
+    _renderMetadataActions(dialog, actions, mode, selectedFilters) {
+        actions.innerHTML = '';
+
+        if (mode === 'writable' || (mode === 'readonly' && selectedFilters.size > 0)) {
+            const cancelBtn = document.createElement('button');
+            cancelBtn.className = 'action-btn';
+            cancelBtn.textContent = 'Cancel';
+            cancelBtn.addEventListener('click', () => dialog.close());
+
+            const doneBtn = document.createElement('button');
+            doneBtn.className = 'action-btn primary';
+            doneBtn.textContent = 'Done';
+            doneBtn.addEventListener('click', () => {
+                dialog.close();
+                if (mode === 'readonly' && selectedFilters.size > 0) {
+                    // Navigate to Search with pre-filled metadata chips
+                    this._applyMetadataFilters(selectedFilters);
+                }
+            });
+
+            actions.appendChild(cancelBtn);
+            actions.appendChild(doneBtn);
+        } else {
+            const closeBtn = document.createElement('button');
+            closeBtn.className = 'action-btn primary';
+            closeBtn.textContent = 'Close';
+            closeBtn.addEventListener('click', () => dialog.close());
+            actions.appendChild(closeBtn);
+        }
+    },
+
+    /**
+     * Applies selected metadata filters by navigating to Search screen.
+     * Sets metadata criteria on the filter state and renders chips.
+     * @param {Map} selectedFilters - Map of {key: value} pairs
+     * @private
+     */
+    _applyMetadataFilters(selectedFilters) {
+        // Convert Map to plain object
+        const metadata = {};
+        for (const [key, value] of selectedFilters) {
+            metadata[key] = value;
+        }
+
+        // Navigate to Search screen with metadata pre-filled
+        App.showSearch();
+
+        // Set metadata on the Search module (deferred to allow screen to render)
+        requestAnimationFrame(() => {
+            const searchModule = App.getModule('search');
+            if (searchModule && searchModule.setMetadataFilters) {
+                searchModule.setMetadataFilters(metadata);
+            }
+        });
     },
 
     /**

@@ -266,6 +266,7 @@ AppState.images = (function() {
         }
         const filterEmoji = currentFilter.rating ? [...currentFilter.rating] : null;
         const peopleImageIds = (currentFilter.people && currentFilter.peopleImageIds) || null;
+        const metadataImageIds = currentFilter.metadataImageIds || null;
 
         // Single pass through all images
         const filtered = images.filter(img => {
@@ -283,6 +284,7 @@ AppState.images = (function() {
                 if (!filterEmoji.some(e => img.rating && img.rating.includes(e))) return false;
             }
             if (peopleImageIds && !peopleImageIds.has(String(img.id))) return false;
+            if (metadataImageIds && !metadataImageIds.has(String(img.id))) return false;
             return true;
         });
 
@@ -673,16 +675,30 @@ AppState.images = (function() {
 
         /**
          * Fetch single image by ID.
-         * Uses cache if available.
+         * Uses cache if available; falls back to API for full details.
          * @param {string} id - Image ID
          * @returns {Promise<Object>}
          */
         async fetchById(id) {
-            if (_cache?.has(id)) return _cache.get(id);
+            const cached = _cache?.get(id);
+            if (cached) return cached;
             const response = await App.apiGet(`/images/${id}`);
             const image = response.data;
-            if (_cache && image) _cache.set(image.id, image);
+            if (_cache && image) {
+                _cache.set(image.id, image);
+            }
             return image;
+        },
+
+        /**
+         * Fetch EXIF metadata for a single image (lazy-loaded).
+         * Returns parsed exif_data object, or null if none available.
+         * @param {string} id - Image ID
+         * @returns {Promise<Object|null>}
+         */
+        async fetchExifData(id) {
+            const response = await App.apiGet(`/images/${id}/exif`);
+            return response.data?.exif_data || null;
         },
 
         // --- Similarity Data ---

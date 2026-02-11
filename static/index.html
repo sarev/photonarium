@@ -504,6 +504,19 @@
                         </div>
                     </div>
 
+                    <!-- Metadata filter -->
+                    <div class="filter-group" id="filter-metadata-group">
+                        <label>Metadata</label>
+                        <div class="metadata-filter">
+                            <div id="filter-metadata-chips" class="metadata-chips">
+                                <span class="metadata-placeholder">Click to add metadata filters...</span>
+                            </div>
+                            <button id="btn-metadata-picker" class="toolbar-btn" title="Select metadata criteria">
+                                <span class="icon" data-icon="photo_camera">📷</span>
+                            </button>
+                        </div>
+                    </div>
+
                     <!-- Filter actions -->
                     <div class="filter-actions">
                         <button id="btn-apply-filter" class="action-btn primary">
@@ -665,6 +678,19 @@
                 <div class="dialog-actions">
                     <button id="dialog-group-cancel" class="action-btn">Cancel</button>
                     <button id="dialog-group-done" class="action-btn primary">Done</button>
+                </div>
+            </div>
+        </dialog>
+
+        <!-- Metadata dialog (EXIF data viewer / metadata filter) -->
+        <dialog id="dialog-metadata">
+            <div class="dialog-content dialog-metadata-content">
+                <h3 id="dialog-metadata-title">Image Metadata</h3>
+                <div id="dialog-metadata-body" class="metadata-table-container">
+                    <!-- Populated dynamically by gallery.js / search.js -->
+                </div>
+                <div class="dialog-actions" id="dialog-metadata-actions">
+                    <button id="dialog-metadata-close" class="action-btn primary">Close</button>
                 </div>
             </div>
         </dialog>

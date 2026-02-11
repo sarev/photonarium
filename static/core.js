@@ -1977,6 +1977,15 @@ const App = {
     },
 
     /**
+     * Gets a registered module by name.
+     * @param {string} name - Module name (e.g. 'search', 'gallery')
+     * @returns {Object|undefined} Module object, or undefined if not found
+     */
+    getModule(name) {
+        return this._modules[name];
+    },
+
+    /**
      * Registers a callback to run when the app is ready.
      * If already ready, callback runs immediately.
      * @param {Function} callback - Function to call when ready

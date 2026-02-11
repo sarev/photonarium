@@ -308,8 +308,8 @@ def extract_raw_exif(path: Path | str) -> datetime | None:
 def _parse_exif_datetime(exif_value: str) -> datetime | None:
     """Parse an EXIF datetime string into a datetime object.
 
-    Replicates the logic from timestamps._parse_exif_datetime() to avoid
-    a circular import (timestamps.py imports from us for RAW detection).
+    Replicates the logic from metadata._parse_exif_datetime() to avoid
+    a circular import (metadata.py imports from us for RAW detection).
 
     EXIF datetime format is typically ``YYYY:MM:DD HH:MM:SS``.
 

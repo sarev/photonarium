@@ -81,6 +81,22 @@ const Search = {
     _selectedPeople: [],
 
     /**
+     * Selected metadata criteria for the filter.
+     * Keys are metadata field names, values are filter strings.
+     * @type {Object<string, string>}
+     * @private
+     */
+    _selectedMetadata: {},
+
+    /**
+     * Cache for metadata autocomplete values, keyed by metadata key name.
+     * Populated lazily from /api/metadata-values when the user types.
+     * @type {Object<string, string[]>}
+     * @private
+     */
+    _metadataValuesCache: {},
+
+    /**
      * Get all people sorted by name.
      * Delegates to AppState.people with sorting applied.
      * @returns {Array<Object>} Sorted people list
@@ -125,7 +141,10 @@ const Search = {
             peopleAvailable: App.$('people-picker-available'),
             peopleSelected: App.$('people-picker-selected'),
             peopleDoneBtn: App.$('dialog-people-done'),
-            peopleCancelBtn: App.$('dialog-people-cancel')
+            peopleCancelBtn: App.$('dialog-people-cancel'),
+            // Metadata filter elements
+            metadataChips: App.$('filter-metadata-chips'),
+            metadataPickerBtn: App.$('btn-metadata-picker')
         };
 
         // Check face detection status
@@ -225,6 +244,19 @@ const Search = {
         }
         if (this._els.peoplePickerBtn) {
             this._els.peoplePickerBtn.addEventListener('click', () => this._openPeoplePicker());
+        }
+
+        // Metadata filter events
+        if (this._els.metadataChips) {
+            this._els.metadataChips.addEventListener('click', (e) => {
+                // Only open picker if not clicking a remove button
+                if (!e.target.closest('.metadata-chip-remove')) {
+                    this._openMetadataPicker();
+                }
+            });
+        }
+        if (this._els.metadataPickerBtn) {
+            this._els.metadataPickerBtn.addEventListener('click', () => this._openMetadataPicker());
         }
 
         // People picker dialog events
@@ -603,6 +635,14 @@ const Search = {
                 this._selectedPeople = [];
             }
             this._renderPeopleChips();
+
+            // Populate metadata filter
+            if (filter.metadata && Object.keys(filter.metadata).length > 0) {
+                this._selectedMetadata = { ...filter.metadata };
+            } else {
+                this._selectedMetadata = {};
+            }
+            this._renderMetadataChips();
         } else {
             this._clearForm();
         }
@@ -621,6 +661,8 @@ const Search = {
         this._els.ratingInput.value = '';
         this._selectedPeople = [];
         this._renderPeopleChips();
+        this._selectedMetadata = {};
+        this._renderMetadataChips();
     },
 
     /**
@@ -635,9 +677,11 @@ const Search = {
         const dateEnd = this._els.dateEnd.value;
         const rating = this._els.ratingInput.value.trim();
         const people = this._selectedPeople.length > 0 ? [...this._selectedPeople] : null;
+        const metadata = Object.keys(this._selectedMetadata).length > 0
+            ? { ...this._selectedMetadata } : null;
 
         // Return null if all fields are empty
-        if (!text && !dateStart && !dateEnd && !rating && !people) {
+        if (!text && !dateStart && !dateEnd && !rating && !people && !metadata) {
             return null;
         }
 
@@ -646,7 +690,8 @@ const Search = {
             dateStart: dateStart || null,
             dateEnd: dateEnd || null,
             rating: rating || null,
-            people: people
+            people: people,
+            metadata: metadata
         };
     },
 
@@ -661,7 +706,8 @@ const Search = {
             this._els.dateStart.value ||
             this._els.dateEnd.value ||
             this._els.ratingInput.value.trim() ||
-            this._selectedPeople.length > 0
+            this._selectedPeople.length > 0 ||
+            Object.keys(this._selectedMetadata).length > 0
         );
     },
 
@@ -748,6 +794,21 @@ const Search = {
             }
         }
 
+        // If there are metadata criteria, search for matching images
+        if (filter && filter.metadata) {
+            try {
+                const response = await App.apiPost('/metadata-search', {
+                    criteria: filter.metadata
+                });
+                if (response?.data?.image_ids) {
+                    filter.metadataImageIds = new Set(response.data.image_ids);
+                }
+            } catch (error) {
+                console.error('Metadata search failed:', error);
+                // Continue without metadata filter rather than blocking
+            }
+        }
+
         // Set filter - gallery subscribes to filterChanged event
         App.setFilter(filter);
     },
@@ -769,6 +830,358 @@ const Search = {
         if (navigateToGallery) {
             App.showGallery();
         }
+    },
+
+    /* ----------------------------------------------------------------------
+       METADATA FILTER
+
+       Metadata chip rendering, writable modal with autocomplete, and
+       the public setMetadataFilters() method for filter-from-example.
+       ---------------------------------------------------------------------- */
+
+    /**
+     * Sets metadata filters from external code (e.g. Gallery filter-from-example).
+     * @param {Object} metadata - {key: value} pairs to set as filter criteria
+     */
+    setMetadataFilters(metadata) {
+        this._selectedMetadata = { ...metadata };
+        this._renderMetadataChips();
+    },
+
+    /**
+     * Renders metadata filter chips from the current selection.
+     * @private
+     */
+    _renderMetadataChips() {
+        const container = this._els.metadataChips;
+        if (!container) return;
+
+        container.innerHTML = '';
+
+        const keys = Object.keys(this._selectedMetadata);
+        if (keys.length === 0) {
+            const placeholder = document.createElement('span');
+            placeholder.className = 'metadata-placeholder';
+            placeholder.textContent = 'Click to add metadata filters...';
+            container.appendChild(placeholder);
+            return;
+        }
+
+        for (const key of keys) {
+            const value = this._selectedMetadata[key];
+            const chip = document.createElement('span');
+            chip.className = 'metadata-chip';
+
+            const keySpan = document.createElement('span');
+            keySpan.className = 'metadata-chip-key';
+            keySpan.textContent = key + ':';
+            chip.appendChild(keySpan);
+
+            const valueSpan = document.createElement('span');
+            valueSpan.textContent = ' ' + value;
+            chip.appendChild(valueSpan);
+
+            const removeBtn = document.createElement('button');
+            removeBtn.className = 'metadata-chip-remove';
+            removeBtn.textContent = '\u00D7';
+            removeBtn.title = 'Remove filter';
+            removeBtn.addEventListener('click', (e) => {
+                e.stopPropagation();
+                delete this._selectedMetadata[key];
+                this._renderMetadataChips();
+            });
+            chip.appendChild(removeBtn);
+
+            container.appendChild(chip);
+        }
+    },
+
+    /**
+     * Opens the metadata picker dialog in writable mode.
+     * Shows all known metadata keys with input fields for filter values.
+     * @private
+     */
+    async _openMetadataPicker() {
+        const dialog = App.$('dialog-metadata');
+        const title = App.$('dialog-metadata-title');
+        const body = App.$('dialog-metadata-body');
+        const actions = App.$('dialog-metadata-actions');
+        if (!dialog || !body) return;
+
+        title.textContent = 'Metadata Filter';
+        body.innerHTML = '<p class="metadata-empty">Loading available fields\u2026</p>';
+
+        // Fetch available keys from the backend
+        let keys = [];
+        try {
+            const response = await App.apiGet('/metadata-keys');
+            keys = response?.data?.keys || [];
+        } catch (e) {
+            console.error('Failed to load metadata keys:', e);
+            body.innerHTML = '<p class="metadata-empty">Failed to load metadata fields.</p>';
+        }
+
+        if (keys.length === 0) {
+            body.innerHTML = '<p class="metadata-empty">No metadata available. Run a scan with images that have EXIF data.</p>';
+        } else {
+            this._renderWritableMetadata(body, keys);
+        }
+
+        // Actions: Cancel + Done
+        actions.innerHTML = '';
+        const cancelBtn = document.createElement('button');
+        cancelBtn.className = 'action-btn';
+        cancelBtn.textContent = 'Cancel';
+        cancelBtn.addEventListener('click', () => dialog.close());
+
+        const doneBtn = document.createElement('button');
+        doneBtn.className = 'action-btn primary';
+        doneBtn.textContent = 'Done';
+        doneBtn.addEventListener('click', () => {
+            // Read values from input fields
+            this._selectedMetadata = {};
+            const inputs = body.querySelectorAll('.metadata-input');
+            inputs.forEach(input => {
+                const value = input.value.trim();
+                if (value) {
+                    this._selectedMetadata[input.dataset.key] = value;
+                }
+            });
+            this._renderMetadataChips();
+            dialog.close();
+        });
+
+        actions.appendChild(cancelBtn);
+        actions.appendChild(doneBtn);
+
+        // Handle Escape/Enter keys within dialog
+        const keyHandler = (e) => {
+            e.stopPropagation();
+            if (e.key === 'Escape') {
+                e.preventDefault();
+                dialog.close();
+            } else if (e.key === 'Enter' && !e.target.matches('.metadata-input')) {
+                e.preventDefault();
+                doneBtn.click();
+            }
+        };
+        dialog.addEventListener('keydown', keyHandler);
+        dialog.addEventListener('close', () => {
+            dialog.removeEventListener('keydown', keyHandler);
+        }, { once: true });
+
+        dialog.showModal();
+    },
+
+    /**
+     * Renders writable metadata rows with input fields and autocomplete.
+     * @param {HTMLElement} container - Body element to render into
+     * @param {string[]} keys - Available metadata key names
+     * @private
+     */
+    _renderWritableMetadata(container, keys) {
+        container.innerHTML = '';
+
+        // Preferred display order for common keys
+        const keyOrder = [
+            'Camera', 'Lens', 'Focal Length', 'Aperture', 'Shutter Speed',
+            'ISO', 'Exposure Comp', 'Exposure Program', 'Metering', 'Flash',
+            'White Balance', 'Color Space', 'Software', 'Artist', 'Copyright',
+            'GPS'
+        ];
+
+        // Sort: ordered first, then extras alphabetically. Skip 'Date Taken'.
+        const ordered = keyOrder.filter(k => keys.includes(k));
+        const extras = keys.filter(k => !keyOrder.includes(k) && k !== 'Date Taken').sort();
+        const sortedKeys = [...ordered, ...extras];
+
+        for (const key of sortedKeys) {
+            const row = document.createElement('div');
+            row.className = 'metadata-row metadata-row-writable';
+
+            const keyEl = document.createElement('span');
+            keyEl.className = 'metadata-key';
+            keyEl.textContent = key;
+            row.appendChild(keyEl);
+
+            const inputContainer = document.createElement('div');
+            inputContainer.className = 'metadata-input-container';
+
+            const input = document.createElement('input');
+            input.type = 'text';
+            input.className = 'metadata-input';
+            input.dataset.key = key;
+            input.placeholder = `e.g. ${this._getPlaceholder(key)}`;
+            input.autocomplete = 'off';
+            // Pre-fill from current selection
+            if (this._selectedMetadata[key]) {
+                input.value = this._selectedMetadata[key];
+            }
+
+            const dropdown = document.createElement('div');
+            dropdown.className = 'metadata-autocomplete';
+
+            inputContainer.appendChild(input);
+            inputContainer.appendChild(dropdown);
+            row.appendChild(inputContainer);
+            container.appendChild(row);
+
+            // Autocomplete behaviour
+            this._bindAutocomplete(input, dropdown, key);
+        }
+    },
+
+    /**
+     * Returns a placeholder hint for a metadata key.
+     * @param {string} key - Metadata key name
+     * @returns {string} Placeholder text
+     * @private
+     */
+    _getPlaceholder(key) {
+        const hints = {
+            'Camera': 'Nikon',
+            'Lens': '24-70mm',
+            'Focal Length': '50mm',
+            'Aperture': 'f/2.8',
+            'Shutter Speed': '1/250s',
+            'ISO': '400',
+            'Exposure Comp': '+0.7',
+            'Exposure Program': 'Aperture Priority',
+            'Metering': 'Matrix',
+            'Flash': 'Fired',
+            'White Balance': 'Auto',
+            'Color Space': 'sRGB',
+            'Software': 'Lightroom',
+            'Artist': 'Name',
+            'Copyright': '2024'
+        };
+        return hints[key] || 'value';
+    },
+
+    /**
+     * Binds autocomplete behaviour to a metadata input field.
+     * Fetches values lazily and uses subsequence matching to filter.
+     * @param {HTMLInputElement} input
+     * @param {HTMLElement} dropdown
+     * @param {string} key - Metadata key name
+     * @private
+     */
+    _bindAutocomplete(input, dropdown, key) {
+        let highlightedIndex = -1;
+
+        const updateDropdown = async () => {
+            const query = input.value.trim();
+            if (!query) {
+                dropdown.classList.remove('visible');
+                return;
+            }
+
+            // Lazy-fetch values for this key
+            if (!this._metadataValuesCache[key]) {
+                try {
+                    const resp = await App.apiGet(`/metadata-values?key=${encodeURIComponent(key)}`);
+                    this._metadataValuesCache[key] = resp?.data?.values || [];
+                } catch (e) {
+                    this._metadataValuesCache[key] = [];
+                }
+            }
+
+            const values = this._metadataValuesCache[key];
+            // Subsequence matching: each character in query must appear in order
+            const matches = values.filter(v => this._fuzzyMatch(query, v));
+
+            if (matches.length === 0) {
+                dropdown.classList.remove('visible');
+                return;
+            }
+
+            dropdown.innerHTML = '';
+            highlightedIndex = -1;
+
+            matches.slice(0, 20).forEach((value, i) => {
+                const item = document.createElement('div');
+                item.className = 'metadata-autocomplete-item';
+                item.innerHTML = this._highlightMatch(query, value);
+                item.addEventListener('mousedown', (e) => {
+                    e.preventDefault();  // Prevent blur
+                    input.value = value;
+                    dropdown.classList.remove('visible');
+                });
+                dropdown.appendChild(item);
+            });
+
+            dropdown.classList.add('visible');
+        };
+
+        input.addEventListener('input', updateDropdown);
+        input.addEventListener('focus', updateDropdown);
+        input.addEventListener('blur', () => {
+            // Small delay to allow mousedown on items
+            setTimeout(() => dropdown.classList.remove('visible'), 150);
+        });
+
+        // Keyboard navigation
+        input.addEventListener('keydown', (e) => {
+            const items = dropdown.querySelectorAll('.metadata-autocomplete-item');
+            if (!items.length || !dropdown.classList.contains('visible')) return;
+
+            if (e.key === 'ArrowDown') {
+                e.preventDefault();
+                highlightedIndex = Math.min(highlightedIndex + 1, items.length - 1);
+                items.forEach((it, i) => it.classList.toggle('highlighted', i === highlightedIndex));
+            } else if (e.key === 'ArrowUp') {
+                e.preventDefault();
+                highlightedIndex = Math.max(highlightedIndex - 1, 0);
+                items.forEach((it, i) => it.classList.toggle('highlighted', i === highlightedIndex));
+            } else if (e.key === 'Enter' && highlightedIndex >= 0) {
+                e.preventDefault();
+                e.stopPropagation();
+                input.value = items[highlightedIndex].textContent;
+                dropdown.classList.remove('visible');
+            }
+        });
+    },
+
+    /**
+     * Subsequence (fuzzy) match: each character in query appears in order in value.
+     * Case-insensitive.
+     * @param {string} query
+     * @param {string} value
+     * @returns {boolean}
+     * @private
+     */
+    _fuzzyMatch(query, value) {
+        const q = query.toLowerCase();
+        const v = value.toLowerCase();
+        let qi = 0;
+        for (let vi = 0; vi < v.length && qi < q.length; vi++) {
+            if (v[vi] === q[qi]) qi++;
+        }
+        return qi === q.length;
+    },
+
+    /**
+     * Highlights matching characters in a value for subsequence display.
+     * Wraps matching chars in <mark> tags.
+     * @param {string} query
+     * @param {string} value
+     * @returns {string} HTML with highlighted matches
+     * @private
+     */
+    _highlightMatch(query, value) {
+        const q = query.toLowerCase();
+        const v = value.toLowerCase();
+        let qi = 0;
+        let html = '';
+        for (let vi = 0; vi < value.length; vi++) {
+            if (qi < q.length && v[vi] === q[qi]) {
+                html += `<mark>${App.escapeHtml(value[vi])}</mark>`;
+                qi++;
+            } else {
+                html += App.escapeHtml(value[vi]);
+            }
+        }
+        return html;
     }
 };
 
