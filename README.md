@@ -550,6 +550,8 @@ If you prefer to install manually, or the installer script doesn't suit your set
 
   The app runs entirely offline after models are downloaded.
 
+  **Important:** Imaginary is designed to run locally on the same machine as your images. It has not been hardened for exposure to the public internet or untrusted networks. Do not publish it or make it accessible to others — doing so may introduce security risks that are outside the scope of this project.
+
 ### Command line options
 
 ```bash
