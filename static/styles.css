@@ -3429,7 +3429,7 @@ a:hover {
     font-weight: 500;
 }
 
-/* Custom group stack: name as primary label, count as subtitle */
+/* Named group stack: name as primary label, count as subtitle */
 .duplicate-stack-name {
     margin-top: 0.4rem;
     font-size: 0.8rem;
@@ -3439,6 +3439,14 @@ a:hover {
     overflow: hidden;
     text-overflow: ellipsis;
     max-width: 100%;
+}
+
+/* Directory group names: truncate from the left so the meaningful
+   trailing path components remain visible (e.g. "...Holiday/Beach"
+   instead of "D:/Photos/Holiday/Be..."). */
+.duplicate-stack-name.rtl-ellipsis {
+    direction: rtl;
+    text-align: left;
 }
 
 .duplicate-stack-count-sub {
@@ -3536,6 +3544,48 @@ a:hover {
     opacity: 1;
     visibility: visible;
     transform: translateX(-50%) translateY(0);
+}
+
+/* Info toast — friendly, non-alarming notification with optional action button */
+.info-toast {
+    position: fixed;
+    bottom: 2rem;
+    left: 50%;
+    transform: translateX(-50%) translateY(1rem);
+    padding: 0.75rem 1.25rem;
+    background-color: var(--color-accent);
+    color: var(--color-overlay-text);
+    border-radius: 8px;
+    box-shadow: var(--shadow-lg);
+    font-size: 0.9rem;
+    z-index: 10000;
+    opacity: 0;
+    visibility: hidden;
+    transition: opacity 0.2s, visibility 0.2s, transform 0.2s;
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+}
+
+.info-toast.visible {
+    opacity: 1;
+    visibility: visible;
+    transform: translateX(-50%) translateY(0);
+}
+
+.info-toast-action {
+    background: rgba(255, 255, 255, 0.2);
+    color: inherit;
+    border: 1px solid rgba(255, 255, 255, 0.4);
+    border-radius: 4px;
+    padding: 0.25rem 0.75rem;
+    font-size: 0.8rem;
+    cursor: pointer;
+    white-space: nowrap;
+}
+
+.info-toast-action:hover {
+    background: rgba(255, 255, 255, 0.35);
 }
 
 /* Dialog (modal) base */

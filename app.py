@@ -1095,16 +1095,16 @@ def get_duplicates():
     level = request.args.get('level', 0, type=int)
     since = request.args.get('since')
 
-    # Validate level (0-3 = auto-detected, 4 = custom groups)
-    if level < 0 or level > 4:
-        return error_response('Level must be between 0 and 4')
+    # Validate level (0-3 = auto-detected, 4 = directories, 5 = custom groups)
+    if level < 0 or level > 5:
+        return error_response('Level must be between 0 and 5')
 
     db = get_db()
     status = db.get_duplicate_status().get(level, 'done')
     epoch = db.get_duplicate_epoch()
 
-    # Custom groups (level 4) skip epoch caching — always return fresh data
-    if level != 4 and since and since == epoch and status == 'done':
+    # Named groups (levels 4-5) skip epoch caching — always return fresh data
+    if level < 4 and since and since == epoch and status == 'done':
         return success_response({
             'groups': [],
             'status': status,

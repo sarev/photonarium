@@ -351,7 +351,7 @@ const Gallery = {
             onDeleteRequested: (ids) => {
                 // Backspace/Delete in a custom group context removes from group instead of deleting
                 const filter = App.getFilter();
-                if (filter && filter.type === 'duplicates' && filter.sourceLevel === 4 && filter.groupHash) {
+                if (filter && filter.type === 'duplicates' && filter.sourceLevel === 5 && filter.groupHash) {
                     this._removeFromGroup();
                 } else {
                     this._deleteImages(ids);
@@ -1654,7 +1654,7 @@ const Gallery = {
     _updateDupGroupNavState() {
         const filter = App.getFilter();
         const isDupFilter = filter && filter.type === 'duplicates' && filter.groupHash;
-        const isCustomGroup = isDupFilter && filter.sourceLevel === 4;
+        const isCustomGroup = isDupFilter && filter.sourceLevel === 5;
 
         // Show/hide buttons and separator
         const show = isDupFilter;
@@ -1795,8 +1795,8 @@ const Gallery = {
         const dialog = document.getElementById('dialog-group-picker');
         if (!dialog) return;
 
-        // Ensure level 4 is loaded
-        await AppState.duplicates.loadLevel(4);
+        // Ensure level 5 (custom groups) is loaded
+        await AppState.duplicates.loadLevel(5);
 
         // Store state for the picker session
         this._groupPickerState = {
@@ -2056,12 +2056,12 @@ const Gallery = {
 
     /**
      * Removes selected images from the current custom group.
-     * Only active when viewing a level-4 group in the gallery.
+     * Only active when viewing a level-5 group in the gallery.
      * @private
      */
     async _removeFromGroup() {
         const filter = App.getFilter();
-        if (!filter || filter.type !== 'duplicates' || filter.sourceLevel !== 4 || !filter.groupHash) return;
+        if (!filter || filter.type !== 'duplicates' || filter.sourceLevel !== 5 || !filter.groupHash) return;
 
         const selectedIds = App.getSelectedImages();
         if (selectedIds.length === 0) return;

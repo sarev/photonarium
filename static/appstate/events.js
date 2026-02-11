@@ -174,6 +174,14 @@ AppState.events = (function() {
             AppState.images.reload();
         }
 
+        // Invalidate duplicate group caches (levels 0-4) — recomputed during processing.
+        // Level 5 (custom groups) is unaffected by processing.
+        if (AppState.duplicates?.invalidate) {
+            for (let level = 0; level <= 4; level++) {
+                AppState.duplicates.invalidate(level);
+            }
+        }
+
         // Notify folders domain that processing is complete
         // This triggers databaseChanged broadcast for screens that care
         if (AppState.folders?.setStatus) {
@@ -212,6 +220,11 @@ AppState.events = (function() {
         // so next access triggers a reload (avoids disruptive background reload)
         if (AppState.images?.invalidate) {
             AppState.images.invalidate();
+        }
+
+        // Invalidate directory groups cache (level 4) — folder removal triggers re-sync
+        if (AppState.duplicates?.invalidate) {
+            AppState.duplicates.invalidate(4);
         }
 
         broadcast({ type: 'folderRemoved', folder: data?.folder });

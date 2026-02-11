@@ -154,7 +154,7 @@
                     <div class="toolbar-separator"></div>
                     <div class="similarity-control">
                         <label for="similarity-slider">Group:</label>
-                        <input type="range" id="similarity-slider" min="0" max="4" value="0" step="1">
+                        <input type="range" id="similarity-slider" min="0" max="5" value="0" step="1">
                         <span id="similarity-label">Identical</span>
                     </div>
                     <div class="toolbar-separator auto-level-control"></div>
@@ -184,7 +184,7 @@
                     <button id="btn-group-delete" class="toolbar-btn custom-group-control" title="Delete selected group" hidden disabled>
                         <span class="icon" data-icon="delete">&#x1F5D1;</span>
                     </button>
-                    <input type="text" id="dup-group-filter" class="semantic-query-input custom-group-control" placeholder="Filter groups by name..." hidden>
+                    <input type="text" id="dup-group-filter" class="semantic-query-input named-group-control custom-group-control" placeholder="Filter groups by name..." hidden>
                 </div>
 
                 <!-- Database controls (visible when data-screen="database") -->
@@ -292,7 +292,7 @@
                         <button id="btn-dup-sort-size" class="toolbar-btn active auto-level-control" title="Sort by group size">
                             <span class="icon" data-icon="sort">⇅</span>
                         </button>
-                        <button id="btn-dup-sort-alpha" class="toolbar-btn custom-group-control" title="Sort alphabetically" hidden>
+                        <button id="btn-dup-sort-alpha" class="toolbar-btn named-group-control custom-group-control" title="Sort alphabetically" hidden>
                             <span class="icon" data-icon="sort_by_alpha">AZ</span>
                         </button>
                         <button id="btn-dup-sort-people" class="toolbar-btn" title="Sort by people">

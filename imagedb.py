@@ -286,6 +286,8 @@ _SQL_MIGRATIONS = [
     "ALTER TABLE images ADD COLUMN aesthetic_laion REAL",
     # Add NIMA aesthetic score (VGG16-AVA weighted mean, range 1-10)
     "ALTER TABLE images ADD COLUMN aesthetic_nima REAL",
+    # Add source_path for directory groups (NULL = custom group, non-NULL = directory group)
+    "ALTER TABLE custom_groups ADD COLUMN source_path TEXT",
 ]
 
 # SQL schema for the duplicate_groups table
@@ -300,11 +302,12 @@ CREATE TABLE IF NOT EXISTS duplicate_groups (
 )
 """
 
-# SQL schema for tracking one-time migrations
+# SQL schema for custom/directory groups metadata
 _SQL_CREATE_CUSTOM_GROUPS = """
 CREATE TABLE IF NOT EXISTS custom_groups (
     group_hash  TEXT PRIMARY KEY,
     name        TEXT NOT NULL,
+    source_path TEXT,
     created_at  TEXT NOT NULL,
     updated_at  TEXT NOT NULL
 )
@@ -340,6 +343,8 @@ _SQL_CREATE_INDEXES = [
     "CREATE INDEX IF NOT EXISTS idx_dup_image_id ON duplicate_groups(image_id)",
     # Index for custom group name lookups
     "CREATE INDEX IF NOT EXISTS idx_custom_groups_name ON custom_groups(name)",
+    # Unique index for directory group source paths (partial: only non-NULL)
+    "CREATE UNIQUE INDEX IF NOT EXISTS idx_custom_groups_source_path ON custom_groups(source_path) WHERE source_path IS NOT NULL",
 ]
 
 
@@ -3933,6 +3938,8 @@ class ImageDatabase:
         self._migrate_recalculate_timestamps()
         self._migrate_duplicate_epoch_to_metadata()
         self._migrate_add_timestamp_confidence()
+        self._migrate_renumber_custom_groups_to_level5()
+        self._migrate_initial_directory_groups()
 
         # Steps 6-7: Start background threads
         self.start_threads()
@@ -4342,6 +4349,63 @@ class ImageDatabase:
         record_migration(self.conn, migration_id)
         logger.info(f'        Updated {updated} images with timestamp_confidence')
 
+    def _migrate_renumber_custom_groups_to_level5(self) -> None:
+        """One-time migration to move custom groups from level 4 to level 5.
+
+        This makes room for directory groups at level 4. All existing custom
+        group membership rows in duplicate_groups are renumbered.
+
+        Only runs once; tracked via the migrations table.
+        """
+        migration_id = 'renumber_custom_groups_to_level5'
+
+        if has_migration_run(self.conn, migration_id):
+            return
+
+        cursor = self.conn.execute(
+            'SELECT COUNT(*) as cnt FROM duplicate_groups WHERE level = 4'
+        )
+        count = cursor.fetchone()['cnt']
+
+        if count > 0:
+            self.conn.execute('UPDATE duplicate_groups SET level = 5 WHERE level = 4')
+            self.conn.commit()
+            logger.info(f'Migrated {count} custom group membership rows from level 4 to level 5')
+        else:
+            logger.debug('No custom group rows to migrate (level 4 → 5)')
+
+        record_migration(self.conn, migration_id)
+
+    def _migrate_initial_directory_groups(self) -> None:
+        """One-time migration to create directory groups for existing images.
+
+        For databases that already have indexed images but were created before
+        the directory groups feature existed, this runs sync_directory_groups()
+        once at startup so that the Directories level is immediately populated.
+
+        Subsequent syncs happen automatically at the end of each processing cycle.
+
+        Only runs once; tracked via the migrations table.
+        """
+        migration_id = 'initial_directory_groups'
+
+        if has_migration_run(self.conn, migration_id):
+            return
+
+        # Check if there are any images to group
+        cursor = self.conn.execute(
+            'SELECT COUNT(*) as cnt FROM images WHERE deleted = 0'
+        )
+        count = cursor.fetchone()['cnt']
+
+        if count > 0:
+            logger.info(f'Creating initial directory groups for {count} images (one-time migration)...')
+            self._duplicate_manager.sync_directory_groups(self.conn, self._db_lock)
+        else:
+            logger.debug('No images to create directory groups for')
+
+        record_migration(self.conn, migration_id)
+
     def _load_checksum_cache(self) -> None:
         """Load all image_id -> checksum mappings into RAM.
 
@@ -4488,8 +4552,14 @@ class ImageDatabase:
 
         # Final completion callback (after all processing including faces)
         def on_final_complete():
+            # Sync directory groups — lightweight DB operation that mirrors
+            # filesystem folders as browse-able groups. Runs regardless of
+            # whether face grouping was requested.
+            self._duplicate_manager.sync_directory_groups(self.conn, self._db_lock)
+
             if not self._run_face_grouping:
                 logger.info('Skipping grouping phase (use --group-faces or GUI Rescan)')
+                emit_processing_complete(self.event_queue)
                 return
             # Clean up people with no faces
             with self._db_lock:
@@ -4745,6 +4815,8 @@ class ImageDatabase:
                 # Clean up duplicate groups for orphaned images
                 if orphaned_ids:
                     self._duplicate_manager.invalidate_images(orphaned_ids)
+                # Re-sync directory groups (removes groups for the deleted folder)
+                self._duplicate_manager.sync_directory_groups(self.conn, self._db_lock)
                 emit_folder_removed(self.event_queue, path)
 
             return result

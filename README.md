@@ -21,7 +21,7 @@ Find out more about the motivations behind Imaginary in [`BACKGROUND.md`](BACKGR
 - **Fast browsing** with a thumbnail grid that stays smooth on large libraries
 - **AI search** that understands what you type (for example: "sunset over mountains", "birthday cake"), with negative terms to exclude concepts (e.g. "beach -people")
 - **Face workflows**: detect faces, group unknowns, name people, and use those names later
-- **Duplicate finding** at multiple strictness levels (identical, near-identical, similar, related) plus user-curated **custom groups** (albums)
+- **Duplicate finding** at multiple strictness levels (identical, near-identical, similar, related) plus auto-generated **directory groups** and user-curated **custom groups** (albums)
 - **Ratings and descriptions** so you can build your own “favourites” system
 
 Once you have run the model downloader, the models stay on your machine. Everything runs locally.
@@ -269,6 +269,15 @@ Groups helps you clean up your library by finding duplicates and also lets you o
   - **Related**, **Similar**, **Near-identical**, **Identical**
 - Double click a stack (or press **Enter**) to open that group in the Gallery, automatically sorted by quality with the best image selected.
 - While viewing a group in the Gallery, use **Alt + Left / Right** to move between groups.
+
+### Directory groups
+
+Slide to **Directories** to see your images organised by folder. Directory groups are automatically created and kept in sync whenever a folder is scanned:
+
+- Each directory that contains images becomes a group, named after the folder.
+- When two folders share the same name, parent directories are added to make names unique (e.g. `Holiday/Beach` vs `Birthday/Beach`).
+- Hover over a directory group name to see the full path.
+- Directory groups are read-only — they mirror the filesystem and update automatically.
 
 ### Custom groups (albums)
 

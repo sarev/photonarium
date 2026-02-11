@@ -7,9 +7,10 @@
  * - Level 1: Near-identical (perceptual hash)
  * - Level 2: Similar (high embedding similarity)
  * - Level 3: Related (lower embedding similarity)
- * - Level 4: Custom groups (user-curated albums)
+ * - Level 4: Directory groups (auto-generated from folder structure)
+ * - Level 5: Custom groups (user-curated albums)
  *
- * Levels 0-3 are auto-computed; level 4 is user-managed with overlap
+ * Levels 0-3 are auto-computed; levels 4-5 are named groups with overlap
  * allowed (same image in multiple groups) and groups that persist
  * even when empty.
  *
@@ -75,8 +76,8 @@ AppState.duplicates = (function() {
          * Called when image is deleted.
          *
          * For auto levels (0-3): dissolves groups with <= 1 image.
-         * For custom groups (level 4): removes image but keeps the group
-         * (custom groups persist even when empty).
+         * For named groups (levels 4-5): removes image but keeps the group
+         * (named groups persist even when empty).
          *
          * @param {string} imageId - Image ID to remove
          */
@@ -86,7 +87,7 @@ AppState.duplicates = (function() {
             for (const level of Object.keys(_groupCache)) {
                 const groups = _groupCache[level];
                 if (!groups) continue;
-                const isCustom = parseInt(level, 10) === 4;
+                const isNamed = parseInt(level, 10) >= 4;
 
                 for (let i = groups.length - 1; i >= 0; i--) {
                     const group = groups[i];
@@ -98,8 +99,8 @@ AppState.duplicates = (function() {
                         changed = true;
 
                         // Auto levels: remove group if only 1 image left
-                        // Custom groups: keep group even when empty
-                        if (!isCustom && group.image_ids.length <= 1) {
+                        // Named groups (4-5): keep group even when empty
+                        if (!isNamed && group.image_ids.length <= 1) {
                             groups.splice(i, 1);
                         }
                     }
@@ -170,12 +171,12 @@ AppState.duplicates = (function() {
     // =========================================================================
 
     /**
-     * Create a backup of level-4 groups for rollback.
-     * @returns {Array} Deep copy of level-4 group cache
+     * Create a backup of level-5 (custom) groups for rollback.
+     * @returns {Array} Deep copy of level-5 group cache
      * @private
      */
-    function _backupLevel4() {
-        const groups = _groupCache[4];
+    function _backupLevel5() {
+        const groups = _groupCache[5];
         if (!groups) return [];
         return groups.map(g => ({
             ...g,
@@ -184,13 +185,13 @@ AppState.duplicates = (function() {
     }
 
     /**
-     * Restore level-4 groups from a backup.
+     * Restore level-5 (custom) groups from a backup.
      * @param {Array} backup - Previously saved backup
      * @private
      */
-    function _restoreLevel4(backup) {
+    function _restoreLevel5(backup) {
         transaction(() => {
-            _groupCache[4] = backup;
+            _groupCache[5] = backup;
             markDirty(domainRef);
         });
     }
@@ -225,8 +226,8 @@ AppState.duplicates = (function() {
         /**
          * Load duplicate groups for a similarity level.
          * Automatically starts polling if computation is in progress.
-         * Level 4 (custom groups) never polls — status is always 'done'.
-         * @param {number} level - Similarity level (0-4)
+         * Levels 4-5 (named groups) never poll — status is always 'done'.
+         * @param {number} level - Similarity level (0-5)
          * @param {boolean} [force=false] - Force reload even if cached
          * @returns {Promise<Array>} Duplicate groups
          */
@@ -251,8 +252,8 @@ AppState.duplicates = (function() {
                 const status = data.status;
                 _computing = status === 'computing' || status === 'pending';
 
-                // Start polling if computation in progress (not for custom groups)
-                if (level !== 4) {
+                // Start polling if computation in progress (not for named groups)
+                if (level < 4) {
                     _startPollingIfNeeded(level, status);
                 }
 
@@ -287,21 +288,21 @@ AppState.duplicates = (function() {
         },
 
         /**
-         * Get custom groups (level 4).
+         * Get custom groups (level 5).
          * @returns {Array} Custom group objects with name, count, image_ids, best_image
          */
         getCustomGroups() {
-            return _groupCache[4] || [];
+            return _groupCache[5] || [];
         },
 
         /**
-         * Get level-4 groups that contain ALL of the given image IDs.
+         * Get level-5 (custom) groups that contain ALL of the given image IDs.
          * Used by the Group Picker to show which groups the selected images share.
          * @param {string[]} imageIds - Image IDs to check
          * @returns {Array} Custom groups containing all the given images
          */
         getGroupsForImages(imageIds) {
-            const groups = _groupCache[4] || [];
+            const groups = _groupCache[5] || [];
             if (!imageIds || imageIds.length === 0) return [];
             return groups.filter(g =>
                 imageIds.every(id => g.image_ids.includes(id))
@@ -314,8 +315,8 @@ AppState.duplicates = (function() {
          * @returns {{status: string, progress: number, total: number}|null}
          */
         getStatus(level) {
-            // Custom groups have no computation phase
-            if (level === 4) return { status: 'done', progress: 0, total: 0 };
+            // Named groups (directory + custom) have no computation phase
+            if (level >= 4) return { status: 'done', progress: 0, total: 0 };
             return _statusCache[level] || null;
         },
 
@@ -338,7 +339,7 @@ AppState.duplicates = (function() {
 
         /**
          * Set currently selected level.
-         * @param {number} level - Similarity level (0-4)
+         * @param {number} level - Similarity level (0-5)
          */
         setCurrentLevel(level) {
             _currentLevel = level;
@@ -390,7 +391,7 @@ AppState.duplicates = (function() {
             }
         },
 
-        // --- Actions (custom groups, level 4) ---
+        // --- Actions (custom groups, level 5) ---
 
         /**
          * Create a new custom group (album).
@@ -403,12 +404,12 @@ AppState.duplicates = (function() {
          */
         async createGroup(name, imageIds = []) {
             const groupHash = crypto.randomUUID();
-            const backup = _backupLevel4();
+            const backup = _backupLevel5();
 
             // Phase 1: Synchronous optimistic update
             transaction(() => {
-                if (!_groupCache[4]) _groupCache[4] = [];
-                _groupCache[4].push({
+                if (!_groupCache[5]) _groupCache[5] = [];
+                _groupCache[5].push({
                     group_hash: groupHash,
                     name: name,
                     count: imageIds.length,
@@ -426,9 +427,9 @@ AppState.duplicates = (function() {
                     image_ids: imageIds,
                 });
                 // Reload to get best_image from backend
-                await this.loadLevel(4, true);
+                await this.loadLevel(5, true);
             } catch (err) {
-                _restoreLevel4(backup);
+                _restoreLevel5(backup);
                 broadcastError(err.message || 'Failed to create group');
                 throw err;
             }
@@ -444,11 +445,11 @@ AppState.duplicates = (function() {
          * @returns {Promise<void>}
          */
         async renameGroup(groupHash, name) {
-            const backup = _backupLevel4();
+            const backup = _backupLevel5();
 
             // Phase 1: Synchronous optimistic update
             transaction(() => {
-                const groups = _groupCache[4] || [];
+                const groups = _groupCache[5] || [];
                 const group = groups.find(g => g.group_hash === groupHash);
                 if (group) group.name = name;
                 markDirty(domainRef);
@@ -458,7 +459,7 @@ AppState.duplicates = (function() {
             try {
                 await App.apiPatch(`/groups/${groupHash}`, { name });
             } catch (err) {
-                _restoreLevel4(backup);
+                _restoreLevel5(backup);
                 broadcastError(err.message || 'Failed to rename group');
                 throw err;
             }
@@ -471,12 +472,12 @@ AppState.duplicates = (function() {
          * @returns {Promise<void>}
          */
         async deleteGroup(groupHash) {
-            const backup = _backupLevel4();
+            const backup = _backupLevel5();
 
             // Phase 1: Synchronous optimistic update
             transaction(() => {
-                if (_groupCache[4]) {
-                    _groupCache[4] = _groupCache[4].filter(g => g.group_hash !== groupHash);
+                if (_groupCache[5]) {
+                    _groupCache[5] = _groupCache[5].filter(g => g.group_hash !== groupHash);
                 }
                 markDirty(domainRef);
             });
@@ -485,7 +486,7 @@ AppState.duplicates = (function() {
             try {
                 await App.apiDelete(`/groups/${groupHash}`);
             } catch (err) {
-                _restoreLevel4(backup);
+                _restoreLevel5(backup);
                 broadcastError(err.message || 'Failed to delete group');
                 throw err;
             }
@@ -500,11 +501,11 @@ AppState.duplicates = (function() {
          */
         async addImages(groupHash, imageIds) {
             if (!imageIds || imageIds.length === 0) return;
-            const backup = _backupLevel4();
+            const backup = _backupLevel5();
 
             // Phase 1: Synchronous optimistic update
             transaction(() => {
-                const groups = _groupCache[4] || [];
+                const groups = _groupCache[5] || [];
                 const group = groups.find(g => g.group_hash === groupHash);
                 if (group) {
                     // Only add images not already in the group
@@ -523,9 +524,9 @@ AppState.duplicates = (function() {
             try {
                 await App.apiPost(`/groups/${groupHash}/images`, { image_ids: imageIds });
                 // Reload to update best_image
-                await this.loadLevel(4, true);
+                await this.loadLevel(5, true);
             } catch (err) {
-                _restoreLevel4(backup);
+                _restoreLevel5(backup);
                 broadcastError(err.message || 'Failed to add images to group');
                 throw err;
             }
@@ -540,11 +541,11 @@ AppState.duplicates = (function() {
          */
         async removeImages(groupHash, imageIds) {
             if (!imageIds || imageIds.length === 0) return;
-            const backup = _backupLevel4();
+            const backup = _backupLevel5();
 
             // Phase 1: Synchronous optimistic update
             transaction(() => {
-                const groups = _groupCache[4] || [];
+                const groups = _groupCache[5] || [];
                 const group = groups.find(g => g.group_hash === groupHash);
                 if (group) {
                     const removeSet = new Set(imageIds);
@@ -566,9 +567,9 @@ AppState.duplicates = (function() {
             try {
                 await App.apiPost(`/groups/${groupHash}/images/remove`, { image_ids: imageIds });
                 // Reload to get updated best_image from backend
-                await this.loadLevel(4, true);
+                await this.loadLevel(5, true);
             } catch (err) {
-                _restoreLevel4(backup);
+                _restoreLevel5(backup);
                 broadcastError(err.message || 'Failed to remove images from group');
                 throw err;
             }

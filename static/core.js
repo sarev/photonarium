@@ -1308,6 +1308,54 @@ const App = {
         }, duration);
     },
 
+    /**
+     * Shows a non-intrusive info toast with an optional action button.
+     * Auto-dismisses after the given duration. Clicking the action button
+     * triggers the callback and dismisses immediately.
+     *
+     * @param {string} message - Info message to display
+     * @param {Object} [options] - Optional configuration
+     * @param {string} [options.actionLabel] - Label for the action button
+     * @param {Function} [options.onAction] - Callback when action button is clicked
+     * @param {number} [options.duration=5000] - Auto-dismiss time in ms
+     */
+    showInfo(message, options = {}) {
+        const { actionLabel, onAction, duration = 5000 } = options;
+
+        let toast = document.getElementById('info-toast');
+        if (!toast) {
+            toast = document.createElement('div');
+            toast.id = 'info-toast';
+            toast.className = 'info-toast';
+            (document.getElementById('app') || document.body).appendChild(toast);
+        }
+
+        // Build content: message text + optional action button
+        toast.textContent = '';
+        const textSpan = document.createElement('span');
+        textSpan.textContent = message;
+        toast.appendChild(textSpan);
+
+        if (actionLabel && onAction) {
+            const btn = document.createElement('button');
+            btn.className = 'info-toast-action';
+            btn.textContent = actionLabel;
+            btn.addEventListener('click', () => {
+                toast.classList.remove('visible');
+                clearTimeout(toast._hideTimeout);
+                onAction();
+            });
+            toast.appendChild(btn);
+        }
+
+        toast.classList.add('visible');
+
+        clearTimeout(toast._hideTimeout);
+        toast._hideTimeout = setTimeout(() => {
+            toast.classList.remove('visible');
+        }, duration);
+    },
+
     /* ----------------------------------------------------------------------
        DIALOG SYSTEM
 

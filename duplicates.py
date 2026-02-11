@@ -2,12 +2,14 @@
 Duplicate detection and group management for the Imaginary application.
 
 This module provides the DuplicateManager class which handles all duplicate
-detection across 4 similarity levels:
+detection across 6 group levels:
 
 - Level 0: Identical (same SHA256 checksum)
 - Level 1: Near-identical (perceptual hash within Hamming distance threshold)
 - Level 2: Similar (high OpenCLIP embedding cosine similarity)
 - Level 3: Related (lower embedding similarity threshold)
+- Level 4: Directories (auto-generated from filesystem directory structure)
+- Level 5: Custom (user-curated albums)
 
 The module uses several optimization techniques:
 - Multi-index hashing (LSH) for level 1 to avoid O(n²) comparisons
@@ -30,6 +32,10 @@ from config import Config, get_default_config
 
 logger = logging.getLogger(__name__)
 
+# Semantic constants for group levels (avoids magic numbers throughout)
+LEVEL_DIRECTORY = 4   # Auto-generated groups mirroring filesystem directories
+LEVEL_CUSTOM = 5      # User-curated albums/groups
+
 
 # =============================================================================
 # UTILITY FUNCTIONS
@@ -45,6 +51,62 @@ def embedding_to_numpy(embedding_bytes: bytes) -> np.ndarray:
         Numpy array of the embedding vector.
     """
     return np.frombuffer(embedding_bytes, dtype=np.float32)
+
+
+def _compute_unique_dir_names(dir_paths: list[str]) -> dict[str, str]:
+    """Compute shortest-unique-suffix display names for a list of directories.
+
+    When multiple directories share the same basename (e.g. .../Holiday/Beach
+    and .../Birthday/Beach), parent path components are prepended until every
+    name is unique.  Single-occurrence basenames stay as-is.
+
+    Uses os.sep-aware splitting so it works on both Windows (backslash) and
+    Unix (forward slash) paths.
+
+    Args:
+        dir_paths: List of absolute directory paths.
+
+    Returns:
+        Dict mapping each full path to its shortest unique display name.
+    """
+    import os
+
+    if not dir_paths:
+        return {}
+
+    # Split each path into its components (reversed for suffix building)
+    parts_map: dict[str, list[str]] = {}
+    for p in dir_paths:
+        # Normalise to platform separator, then split
+        normalised = os.path.normpath(p)
+        parts_map[p] = normalised.replace('\\', '/').rstrip('/').split('/')
+
+    # Start with just the basename (last component)
+    names: dict[str, str] = {}
+    for p, parts in parts_map.items():
+        names[p] = parts[-1] if parts else p
+
+    # Iteratively resolve collisions by prepending parent components
+    max_depth = max(len(parts) for parts in parts_map.values())
+    for depth in range(2, max_depth + 1):
+        # Find collisions (same display name for different paths)
+        name_to_paths: dict[str, list[str]] = {}
+        for p, name in names.items():
+            name_to_paths.setdefault(name, []).append(p)
+
+        collisions = {name: paths for name, paths in name_to_paths.items() if len(paths) > 1}
+        if not collisions:
+            break
+
+        # Expand only the colliding entries
+        for _name, paths in collisions.items():
+            for p in paths:
+                parts = parts_map[p]
+                # Take up to `depth` trailing components
+                suffix_parts = parts[-depth:] if depth <= len(parts) else parts
+                names[p] = '/'.join(suffix_parts)
+
+    return names
 
 
 def compute_cosine_similarity(embedding1: np.ndarray, embedding2: np.ndarray) -> float:
@@ -1513,7 +1575,8 @@ class DuplicateManager:
     """Manages duplicate detection and grouping for images.
 
     This class encapsulates all duplicate-related functionality:
-    - Computing duplicates at all 4 levels
+    - Computing duplicates at all 4 auto-detected levels (0-3)
+    - Directory groups (level 4) and custom groups (level 5)
     - Incremental updates for small batches
     - Status tracking per level
     - Group retrieval with in-memory caching
@@ -1539,7 +1602,7 @@ class DuplicateManager:
         self._db_path = db_path
         self._config = config or get_default_config()
         self._status_lock = threading.Lock()
-        self._status: dict[int, str] = {0: 'pending', 1: 'pending', 2: 'pending', 3: 'pending', 4: 'done'}
+        self._status: dict[int, str] = {0: 'pending', 1: 'pending', 2: 'pending', 3: 'pending'}
 
         # In-memory group cache (lazy loaded)
         self._cache_lock = threading.Lock()
@@ -1571,8 +1634,8 @@ class DuplicateManager:
                 return
 
             logger.debug('Loading duplicate group cache from database')
-            self._group_cache = {0: {}, 1: {}, 2: {}, 3: {}, 4: {}}
-            self._image_to_group = {0: {}, 1: {}, 2: {}, 3: {}, 4: {}}
+            self._group_cache = {0: {}, 1: {}, 2: {}, 3: {}, LEVEL_DIRECTORY: {}, LEVEL_CUSTOM: {}}
+            self._image_to_group = {0: {}, 1: {}, 2: {}, 3: {}, LEVEL_DIRECTORY: {}, LEVEL_CUSTOM: {}}
 
             conn = self._get_db()
             try:
@@ -1594,34 +1657,38 @@ class DuplicateManager:
                         self._group_cache[level][group_hash].add(image_id)
                         self._image_to_group[level][image_id] = group_hash
 
-                # Load custom groups (level 4) — images can belong to multiple groups
-                cursor = conn.execute("""
-                    SELECT dg.group_hash, dg.image_id
-                    FROM duplicate_groups dg
-                    JOIN images i ON i.id = dg.image_id
-                    WHERE dg.level = 4 AND i.deleted = 0
-                """)
-                for row in cursor.fetchall():
-                    group_hash = row['group_hash']
-                    image_id = row['image_id']
-                    if group_hash not in self._group_cache[4]:
-                        self._group_cache[4][group_hash] = set()
-                    self._group_cache[4][group_hash].add(image_id)
-                    # Level 4 allows overlap: _image_to_group[4] is not used
-                    # (an image can be in multiple custom groups)
+                # Load named groups (levels 4 and 5) — images can belong to multiple groups
+                for named_level in (LEVEL_DIRECTORY, LEVEL_CUSTOM):
+                    cursor = conn.execute("""
+                        SELECT dg.group_hash, dg.image_id
+                        FROM duplicate_groups dg
+                        JOIN images i ON i.id = dg.image_id
+                        WHERE dg.level = ? AND i.deleted = 0
+                    """, (named_level,))
+                    for row in cursor.fetchall():
+                        group_hash = row['group_hash']
+                        image_id = row['image_id']
+                        if group_hash not in self._group_cache[named_level]:
+                            self._group_cache[named_level][group_hash] = set()
+                        self._group_cache[named_level][group_hash].add(image_id)
+                        # Named levels allow overlap: _image_to_group is not used
+                        # (an image can be in multiple directory/custom groups)
 
                 # Also load empty custom groups (they persist when empty)
+                # source_path IS NULL = custom groups (level 5)
+                # source_path IS NOT NULL = directory groups (level 4)
                 cursor = conn.execute("""
-                    SELECT cg.group_hash
+                    SELECT cg.group_hash,
+                           CASE WHEN cg.source_path IS NOT NULL THEN ? ELSE ? END AS level
                     FROM custom_groups cg
                     WHERE cg.group_hash NOT IN (
                         SELECT DISTINCT dg.group_hash
                         FROM duplicate_groups dg
-                        WHERE dg.level = 4
+                        WHERE dg.level IN (?, ?)
                     )
-                """)
+                """, (LEVEL_DIRECTORY, LEVEL_CUSTOM, LEVEL_DIRECTORY, LEVEL_CUSTOM))
                 for row in cursor.fetchall():
-                    self._group_cache[4][row['group_hash']] = set()
+                    self._group_cache[row['level']][row['group_hash']] = set()
 
                 total_groups = sum(len(groups) for groups in self._group_cache.values())
                 total_images = sum(len(imgs) for imgs in self._image_to_group.values())
@@ -1681,9 +1748,10 @@ class DuplicateManager:
                                 self._image_to_group[level].pop(remaining_id, None)
                             del self._group_cache[level][group_hash]
 
-            # Level 4 (custom groups): remove image but never dissolve empty groups
-            for group_hash, members in list(self._group_cache.get(4, {}).items()):
-                members.discard(image_id)
+            # Named groups (levels 4-5): remove image but never dissolve empty groups
+            for named_level in (LEVEL_DIRECTORY, LEVEL_CUSTOM):
+                for group_hash, members in list(self._group_cache.get(named_level, {}).items()):
+                    members.discard(image_id)
 
     def _remove_image_from_db_groups(self, image_id: str) -> None:
         """Remove an image from all duplicate groups in the database.
@@ -1713,8 +1781,8 @@ class DuplicateManager:
 
             # Check each affected group for singleton status
             for level, group_hash in affected_groups:
-                # Custom groups (level 4) persist even when empty — skip dissolution
-                if level == 4:
+                # Named groups (levels 4-5) persist even when empty — skip dissolution
+                if level >= LEVEL_DIRECTORY:
                     continue
 
                 cursor = conn.execute(
@@ -1783,8 +1851,8 @@ class DuplicateManager:
             # Check each affected group for singleton status
             dissolved_count = 0
             for level, group_hash in affected_groups:
-                # Custom groups (level 4) persist even when empty — skip dissolution
-                if level == 4:
+                # Named groups (levels 4-5) persist even when empty — skip dissolution
+                if level >= LEVEL_DIRECTORY:
                     continue
 
                 cursor = conn.execute(
@@ -1824,9 +1892,10 @@ class DuplicateManager:
                     for remaining_id in self._group_cache[level][group_hash]:
                         self._image_to_group[level].pop(remaining_id, None)
                     del self._group_cache[level][group_hash]
-            # Level 4 (custom groups): remove image but never dissolve
-            for group_hash, members in list(self._group_cache.get(4, {}).items()):
-                members.discard(img_id)
+            # Named groups (levels 4-5): remove image but never dissolve
+            for named_level in (LEVEL_DIRECTORY, LEVEL_CUSTOM):
+                for group_hash, members in list(self._group_cache.get(named_level, {}).items()):
+                    members.discard(img_id)
 
         if self._cache_loaded:
             with self._cache_lock:
@@ -1935,12 +2004,17 @@ class DuplicateManager:
         Uses the in-memory cache for image_ids to avoid per-group DB queries.
         Still queries DB for best_image selection (requires sorting by metadata).
 
-        Level 4 (custom groups) includes the group name and allows empty groups.
+        Level 4 (directory groups) and level 5 (custom groups) include the
+        group name and allow empty groups.
         """
         self._ensure_cache_loaded()
 
-        # Level 4: custom groups — different query that includes name and allows empty groups
-        if level == 4:
+        # Level 4: directory groups — sorted by source_path, includes source_path
+        if level == LEVEL_DIRECTORY:
+            return self._get_directory_groups_lightweight()
+
+        # Level 5: custom groups — different query that includes name and allows empty groups
+        if level == LEVEL_CUSTOM:
             return self._get_custom_groups_lightweight()
 
         conn = self._get_db()
@@ -2003,7 +2077,7 @@ class DuplicateManager:
             conn.close()
 
     def _get_custom_groups_lightweight(self) -> list[dict[str, Any]]:
-        """Get custom groups (level 4) with names, including empty groups.
+        """Get custom groups (level 5) with names, including empty groups.
 
         Custom groups differ from auto-detected levels:
         - They have a user-assigned name (from custom_groups table)
@@ -2015,10 +2089,11 @@ class DuplicateManager:
         """
         conn = self._get_db()
         try:
-            # Get all custom groups with their names
+            # Get all custom groups (source_path IS NULL) with their names
             cursor = conn.execute("""
                 SELECT cg.group_hash, cg.name
                 FROM custom_groups cg
+                WHERE cg.source_path IS NULL
                 ORDER BY cg.name COLLATE NOCASE ASC
             """)
             custom_group_rows = cursor.fetchall()
@@ -2043,12 +2118,12 @@ class DuplicateManager:
                         ) as rank
                     FROM duplicate_groups dg
                     JOIN images i ON i.id = dg.image_id
-                    WHERE dg.level = 4 AND i.deleted = 0
+                    WHERE dg.level = ? AND i.deleted = 0
                 )
                 SELECT group_hash, id, basename
                 FROM ranked
                 WHERE rank = 1
-            """)
+            """, (LEVEL_CUSTOM,))
             for row in cursor.fetchall():
                 best_images[row['group_hash']] = {
                     'id': row['id'],
@@ -2059,7 +2134,7 @@ class DuplicateManager:
             with self._cache_lock:
                 for row in custom_group_rows:
                     group_hash = row['group_hash']
-                    image_ids = list(self._group_cache[4].get(group_hash, set()))
+                    image_ids = list(self._group_cache[LEVEL_CUSTOM].get(group_hash, set()))
 
                     groups.append({
                         'group_hash': group_hash,
@@ -2072,6 +2147,223 @@ class DuplicateManager:
             return groups
         finally:
             conn.close()
+
+    def _get_directory_groups_lightweight(self) -> list[dict[str, Any]]:
+        """Get directory groups (level 4) with names and source paths.
+
+        Directory groups mirror filesystem directories. They are sorted by
+        source_path for consistent alphabetical ordering by full path.
+
+        Returns:
+            List of group dicts with group_hash, name, source_path, count,
+            image_ids, best_image.
+        """
+        conn = self._get_db()
+        try:
+            # Get all directory groups (source_path IS NOT NULL)
+            cursor = conn.execute("""
+                SELECT cg.group_hash, cg.name, cg.source_path
+                FROM custom_groups cg
+                WHERE cg.source_path IS NOT NULL
+                ORDER BY cg.source_path COLLATE NOCASE ASC
+            """)
+            dir_group_rows = cursor.fetchall()
+
+            if not dir_group_rows:
+                return []
+
+            # Get best image per non-empty group
+            best_images = {}
+            cursor = conn.execute("""
+                WITH ranked AS (
+                    SELECT
+                        dg.group_hash,
+                        i.id,
+                        i.basename,
+                        ROW_NUMBER() OVER (
+                            PARTITION BY dg.group_hash
+                            ORDER BY
+                                i.aesthetic_laion DESC,
+                                i.laplacian_var DESC,
+                                i.id ASC
+                        ) as rank
+                    FROM duplicate_groups dg
+                    JOIN images i ON i.id = dg.image_id
+                    WHERE dg.level = ? AND i.deleted = 0
+                )
+                SELECT group_hash, id, basename
+                FROM ranked
+                WHERE rank = 1
+            """, (LEVEL_DIRECTORY,))
+            for row in cursor.fetchall():
+                best_images[row['group_hash']] = {
+                    'id': row['id'],
+                    'basename': row['basename'],
+                }
+
+            groups = []
+            with self._cache_lock:
+                for row in dir_group_rows:
+                    group_hash = row['group_hash']
+                    image_ids = list(self._group_cache[LEVEL_DIRECTORY].get(group_hash, set()))
+
+                    groups.append({
+                        'group_hash': group_hash,
+                        'name': row['name'],
+                        'source_path': row['source_path'],
+                        'count': len(image_ids),
+                        'image_ids': image_ids,
+                        'best_image': best_images.get(group_hash),
+                    })
+
+            return groups
+        finally:
+            conn.close()
+
+    # =========================================================================
+    # Directory Group Sync (Level 4)
+    # =========================================================================
+
+    def sync_directory_groups(
+        self,
+        conn: sqlite3.Connection,
+        db_lock: threading.Lock,
+    ) -> None:
+        """Synchronise directory groups with current image data.
+
+        Creates, updates, and removes directory groups to mirror the filesystem
+        structure of non-deleted images. Each unique parent directory of at least
+        one image becomes a group.
+
+        Group names use shortest-unique-suffix disambiguation: if two directories
+        share the same basename (e.g. /Photos/Holiday/Beach and /Photos/Birthday/Beach),
+        parent path components are prepended until names are unique.
+
+        Called at the end of processing (on_final_complete) and after folder removal.
+
+        Args:
+            conn: Shared database connection (caller holds db_lock for the queries).
+            db_lock: The database lock for thread safety.
+        """
+        import os
+        from datetime import datetime as dt
+
+        now = dt.now().isoformat()
+
+        # ── Step 1: gather directories with non-deleted images ──
+        with db_lock:
+            cursor = conn.execute(
+                'SELECT id, path FROM images WHERE deleted = 0'
+            )
+            rows = cursor.fetchall()
+
+        # Map directory → set of image IDs
+        dir_to_images: dict[str, set[str]] = {}
+        for row in rows:
+            parent = os.path.dirname(row['path'])
+            if parent not in dir_to_images:
+                dir_to_images[parent] = set()
+            dir_to_images[parent].add(row['id'])
+
+        # ── Step 2: get existing directory groups ──
+        with db_lock:
+            cursor = conn.execute(
+                'SELECT group_hash, source_path FROM custom_groups WHERE source_path IS NOT NULL'
+            )
+            existing = {row['source_path']: row['group_hash'] for row in cursor.fetchall()}
+
+        # ── Step 3: compute shortest-unique-suffix display names ──
+        all_dirs = list(dir_to_images.keys())
+        display_names = _compute_unique_dir_names(all_dirs)
+
+        # ── Step 4: sync groups ──
+        created = 0
+        updated = 0
+        removed = 0
+
+        # Directories that should have groups
+        needed_paths = set(all_dirs)
+
+        with db_lock:
+            for dir_path in all_dirs:
+                image_ids = dir_to_images[dir_path]
+                display_name = display_names[dir_path]
+
+                if dir_path in existing:
+                    # Group exists — sync membership and name
+                    group_hash = existing[dir_path]
+                    conn.execute(
+                        'DELETE FROM duplicate_groups WHERE level = ? AND group_hash = ?',
+                        (LEVEL_DIRECTORY, group_hash)
+                    )
+                    for image_id in image_ids:
+                        conn.execute(
+                            'INSERT INTO duplicate_groups (level, group_hash, image_id, updated_at) VALUES (?, ?, ?, ?)',
+                            (LEVEL_DIRECTORY, group_hash, image_id, now)
+                        )
+                    conn.execute(
+                        'UPDATE custom_groups SET name = ?, updated_at = ? WHERE group_hash = ?',
+                        (display_name, now, group_hash)
+                    )
+                    updated += 1
+                else:
+                    # New directory — create group
+                    import uuid
+                    group_hash = str(uuid.uuid4())
+                    conn.execute(
+                        'INSERT INTO custom_groups (group_hash, name, source_path, created_at, updated_at) '
+                        'VALUES (?, ?, ?, ?, ?)',
+                        (group_hash, display_name, dir_path, now, now)
+                    )
+                    for image_id in image_ids:
+                        conn.execute(
+                            'INSERT INTO duplicate_groups (level, group_hash, image_id, updated_at) VALUES (?, ?, ?, ?)',
+                            (LEVEL_DIRECTORY, group_hash, image_id, now)
+                        )
+                    created += 1
+
+            # Remove directory groups whose source_path no longer has images
+            for source_path, group_hash in existing.items():
+                if source_path not in needed_paths:
+                    conn.execute(
+                        'DELETE FROM duplicate_groups WHERE level = ? AND group_hash = ?',
+                        (LEVEL_DIRECTORY, group_hash)
+                    )
+                    conn.execute(
+                        'DELETE FROM custom_groups WHERE group_hash = ?',
+                        (group_hash,)
+                    )
+                    removed += 1
+
+            conn.commit()
+
+        # Invalidate level-4 cache so next access reloads from DB
+        with self._cache_lock:
+            if self._cache_loaded and self._group_cache is not None:
+                self._group_cache[LEVEL_DIRECTORY] = {}
+
+                # Rebuild level-4 cache from the data we just wrote
+                for dir_path in all_dirs:
+                    image_ids = dir_to_images[dir_path]
+                    group_hash = existing.get(dir_path)
+                    if group_hash is None:
+                        # Look up newly created group hash
+                        with db_lock:
+                            cursor = conn.execute(
+                                'SELECT group_hash FROM custom_groups WHERE source_path = ?',
+                                (dir_path,)
+                            )
+                            row = cursor.fetchone()
+                            if row:
+                                group_hash = row['group_hash']
+                    if group_hash:
+                        self._group_cache[LEVEL_DIRECTORY][group_hash] = set(image_ids)
+
+        if created or updated or removed:
+            logger.info(
+                f'Directory groups synced: {created} created, {updated} updated, {removed} removed '
+                f'({len(all_dirs)} directories total)'
+            )
 
     def get_epoch(self) -> str:
         """Get the current epoch timestamp for duplicate groups."""
@@ -2257,14 +2549,14 @@ class DuplicateManager:
                 conn.close()
 
     # =========================================================================
-    # Custom Groups (Level 4 — Albums)
+    # Custom Groups (Level 5 — Albums)
     # =========================================================================
 
     def create_custom_group(self, group_hash: str, name: str, image_ids: list[str]) -> None:
         """Create a custom group (album) with the given images.
 
         Inserts into both custom_groups (metadata) and duplicate_groups (membership)
-        tables. Custom groups use level 4 in duplicate_groups.
+        tables. Custom groups use level 5 in duplicate_groups.
 
         Args:
             group_hash: Frontend-generated UUID for the group.
@@ -2280,8 +2572,8 @@ class DuplicateManager:
             )
             for image_id in image_ids:
                 conn.execute(
-                    'INSERT OR IGNORE INTO duplicate_groups (level, group_hash, image_id, updated_at) VALUES (4, ?, ?, ?)',
-                    (group_hash, image_id, now)
+                    'INSERT OR IGNORE INTO duplicate_groups (level, group_hash, image_id, updated_at) VALUES (?, ?, ?, ?)',
+                    (LEVEL_CUSTOM, group_hash, image_id, now)
                 )
             conn.commit()
             logger.info(f'Created custom group "{name}" ({group_hash}) with {len(image_ids)} images')
@@ -2291,7 +2583,7 @@ class DuplicateManager:
         # Update cache
         self._ensure_cache_loaded()
         with self._cache_lock:
-            self._group_cache[4][group_hash] = set(image_ids)
+            self._group_cache[LEVEL_CUSTOM][group_hash] = set(image_ids)
 
     def rename_custom_group(self, group_hash: str, name: str) -> None:
         """Rename a custom group.
@@ -2324,8 +2616,8 @@ class DuplicateManager:
         try:
             conn.execute('DELETE FROM custom_groups WHERE group_hash = ?', (group_hash,))
             conn.execute(
-                'DELETE FROM duplicate_groups WHERE level = 4 AND group_hash = ?',
-                (group_hash,)
+                'DELETE FROM duplicate_groups WHERE level = ? AND group_hash = ?',
+                (LEVEL_CUSTOM, group_hash)
             )
             conn.commit()
             logger.info(f'Deleted custom group {group_hash}')
@@ -2335,7 +2627,7 @@ class DuplicateManager:
         # Update cache
         if self._cache_loaded:
             with self._cache_lock:
-                self._group_cache[4].pop(group_hash, None)
+                self._group_cache[LEVEL_CUSTOM].pop(group_hash, None)
 
     def add_images_to_custom_group(self, group_hash: str, image_ids: list[str]) -> None:
         """Add images to an existing custom group.
@@ -2351,8 +2643,8 @@ class DuplicateManager:
         try:
             for image_id in image_ids:
                 conn.execute(
-                    'INSERT OR IGNORE INTO duplicate_groups (level, group_hash, image_id, updated_at) VALUES (4, ?, ?, ?)',
-                    (group_hash, image_id, now)
+                    'INSERT OR IGNORE INTO duplicate_groups (level, group_hash, image_id, updated_at) VALUES (?, ?, ?, ?)',
+                    (LEVEL_CUSTOM, group_hash, image_id, now)
                 )
             conn.execute(
                 'UPDATE custom_groups SET updated_at = ? WHERE group_hash = ?',
@@ -2366,9 +2658,9 @@ class DuplicateManager:
         # Update cache
         self._ensure_cache_loaded()
         with self._cache_lock:
-            if group_hash not in self._group_cache[4]:
-                self._group_cache[4][group_hash] = set()
-            self._group_cache[4][group_hash].update(image_ids)
+            if group_hash not in self._group_cache[LEVEL_CUSTOM]:
+                self._group_cache[LEVEL_CUSTOM][group_hash] = set()
+            self._group_cache[LEVEL_CUSTOM][group_hash].update(image_ids)
 
     def remove_images_from_custom_group(self, group_hash: str, image_ids: list[str]) -> None:
         """Remove images from a custom group (group persists even if empty).
@@ -2382,8 +2674,8 @@ class DuplicateManager:
         try:
             placeholders = ','.join('?' * len(image_ids))
             conn.execute(
-                f'DELETE FROM duplicate_groups WHERE level = 4 AND group_hash = ? AND image_id IN ({placeholders})',
-                [group_hash] + image_ids
+                f'DELETE FROM duplicate_groups WHERE level = ? AND group_hash = ? AND image_id IN ({placeholders})',
+                [LEVEL_CUSTOM, group_hash] + image_ids
             )
             conn.execute(
                 'UPDATE custom_groups SET updated_at = ? WHERE group_hash = ?',
@@ -2397,5 +2689,5 @@ class DuplicateManager:
         # Update cache — group persists even when empty
         if self._cache_loaded:
             with self._cache_lock:
-                if group_hash in self._group_cache[4]:
-                    self._group_cache[4][group_hash] -= set(image_ids)
+                if group_hash in self._group_cache[LEVEL_CUSTOM]:
+                    self._group_cache[LEVEL_CUSTOM][group_hash] -= set(image_ids)

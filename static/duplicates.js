@@ -90,39 +90,39 @@
 const Duplicates = {
     /**
      * Similarity level labels for the slider (ordered loose to strict).
-     * Index 0 = leftmost (loosest/custom), Index 4 = rightmost (strictest).
+     * Index 0 = leftmost (custom), Index 5 = rightmost (identical).
      * @type {string[]}
      * @constant
      */
-    SIMILARITY_LABELS: ['Custom', 'Related', 'Similar', 'Near-identical', 'Identical'],
+    SIMILARITY_LABELS: ['Custom', 'Directories', 'Related', 'Similar', 'Near-identical', 'Identical'],
 
     /**
      * Converts slider position to similarity level.
-     * Slider: 0 (left/custom) to 4 (right/strict)
-     * Level: 4 (custom) to 0 (identical)
-     * @param {number} sliderValue - Slider position (0-4)
-     * @returns {number} Similarity level (0-4)
+     * Slider: 0 (left/custom) to 5 (right/strict)
+     * Level: 5 (custom) to 0 (identical)
+     * @param {number} sliderValue - Slider position (0-5)
+     * @returns {number} Similarity level (0-5)
      * @private
      */
     _sliderToLevel(sliderValue) {
-        return 4 - sliderValue;
+        return 5 - sliderValue;
     },
 
     /**
      * Converts similarity level to slider position.
-     * @param {number} level - Similarity level (0-4)
-     * @returns {number} Slider position (0-4)
+     * @param {number} level - Similarity level (0-5)
+     * @returns {number} Slider position (0-5)
      * @private
      */
     _levelToSlider(level) {
-        return 4 - level;
+        return 5 - level;
     },
 
     /**
      * Local state for the duplicates screen.
      * Note: Group caching is handled by AppState.duplicates.
      * @type {Object}
-     * @property {number} currentLevel - Current similarity level (0-4)
+     * @property {number} currentLevel - Current similarity level (0-5)
      * @property {Array<Object>} groups - Current duplicate groups for display (filtered)
      * @property {Array<Object>} allGroups - All groups before min size filtering
      * @property {string} currentStatus - Status of current level ('pending', 'computing', 'done')
@@ -208,7 +208,7 @@ const Duplicates = {
             getItemHeight: (thumbSize, itemWidth) => {
                 // Stack height: thumbnail (square) + count label + optional name label + padding
                 const thumbnailHeight = itemWidth;
-                const labelHeight = this.state.currentLevel === 4 ? 44 : 24;
+                const labelHeight = this.state.currentLevel >= 4 ? 44 : 24;
                 return thumbnailHeight + labelHeight + 16;
             },
             onItemCreated: (id, el) => {
@@ -230,10 +230,10 @@ const Duplicates = {
                 this._updateCustomGroupButtons();
             },
             onItemActivated: (hash) => this._openGroupInGallery(hash),
-            // Delete key triggers group deletion at level 4
+            // Delete key triggers group deletion at level 5 (custom groups)
             enableDeleteKey: false,
             onDeleteKey: () => {
-                if (this.state.currentLevel === 4 && this.state.selectedGroups.length > 0) {
+                if (this.state.currentLevel === 5 && this.state.selectedGroups.length > 0) {
                     this._onDeleteGroup();
                 }
             }
@@ -433,6 +433,31 @@ const Duplicates = {
             // Note: AppState.duplicates._internal.removeImage is called by images.delete()
             // so the duplicates cache is already updated
         });
+
+        // Subscribe to backend events for "updates available" notification.
+        // When processing completes, duplicate groups (levels 0-3) and directory
+        // groups (level 4) may have changed. Rather than swapping data under the
+        // user, show a non-intrusive toast with a Refresh button.
+        // Level 5 (custom groups) is unaffected by processing.
+        AppState.events.onChanged((event) => {
+            if (event.type !== 'event' || event.eventType !== 'processing_complete') return;
+            if (App.getScreen() !== 'duplicates') return;
+            if (this.state.currentLevel > 4) return;
+
+            const message = this.state.currentLevel === 4
+                ? 'Directory groups have been updated.'
+                : 'Duplicate groups have been updated.';
+            const level = this.state.currentLevel;
+
+            App.showInfo(message, {
+                actionLabel: 'Refresh',
+                onAction: () => {
+                    // Force reload: clear local state so _setLevel doesn't early-return
+                    this.state.allGroups = [];
+                    this._setLevel(level);
+                },
+            });
+        });
     },
 
     /**
@@ -477,7 +502,7 @@ const Duplicates = {
     markNeedsRefresh() {
         this.state.needsRefresh = true;
         // Invalidate all levels in AppState cache
-        for (let level = 0; level <= 4; level++) {
+        for (let level = 0; level <= 5; level++) {
             AppState.duplicates.invalidate(level);
         }
         this.state.allGroups = [];
@@ -487,56 +512,48 @@ const Duplicates = {
     /**
      * Shows or hides level-specific UI controls based on the current level.
      *
-     * Level 4 (custom groups): shows New/Rename/Delete buttons, alphabetical sort,
-     * group name filter. Hides min-group-size, size sort, semantic query.
+     * Three-way logic:
+     * - `.auto-level-control` → hidden when level >= 4 (named groups)
+     * - `.custom-group-control` → hidden when level !== 5 (create/rename/delete for custom only)
+     * - `.named-group-control` → hidden when level < 4 (alpha sort + filter for levels 4 and 5)
      *
      * Levels 0-3 (auto): shows min-group-size, size sort, semantic query.
-     * Hides custom group controls.
      *
      * @param {number} level - The current similarity level
      * @private
      */
     _updateLevelUI(level) {
-        const isCustom = level === 4;
-        const container = document.querySelector('[data-for-screen="duplicates"]');
-        if (!container) return;
+        const isNamed = level >= 4;       // Directory or custom groups
+        const isCustom = level === 5;     // Custom groups only
 
-        // Toggle auto-level controls (min-group-size, size sort)
-        container.querySelectorAll('.auto-level-control').forEach(el => {
-            el.hidden = isCustom;
-        });
-
-        // Toggle custom-group controls (new/rename/delete, alpha sort, name filter)
-        container.querySelectorAll('.custom-group-control').forEach(el => {
-            el.hidden = !isCustom;
-        });
-
-        // Also toggle in the right-side toolbar
-        const rightToolbar = document.querySelector('.toolbar-right [data-for-screen="duplicates"]');
-        if (rightToolbar) {
-            rightToolbar.querySelectorAll('.auto-level-control').forEach(el => {
-                el.hidden = isCustom;
+        /**
+         * Apply visibility toggles for a container's control classes.
+         * @param {Element} container - DOM element to search within
+         */
+        const applyToggles = (container) => {
+            if (!container) return;
+            // Auto-level controls: hidden for named groups (levels 4-5)
+            container.querySelectorAll('.auto-level-control').forEach(el => {
+                el.hidden = isNamed;
             });
-            rightToolbar.querySelectorAll('.custom-group-control').forEach(el => {
+            // Custom-group controls (new/rename/delete): only for level 5
+            container.querySelectorAll('.custom-group-control').forEach(el => {
                 el.hidden = !isCustom;
             });
-        }
+            // Named-group controls (alpha sort, name filter): for levels 4 and 5
+            container.querySelectorAll('.named-group-control').forEach(el => {
+                el.hidden = !isNamed;
+            });
+        };
 
-        // Also toggle in the left toolbar
-        const leftToolbar = document.querySelector('.toolbar-left [data-for-screen="duplicates"]');
-        if (leftToolbar) {
-            leftToolbar.querySelectorAll('.auto-level-control').forEach(el => {
-                el.hidden = isCustom;
-            });
-            leftToolbar.querySelectorAll('.custom-group-control').forEach(el => {
-                el.hidden = !isCustom;
-            });
-        }
+        applyToggles(document.querySelector('[data-for-screen="duplicates"]'));
+        applyToggles(document.querySelector('.toolbar-right [data-for-screen="duplicates"]'));
+        applyToggles(document.querySelector('.toolbar-left [data-for-screen="duplicates"]'));
 
         // Update custom group buttons based on selection state
         this._updateCustomGroupButtons();
 
-        // Enable delete key only for level 4
+        // Enable delete key only for level 5 (custom groups)
         if (this._selection) {
             this._selection.enableDeleteKey = isCustom;
         }
@@ -548,7 +565,7 @@ const Duplicates = {
      * @private
      */
     _updateCustomGroupButtons() {
-        if (this.state.currentLevel !== 4) return;
+        if (this.state.currentLevel !== 5) return;
 
         const count = this.state.selectedGroups.length;
         if (this._els.btnGroupRename) {
@@ -615,7 +632,7 @@ Duplicates._loadGroups = async function() {
 
 /**
  * Changes the similarity level and updates the display.
- * @param {number} level - New similarity level (0-4)
+ * @param {number} level - New similarity level (0-5)
  * @private
  */
 Duplicates._setLevel = async function(level) {
@@ -637,11 +654,11 @@ Duplicates._setLevel = async function(level) {
     // Update level-specific UI (show/hide controls)
     this._updateLevelUI(level);
 
-    // Set appropriate default sort mode when switching to level 4
-    if (level === 4 && this.state.sortMode === 'size') {
+    // Set appropriate default sort mode when switching to named groups (levels 4-5)
+    if (level >= 4 && this.state.sortMode === 'size') {
         this.state.sortMode = 'alpha';
         this._syncSortModeUI();
-    } else if (level !== 4 && this.state.sortMode === 'alpha') {
+    } else if (level < 4 && this.state.sortMode === 'alpha') {
         this.state.sortMode = 'size';
         this._syncSortModeUI();
     }
@@ -744,11 +761,11 @@ Duplicates._onMinGroupSizeChange = function() {
 
 /**
  * Applies the min group size filter to allGroups and stores result in groups.
- * Only applies for levels 0-3. Level 4 uses name filter instead.
+ * Only applies for levels 0-3. Levels 4-5 use name filter instead.
  * @private
  */
 Duplicates._applyMinGroupSizeFilter = function() {
-    if (this.state.currentLevel === 4) {
+    if (this.state.currentLevel >= 4) {
         this._applyGroupNameFilter();
         return;
     }
@@ -757,7 +774,7 @@ Duplicates._applyMinGroupSizeFilter = function() {
 };
 
 /**
- * Applies the group name filter for level 4 custom groups.
+ * Applies the group name filter for named groups (levels 4-5).
  * Uses case-insensitive substring matching.
  * @private
  */
@@ -795,15 +812,17 @@ Duplicates._sortGroupsBySize = function() {
 };
 
 /**
- * Sorts groups alphabetically by name.
- * Used for level 4 custom groups.
+ * Sorts groups alphabetically by name (levels 4-5).
+ * For directory groups (level 4), sorts by source_path for full-path ordering.
+ * For custom groups (level 5), sorts by display name.
  * @private
  */
 Duplicates._sortGroupsByAlpha = function() {
+    const useSourcePath = this.state.currentLevel === 4;
     this.state.allGroups.sort((a, b) => {
-        const nameA = a.name || '';
-        const nameB = b.name || '';
-        return nameA.localeCompare(nameB, undefined, { sensitivity: 'base' });
+        const keyA = (useSourcePath ? a.source_path : a.name) || '';
+        const keyB = (useSourcePath ? b.source_path : b.name) || '';
+        return keyA.localeCompare(keyB, undefined, { sensitivity: 'base' });
     });
     this._applyGroupNameFilter();
 };
@@ -1043,12 +1062,19 @@ Duplicates._renderGroups = function() {
 
         const p = empty.querySelector('p');
         if (p) {
-            if (level === 4) {
+            if (level === 5) {
                 // Custom groups empty state
                 if (this.state.groupFilter) {
                     p.textContent = 'No groups match the current filter.';
                 } else {
                     p.textContent = 'No custom groups yet. Select images in the Gallery and use the group button to create one.';
+                }
+            } else if (level === 4) {
+                // Directory groups empty state
+                if (this.state.groupFilter) {
+                    p.textContent = 'No groups match the current filter.';
+                } else {
+                    p.textContent = 'No directory groups yet \u2014 add a folder and let it scan.';
                 }
             } else if (status === 'computing') {
                 p.textContent = `Computing ${levelLabel} duplicates\u2026 This may take a while for large collections.`;
@@ -1077,7 +1103,7 @@ Duplicates._renderGroups = function() {
 
 /**
  * Creates a stack element for a duplicate group with thumbnail already loaded.
- * For level 4 (custom groups), shows the group name as primary label and count below.
+ * For named groups (levels 4-5), shows the group name as primary label and count below.
  * For levels 0-3, shows the count as the primary label.
  * @param {Object} group - The duplicate group (lightweight format)
  * @param {number} index - Group index for data attribute
@@ -1101,12 +1127,18 @@ Duplicates._createStackElement = function(group, index, blobUrl) {
     img.dataset.imageId = group.best_image?.id || '';
     stack.appendChild(img);
 
-    if (this.state.currentLevel === 4) {
-        // Custom groups: show name as primary label, count as subtitle
+    if (this.state.currentLevel >= 4) {
+        // Named groups: show name as primary label, count as subtitle
         const nameEl = document.createElement('div');
         nameEl.className = 'duplicate-stack-name';
         nameEl.textContent = group.name || 'Untitled';
-        nameEl.title = group.name || 'Untitled';
+        // Directory groups: RTL ellipsis for leading-path truncation, tooltip shows full path
+        if (this.state.currentLevel === 4) {
+            nameEl.classList.add('rtl-ellipsis');
+            nameEl.title = group.source_path || group.name || 'Untitled';
+        } else {
+            nameEl.title = group.name || 'Untitled';
+        }
         stack.appendChild(nameEl);
 
         const countEl = document.createElement('div');
