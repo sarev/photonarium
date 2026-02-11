@@ -1,0 +1,315 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Imaginary — AI-Powered Local Image Catalogue</title>
+    <meta name="description" content="Imaginary is a local image catalogue and management tool with AI-powered search, face recognition, and duplicate detection. 100% offline, 100% private.">
+    <link rel="icon" type="image/png" href="favicon.png">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Urbanist:wght@400;500;600;700&family=Noto+Sans:wght@400;500;600&display=swap">
+    <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+
+<!-- ================================================================== -->
+<!-- Navigation Bar                                                      -->
+<!-- ================================================================== -->
+<nav class="navbar" id="navbar">
+    <div class="nav-inner">
+        <a href="#hero" class="nav-brand">
+            <img src="images/logo.png" alt="Imaginary logo" class="nav-logo">
+            <span class="nav-title">Imaginary</span>
+        </a>
+        <button class="nav-toggle" id="navToggle" aria-label="Toggle navigation menu">
+            <span></span><span></span><span></span>
+        </button>
+        <ul class="nav-links" id="navLinks">
+            <li><a href="#features">Features</a></li>
+            <li><a href="#screenshots">Screenshots</a></li>
+            <li><a href="#getting-started">Getting Started</a></li>
+            <li><a href="#support">Support</a></li>
+            <li>
+                <a href="https://github.com/sarev/imaginary" class="nav-github" target="_blank" rel="noopener" aria-label="View on GitHub">
+                    <!-- GitHub SVG icon (MIT-licensed Octicon) -->
+                    <svg viewBox="0 0 16 16" width="24" height="24" fill="currentColor" aria-hidden="true">
+                        <path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38
+                            0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13
+                            -.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66
+                            .07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15
+                            -.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0
+                            1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56
+                            .82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07
+                            -.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0016 8c0-4.42-3.58-8-8-8z"/>
+                    </svg>
+                </a>
+            </li>
+        </ul>
+    </div>
+</nav>
+
+<!-- ================================================================== -->
+<!-- Hero Section                                                        -->
+<!-- ================================================================== -->
+<section class="hero" id="hero">
+    <div class="hero-inner">
+        <img src="images/logo.png" alt="Imaginary" class="hero-logo">
+        <h1 class="hero-headline">Your images. Your machine. Your&nbsp;rules.</h1>
+        <p class="hero-sub">
+            AI-powered local image catalogue with semantic search, face recognition,
+            and duplicate detection. Runs entirely on your machine &mdash; no cloud,
+            no accounts, no&nbsp;tracking.
+        </p>
+        <div class="hero-ctas">
+            <a href="https://github.com/sarev/imaginary/releases" class="btn btn-primary" target="_blank" rel="noopener">
+                <!-- Download icon -->
+                <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                    <path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/>
+                    <polyline points="7 10 12 15 17 10"/>
+                    <line x1="12" y1="15" x2="12" y2="3"/>
+                </svg>
+                Download
+            </a>
+            <a href="https://github.com/sarev/imaginary" class="btn btn-secondary" target="_blank" rel="noopener">
+                <!-- GitHub icon -->
+                <svg viewBox="0 0 16 16" width="18" height="18" fill="currentColor" aria-hidden="true">
+                    <path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38
+                        0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13
+                        -.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66
+                        .07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15
+                        -.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0
+                        1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56
+                        .82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07
+                        -.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0016 8c0-4.42-3.58-8-8-8z"/>
+                </svg>
+                View on GitHub
+            </a>
+        </div>
+    </div>
+</section>
+
+<!-- ================================================================== -->
+<!-- Features Section                                                    -->
+<!-- ================================================================== -->
+<section class="features" id="features">
+    <div class="container">
+        <h2 class="section-title">Features</h2>
+        <div class="features-grid">
+
+            <div class="feature-card">
+                <div class="feature-icon">
+                    <!-- Search/sparkle icon -->
+                    <svg viewBox="0 0 24 24" width="32" height="32" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+                        <circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/>
+                        <path d="M11 8v6M8 11h6"/>
+                    </svg>
+                </div>
+                <h3>AI-Powered Search</h3>
+                <p>Describe what you're looking for in natural language &mdash; Imaginary understands the content of your images.</p>
+            </div>
+
+            <div class="feature-card">
+                <div class="feature-icon">
+                    <!-- Face icon -->
+                    <svg viewBox="0 0 24 24" width="32" height="32" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+                        <circle cx="12" cy="12" r="10"/>
+                        <circle cx="9" cy="10" r="1" fill="currentColor" stroke="none"/>
+                        <circle cx="15" cy="10" r="1" fill="currentColor" stroke="none"/>
+                        <path d="M8 15c1.333 1.333 2.667 2 4 2s2.667-.667 4-2"/>
+                    </svg>
+                </div>
+                <h3>Face Recognition</h3>
+                <p>Automatic face detection and recognition. Name a face once and Imaginary finds them everywhere.</p>
+            </div>
+
+            <div class="feature-card">
+                <div class="feature-icon">
+                    <!-- Layers/duplicate icon -->
+                    <svg viewBox="0 0 24 24" width="32" height="32" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+                        <rect x="3" y="3" width="14" height="14" rx="2"/>
+                        <path d="M7 21h12a2 2 0 002-2V7"/>
+                    </svg>
+                </div>
+                <h3>Duplicate Detection</h3>
+                <p>Four levels of similarity detection &mdash; from identical copies to thematically related images.</p>
+            </div>
+
+            <div class="feature-card">
+                <div class="feature-icon">
+                    <!-- Camera/EXIF icon -->
+                    <svg viewBox="0 0 24 24" width="32" height="32" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+                        <path d="M23 19a2 2 0 01-2 2H3a2 2 0 01-2-2V8a2 2 0 012-2h4l2-3h6l2 3h4a2 2 0 012 2z"/>
+                        <circle cx="12" cy="13" r="4"/>
+                    </svg>
+                </div>
+                <h3>EXIF Metadata</h3>
+                <p>Full camera data extraction. Search and filter by camera, lens, ISO, aperture, and more.</p>
+            </div>
+
+            <div class="feature-card">
+                <div class="feature-icon">
+                    <!-- Shield/lock icon -->
+                    <svg viewBox="0 0 24 24" width="32" height="32" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+                        <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/>
+                        <polyline points="9 12 11 14 15 10"/>
+                    </svg>
+                </div>
+                <h3>100% Offline &amp; Private</h3>
+                <p>Runs entirely on your machine. No cloud, no accounts, no tracking. Your images never leave your computer.</p>
+            </div>
+
+            <div class="feature-card">
+                <div class="feature-icon">
+                    <!-- Star/quality icon -->
+                    <svg viewBox="0 0 24 24" width="32" height="32" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+                        <polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"/>
+                    </svg>
+                </div>
+                <h3>Quality Scoring</h3>
+                <p>AI aesthetic scoring ranks your images by visual quality. Find your best shots instantly.</p>
+            </div>
+
+        </div>
+    </div>
+</section>
+
+<!-- ================================================================== -->
+<!-- Screenshots Section (Horizontal Carousel)                           -->
+<!-- ================================================================== -->
+<section class="screenshots" id="screenshots">
+    <div class="container">
+        <h2 class="section-title">See it in action</h2>
+    </div>
+    <div class="carousel-wrapper">
+        <button class="carousel-arrow carousel-arrow-left" id="carouselLeft" aria-label="Scroll left">
+            <svg viewBox="0 0 24 24" width="28" height="28" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+                <polyline points="15 18 9 12 15 6"/>
+            </svg>
+        </button>
+        <div class="carousel" id="carousel">
+            <figure class="carousel-slide">
+                <img src="images/gallery.png" alt="Gallery view showing a grid of image thumbnails" loading="lazy">
+                <figcaption>Gallery &mdash; browse your collection with a rich thumbnail grid</figcaption>
+            </figure>
+            <figure class="carousel-slide">
+                <img src="images/fullscreen.png" alt="Fullscreen image viewer with zoom controls" loading="lazy">
+                <figcaption>Fullscreen &mdash; immersive image viewing with zoom and pan</figcaption>
+            </figure>
+            <figure class="carousel-slide">
+                <img src="images/info-panel.png" alt="Info panel showing EXIF metadata and image details" loading="lazy">
+                <figcaption>Info Panel &mdash; image details, EXIF metadata, histogram</figcaption>
+            </figure>
+            <figure class="carousel-slide">
+                <img src="images/duplicates.png" alt="Duplicate detection showing groups of similar images" loading="lazy">
+                <figcaption>Duplicates &mdash; find similar and related images automatically</figcaption>
+            </figure>
+            <figure class="carousel-slide">
+                <img src="images/faces.png" alt="Face detection and people management interface" loading="lazy">
+                <figcaption>Faces &mdash; automatic face detection and people management</figcaption>
+            </figure>
+            <figure class="carousel-slide">
+                <img src="images/light-theme.png" alt="Application in light theme mode" loading="lazy">
+                <figcaption>Light Theme &mdash; choose between dark and light themes</figcaption>
+            </figure>
+        </div>
+        <button class="carousel-arrow carousel-arrow-right" id="carouselRight" aria-label="Scroll right">
+            <svg viewBox="0 0 24 24" width="28" height="28" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+                <polyline points="9 18 15 12 9 6"/>
+            </svg>
+        </button>
+    </div>
+</section>
+
+<!-- ================================================================== -->
+<!-- Getting Started Section                                             -->
+<!-- ================================================================== -->
+<section class="getting-started" id="getting-started">
+    <div class="container">
+        <h2 class="section-title">Getting Started</h2>
+        <div class="steps">
+            <div class="step">
+                <div class="step-number">1</div>
+                <div class="step-content">
+                    <h3>Download</h3>
+                    <p>Grab the latest release from <a href="https://github.com/sarev/imaginary/releases" target="_blank" rel="noopener">GitHub</a> and extract the archive.</p>
+                </div>
+            </div>
+            <div class="step">
+                <div class="step-number">2</div>
+                <div class="step-content">
+                    <h3>Install dependencies</h3>
+                    <p>Create a Python virtual environment and install the required packages. Requires <strong>Python&nbsp;3.11+</strong>.</p>
+                </div>
+            </div>
+            <div class="step">
+                <div class="step-number">3</div>
+                <div class="step-content">
+                    <h3>Download models</h3>
+                    <p>Run <code>python download_models.py</code> to fetch the AI models (one-time download, ~4&nbsp;GB).</p>
+                </div>
+            </div>
+            <div class="step">
+                <div class="step-number">4</div>
+                <div class="step-content">
+                    <h3>Launch</h3>
+                    <p>Run <code>python app.py</code> and open your browser. Add your image folders and start exploring.</p>
+                </div>
+            </div>
+        </div>
+        <div class="steps-footer">
+            <p class="steps-note">An NVIDIA GPU with CUDA support is recommended for best performance, but Imaginary works on CPU&nbsp;too.</p>
+            <a href="tutorial/index.html" class="btn btn-primary">
+                Read the full tutorial
+                <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                    <line x1="5" y1="12" x2="19" y2="12"/><polyline points="12 5 19 12 12 19"/>
+                </svg>
+            </a>
+        </div>
+    </div>
+</section>
+
+<!-- ================================================================== -->
+<!-- Support Section                                                     -->
+<!-- ================================================================== -->
+<section class="support" id="support">
+    <div class="container">
+        <h2 class="section-title">Support Imaginary</h2>
+        <p class="support-message">
+            Imaginary is free, open-source software licensed under Apache&nbsp;2.0.
+            If you find it valuable, consider supporting its continued development.
+        </p>
+        <img src="images/support.png" alt="QR codes for USD, GBP, and EUR payment links" class="support-qr" loading="lazy">
+        <div class="support-buttons">
+            <a href="https://buy.stripe.com/fZu3cv4WOdN0b0N8Jaebu01" class="btn btn-support" target="_blank" rel="noopener">
+                Contribute in USD&nbsp;($)
+            </a>
+            <a href="https://buy.stripe.com/14A14nexodN00m94sUebu00" class="btn btn-support" target="_blank" rel="noopener">
+                Contribute in GBP&nbsp;(&pound;)
+            </a>
+            <a href="https://buy.stripe.com/dRmbJ1blc4cq3ylbVmebu02" class="btn btn-support" target="_blank" rel="noopener">
+                Contribute in EUR&nbsp;(&euro;)
+            </a>
+        </div>
+    </div>
+</section>
+
+<!-- ================================================================== -->
+<!-- Footer                                                              -->
+<!-- ================================================================== -->
+<footer class="footer">
+    <div class="container footer-inner">
+        <div class="footer-links">
+            <a href="https://github.com/sarev/imaginary" target="_blank" rel="noopener">GitHub</a>
+            <a href="tutorial/index.html">Tutorial</a>
+        </div>
+        <p class="footer-copy">
+            &copy; 2026 7th software Ltd. &middot; Licensed under
+            <a href="https://www.apache.org/licenses/LICENSE-2.0" target="_blank" rel="noopener">Apache&nbsp;2.0</a>
+        </p>
+    </div>
+</footer>
+
+<script src="script.js"></script>
+</body>
+</html>
