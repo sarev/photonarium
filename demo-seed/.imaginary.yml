@@ -92,7 +92,7 @@ similarity_threshold_level3: 0.85
 # Number of threads for parallel image indexing (1-16)
 # Higher values speed up initial scanning but use more CPU/disk I/O.
 # Recommended: 4-8 for HDD, 8-16 for SSD
-indexing_threads: 8
+indexing_threads: 16
 
 # Maximum number of new/modified images to process incrementally for duplicates.
 # If more images need checking, falls back to full recomputation which is faster
@@ -116,7 +116,7 @@ thumbnail_concurrent_requests: 6
 # Extra rows above/below the viewport to prefetch thumbnails for.
 # Higher values reduce blank thumbnails when scrolling but increase memory usage.
 # Range: 1-20, recommended: 3-8
-thumbnail_extra_rows: 5
+thumbnail_extra_rows: 7
 
 # Timeout for thumbnail fetch requests in milliseconds.
 # If a request takes longer than this, it's aborted and the slot freed.
@@ -153,13 +153,13 @@ face_detection_min_size: 60
 
 # Cosine similarity threshold for auto-matching faces to known people.
 # Higher values = stricter matching (fewer false matches, more unknowns).
-# Range: 0.0-1.0, recommended: 0.65-0.90
-face_recognition_threshold: 0.90
+# Range: 0.0-1.0, recommended: 0.75-0.95
+face_recognition_threshold: 0.92
 
 # Batch size for face detection (number of images processed together).
 # Higher values improve GPU utilization but use more VRAM.
 # Reduce if you get out-of-memory errors. Range: 1-64, recommended: 16-32
-face_detection_batch_size: 32
+face_detection_batch_size: 28
 
 # ------------------------------------------------------------------------------
 # Image Captioning (BLIP/BLIP-2)
@@ -175,12 +175,12 @@ caption_model: Salesforce/blip-image-captioning-large
 # Maximum length of generated captions in tokens.
 # Higher values allow longer, more detailed descriptions.
 # Range: 10-200, recommended: 30-75
-caption_max_length: 50
+caption_max_length: 75
 
 # Minimum length of generated captions in tokens.
 # Higher values force more descriptive captions.
 # Range: 1-50, recommended: 5-20
-caption_min_length: 10
+caption_min_length: 20
 
 # Number of beams for beam search during generation.
 # Higher values produce better quality but are slower.
@@ -190,4 +190,42 @@ caption_num_beams: 5
 
 # Convert American English spellings to British English in generated captions.
 # Handles common differences like color→colour, center→centre, gray→grey, etc.
-caption_british_english: false
+caption_british_english: true
+
+# ------------------------------------------------------------------------------
+# NIMA Aesthetic Scoring
+# ------------------------------------------------------------------------------
+# NIMA (Neural IMage Assessment) provides a second aesthetic quality signal
+# alongside the LAION aesthetic predictor. The two scores are blended for
+# the Quality sort in Gallery and best-image ranking in duplicate groups.
+
+# Enable NIMA aesthetic scoring during image indexing.
+# When disabled, the NIMA thread sits idle and quality ranking falls back to
+# LAION-only. Existing NIMA scores are preserved.
+nima_enabled: true
+
+# Batch size for NIMA scoring (1-64).
+# Higher values are faster but use more VRAM (~500MB base for VGG16).
+nima_batch_size: 16
+
+# ------------------------------------------------------------------------------
+# Quality Scoring Weights
+# ------------------------------------------------------------------------------
+# These weights control how the composite quality score is computed in the
+# frontend. They are applied at sort time and do not affect stored data.
+
+# Component weights (should sum to ~1.0):
+#   aesthetic - blended NIMA+LAION aesthetic score (percentile rank)
+#   sharpness - log Laplacian variance (percentile rank)
+#   pixels    - total pixel count (percentile rank)
+#   bpp       - bits per pixel (percentile rank)
+quality_weight_aesthetic: 0.80
+quality_weight_sharpness: 0.10
+quality_weight_pixels: 0.05
+quality_weight_bpp: 0.05
+
+# Blend ratio for NIMA vs LAION aesthetic scores.
+# A = alpha * NIMA_normalised + (1 - alpha) * LAION
+# Set to 0.0 to use LAION only, 1.0 for NIMA only.
+# Range: 0.0-1.0
+quality_alpha: 0.50

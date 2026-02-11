@@ -559,9 +559,12 @@ def step_groups_toolbar(page, ctx):
 
 @step('strictness')
 def step_groups_strictness(page, ctx):
-    # Move the similarity slider to "Similar" level.
-    # Slider is inverted: position 0=Custom, 1=Related, 2=Similar, 3=Near-identical, 4=Identical
+    # Move the similarity slider to "Related" level.
+    # Slider is inverted: position 0=Custom, 1=Directories, 2=Related, 3=Similar, 4=Near-identical, 5=Identical
+    # Remove existing stacks first so wait_for_selector only matches fresh ones
+    # (avoids race where stale stacks from the previous level match instantly).
     page.evaluate('''() => {
+        document.querySelectorAll('.duplicate-stack').forEach(el => el.remove());
         const slider = document.querySelector('#similarity-slider');
         if (slider) {
             slider.value = 2;
@@ -569,22 +572,52 @@ def step_groups_strictness(page, ctx):
             slider.dispatchEvent(new Event('change', { bubbles: true }));
         }
     }''')
-    # Wait for loading overlay to appear and then disappear
+    page.wait_for_selector('.duplicate-stack', timeout=15000)
+    wait_for_idle(page)
+    highlight_element(page, '#similarity-slider',
+                      color='rgba(255, 180, 0, 0.5)', width='2px')
+
+@step('directories')
+def step_groups_directories(page, ctx):
+    # Move slider to Directories (position 1)
+    page.evaluate('''() => {
+        const slider = document.querySelector('#similarity-slider');
+        if (slider) {
+            slider.value = 1;
+            slider.dispatchEvent(new Event('input', { bubbles: true }));
+            slider.dispatchEvent(new Event('change', { bubbles: true }));
+        }
+    }''')
+    # Wait for groups to load — directory groups may or may not exist yet
+    # depending on whether the demo-seed has subdirectories.
     try:
         page.wait_for_selector('#loading-overlay.visible', timeout=2000)
         page.wait_for_selector('#loading-overlay:not(.visible)', timeout=15000)
     except Exception:
         pass
-    page.wait_for_selector('.duplicate-stack', timeout=10000)
+    # Give the level switch time to settle even if there are no stacks
+    page.wait_for_timeout(1000)
     wait_for_idle(page)
     highlight_element(page, '#similarity-slider',
                       color='rgba(255, 180, 0, 0.5)', width='2px')
 
 @step('opening-a-group')
 def step_groups_opening_a_group(page, ctx):
-    # Find the laptop photos stack by its thumbnail alt text
-    stack = page.locator('.duplicate-stack', has=page.locator('img[alt="photo_252.jpg"]'))
-    stack.dblclick()
+    # Switch from Directories back to Related.  Remove stale stacks first
+    # so wait_for_selector only matches freshly rendered ones.
+    page.evaluate('''() => {
+        document.querySelectorAll('.duplicate-stack').forEach(el => el.remove());
+        const slider = document.querySelector('#similarity-slider');
+        if (slider) {
+            slider.value = 2;
+            slider.dispatchEvent(new Event('input', { bubbles: true }));
+            slider.dispatchEvent(new Event('change', { bubbles: true }));
+        }
+    }''')
+    page.wait_for_selector('.duplicate-stack', timeout=15000)
+    wait_for_idle(page)
+    # Open the first stack (largest group, sorted by size)
+    page.locator('.duplicate-stack').first.dblclick()
     page.wait_for_selector('#screen-gallery', state='visible', timeout=5000)
     wait_for_idle(page)
     wait_for_thumbnails(page)
@@ -608,11 +641,18 @@ section('custom-groups')
 
 @step('custom-level')
 def step_custom_groups_custom_level(page, ctx):
-    # Navigate back to Groups screen
+    # We're in Gallery group-view mode (from step 4.7) where both
+    # btn-back-gallery and btn-duplicates are hidden.  Navigate via
+    # Database (always visible) to break out, then to Groups.
+    navigate_to(page, 'database')
     navigate_to(page, 'duplicates')
     page.wait_for_timeout(300)
-    # Move slider to Custom (position 0)
+    # Move slider to Custom (position 0).  Remove stale stacks first
+    # so we don't race with the level transition.
+    # Custom level starts empty (no groups yet) so we just wait a beat
+    # rather than waiting for stacks.
     page.evaluate('''() => {
+        document.querySelectorAll('.duplicate-stack').forEach(el => el.remove());
         const slider = document.querySelector('#similarity-slider');
         if (slider) {
             slider.value = 0;
@@ -666,7 +706,7 @@ def step_custom_groups_managing_groups(page, ctx):
     # Create two groups so this step has something to show.
     # The await ensures backend persistence completes before we navigate.
     # createGroup() does an optimistic cache update followed by a forced
-    # loadLevel(4, true) reload, so _groupCache[4] is correct when this
+    # loadLevel(5, true) reload, so _groupCache[5] is correct when this
     # returns.  We do NOT invalidate afterwards — that would clear the
     # valid cache and force a redundant re-fetch.
     page.evaluate('''async () => {
@@ -684,8 +724,8 @@ def step_custom_groups_managing_groups(page, ctx):
     # navigated there), so this triggers a real onLeave/onEnter cycle.
     # The duplicates onChanged handler already set needsRefresh=true
     # (fired by createGroup while we were on Gallery), so onEnter() will
-    # call _loadGroups() which picks up the cached level-4 data.
-    # onEnter() also syncs the slider to state.currentLevel (4 = Custom),
+    # call _loadGroups() which picks up the cached level-5 data.
+    # onEnter() also syncs the slider to state.currentLevel (5 = Custom),
     # so we must NOT manually set the slider — that would dispatch an
     # input event triggering _setLevel() which races with _loadGroups().
     navigate_to(page, 'duplicates')
