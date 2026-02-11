@@ -474,11 +474,13 @@ html, body {
     document.addEventListener('keydown', function (e) {
         // If TOC is visible, handle differently
         if (tocVisible()) {
-            if (e.key !== 'Escape') {
+            if (e.key === 'Escape') {
+                // Navigate back to the landing page
+                window.location.href = '../index.html';
+            } else {
                 hideToc();
                 speak(currentIndex);
             }
-            // Escape on TOC does nothing (stays on TOC)
             return;
         }
 
