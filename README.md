@@ -622,6 +622,16 @@ The tutorial example images come from [Lorem Picsum](https://picsum.photos), whi
 
 Finally, thanks to [Anthropic](https://www.anthropic.com) and [Claude Code](https://claude.ai/code) for doing a lot of the grunt work.
 
+## Support 7th software
+
+We hope you enjoy Imaginary and find it valuable. If you’d like to show your support, please use one of the links below:
+
+![Payment links](support.png)
+
+- [USD ($) contribution](https://buy.stripe.com/fZu3cv4WOdN0b0N8Jaebu01)
+- [GBP (£) contribution](https://buy.stripe.com/14A14nexodN00m94sUebu00)
+- [EUR (€) contribution](https://buy.stripe.com/dRmbJ1blc4cq3ylbVmebu02)
+
 ## Licence
 
 Apache 2.0
