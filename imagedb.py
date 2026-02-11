@@ -3054,6 +3054,7 @@ class NimaThread(threading.Thread):
         self._model_loaded = False  # Track whether we've attempted loading
 
         self._processed_count = 0
+        self._skipped_count = 0  # Images skipped (e.g. missing thumbnails)
         self._error_count = 0
         self._completion_triggered = False
 
@@ -3206,6 +3207,10 @@ class NimaThread(threading.Thread):
             except Exception as e:
                 logger.warning(f'Failed to load thumbnail for NIMA: {image_id}: {e}')
 
+        skipped = len(image_ids) - len(valid_ids)
+        if skipped > 0:
+            self._skipped_count += skipped
+
         if not pil_images:
             return
 
@@ -3232,17 +3237,25 @@ class NimaThread(threading.Thread):
         Completion requires:
         - IngestionThread is idle (no more images coming in)
         - NIMA queue is empty
-        - At least one image has been scored (avoids spurious events on
+        - At least one image has been dequeued (avoids spurious events on
           startup when the queue hasn't been populated yet)
         """
         if self._completion_triggered:
             return
 
-        if (self._processed_count > 0
+        total_dequeued = self._processed_count + self._skipped_count + self._error_count
+        if (total_dequeued > 0
                 and self.ingestion_thread.is_idle
                 and self.nima_queue.empty()):
             self._completion_triggered = True
-            logger.info('NIMA scoring complete')
+            parts = []
+            if self._processed_count:
+                parts.append(f'scored {self._processed_count}')
+            if self._skipped_count:
+                parts.append(f'skipped {self._skipped_count} (no thumbnail)')
+            if self._error_count:
+                parts.append(f'{self._error_count} errors')
+            logger.info(f'NIMA scoring complete — {", ".join(parts)}')
 
             if self._event_queue:
                 self._event_queue.emit(EVENT_NIMA_COMPLETE, {
