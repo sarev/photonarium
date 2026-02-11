@@ -30,10 +30,12 @@ If applicable, add screenshots to help explain your problem.
 - Python version [e.g. 3.11.9]
 
 **Smartphone (please complete the following information):**
- - Device: [e.g. iPhone6]
- - OS: [e.g. iOS8.1]
+ - Imaginary Version [e.g. 1]
+ - Device: [e.g. PC]
+ - OS: [e.g. Windows 11]
+ - RAM: [e.g. 32GB]
+ - GPU: [e.g. NVIDIA RTX 4060 mobile]
  - Browser [e.g. stock browser, safari]
- - Version [e.g. 22]
 
 **Additional context**
 Add any other context about the problem here.
