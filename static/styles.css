@@ -53,20 +53,20 @@
     --color-overlay-toast-bg: rgba(0, 0, 0, 0.7);
 }
 
-/* Light theme (warm grey) */
+/* Light theme (warm mauve) */
 [data-theme="light"] {
-    --color-bg-primary: #eae5e3;
-    --color-bg-secondary: #e0dad6;
-    --color-bg-tertiary: #d6cfca;
-    --color-bg-elevated: #f4f0f1;
+    --color-bg-primary: #eae4ea;
+    --color-bg-secondary: #e0d8e0;
+    --color-bg-tertiary: #d5cdd5;
+    --color-bg-elevated: #f4eff4;
 
-    --color-text-primary: #2e2a27;
-    --color-text-secondary: #5b5652;
-    --color-text-muted: #86807a;
-    --color-text-inverse: #eae5e3;
+    --color-text-primary: #2e2a2e;
+    --color-text-secondary: #5a5459;
+    --color-text-muted: #847e84;
+    --color-text-inverse: #eae4ea;
 
-    --color-border: #ccc4bd;
-    --color-border-light: #dbd5d0;
+    --color-border: #cbc3cb;
+    --color-border-light: #dbd4db;
 
     --color-accent: #796a57;
     --color-accent-hover: #695b4a;
@@ -82,9 +82,9 @@
     --color-warning: #ffc107;
     --color-ignore: #8a837d;
 
-    --shadow-sm: 0 1px 2px rgba(46, 42, 39, 0.08);
-    --shadow-md: 0 2px 8px rgba(46, 42, 39, 0.12);
-    --shadow-lg: 0 4px 16px rgba(46, 42, 39, 0.16);
+    --shadow-sm: 0 1px 2px rgba(46, 40, 46, 0.08);
+    --shadow-md: 0 2px 8px rgba(46, 40, 46, 0.12);
+    --shadow-lg: 0 4px 16px rgba(46, 40, 46, 0.16);
 
     /* Pastel button backgrounds */
     --color-pastel-blue-bg: #e3f2fd;
@@ -156,22 +156,28 @@
     /* Chip/tag button backgrounds (on dark chip backgrounds) */
     --color-chip-button: rgba(255, 255, 255, 0.3);
     --color-chip-button-hover: rgba(255, 255, 255, 0.5);
+
+    /* Ambient background gradient — soft highlight and vignette for depth */
+    --bg-gradient:
+        radial-gradient(ellipse 120% 60% at 50% 0%, rgba(180, 140, 180, 0.06) 0%, transparent 70%),
+        radial-gradient(ellipse 100% 100% at 50% 100%, rgba(140, 120, 150, 0.04) 0%, transparent 60%),
+        var(--color-bg-primary);
 }
 
-/* Dark theme (warm grey) */
+/* Dark theme (warm mauve) */
 [data-theme="dark"] {
-    --color-bg-primary: #231e1d;
-    --color-bg-secondary: #2d2826;
-    --color-bg-tertiary: #383230;
-    --color-bg-elevated: #3f3835;
+    --color-bg-primary: #231d23;
+    --color-bg-secondary: #2d262d;
+    --color-bg-tertiary: #383038;
+    --color-bg-elevated: #3f363f;
 
-    --color-text-primary: #dbd4d0;
-    --color-text-secondary: #ada49f;
-    --color-text-muted: #79726c;
-    --color-text-inverse: #231e1d;
+    --color-text-primary: #dbd4db;
+    --color-text-secondary: #ada4ad;
+    --color-text-muted: #79727a;
+    --color-text-inverse: #231d23;
 
-    --color-border: #4a4340;
-    --color-border-light: #3f3835;
+    --color-border: #4a424a;
+    --color-border-light: #3f363f;
 
     --color-accent: #a19078;
     --color-accent-hover: #b5a38b;
@@ -261,6 +267,12 @@
     /* Chip/tag button backgrounds (on dark chip backgrounds) */
     --color-chip-button: rgba(255, 255, 255, 0.3);
     --color-chip-button-hover: rgba(255, 255, 255, 0.5);
+
+    /* Ambient background gradient — soft highlight and vignette for depth */
+    --bg-gradient:
+        radial-gradient(ellipse 120% 60% at 50% 0%, rgba(160, 100, 170, 0.07) 0%, transparent 70%),
+        radial-gradient(ellipse 100% 100% at 50% 100%, rgba(100, 70, 120, 0.05) 0%, transparent 60%),
+        var(--color-bg-primary);
 }
 
 /* Base reset */
@@ -371,6 +383,7 @@ a:hover {
     flex-direction: column;
     height: 100vh;
     overflow: hidden;
+    background: var(--bg-gradient);
 }
 
 /* Screen visibility controlled by data-screen */
@@ -436,6 +449,17 @@ a:hover {
     height: 24px;
     background-color: var(--color-border);
     margin: 0 0.25rem;
+}
+
+/* Logo button — always visible, links to tutorial */
+.toolbar-logo {
+    text-decoration: none;
+    flex-shrink: 0;
+}
+
+.toolbar-logo img {
+    border-radius: 5px;
+    display: block;
 }
 
 /* Toolbar buttons */
@@ -755,7 +779,6 @@ a:hover {
     display: flex;
     flex: 1;
     overflow: hidden;
-    background-color: var(--color-bg-primary);
 }
 
 /* Wrapper for grid and loading overlay */
@@ -772,7 +795,6 @@ a:hover {
     height: 100%;
     overflow-y: auto;
     position: relative;
-    background-color: var(--color-bg-primary);
 }
 
 /* Inner container for absolute positioning */
@@ -1680,7 +1702,6 @@ a:hover {
 
 #screen-faces {
     flex-direction: column;
-    background-color: var(--color-bg-primary);
 }
 
 .faces-container {
@@ -2520,7 +2541,7 @@ a:hover {
     justify-content: center;
     padding: 3rem;
     color: var(--color-text-muted);
-    background: var(--color-bg-primary);
+    background: var(--bg-gradient);
     z-index: 10;
 }
 
@@ -2607,7 +2628,6 @@ a:hover {
     align-items: center;
     padding: 2rem;
     overflow-y: auto;
-    background-color: var(--color-bg-primary);
 }
 
 .database-container {
@@ -2807,7 +2827,6 @@ a:hover {
     align-items: center;
     padding: 2rem;
     overflow-y: auto;
-    background-color: var(--color-bg-primary);
 }
 
 .search-container {
@@ -3344,7 +3363,6 @@ a:hover {
 
 #screen-duplicates {
     flex-direction: column;
-    background-color: var(--color-bg-primary);
 }
 
 .duplicates-container {
@@ -3466,7 +3484,7 @@ a:hover {
     justify-content: center;
     padding: 3rem;
     color: var(--color-text-muted);
-    background: var(--color-bg-primary);
+    background: var(--bg-gradient);
     z-index: 10;
 }
 
@@ -3499,7 +3517,7 @@ a:hover {
     align-items: center;
     justify-content: center;
     gap: 1rem;
-    background-color: var(--color-bg-primary);
+    background: var(--bg-gradient);
     z-index: 500;  /* Above screens, below fullscreen (1000) */
     opacity: 0;
     visibility: hidden;

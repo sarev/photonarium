@@ -26,8 +26,8 @@
     <!-- Critical CSS for loading state - inlined to prevent flash -->
     <style>
         /* Theme colors matching styles.css for seamless transition */
-        html[data-theme="dark"] { --splash-bg: #231e1d; --splash-text: #9e9590; --splash-spinner: #4a4340; --splash-accent: #6b9eff; }
-        html[data-theme="light"] { --splash-bg: #eae5e3; --splash-text: #86807a; --splash-spinner: #ccc4bd; --splash-accent: #796a57; }
+        html[data-theme="dark"] { --splash-bg: #231d23; --splash-text: #9e959e; --splash-spinner: #4a424a; --splash-accent: #6b9eff; }
+        html[data-theme="light"] { --splash-bg: #eae4ea; --splash-text: #847e84; --splash-spinner: #cbc3cb; --splash-accent: #796a57; }
         html { background: var(--splash-bg); }
         body { margin: 0; background: var(--splash-bg); }
         #app-loading {
@@ -107,6 +107,13 @@
         <header id="toolbar">
             <!-- Left section: screen-specific controls -->
             <div class="toolbar-left">
+                <!-- Logo — links to the online tutorial (visible on all screens) -->
+                <a href="https://imaginary.7thsoftware.co.uk/tutorial/" target="_blank" rel="noopener"
+                   class="toolbar-btn toolbar-logo" title="Open the Imaginary tutorial">
+                    <img src="favicon90.png" alt="Imaginary" width="28" height="28">
+                </a>
+                <div class="toolbar-separator"></div>
+
                 <!-- Gallery controls (visible when data-screen="gallery") -->
                 <div class="toolbar-group" data-for-screen="gallery">
                     <button id="btn-thumb-smaller" class="toolbar-btn" title="Smaller thumbnails">
