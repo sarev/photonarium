@@ -28,13 +28,14 @@ Once you have run the model downloader, the models stay on your machine. Everyth
 
 ## A quick start (how most people use it)
 
-1. Start Imaginary, then open the web page in your browser.
-2. Go to **Database** and **add one or more folders** that contain photos.
-3. Let it scan. Big libraries take time, especially face detection.
-4. Go back to **Gallery** and start browsing.
-5. Use **Search** when you want to find something specific.
-6. Use **Groups** when you want to clean up duplicates or organise images into albums.
-7. Use **Faces** when you want to name people and improve recognition.
+1. Start the Imaginary app in a terminal window.
+2. Open the Imaginary web page in your browser, the default is http://localhost:5000
+3. Go to **Database** and **add one or more folders** that contain photos.
+4. Let it scan. Big libraries take time, especially face detection.
+5. Go to **Gallery** and start browsing.
+6. Use **Search** when you want to find specific images.
+7. Use **Groups** when you want to clean up duplicates or organise images into albums.
+8. Use **Faces** when you want to name people and improve recognition.
 
 ## Getting around
 
@@ -42,9 +43,9 @@ Use the toolbar buttons, or these shortcuts (ignored while you are typing in a t
 
 - **Ctrl/Cmd + G**: Gallery
 - **Ctrl/Cmd + M**: Manage Database
-- **Ctrl/Cmd + D**: Groups
-- **Ctrl/Cmd + S**: Search
-- **Ctrl/Cmd + F**: Faces
+- **Ctrl/Cmd + D**: Groups (Duplicates and Albums)
+- **Ctrl/Cmd + S**: Search and Filter
+- **Ctrl/Cmd + F**: Faces and People
 
 Common keys across screens:
 
@@ -577,6 +578,23 @@ Settings are stored in `.imaginary.yml` (created automatically on first run). Ex
 * If two people get mixed up, increase that person's recognition threshold.
 * Emoji ratings work well for quick favourites, and make filtering pleasant.
 * Use negative terms in search (`beach -people`) to exclude concepts from results.
+
+## Acknowledgements
+
+Imaginary is built on the shoulders of some remarkable open-source AI/ML work:
+
+- [OpenCLIP](https://github.com/mlfoundations/open_clip) (LAION) — the semantic image embeddings that power search and similarity
+- [BLIP / BLIP-2](https://github.com/salesforce/LAVIS) (Salesforce Research) — automatic image captioning
+- [facenet-pytorch](https://github.com/timesler/facenet-pytorch) — MTCNN face detection and InceptionResnetV1 face recognition
+- [LAION Aesthetic Predictor](https://github.com/LAION-AI/aesthetic-predictor) (LAION) — lightweight aesthetic quality scoring
+- [NIMA](https://github.com/truskovskiyk/nima.pytorch) — neural image quality assessment trained on human aesthetic judgements
+- [PyTorch](https://pytorch.org/) (Meta) — the foundation all of the above is built on
+
+Thanks to the broader Python community — Flask, Pillow, NumPy, OpenCV, and countless other libraries — for making a project like this feasible for a small team.
+
+The tutorial example images come from [Lorem Picsum](https://picsum.photos), which serves freely usable photos from [Unsplash](https://unsplash.com).
+
+Finally, thanks to [Anthropic](https://www.anthropic.com) and [Claude Code](https://claude.ai/code) for doing a lot of the grunt work.
 
 ## Licence
 
