@@ -22,7 +22,8 @@ Find out more about the motivations behind Imaginary in [`BACKGROUND.md`](BACKGR
 - **AI search** that understands what you type (for example: "sunset over mountains", "birthday cake"), with negative terms to exclude concepts (e.g. "beach -people")
 - **Face workflows**: detect faces, group unknowns, name people, and use those names later
 - **Duplicate finding** at multiple strictness levels (identical, near-identical, similar, related) plus auto-generated **directory groups** and user-curated **custom groups** (albums)
-- **Ratings and descriptions** so you can build your own “favourites” system
+- **EXIF metadata** viewing, searching, and filtering by camera settings (camera, lens, ISO, aperture, shutter speed, and more)
+- **Ratings and descriptions** so you can build your own "favourites" system
 
 Once you have run the model downloader, the models stay on your machine. Everything runs locally.
 
@@ -124,6 +125,8 @@ When you select a photo, the info panel shows basic details and lets you edit:
   - Use the emoji button to insert emoji quickly.
 
 Descriptions and ratings help when you search later.
+
+- **Metadata** opens a dialog showing EXIF data extracted from the image file (camera, lens, focal length, aperture, shutter speed, ISO, and so on). If any field looks interesting, click the filter icon next to it to select it. You can select several fields, then click **Done** to jump straight to Search with those values pre-filled as metadata filters.
 
 ### Reviewing groups in the Gallery
 
@@ -248,6 +251,19 @@ Only available when face detection is enabled and you have named people.
 - You can also drag and drop people between the available and selected lists.
 - **Enter** confirms (unless you’re typing in the search box).
 - **Escape** cancels.
+
+### Metadata
+
+Filter by EXIF camera settings such as Camera, Lens, ISO, Aperture, Shutter Speed, and others. This is useful for finding all images taken with a particular camera body, lens, or shooting settings.
+
+- Click the metadata area or the camera button to open the metadata picker.
+- Type into any field to search — matching is fuzzy (subsequence), so "nkn" will find "Nikon" and "d85" will find "D850".
+- As you type, a dropdown shows matching values from your library.
+- Click **Done** to confirm your choices. Each filled field appears as a chip in the filter bar.
+- Click the **x** on a chip to remove that criterion.
+- Multiple metadata filters are combined with AND (all must match).
+
+You can also add metadata filters directly from the Gallery: open the info panel, click **View EXIF data**, then click the filter icon next to any value you want to filter by.
 
 ### Applying or clearing
 
@@ -544,6 +560,7 @@ python app.py --scan                   # Run folder scan on startup
 python app.py --detect-faces           # Run face detection on startup
 python app.py --group-faces            # Run unknown face grouping on startup
 python app.py --scan --detect-faces    # Combine flags as needed
+python app.py --extract-exif           # Extract EXIF metadata for all images and exit
 python app.py --list-models            # Output required models as JSON (for scripting)
 ```
 
