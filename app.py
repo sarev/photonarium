@@ -1165,6 +1165,8 @@ def sort_duplicates_semantic():
     image_ids = data.get('image_ids', [])
     if not image_ids:
         return error_response('image_ids array is required')
+    if not isinstance(image_ids, list):
+        return error_response('image_ids must be an array')
 
     try:
         scores = get_db().get_semantic_scores_for_images(query, image_ids)
@@ -1994,6 +1996,10 @@ def assign_faces():
 
     if not face_ids:
         return error_response('face_ids is required')
+    if not isinstance(face_ids, list):
+        return error_response('face_ids must be an array')
+    if not isinstance(face_ids, list):
+        return error_response('face_ids must be an array')
     if not person_id:
         return error_response('person_id is required')
 
@@ -2055,6 +2061,8 @@ def unassign_faces_simple():
     face_ids = data.get('face_ids', [])
     if not face_ids:
         return error_response('face_ids is required')
+    if not isinstance(face_ids, list):
+        return error_response('face_ids must be an array')
 
     db = get_db()
 
@@ -2096,6 +2104,8 @@ def suppress_faces_batch():
     face_ids = data.get('face_ids', [])
     if not face_ids:
         return error_response('face_ids is required')
+    if not isinstance(face_ids, list):
+        return error_response('face_ids must be an array')
 
     db = get_db()
 
@@ -2132,6 +2142,8 @@ def update_faces_batch():
     face_ids = data.get('face_ids', [])
     if not face_ids:
         return error_response('face_ids is required')
+    if not isinstance(face_ids, list):
+        return error_response('face_ids must be an array')
 
     locked = data.get('locked')
 
@@ -2251,6 +2263,8 @@ def identify_faces_batch():
 
     if not face_ids:
         return error_response('face_ids is required')
+    if not isinstance(face_ids, list):
+        return error_response('face_ids must be an array')
     if not name:
         return error_response('name is required')
 
@@ -2683,6 +2697,8 @@ def unassign_faces_batch():
     face_ids = data.get('face_ids', [])
     if not face_ids:
         return error_response('face_ids is required')
+    if not isinstance(face_ids, list):
+        return error_response('face_ids must be an array')
 
     db = get_db()
     unassigned_count = 0
