@@ -1099,6 +1099,63 @@ const VirtualGrid = {
             },
 
             /**
+             * Returns IDs of all items whose layout position intersects the given
+             * content-coordinate rectangle. Uses pure geometry — works for items
+             * outside the rendered buffer zone (no DOM query needed).
+             *
+             * @param {{left: number, top: number, right: number, bottom: number}} rect
+             *     Rectangle in content coordinates (scroll-adjusted, not viewport).
+             * @returns {string[]} IDs of intersecting items
+             */
+            getItemIdsInRect(rect) {
+                const { itemsPerRow, itemWidth, itemHeight } = this._state;
+                const { gap, padding } = this._config;
+                if (!itemsPerRow || !itemHeight) return [];
+
+                const items = this._config.getItems();
+                const totalCount = items.length;
+                if (totalCount === 0) return [];
+
+                const colStride = itemWidth + gap;
+                const cellHeight = itemHeight - gap; // actual item height (no gap)
+
+                // Row range that could intersect (each row occupies itemHeight px)
+                const firstRow = Math.max(0, Math.floor((rect.top - padding) / itemHeight));
+                const lastRow = Math.min(
+                    Math.ceil(totalCount / itemsPerRow) - 1,
+                    Math.floor((rect.bottom - padding) / itemHeight)
+                );
+
+                // Column range that could intersect
+                const firstCol = Math.max(0, Math.floor((rect.left - padding) / colStride));
+                const lastCol = Math.min(
+                    itemsPerRow - 1,
+                    Math.floor((rect.right - padding) / colStride)
+                );
+
+                const ids = [];
+                for (let row = firstRow; row <= lastRow; row++) {
+                    for (let col = firstCol; col <= lastCol; col++) {
+                        const index = row * itemsPerRow + col;
+                        if (index >= totalCount) break;
+
+                        // Exact item bounds (same formula as _getItemPosition)
+                        const itemTop = padding + row * itemHeight;
+                        const itemLeft = padding + col * colStride;
+                        const itemRight = itemLeft + itemWidth;
+                        const itemBottom = itemTop + cellHeight;
+
+                        // Intersection test
+                        if (rect.right > itemLeft && rect.left < itemRight &&
+                            rect.bottom > itemTop && rect.top < itemBottom) {
+                            ids.push(String(this._config.getItemId(items[index])));
+                        }
+                    }
+                }
+                return ids;
+            },
+
+            /**
              * Unbinds scroll listener and cancels pending operations.
              *
              * Call when:
@@ -1677,18 +1734,17 @@ const GridSelection = {
                 const { box, isRightButton, dragged } = this._dragState;
 
                 if (dragged) {
-                    const boxRect = box.getBoundingClientRect();
-                    const gridEl = this._getGridElement();
-                    const items = gridEl.querySelectorAll(this._config.itemSelector);
-                    const idsInBox = [];
-
-                    for (const item of items) {
-                        const itemRect = item.getBoundingClientRect();
-                        if (this._rectsIntersect(boxRect, itemRect)) {
-                            const id = item.dataset.id || item.dataset.groupHash;
-                            if (id) idsInBox.push(id);
-                        }
-                    }
+                    // Use geometry-based hit test via VirtualGrid so that items
+                    // outside the rendered buffer zone (scrolled out of view
+                    // during auto-scroll) are still included in the selection.
+                    const boxStyle = box.style;
+                    const contentRect = {
+                        left:   parseFloat(boxStyle.left),
+                        top:    parseFloat(boxStyle.top),
+                        right:  parseFloat(boxStyle.left) + parseFloat(boxStyle.width),
+                        bottom: parseFloat(boxStyle.top) + parseFloat(boxStyle.height)
+                    };
+                    const idsInBox = this._config.grid.getItemIdsInRect(contentRect);
 
                     if (isRightButton) {
                         // Toggle selection for items in box
@@ -1706,18 +1762,6 @@ const GridSelection = {
                 // Cleanup
                 box.remove();
                 this._dragState = null;
-            },
-
-            /**
-             * Checks if two rectangles intersect.
-             * @param {DOMRect} r1
-             * @param {DOMRect} r2
-             * @returns {boolean}
-             * @private
-             */
-            _rectsIntersect(r1, r2) {
-                return !(r1.right < r2.left || r1.left > r2.right ||
-                         r1.bottom < r2.top || r1.top > r2.bottom);
             },
 
             // ==================== Keyboard Navigation ====================
