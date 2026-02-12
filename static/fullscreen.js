@@ -1255,8 +1255,11 @@ const Fullscreen = {
                 const faces = AppState.faces.getForImage(imageId);
                 if (faces.length) {
                     // Wait for image to load before rendering overlay
-                    // (overlay needs correct image dimensions)
+                    // (overlay needs correct image dimensions).
+                    // Staleness check: user may have navigated away while
+                    // the rotated image was loading.
                     this._els.image.addEventListener('load', () => {
+                        if (this.state.currentId !== imageId) return;
                         Faces.renderFaceOverlay(faces, imageId);
                     }, { once: true });
                 }
