@@ -550,6 +550,8 @@ If you prefer to install manually, or the installer script doesn't suit your set
 
   The app runs entirely offline after models are downloaded.
 
+  If you haven't looked already, take a look at the [Imaginary site](https://imaginary.7thsoftware.co.uk/), and take a look at the tutorial.
+
   **Important:** Imaginary is designed to run locally on the same machine as your images. It has not been hardened for exposure to the public internet or untrusted networks. Do not publish it or make it accessible to others — doing so may introduce security risks that are outside the scope of this project.
 
 ### Command line options
@@ -636,4 +638,4 @@ We hope you enjoy Imaginary and find it valuable. If you’d like to show your s
 
 ## Licence
 
-Apache 2.0
+Copyright © 2026 7th software Ltd. · Licensed under Apache 2.0
