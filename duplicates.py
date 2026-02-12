@@ -195,15 +195,28 @@ class UnionFind:
     def find(self, x: int) -> int:
         """Find the root of element x with path compression.
 
+        Uses iterative two-pass path compression to avoid stack overflow
+        on large datasets (recursive version could exceed Python's default
+        1000-deep recursion limit with chain-structured groups).
+
         Args:
             x: Element index.
 
         Returns:
             Root index of the set containing x.
         """
-        if self._parent[x] != x:
-            self._parent[x] = self.find(self._parent[x])  # Path compression
-        return self._parent[x]
+        # Pass 1: walk to root
+        root = x
+        while self._parent[root] != root:
+            root = self._parent[root]
+
+        # Pass 2: compress path (point all nodes directly to root)
+        while self._parent[x] != root:
+            next_x = self._parent[x]
+            self._parent[x] = root
+            x = next_x
+
+        return root
 
     def union(self, x: int, y: int) -> bool:
         """Union the sets containing elements x and y.
