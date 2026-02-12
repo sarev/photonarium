@@ -103,7 +103,8 @@ const Search = {
      * @private
      */
     _getAllPeopleSorted() {
-        return AppState.people.getAll().sort((a, b) =>
+        // Spread to avoid mutating AppState's internal array (sort is in-place)
+        return [...AppState.people.getAll()].sort((a, b) =>
             a.name.localeCompare(b.name, undefined, { sensitivity: 'base' })
         );
     },
