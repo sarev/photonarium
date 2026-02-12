@@ -1288,6 +1288,10 @@ const Gallery = {
             return;
         }
 
+        // Guard against stale responses: if the user clicked a different image
+        // while the fetch was in flight, discard this response
+        if (this._infoPanelImageId !== imageId) return;
+
         if (!img) {
             content.innerHTML = '<p class="info-placeholder">Image not found</p>';
             return;
@@ -1708,6 +1712,10 @@ const Gallery = {
 
             try {
                 const response = await App.apiGet(`/images/${imageId}/histogram`);
+
+                // Guard against stale response if user switched images during fetch
+                if (this._infoPanelImageId !== imageId) return;
+
                 const histogramData = response.data;
 
                 // Set image sources from data URLs
