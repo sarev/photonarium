@@ -4974,8 +4974,8 @@
                 }
             }
 
-            // AppState.faces.unassign() does synchronous optimistic updates
-            AppState.faces.unassign(faceId)
+            // AppState.faces.unassign() expects an array of face IDs
+            AppState.faces.unassign([faceId])
                 .then(() => {
                     // Success - AppState handled cache updates
                 })
