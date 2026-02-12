@@ -868,8 +868,12 @@ const Gallery = {
         // Get display images from AppState (single source of truth)
         const displayList = AppState.images.getDisplayList();
 
-        // Handle empty state
+        // Handle empty state — unbind grid/selection so scroll listeners and
+        // blob URLs from the previous render are cleaned up
         if (displayList.length === 0) {
+            if (this._selection) this._selection.unbind();
+            if (this._grid) this._grid.unbind();
+            ThumbnailLoader.clear();
             grid.innerHTML = '<div class="empty-state"><span class="material-symbols-outlined">photo_library</span><p>No images to display</p></div>';
             return;
         }
