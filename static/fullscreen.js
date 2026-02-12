@@ -1177,15 +1177,11 @@ const Fullscreen = {
         let faces = AppState.faces.getForImage(imageId);
 
         if (!faces.length) {
-            // Cache might be empty/partial - fetch fresh and add to cache
+            // Cache might be empty/partial - fetch fresh (fetchForImage
+            // automatically populates the cache with the response)
             try {
                 const fetched = await AppState.faces.fetchForImage(imageId, { fresh: true });
-
-                // Add fetched faces to cache so identify() can find them
                 if (fetched?.length) {
-                    for (const face of fetched) {
-                        AppState.faces._test.addToCache(face);
-                    }
                     faces = fetched;
                 }
             } catch (err) {
