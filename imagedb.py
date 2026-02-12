@@ -3074,6 +3074,14 @@ class FaceDetectionThread(threading.Thread):
 
                 except Exception as e:
                     logger.error(f'Error in face detection thread: {e}')
+                    # If the prefetch future failed, its batch_ids were never
+                    # transferred to batch_ids.  Claim them now so the finally
+                    # block calls task_done() for them and clear the failed
+                    # future so we don't retry it on the next loop iteration.
+                    if prefetch_future is not None:
+                        batch_ids = prefetch_batch_ids
+                        prefetch_future = None
+                        prefetch_batch_ids = []
                     self._error_count += len(batch_ids)
                 finally:
                     # Always mark items as done, even on error or shutdown
