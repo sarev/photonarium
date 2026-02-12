@@ -258,44 +258,109 @@ def _reset_exif_orientation(path: Path) -> bool:
     the original EXIF orientation tag even though it has physically rotated
     the pixels. This causes issues when other code applies exif_transpose().
 
+    Modifies the orientation tag byte directly in the JPEG's EXIF segment,
+    preserving all image data and other metadata bit-for-bit. This avoids
+    re-encoding the JPEG (which would defeat jpegtran's lossless rotation).
+
     Args:
         path: Path to the JPEG file.
 
     Returns:
         True if successful, False otherwise.
     """
+    ORIENTATION_TAG = 0x0112  # 274
+
     try:
-        with Image.open(path) as img:
-            # Get existing EXIF data
-            exif = img.getexif()
-            if not exif:
-                return True  # No EXIF data, nothing to fix
+        data = bytearray(path.read_bytes())
+        if len(data) < 4 or data[:2] != b'\xff\xd8':
+            return True  # Not a valid JPEG, nothing to do
 
-            # Check if orientation tag exists (tag 0x0112 = 274)
-            ORIENTATION_TAG = 274
-            if ORIENTATION_TAG not in exif:
-                return True  # No orientation tag, nothing to fix
+        # Scan JPEG markers to find the APP1 (EXIF) segment
+        pos = 2  # After SOI marker
+        while pos < len(data) - 3:
+            if data[pos] != 0xFF:
+                return True  # No more markers, no EXIF found
 
-            if exif[ORIENTATION_TAG] == 1:
-                return True  # Already normal orientation
+            marker_type = data[pos + 1]
 
-            # Set orientation to 1 (normal)
-            exif[ORIENTATION_TAG] = 1
+            # SOS (start of scan) means no more metadata segments
+            if marker_type == 0xDA:
+                return True
 
-            # Save with updated EXIF
-            # Need to save to temp file then replace (can't overwrite while open)
-            with tempfile.NamedTemporaryFile(
-                suffix='.jpg',
-                delete=False,
-                dir=path.parent,
-            ) as tmp:
-                tmp_path = Path(tmp.name)
+            # Skip markers without length fields (SOI, EOI, RST0-RST7)
+            if marker_type in (0xD8, 0xD9) or 0xD0 <= marker_type <= 0xD7:
+                pos += 2
+                continue
 
-            img.save(tmp_path, 'JPEG', quality=95, exif=exif, optimize=True)
+            seg_length = int.from_bytes(data[pos + 2:pos + 4], 'big')
 
-        _move_with_retry(tmp_path, path)
-        logger.debug(f'Reset EXIF orientation to normal: {path}')
-        return True
+            if marker_type == 0xE1:  # APP1
+                app1_data_start = pos + 4  # After marker (2) and length (2)
+
+                # Verify this is an EXIF APP1 (not XMP or other APP1 usage)
+                if data[app1_data_start:app1_data_start + 6] != b'Exif\x00\x00':
+                    pos += 2 + seg_length
+                    continue
+
+                # Parse the TIFF header within the EXIF segment
+                tiff_start = app1_data_start + 6
+                byte_order = bytes(data[tiff_start:tiff_start + 2])
+                if byte_order == b'MM':
+                    endian = 'big'
+                elif byte_order == b'II':
+                    endian = 'little'
+                else:
+                    return True  # Unknown byte order, skip
+
+                # First IFD offset (relative to tiff_start)
+                ifd_offset = int.from_bytes(
+                    data[tiff_start + 4:tiff_start + 8], endian
+                )
+                ifd_pos = tiff_start + ifd_offset
+
+                # Read number of IFD0 entries
+                num_entries = int.from_bytes(
+                    data[ifd_pos:ifd_pos + 2], endian
+                )
+
+                # Scan IFD0 entries for the orientation tag
+                for i in range(num_entries):
+                    entry_pos = ifd_pos + 2 + i * 12
+                    tag = int.from_bytes(
+                        data[entry_pos:entry_pos + 2], endian
+                    )
+                    if tag == ORIENTATION_TAG:
+                        # Type is SHORT (3), count is 1, value is inline
+                        # at entry_pos + 8 (2 bytes)
+                        val = int.from_bytes(
+                            data[entry_pos + 8:entry_pos + 10], endian
+                        )
+                        if val == 1:
+                            return True  # Already normal
+
+                        # Overwrite with orientation = 1
+                        data[entry_pos + 8:entry_pos + 10] = \
+                            (1).to_bytes(2, endian)
+
+                        # Write atomically via temp file
+                        with tempfile.NamedTemporaryFile(
+                            suffix='.jpg',
+                            delete=False,
+                            dir=path.parent,
+                        ) as tmp:
+                            tmp_path = Path(tmp.name)
+                        tmp_path.write_bytes(data)
+                        _move_with_retry(tmp_path, path)
+                        logger.debug(
+                            f'Reset EXIF orientation to normal: {path}'
+                        )
+                        return True
+
+                return True  # Orientation tag not in IFD0
+
+            pos += 2 + seg_length
+
+        return True  # No EXIF segment found
 
     except Exception as e:
         logger.warning(f'Failed to reset EXIF orientation for {path}: {e}')
@@ -364,6 +429,11 @@ def _rotate_jpeg_lossless(path: Path, degrees: float) -> bool:
         return False
     except subprocess.TimeoutExpired:
         logger.warning(f'jpegtran timed out for: {path}')
+        if 'tmp_path' in locals() and tmp_path.exists():
+            try:
+                tmp_path.unlink()
+            except OSError:
+                pass  # Best-effort cleanup
         return False
     except Exception as e:
         logger.warning(f'jpegtran error for {path}: {e}')
