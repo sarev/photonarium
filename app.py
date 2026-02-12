@@ -2457,7 +2457,7 @@ def suppress_face_endpoint(face_id):
                 # Person still has faces but lost their preferred - select new one
                 new_preferred_id = remaining_faces['id']
                 db.conn.execute(
-                    'UPDATE people SET preferred_face_id = ? WHERE id = ?',
+                    "UPDATE people SET preferred_face_id = ?, updated_at = datetime('now') WHERE id = ?",
                     (new_preferred_id, old_person_id)
                 )
                 # Lock the new preferred face (prevents auto-reassignment)

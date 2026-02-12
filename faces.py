@@ -1374,8 +1374,8 @@ def create_face(
     conn.execute(
         '''INSERT INTO faces
            (id, image_id, box_x, box_y, box_w, box_h, confidence, embedding,
-            person_id, semantic_embedding)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)''',
+            person_id, semantic_embedding, created_at, updated_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'), datetime('now'))''',
         (face_id, image_id, box_x, box_y, box_w, box_h, confidence,
          embedding_bytes, person_id, semantic_bytes)
     )
@@ -1903,8 +1903,8 @@ def mark_no_faces_detected(
     conn.execute(
         '''INSERT INTO faces
            (id, image_id, box_x, box_y, box_w, box_h, confidence, embedding,
-            person_id, suppressed)
-           VALUES (?, ?, 0, 0, 0, 0, 0, ?, NULL, 1)''',
+            person_id, suppressed, created_at, updated_at)
+           VALUES (?, ?, 0, 0, 0, 0, 0, ?, NULL, 1, datetime('now'), datetime('now'))''',
         (face_id, image_id, dummy_embedding)
     )
     conn.commit()
@@ -2691,8 +2691,11 @@ def _compute_unknown_face_groups_impl(
     groups = uf.extract_groups_by_id()
     logger.info(f'Found {len(groups)} distinct clusters, assigning group IDs...')
 
-    # Clear all existing group IDs first
-    conn.execute("UPDATE faces SET unknown_group_id = NULL WHERE person_id IS NULL")
+    # Clear all existing group IDs first (set updated_at per concurrency contract)
+    conn.execute(
+        "UPDATE faces SET unknown_group_id = NULL, updated_at = datetime('now') "
+        "WHERE person_id IS NULL AND unknown_group_id IS NOT NULL"
+    )
 
     # Assign new group IDs (batch to avoid SQLite variable limit of ~999)
     BATCH_SIZE = 500  # Leave room for the group_id parameter
@@ -2855,9 +2858,10 @@ def compute_unknown_face_groups_async(
                 logger.debug('Async face grouping: WRITE phase started')
 
                 # Clear all existing group IDs for unknown, non-suppressed faces
+                # (set updated_at per concurrency contract)
                 db.conn.execute(
-                    "UPDATE faces SET unknown_group_id = NULL "
-                    "WHERE person_id IS NULL AND suppressed = 0"
+                    "UPDATE faces SET unknown_group_id = NULL, updated_at = datetime('now') "
+                    "WHERE person_id IS NULL AND suppressed = 0 AND unknown_group_id IS NOT NULL"
                 )
 
                 # Assign new group IDs (batch to avoid SQLite variable limit)
