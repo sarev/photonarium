@@ -180,18 +180,29 @@ def invalidate_images_cache():
         _images_cache = None
 
 
+_caption_generator_lock = threading.Lock()
+
+
 def get_caption_generator() -> CaptionGenerator:
-    """Get the caption generator, initializing if necessary."""
+    """Get the caption generator, initializing if necessary.
+
+    Thread-safe: uses a lock to prevent duplicate model loading when
+    two concurrent caption requests arrive before the model is loaded.
+    """
     global _caption_generator
-    if _caption_generator is None:
-        config = get_db().config
-        _caption_generator = CaptionGenerator(
-            model_name=config.caption_model,
-            max_length=config.caption_max_length,
-            min_length=config.caption_min_length,
-            num_beams=config.caption_num_beams,
-            british_english=config.caption_british_english,
-        )
+    if _caption_generator is not None:
+        return _caption_generator
+    with _caption_generator_lock:
+        # Double-checked locking: another thread may have initialised while we waited
+        if _caption_generator is None:
+            config = get_db().config
+            _caption_generator = CaptionGenerator(
+                model_name=config.caption_model,
+                max_length=config.caption_max_length,
+                min_length=config.caption_min_length,
+                num_beams=config.caption_num_beams,
+                british_english=config.caption_british_english,
+            )
     return _caption_generator
 
 
@@ -248,19 +259,26 @@ atexit.register(shutdown_db)
 
 # Global thumbnail cache instance (initialized lazily)
 _thumbnail_cache: ThumbnailCache | None = None
+_thumbnail_cache_lock = threading.Lock()
 
 
 def get_thumbnail_cache() -> ThumbnailCache:
-    """Get the thumbnail cache instance, initializing if necessary."""
+    """Get the thumbnail cache instance, initializing if necessary.
+
+    Thread-safe: uses a lock to prevent duplicate initialization.
+    """
     global _thumbnail_cache
-    if _thumbnail_cache is None:
-        config = get_db().config
-        max_bytes = config.thumbnail_cache_size_mb * 1024 * 1024
-        _thumbnail_cache = ThumbnailCache(max_bytes)
-        if max_bytes > 0:
-            logger.info(f'Thumbnail cache initialized: {config.thumbnail_cache_size_mb}MB')
-        else:
-            logger.info('Thumbnail cache disabled (size=0)')
+    if _thumbnail_cache is not None:
+        return _thumbnail_cache
+    with _thumbnail_cache_lock:
+        if _thumbnail_cache is None:
+            config = get_db().config
+            max_bytes = config.thumbnail_cache_size_mb * 1024 * 1024
+            _thumbnail_cache = ThumbnailCache(max_bytes)
+            if max_bytes > 0:
+                logger.info(f'Thumbnail cache initialized: {config.thumbnail_cache_size_mb}MB')
+            else:
+                logger.info('Thumbnail cache disabled (size=0)')
     return _thumbnail_cache
 
 

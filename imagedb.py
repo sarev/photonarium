@@ -1062,8 +1062,8 @@ def get_image_by_path(conn: sqlite3.Connection, path: Path | str) -> dict[str, A
     cursor = conn.execute("""
         SELECT id, path, basename, size, width, height, timestamp,
                timestamp_confidence, checksum, perceptual_hash, laplacian_var,
-               lossless, description, rating, embedding, deleted, created_at,
-               updated_at, mtime, aesthetic_nima, exif_data
+               lossless, description, rating, embedding, description_embedding,
+               deleted, created_at, updated_at, mtime, aesthetic_nima, exif_data
         FROM images
         WHERE path = ?
     """, (path_str,))
@@ -2131,8 +2131,8 @@ class IngestionThread(threading.Thread):
                     exif_json = json.dumps(exif_data) if exif_data else '{}'
                     with self._db_lock:
                         self.conn.execute(
-                            'UPDATE images SET exif_data = ? WHERE id = ?',
-                            (exif_json, existing['id'])
+                            'UPDATE images SET exif_data = ?, updated_at = ? WHERE id = ?',
+                            (exif_json, datetime.now().isoformat(), existing['id'])
                         )
                         if exif_data:
                             _upsert_image_metadata(
@@ -4274,15 +4274,17 @@ class ImageDatabase:
                 embedding = clip_model.encode_text(description)
                 embedding_bytes = embedding.astype(np.float32).tobytes()
 
-                self.conn.execute(
-                    'UPDATE images SET description_embedding = ? WHERE id = ?',
-                    (embedding_bytes, image_id)
-                )
+                with self._db_lock:
+                    self.conn.execute(
+                        'UPDATE images SET description_embedding = ? WHERE id = ?',
+                        (embedding_bytes, image_id)
+                    )
                 count += 1
             except Exception as e:
                 logger.warning(f'Failed to compute description embedding for {image_id}: {e}')
 
-        self.conn.commit()
+        with self._db_lock:
+            self.conn.commit()
         logger.info(f'        Backfilled {count} description embeddings')
 
     def _backfill_aesthetic_laion(self) -> None:
