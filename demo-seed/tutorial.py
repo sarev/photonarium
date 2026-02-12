@@ -64,8 +64,8 @@ VIEWPORT = {'width': 1280, 'height': 800}
 SETTLE_MS = 400             # ms to wait after actions for animations
 
 # Debug: stop after this section number (None = run all)
-STOP_AFTER_SECTION = None
 START_FROM_SECTION = None
+STOP_AFTER_SECTION = None
 
 # ---------------------------------------------------------------------------
 # Tutorial script — section titles and step text loaded from script.json
@@ -773,7 +773,7 @@ def step_faces_unknown_faces(page, ctx):
 
 @step('typing')
 def step_faces_typing(page, ctx):
-    card = nth_face_card(page, 9)
+    card = nth_face_card(page, 10)
     card.scroll_into_view_if_needed()
     wait_for_idle(page)
     # Click the input directly to focus it
@@ -810,15 +810,15 @@ def step_faces_naming(page, ctx):
 
 @step('autocomplete')
 def step_faces_autocomplete(page, ctx):
-    # After naming the 9th face "Alice", it moved to the known section —
-    # so the old 10th face is now the 9th unknown face.
+    # After naming the 10th face "Alice", it moved to the known section —
+    # so faces 1-9 stay in place and the old 11th is now the 10th.
     # First, wait for Alice to be fully persisted in the people cache so
     # autocomplete can find her (the optimistic update + API call needs
     # a moment to propagate).
     page.wait_for_function(
         "() => AppState.people.getAll().some(p => p.name === 'Alice')",
         timeout=5000)
-    card = nth_face_card(page, 9)
+    card = nth_face_card(page, 10)
     card.scroll_into_view_if_needed()
     wait_for_idle(page)
     # Focus the input, then type via JS to reliably fire the 'input' event
@@ -865,14 +865,14 @@ def step_faces_failed_detections(page, ctx):
     page.locator('.face-card-autocomplete-item').first.click()
     page.wait_for_timeout(800)
     # Now select the first non-face via JS-dispatched click
-    click_face_card(page, 3)
+    click_face_card(page, 1)
     wait_for_idle(page)
 
 @step('selecting-multiple')
 def step_faces_selecting_multiple(page, ctx):
     # Right-click each additional non-face to add to selection.
-    # Face 3 was already selected; add the rest.
-    for n in [4, 7, 8, 9, 11, 13, 14]:
+    # Face 1 was already selected; add the rest.
+    for n in [2, 3, 4, 7, 8, 13, 15, 16]:
         click_face_card(page, n, button='right')
         page.wait_for_timeout(150)
     wait_for_idle(page)
