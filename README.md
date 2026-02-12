@@ -2,7 +2,7 @@
 
 ![Photonarium Logo](logo.png)
 
-Photonarium is a photo catalogue that stays on your computer. It’s for people who want the convenience of modern search and face grouping, without uploading their life to someone else’s servers.
+[Photonarium](http://photonarium.org/) is a photo catalogue that stays on your computer. It’s for people who want the convenience of modern search and face grouping, without uploading their life to someone else’s servers.
 
 ## Why Photonarium exists
 
@@ -550,7 +550,7 @@ If you prefer to install manually, or the installer script doesn't suit your set
 
   The app runs entirely offline after models are downloaded.
 
-  If you haven't looked already, take a look at the [Photonarium site](https://photonarium.7thsoftware.co.uk/), and take a look at the tutorial.
+  If you haven't looked already, take a look at the [Photonarium site](http://photonarium.org/tutorial/), and take a look at the tutorial.
 
   **Important:** Photonarium is designed to run locally on the same machine as your images. It has not been hardened for exposure to the public internet or untrusted networks. Do not publish it or make it accessible to others — doing so may introduce security risks that are outside the scope of this project.
 
