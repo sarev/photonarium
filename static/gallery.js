@@ -2184,11 +2184,7 @@ const Gallery = {
         if (group.best_image?.id) {
             const img = document.createElement('img');
             img.alt = group.name || 'Group';
-            // Load thumbnail
-            App.apiGet(`/images/${group.best_image.id}/thumbnail?size=200`).then(async response => {
-                // Use fetch directly to get blob
-            }).catch(() => {});
-            // Use the thumbnail endpoint as src (simple approach)
+            // Load thumbnail directly via img.src
             img.src = `/api/images/${group.best_image.id}/thumbnail?size=200`;
             item.appendChild(img);
         } else {

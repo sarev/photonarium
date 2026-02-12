@@ -2403,9 +2403,9 @@
                         // Clear any pending reload flag (we're handling the update ourselves)
                         reloadPending = false;
 
-                        // Clear selection
-                        if (facesSelection) {
-                            facesSelection.clear();
+                        // Clear picker selection (threshold changes only happen in picker mode)
+                        if (pickerSelection) {
+                            pickerSelection.clear();
                         }
 
                         // Update header (account for showLockedFaces filter)
