@@ -1187,9 +1187,10 @@ def revalidate_person_faces(
     face_locked = [f[2] for f in faces]
     embeddings = np.vstack([f[1] for f in faces])
 
-    # Ensure normalized
+    # Ensure normalized (guard against zero-norm embeddings from corruption)
     norms = np.linalg.norm(embeddings, axis=1, keepdims=True)
     if not np.allclose(norms, 1.0, atol=0.01):
+        norms[norms == 0] = 1
         embeddings = embeddings / norms
 
     # Compute pairwise similarities
@@ -1750,12 +1751,15 @@ def get_face_matches(
     # Compute similarities
     locked_matrix = np.vstack([emb for _, _, _, emb in locked_faces])
 
-    # Ensure L2-normalized
+    # Ensure L2-normalized (guard against zero-norm from corruption)
     target_norm = np.linalg.norm(target_embedding)
+    if target_norm == 0:
+        return []  # Zero-norm embedding cannot produce meaningful matches
     if not np.isclose(target_norm, 1.0, atol=0.01):
         target_embedding = target_embedding / target_norm
     locked_norms = np.linalg.norm(locked_matrix, axis=1)
     if not np.allclose(locked_norms, 1.0, atol=0.01):
+        locked_norms[locked_norms == 0] = 1
         locked_matrix = locked_matrix / locked_norms[:, np.newaxis]
 
     # Dot product = cosine similarity for L2-normalized vectors
@@ -2087,8 +2091,10 @@ def find_best_match(
     if not known_embeddings:
         return None
 
-    # Ensure input embedding is normalized
+    # Ensure input embedding is normalized (guard against zero-norm)
     emb_norm = np.linalg.norm(embedding)
+    if emb_norm == 0:
+        return None  # Zero-norm embedding cannot produce meaningful matches
     if not np.isclose(emb_norm, 1.0, atol=0.01):
         embedding = embedding / emb_norm
 
@@ -2096,8 +2102,10 @@ def find_best_match(
     best_similarity = threshold
 
     for face_id, person_id, known_embedding in known_embeddings:
-        # Ensure known embedding is normalized
+        # Ensure known embedding is normalized (skip zero-norm)
         known_norm = np.linalg.norm(known_embedding)
+        if known_norm == 0:
+            continue
         if not np.isclose(known_norm, 1.0, atol=0.01):
             known_embedding = known_embedding / known_norm
 
@@ -2494,11 +2502,13 @@ def reassess_unknown_faces(
     candidate_norms = np.linalg.norm(candidate_matrix, axis=1)
     if not np.allclose(known_norms, 1.0, atol=0.01):
         logger.warning(f'Known embeddings not normalized! norms: min={known_norms.min():.3f}, max={known_norms.max():.3f}')
-        # Re-normalize
+        # Re-normalize (guard against zero-norm from corruption)
+        known_norms[known_norms == 0] = 1
         known_matrix = known_matrix / known_norms[:, np.newaxis]
     if not np.allclose(candidate_norms, 1.0, atol=0.01):
         logger.warning(f'Candidate embeddings not normalized! norms: min={candidate_norms.min():.3f}, max={candidate_norms.max():.3f}')
-        # Re-normalize
+        # Re-normalize (guard against zero-norm from corruption)
+        candidate_norms[candidate_norms == 0] = 1
         candidate_matrix = candidate_matrix / candidate_norms[:, np.newaxis]
 
     # Compute all similarities at once: (num_candidates, num_known)
@@ -3010,7 +3020,10 @@ def search_unknown_faces_semantic(
     """)
 
     faces = []
-    query_norm = query_embedding / np.linalg.norm(query_embedding)
+    norm = np.linalg.norm(query_embedding)
+    if norm == 0:
+        return []  # Zero-norm embedding cannot produce meaningful matches
+    query_norm = query_embedding / norm
 
     for row in cursor:
         # Decode semantic embedding
@@ -3183,12 +3196,14 @@ def reassess_unknown_faces_async(
             candidate_ids = [fid for fid, _ in candidate_embeddings]
             candidate_matrix = np.vstack([emb for _, emb in candidate_embeddings])
 
-            # Ensure L2-normalized
+            # Ensure L2-normalized (guard against zero-norm from corruption)
             known_norms = np.linalg.norm(known_matrix, axis=1)
             candidate_norms = np.linalg.norm(candidate_matrix, axis=1)
             if not np.allclose(known_norms, 1.0, atol=0.01):
+                known_norms[known_norms == 0] = 1
                 known_matrix = known_matrix / known_norms[:, np.newaxis]
             if not np.allclose(candidate_norms, 1.0, atol=0.01):
+                candidate_norms[candidate_norms == 0] = 1
                 candidate_matrix = candidate_matrix / candidate_norms[:, np.newaxis]
 
             # Compute all similarities at once: (num_candidates, num_known)
