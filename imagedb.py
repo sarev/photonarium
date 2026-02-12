@@ -553,12 +553,14 @@ def folder_path_upper_bound(folder_path: str) -> str:
         Upper bound string for exclusive comparison.
 
     Example:
-        folder_path_upper_bound('/photos/2024/')  # Returns '/photos/2024/~'
-        # Query: WHERE path >= '/photos/2024/' AND path < '/photos/2024/~'
+        folder_path_upper_bound('/photos/2024')  # Returns '/photos/2024/~'
+        # Query: WHERE path >= '/photos/2024' AND path < '/photos/2024/~'
     """
-    # Append '~' (ASCII 126) which is higher than all typical filename characters
-    # This ensures we match all paths starting with folder_path but nothing else
-    return folder_path + '~'
+    # Append the path separator then '~' (ASCII 126, higher than all typical
+    # filename characters).  The separator is critical: without it, a folder
+    # like /photos would also match /photography because both are less than
+    # /photos~ -- the separator ensures only children are matched.
+    return folder_path + os.sep + '~'
 
 
 def get_folders(conn: sqlite3.Connection) -> list[dict[str, Any]]:
@@ -574,15 +576,17 @@ def get_folders(conn: sqlite3.Connection) -> list[dict[str, Any]]:
     """
     # Query folders with count of non-deleted images whose path starts with folder path
     # Use range query instead of LIKE for index efficiency (see folder_path_upper_bound)
+    # The separator before '~' prevents /photos from matching /photography
+    sep_tilde = os.sep + '~'
     cursor = conn.execute("""
         SELECT
             f.path,
             COUNT(i.id) as count
         FROM folders f
-        LEFT JOIN images i ON i.path >= f.path AND i.path < f.path || '~' AND i.deleted = 0
+        LEFT JOIN images i ON i.path >= f.path AND i.path < f.path || ? AND i.deleted = 0
         GROUP BY f.path
         ORDER BY f.path
-    """)
+    """, (sep_tilde,))
     rows = cursor.fetchall()
 
     return [{'path': row['path'], 'count': row['count']} for row in rows]
