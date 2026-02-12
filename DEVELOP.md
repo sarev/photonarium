@@ -1,6 +1,6 @@
 # Developer Guide
 
-This document describes the source files that make up Imaginary, what each one
+This document describes the source files that make up Photonarium, what each one
 does, and how they fit together. It is intended as a map for developers working
 on the codebase.
 
@@ -53,7 +53,7 @@ background processing in threads.
 - **Duplicate detection levels** — Level 0 (exact checksum), Level 1
   (perceptual hash distance), Level 2 (high embedding similarity), Level 3
   (lower embedding similarity). Thresholds are configurable in
-  `.imaginary.yml`.
+  `.photonarium.yml`.
 - **Thumbnails** — Generated on demand and cached on disk keyed by image
   checksum. Most thumbnail logic lives in `thumbnails.py`; only
   database-dependent stubs remain here.
@@ -156,7 +156,7 @@ offline mode (`HF_HUB_OFFLINE=1`); models must be pre-downloaded via
 
 ### `config.py` — Configuration
 
-Loads and validates configuration from `.imaginary.yml`. If no configuration
+Loads and validates configuration from `.photonarium.yml`. If no configuration
 file exists, a default one is created with sensible defaults and comments.
 
 ### `timestamps.py` — Timestamp Extraction
@@ -418,17 +418,17 @@ Business logic and core application state in the frontend is handled by `static/
 
 ---
 
-## Key Principles For Developing Imaginary
+## Key Principles For Developing Photonarium
 
-The following rules apply to all submissions to the Imaginary codebase:
+The following rules apply to all submissions to the Photonarium codebase:
 
 1. Must be compatible with the terms of the Apache 2.0 FOSS license.
-2. Aside from `download_models.py` and the speculative downloading of the Google Material-Symbols fonts, Imaginary should be able to run offline indefinitely.
-3. Imaginary should work correctly on (recent) Windows, Mac, and Linux machines.
-4. Imaginary does not collect user/performance data to be sent anywhere for analysis.
-5. While Imaginary prefers NVIDIA GPUs with CUDA cores for performance reasons, it should still be able to function in a pure CPU environment.
-6. Must respect the pre-existing Imaginary coding styles and formatting.
-7. Must attempt to extend/adapt existing Imaginary code over re-inventing the wheel, duplicating.
+2. Aside from `download_models.py` and the speculative downloading of the Google Material-Symbols fonts, Photonarium should be able to run offline indefinitely.
+3. Photonarium should work correctly on (recent) Windows, Mac, and Linux machines.
+4. Photonarium does not collect user/performance data to be sent anywhere for analysis.
+5. While Photonarium prefers NVIDIA GPUs with CUDA cores for performance reasons, it should still be able to function in a pure CPU environment.
+6. Must respect the pre-existing Photonarium coding styles and formatting.
+7. Must attempt to extend/adapt existing Photonarium code over re-inventing the wheel, duplicating.
 8. The UI/UX design should be clean, elegant, obvious, non-technical, and themically/semantically consistent.
 9. All frontend operations that act upon images/faces/people should be assumed to be batch operations to minimise frontend/backend round-trips and encourage parallelism.
 10. Must be well commented with PEP (Python) and JDoc (JavaScript) comments, covering the *why* as well as the *what* and *how*.

@@ -1,5 +1,5 @@
 /**
- * @fileoverview Search and filter screen module for the Imaginary application.
+ * @fileoverview Search and filter screen module for the Photonarium application.
  *
  * This module handles the Search screen where users create filters to narrow
  * down the gallery view. It registers with the core App module and

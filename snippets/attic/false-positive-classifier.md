@@ -238,7 +238,7 @@ for detected_face in mtcnn_results:
 Run periodically on unknown faces to suggest suppressions.
 
 ```python
-# CLI command: python -m imaginary.cleanup_faces
+# CLI command: python -m photonarium.cleanup_faces
 unknown_faces = get_unknown_faces()
 for face in unknown_faces:
     prob = classifier.predict_proba(face.embedding)
@@ -297,7 +297,7 @@ from sklearn.linear_model import LogisticRegression
 from sklearn.model_selection import train_test_split
 from sklearn.metrics import classification_report
 
-conn = sqlite3.connect('imaginary.db')
+conn = sqlite3.connect('photonarium.db')
 
 # Load real faces (identified)
 cur = conn.execute('''

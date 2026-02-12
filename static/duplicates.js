@@ -1,5 +1,5 @@
 /**
- * @fileoverview Groups screen module for the Imaginary application.
+ * @fileoverview Groups screen module for the Photonarium application.
  *
  * This module handles the Groups screen where users find and manage
  * duplicate or near-duplicate images, as well as user-curated custom groups

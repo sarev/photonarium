@@ -1,4 +1,4 @@
-"""Flask backend for the Imaginary image catalogue application.
+"""Flask backend for the Photonarium image catalogue application.
 
 This module provides the REST API that the frontend communicates with.
 It handles HTTP requests and delegates to the imagedb, faces, and
@@ -134,9 +134,9 @@ app = Flask(__name__, static_folder='static', static_url_path='')
 # Configuration
 # =============================================================================
 
-DATABASE_PATH = os.environ.get('IMAGINARY_DB', 'imaginary.db')
-THUMBNAIL_CACHE_DIR = os.environ.get('IMAGINARY_THUMBNAILS', '.thumbnails')
-CONFIG_PATH = os.environ.get('IMAGINARY_CONFIG', None)
+DATABASE_PATH = os.environ.get('PHOTONARIUM_DB', 'photonarium.db')
+THUMBNAIL_CACHE_DIR = os.environ.get('PHOTONARIUM_THUMBNAILS', '.thumbnails')
+CONFIG_PATH = os.environ.get('PHOTONARIUM_CONFIG', None)
 
 
 # =============================================================================
@@ -2984,7 +2984,7 @@ def run_generate_thumbnails_cli():
 # =============================================================================
 
 if __name__ == '__main__':
-    parser = argparse.ArgumentParser(description='Imaginary - Image Catalogue Server')
+    parser = argparse.ArgumentParser(description='Photonarium - Image Catalogue Server')
     parser.add_argument(
         '-s', '--scan',
         action='store_true',
@@ -3048,12 +3048,12 @@ if __name__ == '__main__':
     if args.data_dir is not None:
         _data_dir = os.path.abspath(args.data_dir)
         os.makedirs(_data_dir, exist_ok=True)
-        if not os.environ.get('IMAGINARY_DB'):
-            DATABASE_PATH = os.path.join(_data_dir, 'imaginary.db')
-        if not os.environ.get('IMAGINARY_THUMBNAILS'):
+        if not os.environ.get('PHOTONARIUM_DB'):
+            DATABASE_PATH = os.path.join(_data_dir, 'photonarium.db')
+        if not os.environ.get('PHOTONARIUM_THUMBNAILS'):
             THUMBNAIL_CACHE_DIR = os.path.join(_data_dir, '.thumbnails')
-        if not os.environ.get('IMAGINARY_CONFIG'):
-            CONFIG_PATH = os.path.join(_data_dir, '.imaginary.yml')
+        if not os.environ.get('PHOTONARIUM_CONFIG'):
+            CONFIG_PATH = os.path.join(_data_dir, '.photonarium.yml')
 
     # Handle list-models command (outputs JSON for download_models.py)
     if args.list_models:

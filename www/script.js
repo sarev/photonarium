@@ -1,5 +1,5 @@
 /* ====================================================================
-   Imaginary Landing Page — Script
+   Photonarium Landing Page — Script
    Minimal JS for carousel navigation, smooth scroll, and mobile menu.
    ==================================================================== */
 

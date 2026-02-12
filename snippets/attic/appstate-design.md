@@ -544,7 +544,7 @@ AppState would address these by:
 - `imageCache`, `imageCacheEpoch` - Image data cache with delta sync
 - `fullscreenSourceScreen` - Navigation tracking
 
-**localStorage Keys (all prefixed `imaginary-`):**
+**localStorage Keys (all prefixed `photonarium-`):**
 - `theme`, `thumbnailSize`, `sortBy`, `sortDirection`
 
 **Event Bus Events:**

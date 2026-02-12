@@ -125,7 +125,7 @@ const AppState = (function() {
 
     /**
      * localStorage helper with JSON serialization and error handling.
-     * All keys are prefixed with 'imaginary-' to avoid collisions.
+     * All keys are prefixed with 'photonarium-' to avoid collisions.
      */
     const storage = {
         /**
@@ -136,7 +136,7 @@ const AppState = (function() {
          */
         get(key, defaultValue) {
             try {
-                const value = localStorage.getItem(`imaginary-${key}`);
+                const value = localStorage.getItem(`photonarium-${key}`);
                 return value !== null ? JSON.parse(value) : defaultValue;
             } catch {
                 return defaultValue;
@@ -150,7 +150,7 @@ const AppState = (function() {
          */
         set(key, value) {
             try {
-                localStorage.setItem(`imaginary-${key}`, JSON.stringify(value));
+                localStorage.setItem(`photonarium-${key}`, JSON.stringify(value));
             } catch (err) {
                 console.error('[AppState.storage] Write error:', err);
             }

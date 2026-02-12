@@ -1,6 +1,6 @@
 ---
-name: Imaginary feature request
-about: 'Suggest an idea for Imaginary '
+name: Photonarium feature request
+about: 'Suggest an idea for Photonarium '
 title: ''
 labels: ''
 assignees: ''

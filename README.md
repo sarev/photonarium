@@ -1,20 +1,20 @@
-# Imaginary
+# Photonarium
 
-![Imaginary Logo](logo.png)
+![Photonarium Logo](logo.png)
 
-Imaginary is a photo catalogue that stays on your computer. It’s for people who want the convenience of modern search and face grouping, without uploading their life to someone else’s servers.
+Photonarium is a photo catalogue that stays on your computer. It’s for people who want the convenience of modern search and face grouping, without uploading their life to someone else’s servers.
 
-## Why Imaginary exists
+## Why Photonarium exists
 
 Most photo apps push you towards the cloud. That is great until you care about privacy, subscriptions, slow uploads, or working offline.
 
-Imaginary keeps your library local and helps you do the three things people actually want:
+Photonarium keeps your library local and helps you do the three things people actually want:
 
 - **Find** photos quickly, even when you cannot remember filenames, and exclude what you don't want
 - **Tidy** a messy collection, especially duplicates and near-duplicates
 - **Organise** around people, favourites, and your own notes
 
-Find out more about the motivations behind Imaginary in [`BACKGROUND.md`](BACKGROUND.md).
+Find out more about the motivations behind Photonarium in [`BACKGROUND.md`](BACKGROUND.md).
 
 ## What it can do
 
@@ -29,8 +29,8 @@ Once you have run the model downloader, the models stay on your machine. Everyth
 
 ## A quick start (how most people use it)
 
-1. Start the Imaginary app in a terminal window.
-2. Open the Imaginary web page in your browser, the default is http://localhost:5000
+1. Start the Photonarium app in a terminal window.
+2. Open the Photonarium web page in your browser, the default is http://localhost:5000
 3. Go to **Database** and **add one or more folders** that contain photos.
 4. Let it scan. Big libraries take time, especially face detection.
 5. Go to **Gallery** and start browsing.
@@ -195,7 +195,7 @@ When you hover a face box, you may see:
 - **Escape** cancels your edit (restores the previous value).
 - **Tab / Shift+Tab** cycles through unknown face inputs so you can name several quickly.
 
-As more photos are tagged, Imaginary can recognise that person in other images.
+As more photos are tagged, Photonarium can recognise that person in other images.
 
 ---
 
@@ -327,7 +327,7 @@ When you open a group in the Gallery, images are automatically sorted by **Quali
 
 Each factor is ranked within the group (percentile), so the scores are always relative — a "good" score in one group doesn't necessarily equal the same absolute quality as in another.
 
-These weights can be adjusted in `.imaginary.yml` to suit your preferences:
+These weights can be adjusted in `.photonarium.yml` to suit your preferences:
 
 - `quality_weight_aesthetic`, `quality_weight_sharpness`, `quality_weight_pixels`, `quality_weight_bpp` — the four component weights (should sum to 1.0).
 - `quality_alpha` — controls how the two aesthetic models are blended (0.0 = LAION only, 1.0 = NIMA only, default 0.60 = a mix of both, leaning more to NIMA).
@@ -403,38 +403,38 @@ Matching threshold:
 
 ### Advice on tagging faces
 
-When you first add a folder of images to Imaginary, it will try to spot all of the faces in the images (which can take some time!). This will normally result in the Faces screen showing a lot of 'unknown' faces. Try to find a face for a person you know and enter their name against their image. This will create your first 'person' for the People list. Then, name a few more examples of their face, ideally in different poses and lighting conditions. At this point, you can move onto another person. Follow these steps for a reasonable selection of the people you want to tag (a few images of each). You can drag-and-drop unknown faces onto a person (even multiple at once) to quickly name them.
+When you first add a folder of images to Photonarium, it will try to spot all of the faces in the images (which can take some time!). This will normally result in the Faces screen showing a lot of 'unknown' faces. Try to find a face for a person you know and enter their name against their image. This will create your first 'person' for the People list. Then, name a few more examples of their face, ideally in different poses and lighting conditions. At this point, you can move onto another person. Follow these steps for a reasonable selection of the people you want to tag (a few images of each). You can drag-and-drop unknown faces onto a person (even multiple at once) to quickly name them.
 
-As you come across faces of people that you're not bothered about naming, you can name them '-'. This is a special name that tells Imaginary that this person is someone you want to ignore.  Clicking on the grey circle with a '-' in it that appears as you hover over an unknown face marks them as a face to ignore. If you have multiple unknown faces selected, they will all be ignored with one click. Moving people under the ignore name is helpful for reducing clutter in the unknown faces list.
+As you come across faces of people that you're not bothered about naming, you can name them '-'. This is a special name that tells Photonarium that this person is someone you want to ignore.  Clicking on the grey circle with a '-' in it that appears as you hover over an unknown face marks them as a face to ignore. If you have multiple unknown faces selected, they will all be ignored with one click. Moving people under the ignore name is helpful for reducing clutter in the unknown faces list.
 
 Occasionally, you'll come across images in the unknown faces list that aren't faces. These are incorrect detections by the face detection model. You can click the red circle 'x' control that appears when you hover over it to remove this from the faces list altogether (it is essentially forgotten).
 
 When you name (or ignore) a face, it will be 'locked' to the name you've given it. This means two things:
 
-1. Imaginary uses this face to try to find other similar faces and match them to the same name
-2. Imaginary won't automatically match this face to any other person, even if it's very similar
+1. Photonarium uses this face to try to find other similar faces and match them to the same name
+2. Photonarium won't automatically match this face to any other person, even if it's very similar
 
-In the background, while you are naming faces, or marking them as ignored, Imaginary will work to see if any of the remaining unknown and unlocked faces can be moved under any of the named people. When it does this, the faces will be named appropriately but *unlocked*, so that they might be automatically moved later as it becomes clearer what each person looks like (more locked faces with that name).
+In the background, while you are naming faces, or marking them as ignored, Photonarium will work to see if any of the remaining unknown and unlocked faces can be moved under any of the named people. When it does this, the faces will be named appropriately but *unlocked*, so that they might be automatically moved later as it becomes clearer what each person looks like (more locked faces with that name).
 
-Double-clicking on a person's face in the list of people will open a view where you see all of the faces that have been given that name. The ones with a green padlock symbol are locked, clicking this will unlock the face. Clicking a grey (unlocked) padlock symbol will lock the face. Hovering over a face, you'll see the grey '-' (ignore) and the green 'x' (unname) controls appear. This helps you to fine-tune the faces under this person. You can also select the star badge (turns gold) to choose a single face that Imaginary will use as the 'preferred' face for this person - this is the one it uses elsewhere in the app when referencing that person.
+Double-clicking on a person's face in the list of people will open a view where you see all of the faces that have been given that name. The ones with a green padlock symbol are locked, clicking this will unlock the face. Clicking a grey (unlocked) padlock symbol will lock the face. Hovering over a face, you'll see the grey '-' (ignore) and the green 'x' (unname) controls appear. This helps you to fine-tune the faces under this person. You can also select the star badge (turns gold) to choose a single face that Photonarium will use as the 'preferred' face for this person - this is the one it uses elsewhere in the app when referencing that person.
 
-A useful trick is to click the open padlock button in the toolbar to show only the unlocked faces for this person (if any). These are all the ones that were automatically assigned. By lowering the "match threshold" slider (and wait a few seconds - this can take a little time), Imaginary will review all unknown and unlocked faces to see if any can move across under this name. A lower threshold means faces don't have to be quite as similar to be considered a match. You can then lock the faces that you are happy really *do* belong to that person, before raising the matching threshold back up to a more strict level.
+A useful trick is to click the open padlock button in the toolbar to show only the unlocked faces for this person (if any). These are all the ones that were automatically assigned. By lowering the "match threshold" slider (and wait a few seconds - this can take a little time), Photonarium will review all unknown and unlocked faces to see if any can move across under this name. A lower threshold means faces don't have to be quite as similar to be considered a match. You can then lock the faces that you are happy really *do* belong to that person, before raising the matching threshold back up to a more strict level.
 
 Clicking the "Focus on one person" button in the toolbar returns you to the main Faces screen.
 
-Finally, once you're reasonably happy you've built up a good cross-section of faces for each person, you can go into the faces list for the 'ignored' list (double-click the '-' entry in the people list), and look for people who you missed (should actually be named). If you find any, just unlock them and you can (hopefully) get Imaginary to automatically move them across to the right place.
+Finally, once you're reasonably happy you've built up a good cross-section of faces for each person, you can go into the faces list for the 'ignored' list (double-click the '-' entry in the people list), and look for people who you missed (should actually be named). If you find any, just unlock them and you can (hopefully) get Photonarium to automatically move them across to the right place.
 
 ---
 
 ## Database
 
-Database is where you tell Imaginary where your photos live, and where you can see what the app is currently doing.
+Database is where you tell Photonarium where your photos live, and where you can see what the app is currently doing.
 
 - Add folders (scanned recursively)
 - Rescan folders to pick up changes
 - Watch progress for indexing, embeddings, and face work (with ETAs when possible)
 
-Supported image types include: `.jpg`, `.jpeg`, `.png`, `.gif`, `.bmp`, `.tiff`, `.tif`, `.webp`, and camera RAW formats (`.cr2`, `.cr3`, `.nef`, `.nrw`, `.arw`, `.srf`, `.dng`, `.raf`, `.rw2`, `.orf`, `.pef`, `.srw`, `.x3f`, `.3fr`, `.iiq`, `.rwl`, `.kdc`, `.dcr`, `.erf`). RAW support requires the `rawpy` package. Note that RAW files cannot be rotated within Imaginary. RAW files are also slower to process than standard formats — each file requires full demosaicing of the sensor data, so indexing and opening full-screen images will take a little longer than with JPEGs.
+Supported image types include: `.jpg`, `.jpeg`, `.png`, `.gif`, `.bmp`, `.tiff`, `.tif`, `.webp`, and camera RAW formats (`.cr2`, `.cr3`, `.nef`, `.nrw`, `.arw`, `.srf`, `.dng`, `.raf`, `.rw2`, `.orf`, `.pef`, `.srw`, `.x3f`, `.3fr`, `.iiq`, `.rwl`, `.kdc`, `.dcr`, `.erf`). RAW support requires the `rawpy` package. Note that RAW files cannot be rotated within Photonarium. RAW files are also slower to process than standard formats — each file requires full demosaicing of the sensor data, so indexing and opening full-screen images will take a little longer than with JPEGs.
 
 ---
 
@@ -451,9 +451,9 @@ The installer scripts create a virtual environment, install all dependencies in 
 
 **Windows:**
 
-Open the Imaginary folder in File Explorer and double-click `install.bat`. If Windows SmartScreen shows a "Windows protected your PC" warning, click **More info** then **Run anyway** — the script only installs Python packages and downloads ML models.
+Open the Photonarium folder in File Explorer and double-click `install.bat`. If Windows SmartScreen shows a "Windows protected your PC" warning, click **More info** then **Run anyway** — the script only installs Python packages and downloads ML models.
 
-Alternatively, open Command Prompt, navigate to the Imaginary folder, and run:
+Alternatively, open Command Prompt, navigate to the Photonarium folder, and run:
 
 ```
 install.bat
@@ -461,7 +461,7 @@ install.bat
 
 **Linux / macOS:**
 
-Open a terminal, navigate to the Imaginary folder, and run:
+Open a terminal, navigate to the Photonarium folder, and run:
 
 ```bash
 chmod +x install.sh
@@ -517,14 +517,14 @@ If you prefer to install manually, or the installer script doesn't suit your set
 
   This step is optional.
 
-  Imaginary has various aspects of its behaviour which may be tuned. To do this, you might want to run it once just to create the default configuration file. This contains all of the standard settings along with comments to explain how they work.
+  Photonarium has various aspects of its behaviour which may be tuned. To do this, you might want to run it once just to create the default configuration file. This contains all of the standard settings along with comments to explain how they work.
 
   ```bash
   # Start the app to display the default models it is configured to use, then automatically quits
   python app.py --list-models
   ```
 
-  This will create the `.imaginary.yml` configuration file. You can load this into a text editor and make changes, if you'd like. For example, you may want to select different 'models' to be used for things like generating image descriptions.
+  This will create the `.photonarium.yml` configuration file. You can load this into a text editor and make changes, if you'd like. For example, you may want to select different 'models' to be used for things like generating image descriptions.
 
 5. **Download ML models**
 
@@ -540,7 +540,7 @@ If you prefer to install manually, or the installer script doesn't suit your set
 
    This downloads the AI models required for image search and captioning. Models are cached locally and only need to be downloaded once (or when you change model settings).
 
-## Running Imaginary
+## Running Photonarium
 
   ```bash
   python app.py
@@ -550,9 +550,9 @@ If you prefer to install manually, or the installer script doesn't suit your set
 
   The app runs entirely offline after models are downloaded.
 
-  If you haven't looked already, take a look at the [Imaginary site](https://imaginary.7thsoftware.co.uk/), and take a look at the tutorial.
+  If you haven't looked already, take a look at the [Photonarium site](https://photonarium.7thsoftware.co.uk/), and take a look at the tutorial.
 
-  **Important:** Imaginary is designed to run locally on the same machine as your images. It has not been hardened for exposure to the public internet or untrusted networks. Do not publish it or make it accessible to others — doing so may introduce security risks that are outside the scope of this project.
+  **Important:** Photonarium is designed to run locally on the same machine as your images. It has not been hardened for exposure to the public internet or untrusted networks. Do not publish it or make it accessible to others — doing so may introduce security risks that are outside the scope of this project.
 
 ### Command line options
 
@@ -572,7 +572,7 @@ By default, no processing runs at startup. Add flags to opt in to the phases you
 
 ### Changing ML models
 
-If you change model settings in `.imaginary.yml`, run the model downloader again:
+If you change model settings in `.photonarium.yml`, run the model downloader again:
 
 ```bash
 python download_models.py
@@ -587,7 +587,7 @@ Available caption models (from smallest to largest):
 
 ## Configuration
 
-Settings are stored in `.imaginary.yml` (created automatically on first run). Examples:
+Settings are stored in `.photonarium.yml` (created automatically on first run). Examples:
 
 * `thumbnail_quality`: JPEG quality for thumbnails (1 to 100)
 * `thumbnail_cache_size_mb`: RAM cache size for thumbnails
@@ -611,7 +611,7 @@ Settings are stored in `.imaginary.yml` (created automatically on first run). Ex
 
 ## Acknowledgements
 
-Imaginary is built on the shoulders of some remarkable open-source AI/ML work:
+Photonarium is built on the shoulders of some remarkable open-source AI/ML work:
 
 - [OpenCLIP](https://github.com/mlfoundations/open_clip) (LAION) — the semantic image embeddings that power search and similarity
 - [BLIP / BLIP-2](https://github.com/salesforce/LAVIS) (Salesforce Research) — automatic image captioning
@@ -628,7 +628,7 @@ Finally, thanks to [Anthropic](https://www.anthropic.com) and [Claude Code](http
 
 ## Support 7th software
 
-We hope you enjoy Imaginary and find it valuable. If you’d like to show your support, please use one of the links below:
+We hope you enjoy Photonarium and find it valuable. If you’d like to show your support, please use one of the links below:
 
 ![Payment links](support.png)
 

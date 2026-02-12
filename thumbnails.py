@@ -1,5 +1,5 @@
 """
-Thumbnail generation and caching for the Imaginary image database.
+Thumbnail generation and caching for the Photonarium image database.
 
 This module handles generating, caching, and managing image thumbnails.
 It also includes image rotation utilities (which invalidate thumbnails).

@@ -1,5 +1,5 @@
 """
-Central RAW image loading module for the Imaginary image database.
+Central RAW image loading module for the Photonarium image database.
 
 This module provides a unified interface for loading both standard image formats
 (via Pillow) and camera RAW formats (via rawpy/LibRaw). All code that previously

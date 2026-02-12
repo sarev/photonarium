@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
 """
-Tutorial Generator for Imaginary
+Tutorial Generator for Photonarium
 =================================
 
 Automates screenshot capture and HTML tutorial generation using Playwright.
-Reads the frozen demo-seed database, starts the real Imaginary backend,
+Reads the frozen demo-seed database, starts the real Photonarium backend,
 drives the browser through each tutorial step, captures screenshots, and
 generates static HTML pages.
 
@@ -1211,7 +1211,7 @@ def step_extras_switching_themes(page, ctx):
     # no-op if its internal _theme variable is out of sync with the DOM.
     page.evaluate('''() => {
         document.getElementById('app').dataset.theme = 'light';
-        localStorage.setItem('imaginary-theme', '"light"');
+        localStorage.setItem('photonarium-theme', '"light"');
     }''')
     page.wait_for_timeout(500)
     wait_for_thumbnails(page)
@@ -1250,8 +1250,8 @@ def setup_tutorials_dir():
     SCREENSHOTS_DIR.mkdir()
 
     # Copy frozen demo data for the server to use
-    for name in ['imaginary.db', 'imaginary.db-wal', 'imaginary.db-shm',
-                 '.imaginary.yml']:
+    for name in ['photonarium.db', 'photonarium.db-wal', 'photonarium.db-shm',
+                 '.photonarium.yml']:
         src = SCRIPT_DIR / name
         if src.exists():
             shutil.copy2(src, TUTORIALS_DIR / name)
@@ -1270,7 +1270,7 @@ def setup_tutorials_dir():
 
 
 def start_server():
-    """Start the Imaginary backend against the tutorials data directory."""
+    """Start the Photonarium backend against the tutorials data directory."""
     cmd = [
         sys.executable, str(PROJECT_DIR / 'app.py'),
         '--data-dir', str(TUTORIALS_DIR),
@@ -1383,7 +1383,7 @@ def generate_html():
 # =========================================================================
 
 def main():
-    print('Imaginary Tutorial Generator')
+    print('Photonarium Tutorial Generator')
     print('=' * 40)
 
     # 1. Prepare output directory
@@ -1391,7 +1391,7 @@ def main():
     setup_tutorials_dir()
 
     # 2. Start server
-    print('\n[2/4] Starting Imaginary server...')
+    print('\n[2/4] Starting Photonarium server...')
     server = start_server()
     try:
         wait_for_server()
@@ -1410,7 +1410,7 @@ def main():
             # Set dark theme (all screenshots use dark theme except 7.2)
             page.evaluate('''() => {
                 document.getElementById('app').dataset.theme = 'dark';
-                localStorage.setItem('imaginary-theme', '"dark"');
+                localStorage.setItem('photonarium-theme', '"dark"');
             }''')
             page.wait_for_timeout(300)
 

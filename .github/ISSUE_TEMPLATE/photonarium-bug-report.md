@@ -1,6 +1,6 @@
 ---
-name: Imaginary bug report
-about: Create a report to help us improve Imaginary
+name: Photonarium bug report
+about: Create a report to help us improve Photonarium
 title: ''
 labels: ''
 assignees: ''
@@ -30,7 +30,7 @@ If applicable, add screenshots to help explain your problem.
 - Python version [e.g. 3.11.9]
 
 **Smartphone (please complete the following information):**
- - Imaginary Version [e.g. 1]
+ - Photonarium Version [e.g. 1]
  - Device: [e.g. PC]
  - OS: [e.g. Windows 11]
  - RAM: [e.g. 32GB]

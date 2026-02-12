@@ -17,7 +17,7 @@ Assumption: there is exactly one active scoring configuration at a time for the 
 
 ### Current Problems This Solves
 
-Multiple parts of Imaginary independently rank images by "quality" using ad-hoc multi-column comparisons:
+Multiple parts of Photonarium independently rank images by "quality" using ad-hoc multi-column comparisons:
 
 - **Best-image for duplicate groups** (`duplicates.py`): `ORDER BY resolution DESC, lossless DESC, size DESC, laplacian_var DESC, id ASC`
 - **Best-image for custom groups** (`duplicates.py`): same ad-hoc ranking
@@ -67,7 +67,7 @@ Two categories of scoring configuration, with different storage and invalidation
 - **LAION head** is tied 1:1 to the OpenCLIP model. When the OpenCLIP model changes, all embeddings are recomputed, and `aesthetic_laion` is recomputed in the same pass. The OpenCLIP model is already tracked — no additional mechanism required.
 - **NIMA model** identity (`nima_impl`) can be stored as a key in the existing `metadata` table. On startup, compare against the current config value; mismatch triggers NIMA recomputation.
 
-**Weighting factors (in `.imaginary.yml` only, not in DB)** — applied at sort time in JS, never baked into stored per-image values:
+**Weighting factors (in `.photonarium.yml` only, not in DB)** — applied at sort time in JS, never baked into stored per-image values:
 
 | Setting | Default | Description |
 |---------|---------|-------------|
@@ -159,7 +159,7 @@ If NIMA absent: `A = L`
 
 ### Step 3: Final score
 
-Default weights (configurable via `quality_weights` in `.imaginary.yml`):
+Default weights (configurable via `quality_weights` in `.photonarium.yml`):
 ```
 quality_score = 0.60*A + 0.20*S + 0.15*P + 0.05*B
 ```
@@ -264,7 +264,7 @@ Update `plan-cull-weakest.md` after this plan is implemented.
 
 1. **Changing OpenCLIP model invalidates LAION scores** — LAION head is embedding-space specific. If user changes `openclip_model` or `openclip_pretrained`, wipe and recompute all LAION scores.
 
-2. **NIMA is config-toggleable** — `nima_enabled` in `.imaginary.yml`, like `face_detection_enabled`. Defaults to true. Works on CPU (slower, same trade-off as face detection). Store NULL for `aesthetic_nima` when disabled.
+2. **NIMA is config-toggleable** — `nima_enabled` in `.photonarium.yml`, like `face_detection_enabled`. Defaults to true. Works on CPU (slower, same trade-off as face detection). Store NULL for `aesthetic_nima` when disabled.
 
 3. **NIMA must run on 400px thumbnail *before* sharpening** — Sharpening biases the aesthetic score. Always score the unsharpened resized pixels in-memory.
 
@@ -311,7 +311,7 @@ Update `plan-cull-weakest.md` after this plan is implemented.
 - Auto-sort by quality when opening any group; auto-select the best image
 - Remove the "Quality" option and restore previous sort when leaving the group view
 
-**Does not include:** NIMA. Weighting config (`quality_weights`, `quality_alpha`) can be added to `.imaginary.yml` here or deferred until Phase 3 — the defaults are hardcoded in JS until then.
+**Does not include:** NIMA. Weighting config (`quality_weights`, `quality_alpha`) can be added to `.photonarium.yml` here or deferred until Phase 3 — the defaults are hardcoded in JS until then.
 
 **Files:** `imagedb.py`, `static/appstate/images.js`, `static/appstate/view.js`, `static/gallery.js`, `static/duplicates.js`
 
@@ -332,7 +332,7 @@ Update `plan-cull-weakest.md` after this plan is implemented.
 - New dependency: `pyiqa` (IQA-PyTorch toolbox) — requires strong justification per project rules
 - Schema migration: `ALTER TABLE images ADD COLUMN aesthetic_nima REAL`
 - Store `nima_impl` in the existing `metadata` table to detect model changes on startup
-- Config toggle: `nima_enabled` in `.imaginary.yml` (like `face_detection_enabled`), defaults to true. Works on both GPU and CPU — slower on CPU, same trade-off as face detection and other GPU-accelerated ingest steps. Store NULL for `aesthetic_nima` when disabled.
+- Config toggle: `nima_enabled` in `.photonarium.yml` (like `face_detection_enabled`), defaults to true. Works on both GPU and CPU — slower on CPU, same trade-off as face detection and other GPU-accelerated ingest steps. Store NULL for `aesthetic_nima` when disabled.
 - Hook into thumbnail generation to capture the 400px resized PIL Image *before* sharpening is applied (our thumbnails are sharpened before saving, which would bias the score). Pass these pre-sharpen images in RAM to NIMA batch processing — no intermediate files on disc.
 - Config settings in `config.py`: `nima_enabled`, `quality_weights`, `quality_alpha`
 - Update Phase 2's JS percentile ranking to incorporate NIMA term when present

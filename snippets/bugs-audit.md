@@ -1,6 +1,6 @@
 # Bugs, Performance, and Concurrency Audit
 
-Comprehensive audit of the Imaginary codebase for bugs, performance issues at scale (100,000+ images/faces), race conditions, and inefficiencies.
+Comprehensive audit of the Photonarium codebase for bugs, performance issues at scale (100,000+ images/faces), race conditions, and inefficiencies.
 
 ---
 

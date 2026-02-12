@@ -40,7 +40,7 @@
     "steps": {
         "first-launch": {
             "title": "First launch",
-            "caption": "When you first open Imaginary, you see the Database screen in the default light theme. There are no folders or photos yet \u2014 this is where you tell Imaginary where your photos live."
+            "caption": "When you first open Photonarium, you see the Database screen in the default light theme. There are no folders or photos yet \u2014 this is where you tell Photonarium where your photos live."
         },
         "dark-theme": {
             "title": "Switching to dark theme",
@@ -52,11 +52,11 @@
         },
         "indexing": {
             "title": "Indexing",
-            "caption": "Once you\u2019ve selected a folder, Imaginary starts scanning it for images. The status changes to Updating and shows how many files are left to index."
+            "caption": "Once you\u2019ve selected a folder, Photonarium starts scanning it for images. The status changes to Updating and shows how many files are left to index."
         },
         "processing": {
             "title": "Processing",
-            "caption": "After indexing, Imaginary generates thumbnails and computes embeddings for semantic search. This runs in the background \u2014 you can start browsing as soon as the first thumbnails appear."
+            "caption": "After indexing, Photonarium generates thumbnails and computes embeddings for semantic search. This runs in the background \u2014 you can start browsing as soon as the first thumbnails appear."
         },
         "the-gallery": {
             "title": "The Gallery",
@@ -212,7 +212,7 @@
         },
         "faces-opening": {
             "title": "Opening",
-            "caption": "Click the Faces button in the toolbar. This screen is where you name the people Imaginary has found in your photos."
+            "caption": "Click the Faces button in the toolbar. This screen is where you name the people Photonarium has found in your photos."
         },
         "faces-toolbar": {
             "title": "Toolbar",
@@ -220,7 +220,7 @@
         },
         "unknown-faces": {
             "title": "Unknown faces",
-            "caption": "When you first arrive here, you see any faces Imaginary has detected. None have names yet \u2014 that\u2019s your job! Each face has a name field below it."
+            "caption": "When you first arrive here, you see any faces Photonarium has detected. None have names yet \u2014 that\u2019s your job! Each face has a name field below it."
         },
         "typing": {
             "title": "Typing",
@@ -236,7 +236,7 @@
         },
         "failed-face-detections": {
             "title": "Failed face detections",
-            "caption": "Sometimes Imaginary detects something that isn\u2019t really a face. If you spot one, you can click it to select it."
+            "caption": "Sometimes Photonarium detects something that isn\u2019t really a face. If you spot one, you can click it to select it."
         },
         "selecting-multiple": {
             "title": "Selecting multiple",
@@ -244,7 +244,7 @@
         },
         "removing": {
             "title": "Removing",
-            "caption": "Hover over any selected card and click the red X. Because multiple cards are selected, Imaginary offers to remove them all at once."
+            "caption": "Hover over any selected card and click the red X. Because multiple cards are selected, Photonarium offers to remove them all at once."
         },
         "the-ignore-control": {
             "title": "The ignore control",
@@ -260,7 +260,7 @@
         },
         "quick-match": {
             "title": "Quick Match",
-            "caption": "Click the sparkle button over a face to see who this face might be. Imaginary shows the closest matches from your named people. With more people named, this becomes a fast way to identify faces \u2014 just click a match to assign."
+            "caption": "Click the sparkle button over a face to see who this face might be. Photonarium shows the closest matches from your named people. With more people named, this becomes a fast way to identify faces \u2014 just click a match to assign."
         },
         "naming-another-face": {
             "title": "Naming another face",
@@ -280,11 +280,11 @@
         },
         "preferred-face": {
             "title": "Preferred face",
-            "caption": "Click the star on your favourite image of this person. This becomes their avatar throughout Imaginary."
+            "caption": "Click the star on your favourite image of this person. This becomes their avatar throughout Photonarium."
         },
         "locking-and-unlocking": {
             "title": "Locking and unlocking faces",
-            "caption": "Locked faces (green padlock) are ones you\u2019ve confirmed. Imaginary uses these as reliable examples when trying to recognise this person in other photos. You cannot unlock the preferred face! Unlocked faces may be automatically re-assigned at any time if a better match is found"
+            "caption": "Locked faces (green padlock) are ones you\u2019ve confirmed. Photonarium uses these as reliable examples when trying to recognise this person in other photos. You cannot unlock the preferred face! Unlocked faces may be automatically re-assigned at any time if a better match is found"
         },
         "faces-exiting": {
             "title": "Exiting",

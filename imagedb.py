@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 
 """
-Imaginary image catalogue backend (single-file implementation).
+Photonarium image catalogue backend (single-file implementation).
 
 Core responsibilities:
 
@@ -4078,7 +4078,7 @@ class ImageDatabase:
 
     def __init__(
         self,
-        db_path: Path | str = 'imaginary.db',
+        db_path: Path | str = 'photonarium.db',
         thumbnail_dir: Path | str = '.thumbnails',
         config_path: Path | str | None = None,
         auto_start: bool = True,
@@ -4114,7 +4114,7 @@ class ImageDatabase:
         self.thumbnail_dir = Path(thumbnail_dir)
 
         logger.info('=' * 60)
-        logger.info('IMAGINARY - Image Catalogue Backend')
+        logger.info('PHOTONARIUM - Image Catalogue Backend')
         logger.info('=' * 60)
 
         # Step 0: Load configuration

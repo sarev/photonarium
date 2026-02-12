@@ -1,5 +1,5 @@
 """
-Image metadata and timestamp extraction for the Imaginary image database.
+Image metadata and timestamp extraction for the Photonarium image database.
 
 This module provides functions to extract EXIF metadata and derive timestamps
 from images using multiple sources: EXIF metadata, filename patterns, and

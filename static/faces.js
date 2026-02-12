@@ -1,5 +1,5 @@
 /**
- * Face tagging module for Imaginary.
+ * Face tagging module for Photonarium.
  *
  * This module handles two distinct UI contexts:
  *

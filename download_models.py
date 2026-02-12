@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
 """
-Download required ML models for Imaginary.
+Download required ML models for Photonarium.
 
 This script reads the configuration from app.py and downloads all required
 models from HuggingFace. Run this before first use or after changing model
-settings in .imaginary.yml.
+settings in .photonarium.yml.
 
 Usage:
     python download_models.py
@@ -190,7 +190,7 @@ def download_nima_model(data_dir: str = '.') -> bool:
 
 def main():
     import argparse
-    parser = argparse.ArgumentParser(description='Download required ML models for Imaginary.')
+    parser = argparse.ArgumentParser(description='Download required ML models for Photonarium.')
     parser.add_argument(
         '-d', '--data-dir',
         type=str,
@@ -199,9 +199,9 @@ def main():
     )
     args = parser.parse_args()
 
-    print('Imaginary Model Downloader')
+    print('Photonarium Model Downloader')
     print('=' * 60)
-    print('This script downloads the ML models required by Imaginary.')
+    print('This script downloads the ML models required by Photonarium.')
     print('Models are cached in the HuggingFace cache directory.')
     print()
 

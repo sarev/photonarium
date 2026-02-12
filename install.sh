@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # =============================================================================
-# Imaginary Installer — Linux / macOS
+# Photonarium Installer — Linux / macOS
 #
 # Creates a Python virtual environment, installs all dependencies (with the
 # correct torch variant for the platform), initialises the configuration,
@@ -99,15 +99,15 @@ echo "Using Python $PYTHON_VERSION ($PYTHON_CMD)"
 # 3. Ask data directory
 # ---------------------------------------------------------------------------
 echo ""
-echo "Where should Imaginary store its data (database, thumbnails, config)?"
+echo "Where should Photonarium store its data (database, thumbnails, config)?"
 echo ""
 
 if [ "$PLATFORM_NAME" = "macOS" ]; then
-    DEFAULT_1="$HOME/Library/Application Support/imaginary"
-    DEFAULT_2="$HOME/Pictures/imaginary"
+    DEFAULT_1="$HOME/Library/Application Support/photonarium"
+    DEFAULT_2="$HOME/Pictures/photonarium"
 else
-    DEFAULT_1="$HOME/.local/share/imaginary"
-    DEFAULT_2="$HOME/Pictures/imaginary"
+    DEFAULT_1="$HOME/.local/share/photonarium"
+    DEFAULT_2="$HOME/Pictures/photonarium"
 fi
 DEFAULT_3="."
 
@@ -164,7 +164,7 @@ fi
 # ---------------------------------------------------------------------------
 echo ""
 echo "============================================================"
-echo "  Imaginary Installer"
+echo "  Photonarium Installer"
 echo "============================================================"
 echo ""
 echo "  Platform:       $PLATFORM_NAME"
@@ -249,7 +249,7 @@ else
     if ! "$VENV_PIP" install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu124 2>/dev/null; then
         echo ""
         echo "CUDA build not available for this platform/Python version."
-        echo "Installing CPU-only PyTorch instead (Imaginary will still work,"
+        echo "Installing CPU-only PyTorch instead (Photonarium will still work,"
         echo "just without GPU acceleration)."
         echo ""
         "$VENV_PIP" install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cpu
@@ -323,7 +323,7 @@ if [ "$PLATFORM_NAME" = "macOS" ]; then
     if [ "$MPS_AVAILABLE" = "yes" ]; then
         echo "  GPU: Apple MPS acceleration is available."
     else
-        echo "  GPU: Apple MPS is not available. Imaginary will use the CPU."
+        echo "  GPU: Apple MPS is not available. Photonarium will use the CPU."
         echo "       (MPS requires macOS 12.3+ and Apple Silicon or supported AMD GPU)"
     fi
 else
@@ -332,14 +332,14 @@ else
         CUDA_DEVICE="$("$VENV_PYTHON" -c "import torch; print(torch.cuda.get_device_name(0))" 2>/dev/null || echo "unknown")"
         echo "  GPU: CUDA is available ($CUDA_DEVICE)."
     else
-        echo "  GPU: CUDA is not available. Imaginary will use the CPU."
+        echo "  GPU: CUDA is not available. Photonarium will use the CPU."
         echo "       For GPU acceleration, install NVIDIA drivers and CUDA toolkit:"
         echo "       https://developer.nvidia.com/cuda-downloads"
     fi
 fi
 
 echo ""
-echo "  To start Imaginary:"
+echo "  To start Photonarium:"
 echo ""
 echo "    source $VENV_DIR/bin/activate"
 if [ -n "$DATA_DIR_FLAG" ]; then

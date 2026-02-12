@@ -1,5 +1,5 @@
 """
-Face detection and recognition for the Imaginary image database.
+Face detection and recognition for the Photonarium image database.
 
 This module provides face detection using MTCNN and face embeddings using
 InceptionResnetV1 from the facenet-pytorch library. It handles:

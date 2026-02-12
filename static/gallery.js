@@ -1,5 +1,5 @@
 /**
- * @fileoverview Gallery screen module for the Imaginary application.
+ * @fileoverview Gallery screen module for the Photonarium application.
  *
  * This module handles all functionality specific to the Gallery screen,
  * which is the primary view for browsing the image catalogue. It registers

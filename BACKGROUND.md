@@ -4,7 +4,7 @@ This document is opinionated, but hopefully fair!
 
 # Background
 
-My motivations for creating Imaginary were two-fold:
+My motivations for creating Photonarium were two-fold:
 
 1. Build my dream photo organiser.
 2. See if I could build it using an LLM, rather than me writing most of the code.
@@ -36,7 +36,7 @@ Closed-source tools are, by definition, a black box. You can file tickets and fe
 
 ## The Free Landscape
 
-There are a number of worthy, free apps out there for managing your images. Here's a (hopefully!) honest assessment of how those projects compare to Imaginary, as of late-2025/early-2026:
+There are a number of worthy, free apps out there for managing your images. Here's a (hopefully!) honest assessment of how those projects compare to Photonarium, as of late-2025/early-2026:
 
 ### [digiKam](https://www.digikam.org/)
 
@@ -84,7 +84,7 @@ Worth mentioning because it's genuinely free (no subscription required) and has 
 
 The five key criteria from above: **(a)** semantic search, **(b)** face recognition, **(c)** duplicate/similarity detection, **(d)** data privacy, **(e)** free/affordable.
 
-| | Imaginary | digiKam | Immich | PhotoPrism | darktable | XnView MP | Google Photos | Apple Photos | Adobe Bridge |
+| | Photonarium | digiKam | Immich | PhotoPrism | darktable | XnView MP | Google Photos | Apple Photos | Adobe Bridge |
 |---|---|---|---|---|---|---|---|---|---|
 | **License** | Apache-2.0 | GPL-2.0 | AGPL-3.0 | AGPL-3.0 (features paywalled) | GPL-3.0 | Freeware (closed) | Proprietary | Proprietary | Proprietary (free) |
 | **Platforms** | Win/Mac/Linux | Win/Mac/Linux | Server + web + mobile | Server + web (PWA) | Win/Mac/Linux | Win/Mac/Linux | Web + mobile | Apple only | Win/Mac |
@@ -102,7 +102,7 @@ The five key criteria from above: **(a)** semantic search, **(b)** face recognit
 | **RAW support** | Good | Excellent | Good | Good | Excellent | Excellent | Good | Good | Excellent |
 | **Non-destructive editing** | No | Yes | Basic | Yes | No | No | Yes | Yes | No |
 
-\* These apps offer semantic search but do not support negative terms (e.g. "beach -sunset") to exclude concepts from results. Imaginary does.
+\* These apps offer semantic search but do not support negative terms (e.g. "beach -sunset") to exclude concepts from results. Photonarium does.
 
 ¹ digiKam: core library is local; map/geolocation views may use external map/tile services.
 
@@ -114,15 +114,15 @@ The five key criteria from above: **(a)** semantic search, **(b)** face recognit
 
 ⁵ XnView MP: local file manager, but commonly phones home for update checks unless you disable it.
 
-### Where Imaginary Fits
+### Where Photonarium Fits
 
-Imaginary occupies a niche that none of the above quite covers: a lightweight, fully offline desktop tool that combines CLIP semantic search, face detection and recognition, multi-level duplicate detection, and BLIP image captioning — all accessible via a browser-based UI, without requiring Docker infrastructure, a database server, KDE frameworks, or a cloud account. It's the simplest install of any AI-powered option (just Python and pip), and it runs on Windows, Mac, and Linux with zero telemetry under a permissive Apache-2.0 license.
+Photonarium occupies a niche that none of the above quite covers: a lightweight, fully offline desktop tool that combines CLIP semantic search, face detection and recognition, multi-level duplicate detection, and BLIP image captioning — all accessible via a browser-based UI, without requiring Docker infrastructure, a database server, KDE frameworks, or a cloud account. It's the simplest install of any AI-powered option (just Python and pip), and it runs on Windows, Mac, and Linux with zero telemetry under a permissive Apache-2.0 license.
 
-The trade-offs are: no mobile apps or phone backup, no multi-user support, and no non-destructive editing. It's also new so has a much smaller community than the established projects! But if what you want is to point a tool at your photo folders and immediately start searching them semantically, finding duplicates, and tagging faces — all without sending a single byte off your machine — Imaginary is designed for exactly that.
+The trade-offs are: no mobile apps or phone backup, no multi-user support, and no non-destructive editing. It's also new so has a much smaller community than the established projects! But if what you want is to point a tool at your photo folders and immediately start searching them semantically, finding duplicates, and tagging faces — all without sending a single byte off your machine — Photonarium is designed for exactly that.
 
 ## The Great 'AI' Debate
 
-I made a deliberate decision at the start of creating Imaginary: I would wear the hats of visionary, UX designer, architect, project manager, and tester. I would see if AI (more precisely, an LLM) could be the software developer.
+I made a deliberate decision at the start of creating Photonarium: I would wear the hats of visionary, UX designer, architect, project manager, and tester. I would see if AI (more precisely, an LLM) could be the software developer.
 
 Why? I'm an expert software engineer and technical project leader. I've written software for eons and I consider myself to have been engaged with the LLM revolution since the [OpenAI Playground](https://platform.openai.com/docs/overview) was first announced. I've been using LLMs throughout and had many ups and downs. I'm acutely aware how deeply divided the software development community is around AI: on the one side, you have the nay-sayers who claim "it's not *really* AI", and "it's just a bubble", and "it doesn't understand so it can't write real software", and "I haven't got time to waste on that" etc. On the other side, you have the AI zealots who say "in the future we won't need programmers", and "vibe coding is the next big thing", etc.
 
@@ -130,8 +130,8 @@ I would position myself as a pragmatist. Based upon my experience, LLMs (especia
 
 Recently, I'd been using [Anthropic's Claude Code](https://code.claude.com/docs/en/overview) and I've been generally impressed. For this project, I chose to use it to write the software, do quite a bit of the UI (and a little of the UX) design, and even some of the testing. For the most part, I didn't even *look* at the code, let alone write it. I did have to dive in from time to time, but that was very much the exception rather than the rule.
 
-Overall, I hope that Imaginary speaks for itself. I believe it's well documented, the code is decently commented and reasonably well structured, it's functionally good and absolutely achieves (and surpasses) all of the goals I had in mind when I started. And it took two weeks. My sense of the LLM having concussion has reduced to a sense of it being mildly forgetful and occasionally making dumb (e.g. performance, architectural, duplicative code) decisions. But I've led a many software teams over the years and those issues are not unique to LLMs!
+Overall, I hope that Photonarium speaks for itself. I believe it's well documented, the code is decently commented and reasonably well structured, it's functionally good and absolutely achieves (and surpasses) all of the goals I had in mind when I started. And it took two weeks. My sense of the LLM having concussion has reduced to a sense of it being mildly forgetful and occasionally making dumb (e.g. performance, architectural, duplicative code) decisions. But I've led a many software teams over the years and those issues are not unique to LLMs!
 
-If I weren't an expert software engineer, and an experienced project leader, and I didn't have strong instincts honed over years of experience as to the potential reasons why something isn't working the way it should, creating Imaginary or any similarly complex program using an LLM would be *impossible*. No question. And I don't think this is going to change for the foreseeable future, not even two more papers down the line... I absolutely wouldn't trust an LLM to write critical (e.g. life-safety) code, nor do I believe they would write something highly complex, like a compiler for a language where the 'specification' is a 600-page Reference Guide and a reference implementation in dense AArch32 Arm assembly language. Not a snowball in Hell's chance. For that we'd need to layer *true* AGI on top of (or in place of) the LLM.
+If I weren't an expert software engineer, and an experienced project leader, and I didn't have strong instincts honed over years of experience as to the potential reasons why something isn't working the way it should, creating Photonarium or any similarly complex program using an LLM would be *impossible*. No question. And I don't think this is going to change for the foreseeable future, not even two more papers down the line... I absolutely wouldn't trust an LLM to write critical (e.g. life-safety) code, nor do I believe they would write something highly complex, like a compiler for a language where the 'specification' is a 600-page Reference Guide and a reference implementation in dense AArch32 Arm assembly language. Not a snowball in Hell's chance. For that we'd need to layer *true* AGI on top of (or in place of) the LLM.
 
-But, I hope Imaginary *does* prove that LLMs are now good enough to be a valuable tool, amongst many other tools, for software developers to work smarter and faster. I genuinely felt excited during this development to know I could have an idea for a new feature, think about how to describe it clearly and concisely, and a few minutes later be testing the finished implementation...
+But, I hope Photonarium *does* prove that LLMs are now good enough to be a valuable tool, amongst many other tools, for software developers to work smarter and faster. I genuinely felt excited during this development to know I could have an idea for a new feature, think about how to describe it clearly and concisely, and a few minutes later be testing the finished implementation...

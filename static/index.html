@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Imaginary</title>
+    <title>Photonarium</title>
 
     <link rel="icon" type="image/png" sizes="90x90" href="./favicon90.png">
 
@@ -12,7 +12,7 @@
         (function() {
             var theme = 'light';
             try {
-                var saved = localStorage.getItem('imaginary-theme');
+                var saved = localStorage.getItem('photonarium-theme');
                 if (saved) {
                     theme = JSON.parse(saved);
                 } else if (window.matchMedia('(prefers-color-scheme: dark)').matches) {
@@ -108,9 +108,9 @@
             <!-- Left section: screen-specific controls -->
             <div class="toolbar-left">
                 <!-- Logo — links to the online tutorial (visible on all screens) -->
-                <a href="https://imaginary.7thsoftware.co.uk/tutorial/" target="_blank" rel="noopener"
-                   class="toolbar-btn toolbar-logo" title="Open the Imaginary tutorial">
-                    <img src="favicon90.png" alt="Imaginary" width="28" height="28">
+                <a href="https://photonarium.7thsoftware.co.uk/tutorial/" target="_blank" rel="noopener"
+                   class="toolbar-btn toolbar-logo" title="Open the Photonarium tutorial">
+                    <img src="favicon90.png" alt="Photonarium" width="28" height="28">
                 </a>
                 <div class="toolbar-separator"></div>
 

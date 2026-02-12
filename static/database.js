@@ -1,5 +1,5 @@
 /**
- * @fileoverview Database management screen module for the Imaginary application.
+ * @fileoverview Database management screen module for the Photonarium application.
  *
  * This module handles the Database screen where users manage image source
  * folders and monitor database processing status. It registers with the core

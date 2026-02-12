@@ -29,7 +29,7 @@ Here are the main issues I see, ranked by severity (highest first). I’m assumi
 * **What it is:** `Flask(... static_folder='.', static_url_path='')` effectively makes files in the working directory reachable as static assets unless something else blocks them.
   You also explicitly `send_file('index.html')` at `/`.
 * **Why it matters:**
-  If `imaginary.db`, `.thumbnails/`, config files, logs, or anything else live in that directory, they may become downloadable just by guessing the filename.
+  If `photonarium.db`, `.thumbnails/`, config files, logs, or anything else live in that directory, they may become downloadable just by guessing the filename.
 * **Impact:** Leaks DB contents, thumbnails, configuration, and potentially code or other secrets stored nearby.
 
 ## 4) High: `/api/pick-folder` will behave badly (or dangerously) on non-desktop/server deployments
@@ -101,7 +101,7 @@ Localhost-only.
 
 ## Issue 3: Static file serving exposes working directory
 - [x] Review Flask static file configuration in `app.py`
-- [x] Test if sensitive files (`.imaginary.yml`, `imaginary.db`, `.thumbnails/`) are accessible via HTTP
+- [x] Test if sensitive files (`.photonarium.yml`, `photonarium.db`, `.thumbnails/`) are accessible via HTTP
 - [x] Restrict static serving to only necessary files (index.html, JS, CSS, favicon)
 - [x] Move or exclude sensitive files from static serving scope
 
@@ -188,7 +188,7 @@ Verified no other `_grid._` or `_state` accesses exist in gallery.js, duplicates
 
 **Current Configuration:**
 - `app.py:49` - `static_folder='.'` serves the entire working directory
-- Files like `imaginary.db`, `.imaginary.yml`, and `.thumbnails/` would be accessible if someone guesses the filename
+- Files like `photonarium.db`, `.photonarium.yml`, and `.thumbnails/` would be accessible if someone guesses the filename
 
 **Recommended Changes:**
 1. Create a `static/` folder containing only frontend files:
@@ -201,7 +201,7 @@ Verified no other `_grid._` or `_state` accesses exist in gallery.js, duplicates
    - Change to `app = Flask(__name__, static_folder='static', static_url_path='')`
    - Update `serve_index()` to `send_file('static/index.html')`
 
-3. This isolates sensitive files (`imaginary.db`, `.imaginary.yml`, `.thumbnails/`, `app.py`, etc.) from static serving.
+3. This isolates sensitive files (`photonarium.db`, `.photonarium.yml`, `.thumbnails/`, `app.py`, etc.) from static serving.
 
 **Alternative:** Use an explicit list of allowed static file patterns with Flask's static file handling, but the `static/` folder approach is simpler and cleaner.
 

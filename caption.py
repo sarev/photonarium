@@ -1,5 +1,5 @@
 """
-Image captioning for the Imaginary image database.
+Image captioning for the Photonarium image database.
 
 This module provides automatic image description generation using BLIP/BLIP-2
 (Bootstrapping Language-Image Pre-training) models from the transformers library.

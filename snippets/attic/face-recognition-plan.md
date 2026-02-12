@@ -1,10 +1,10 @@
 # Face Recognition Integration Plan
 
-This document describes how face recognition could be integrated into Imaginary, allowing users to tag people in photos and search for specific individuals.
+This document describes how face recognition could be integrated into Photonarium, allowing users to tag people in photos and search for specific individuals.
 
 ## Overview
 
-**Goal**: Enable users to tag faces with names, have Imaginary learn to recognise those people, and search for photos containing specific individuals.
+**Goal**: Enable users to tag faces with names, have Photonarium learn to recognise those people, and search for photos containing specific individuals.
 
 **Technology**:
 - **facenet-pytorch** (MIT licensed, PyTorch-native)
@@ -107,7 +107,7 @@ New addition:
 
 ### Face Detection Settings
 
-Configurable in `.imaginary.yml`:
+Configurable in `.photonarium.yml`:
 
 ```yaml
 # Face recognition settings
@@ -326,7 +326,7 @@ Models load once on first face operation (lazy loading), similar to OpenCLIP.
 ## Configuration Options
 
 ```yaml
-# .imaginary.yml additions
+# .photonarium.yml additions
 
 # Face recognition
 face_detection_enabled: true           # Set false to disable (UI buttons greyed out)

@@ -1,8 +1,8 @@
-# Imaginary
+# Photonarium
 
-![Imaginary Logo](logo.png)
+![Photonarium Logo](logo.png)
 
-This application is free, Open Source software and we hope you enjoy Imaginary and find it valuable.
+This application is free, Open Source software and we hope you enjoy Photonarium and find it valuable.
 
 ## Support 7th software
 

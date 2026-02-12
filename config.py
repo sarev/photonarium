@@ -1,5 +1,5 @@
 """
-Configuration management for the Imaginary image database.
+Configuration management for the Photonarium image database.
 
 This module handles loading and validating configuration from a YAML file.
 If no configuration file exists, a default one is created with sensible defaults.
@@ -7,7 +7,7 @@ If no configuration file exists, a default one is created with sensible defaults
 Usage:
     from config import Config, load_config
 
-    config = load_config()  # Uses default path .imaginary.yml
+    config = load_config()  # Uses default path .photonarium.yml
     config = load_config('/path/to/config.yml')  # Custom path
 """
 
@@ -25,14 +25,14 @@ logger = logging.getLogger(__name__)
 
 
 # Default configuration file path (relative to working directory)
-DEFAULT_CONFIG_PATH = Path('.imaginary.yml')
+DEFAULT_CONFIG_PATH = Path('.photonarium.yml')
 
 # Default configuration template with comments
 # This is written to disk when no config file exists
 DEFAULT_CONFIG_TEMPLATE = """\
-# Imaginary Configuration File
+# Photonarium Configuration File
 # ============================
-# This file controls the behaviour of the Imaginary image database.
+# This file controls the behaviour of the Photonarium image database.
 # Edit values as needed. Delete this file to reset to defaults.
 
 # ------------------------------------------------------------------------------

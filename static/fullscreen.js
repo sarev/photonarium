@@ -1,5 +1,5 @@
 /**
- * @fileoverview Full-screen image viewer overlay for the Imaginary application.
+ * @fileoverview Full-screen image viewer overlay for the Photonarium application.
  *
  * This module provides a modal overlay for full-screen image viewing with
  * zoom, pan, and navigation capabilities. It floats over whatever screen

@@ -1,5 +1,5 @@
 /**
- * @fileoverview Shared thumbnail infrastructure for the Imaginary application.
+ * @fileoverview Shared thumbnail infrastructure for the Photonarium application.
  *
  * This module provides reusable components for thumbnail grid management:
  * - ThumbnailLoader: Fetches thumbnails with scroll-aware prioritization

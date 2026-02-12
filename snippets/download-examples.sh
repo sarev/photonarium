@@ -15,7 +15,7 @@
 #   https://picsum.photos/seed/{seed}/{width}/{height}
 #
 # The 'seed' parameter makes URLs deterministic - the same seed always returns
-# the same image. We use "imaginary{N}" as seeds so the example set is
+# the same image. We use "photonarium{N}" as seeds so the example set is
 # reproducible. Without a seed, each request returns a random image.
 #
 # The service redirects to the actual image URL, so curl needs -L to follow.
@@ -27,7 +27,7 @@ COUNT=${1:-200}           # Number of images to download (default: 200)
 START=${2:-1}             # Starting index (default: 1)
 WIDTH=1920                # Image width in pixels
 HEIGHT=1080               # Image height in pixels
-SEED_PREFIX="imaginary"   # Seed prefix for reproducibility
+SEED_PREFIX="photonarium"   # Seed prefix for reproducibility
 DELAY=0.3                 # Delay between requests (be nice to the server)
 
 # Output directory (relative to this script's location)

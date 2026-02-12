@@ -1,5 +1,5 @@
 /**
- * @fileoverview Core framework for the Imaginary application.
+ * @fileoverview Core framework for the Photonarium application.
  *
  * This module provides the central infrastructure that all screen-specific
  * modules depend on. It initialises first and exposes a global `App` object

@@ -1,7 +1,7 @@
 @echo off
 setlocal enabledelayedexpansion
 :: =============================================================================
-:: Imaginary Installer — Windows
+:: Photonarium Installer — Windows
 ::
 :: Creates a Python virtual environment, installs all dependencies, initialises
 :: the configuration, and downloads the required ML models.
@@ -65,7 +65,7 @@ if not defined PYTHON_CMD (
     echo.
     echo   IMPORTANT: Do NOT use the "Download Python install manager" link
     echo   at the top of the page — that installs a newer Python which is
-    echo   incompatible with Imaginary's dependencies.
+    echo   incompatible with Photonarium's dependencies.
     echo.
     echo   During installation, make sure to check "Add Python to PATH".
     echo.
@@ -81,10 +81,10 @@ echo Using Python %PYTHON_VERSION% (%PYTHON_CMD%)
 :: 2. Ask data directory
 :: ---------------------------------------------------------------------------
 echo.
-echo Where should Imaginary store its data (database, thumbnails, config)?
+echo Where should Photonarium store its data (database, thumbnails, config)?
 echo.
-echo   1) %LOCALAPPDATA%\imaginary
-echo   2) %USERPROFILE%\Pictures\imaginary
+echo   1) %LOCALAPPDATA%\photonarium
+echo   2) %USERPROFILE%\Pictures\photonarium
 echo   3) . (current directory)
 echo   4) Custom path
 echo.
@@ -92,7 +92,7 @@ set "DATA_CHOICE="
 set /p "DATA_CHOICE=Choose [1-4, default=1]: "
 
 if "!DATA_CHOICE!"=="2" (
-    set "DATA_DIR=%USERPROFILE%\Pictures\imaginary"
+    set "DATA_DIR=%USERPROFILE%\Pictures\photonarium"
 ) else if "!DATA_CHOICE!"=="3" (
     set "DATA_DIR=."
 ) else if "!DATA_CHOICE!"=="4" (
@@ -100,12 +100,12 @@ if "!DATA_CHOICE!"=="2" (
     set /p "CUSTOM_PATH=Enter path: "
     if "!CUSTOM_PATH!"=="" (
         echo No path entered, using default.
-        set "DATA_DIR=%LOCALAPPDATA%\imaginary"
+        set "DATA_DIR=%LOCALAPPDATA%\photonarium"
     ) else (
         set "DATA_DIR=!CUSTOM_PATH!"
     )
 ) else (
-    set "DATA_DIR=%LOCALAPPDATA%\imaginary"
+    set "DATA_DIR=%LOCALAPPDATA%\photonarium"
 )
 
 :: Resolve and create directory if needed
@@ -137,7 +137,7 @@ if "!DATA_DIR!"=="." (
 :: ---------------------------------------------------------------------------
 echo.
 echo ============================================================
-echo   Imaginary Installer
+echo   Photonarium Installer
 echo ============================================================
 echo.
 echo   Platform:       Windows
@@ -222,7 +222,7 @@ echo Trying CUDA 12.4 build (for NVIDIA GPU acceleration)...
 if !errorlevel! neq 0 (
     echo.
     echo CUDA build not available for this platform/Python version.
-    echo Installing CPU-only PyTorch instead (Imaginary will still work,
+    echo Installing CPU-only PyTorch instead (Photonarium will still work,
     echo just without GPU acceleration^).
     echo.
     "%VENV_PIP%" install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cpu
@@ -296,23 +296,23 @@ echo.
 
 :: GPU availability check — write result to a temp file to avoid
 :: single-quote conflicts between for /f and Python string literals
-"%VENV_PYTHON%" -c "import torch; print(torch.cuda.is_available())" > "%TEMP%\imaginary_cuda.txt" 2>nul
-set /p CUDA_AVAILABLE=<"%TEMP%\imaginary_cuda.txt"
-del "%TEMP%\imaginary_cuda.txt" 2>nul
+"%VENV_PYTHON%" -c "import torch; print(torch.cuda.is_available())" > "%TEMP%\photonarium_cuda.txt" 2>nul
+set /p CUDA_AVAILABLE=<"%TEMP%\photonarium_cuda.txt"
+del "%TEMP%\photonarium_cuda.txt" 2>nul
 
 if "!CUDA_AVAILABLE!"=="True" (
-    "%VENV_PYTHON%" -c "import torch; print(torch.cuda.get_device_name(0))" > "%TEMP%\imaginary_cuda.txt" 2>nul
-    set /p CUDA_DEVICE=<"%TEMP%\imaginary_cuda.txt"
-    del "%TEMP%\imaginary_cuda.txt" 2>nul
+    "%VENV_PYTHON%" -c "import torch; print(torch.cuda.get_device_name(0))" > "%TEMP%\photonarium_cuda.txt" 2>nul
+    set /p CUDA_DEVICE=<"%TEMP%\photonarium_cuda.txt"
+    del "%TEMP%\photonarium_cuda.txt" 2>nul
     echo   GPU: CUDA is available ^(!CUDA_DEVICE!^).
 ) else (
-    echo   GPU: CUDA is not available. Imaginary will use the CPU.
+    echo   GPU: CUDA is not available. Photonarium will use the CPU.
     echo        For GPU acceleration, install NVIDIA drivers and CUDA toolkit:
     echo        https://developer.nvidia.com/cuda-downloads
 )
 
 echo.
-echo   To start Imaginary:
+echo   To start Photonarium:
 echo.
 echo     %VENV_DIR%\Scripts\activate
 if "!DATA_DIR_FLAG!"=="" (

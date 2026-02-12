@@ -1,7 +1,7 @@
-Image database module for the Imaginary application.
+Image database module for the Photonarium application.
 
 This module provides all database operations, image processing, and background
-task management for the Imaginary image catalogue application. It is the core
+task management for the Photonarium image catalogue application. It is the core
 backend logic that the Flask API (app.py) delegates to.
 
 For additional context and design decisions, see: snippets/notes.txt

@@ -1,5 +1,5 @@
 """
-Duplicate detection and group management for the Imaginary application.
+Duplicate detection and group management for the Photonarium application.
 
 This module provides the DuplicateManager class which handles all duplicate
 detection across 6 group levels:
