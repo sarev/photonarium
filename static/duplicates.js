@@ -939,6 +939,10 @@ Duplicates._applySemanticSort = async function() {
             groupImageIds.map(g => g.image_id)
         );
 
+        // Staleness check: user may have changed sort mode or query
+        // while the async request was in flight
+        if (this.state.sortMode !== 'semantic' || this.state.semanticQuery !== query) return;
+
         if (scores && scores.length > 0) {
             // Create a map of image_id -> score
             const scoreMap = new Map(
