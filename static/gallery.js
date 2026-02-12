@@ -629,7 +629,7 @@ const Gallery = {
         } catch (error) {
             console.error('Failed to load content similarities:', error);
             if (error.message && error.message.includes('404')) {
-                App.showError('This image has no embedding yet. Wait for processing to complete.');
+                App.showError('This image is still being processed. Please wait.');
             } else {
                 App.showError('Could not load similarity data.');
             }
@@ -2289,7 +2289,7 @@ const Gallery = {
             } else {
                 // Group is now empty - return to groups screen
                 App.clearFilter();
-                App.showScreen('duplicates');
+                App.navigateTo('duplicates');
             }
         } catch (err) {
             App.showError('Failed to remove from group: ' + err.message);
