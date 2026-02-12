@@ -181,6 +181,10 @@
                             <option value="100">100+</option>
                         </select>
                     </div>
+                    <div class="toolbar-separator auto-level-control"></div>
+                    <button id="btn-dup-prune" class="toolbar-btn auto-level-control" title="Prune groups: keep the best images, move the rest to trash">
+                        <span class="icon" data-icon="delete_sweep">&#x1F5D1;</span>
+                    </button>
                     <div class="toolbar-separator custom-group-control" hidden></div>
                     <button id="btn-group-new" class="toolbar-btn custom-group-control" title="Create new group" hidden>
                         <span class="icon" data-icon="create_new_folder">+</span>
@@ -188,7 +192,7 @@
                     <button id="btn-group-rename" class="toolbar-btn custom-group-control" title="Rename selected group" hidden disabled>
                         <span class="icon" data-icon="edit">&#x270F;</span>
                     </button>
-                    <button id="btn-group-delete" class="toolbar-btn custom-group-control" title="Delete selected group" hidden disabled>
+                    <button id="btn-group-delete" class="toolbar-btn custom-group-control" title="Remove selected group (doesn't touch the images!)" hidden disabled>
                         <span class="icon" data-icon="delete">&#x1F5D1;</span>
                     </button>
                     <input type="text" id="dup-group-filter" class="semantic-query-input named-group-control custom-group-control" placeholder="Filter groups by name..." hidden>
@@ -698,6 +702,41 @@
                 </div>
                 <div class="dialog-actions" id="dialog-metadata-actions">
                     <button id="dialog-metadata-close" class="action-btn primary">Close</button>
+                </div>
+            </div>
+        </dialog>
+
+        <!-- Prune dialog (duplicate group pruning options + confirmation) -->
+        <dialog id="dialog-prune">
+            <div class="dialog-content dialog-prune-content">
+                <h3>Prune Groups</h3>
+                <p id="dialog-prune-scope" class="dialog-prune-scope"></p>
+
+                <fieldset class="dialog-prune-fieldset">
+                    <legend>Keep per group</legend>
+                    <label class="dialog-prune-option">
+                        <input type="radio" name="prune-mode" value="best" checked>
+                        <span>Best image only</span>
+                    </label>
+                    <label class="dialog-prune-option">
+                        <input type="radio" name="prune-mode" value="count">
+                        <span>Top</span>
+                        <input type="number" id="dialog-prune-count" class="dialog-prune-number" min="1" max="999" value="2">
+                        <span>images</span>
+                    </label>
+                    <label class="dialog-prune-option">
+                        <input type="radio" name="prune-mode" value="percent">
+                        <span>Top</span>
+                        <input type="number" id="dialog-prune-percent" class="dialog-prune-number" min="1" max="99" value="33">
+                        <span>%</span>
+                    </label>
+                </fieldset>
+
+                <p id="dialog-prune-summary" class="dialog-prune-summary"></p>
+
+                <div class="dialog-actions">
+                    <button id="dialog-prune-cancel" class="action-btn">Cancel</button>
+                    <button id="dialog-prune-ok" class="action-btn danger" disabled>Trash</button>
                 </div>
             </div>
         </dialog>

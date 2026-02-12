@@ -38,6 +38,7 @@ import atexit
 import base64
 import io
 import logging
+import math
 import os
 import subprocess
 import sys
@@ -71,6 +72,7 @@ def jsonify(data):
 
 from caption import CaptionGenerator
 from imagedb import ImageDatabase, register_signal_handlers
+from trash import compute_quality_scores
 from rawimage import is_raw_format, open_image as raw_open_image
 from thumbnails import (
     get_thumbnail_cache_path,
@@ -538,38 +540,50 @@ def generate_caption(image_id):
     return success_response({'caption': caption})
 
 
-@app.route('/api/images/<image_id>', methods=['DELETE'])
-def delete_image(image_id):
-    """Delete an image from the database and optionally from disk.
+@app.route('/api/images/trash', methods=['POST'])
+def trash_images():
+    """Move images to the trash directory and soft-delete from database.
 
-    This removes the image entry from the database. The actual file
-    deletion behaviour is controlled by the delete_file parameter.
+    Moves files out of indexed folders into the configured trash directory
+    so they stop appearing in Photonarium, while remaining on disk for
+    manual recovery.  File moves are parallelised for performance.
 
-    Args:
-        image_id: The unique identifier of the image.
-
-    Query Parameters:
-        delete_file: If 'true', also delete the file from disk.
-                    Defaults to 'false'.
+    Request Body:
+        JSON object with:
+            - image_ids: Array of image IDs to trash
 
     Returns:
-        Success response, or 404 if image not found.
+        JSON object with:
+            - results: Object mapping image_id to success boolean
+            - trashed: Array of successfully trashed image IDs
+            - errors: Object mapping image_id to error message
     """
-    delete_file = request.args.get('delete_file', 'false').lower() == 'true'
+    data = request.get_json()
+    if not data:
+        return error_response('Request body is required')
 
-    # Get checksum before deletion for cache invalidation
+    image_ids = data.get('image_ids', [])
+    if not image_ids:
+        return error_response('At least one image_id is required')
+    if not isinstance(image_ids, list):
+        return error_response('image_ids must be an array')
+
     db = get_db()
-    checksum = db.get_checksum(image_id)
 
-    success = db.delete_image(image_id, from_disk=delete_file)
-    if not success:
-        return error_response('Image not found', 404)
+    try:
+        result = db.trash_images(image_ids)
+    except ValueError as e:
+        return error_response(str(e))
 
-    # Invalidate thumbnail RAM cache
-    if checksum:
-        get_thumbnail_cache().remove(checksum)
+    # Invalidate thumbnail RAM cache for trashed images
+    if result['trashed']:
+        cache = get_thumbnail_cache()
+        for image_id in result['trashed']:
+            checksum = db.get_checksum(image_id)
+            if checksum:
+                cache.remove(checksum)
 
-    return success_response(message='Image deleted')
+    return success_response(result)
 
 
 @app.route('/api/images/<image_id>/thumbnail', methods=['GET'])
@@ -1048,6 +1062,13 @@ def get_status():
         'person_id': last_result.get('person_id') if last_result else None,
     }
 
+    # Add trash status
+    db = get_db()
+    status['trash_enabled'] = db.is_trash_enabled()
+    trash_progress = db.get_trash_progress()
+    if trash_progress:
+        status['trash_progress'] = trash_progress
+
     return success_response(status)
 
 
@@ -1064,7 +1085,8 @@ def get_config():
         (quality_weight_aesthetic, quality_weight_sharpness, quality_weight_pixels,
         quality_weight_bpp, quality_alpha, nima_enabled).
     """
-    config = get_db().config
+    db = get_db()
+    config = db.config
     return success_response({
         'thumbnail_concurrent_requests': config.thumbnail_concurrent_requests,
         'thumbnail_extra_rows': config.thumbnail_extra_rows,
@@ -1076,6 +1098,7 @@ def get_config():
         'quality_weight_bpp': config.quality_weight_bpp,
         'quality_alpha': config.quality_alpha,
         'nima_enabled': config.nima_enabled,
+        'trash_dir': str(db.trash_dir),
     })
 
 
@@ -1192,6 +1215,143 @@ def sort_duplicates_semantic():
     except Exception as e:
         logger.exception('Semantic sort failed')
         return error_response(f'Semantic sort failed: {str(e)}', 500)
+
+
+@app.route('/api/duplicates/prune', methods=['POST'])
+def prune_duplicates():
+    """Prune duplicate groups by trashing lower-quality images.
+
+    For each group at the specified level, ranks images by a composite
+    quality score (aesthetic, sharpness, resolution, compression quality)
+    and keeps the top N, moving the rest to the trash directory.
+
+    The quality scoring algorithm mirrors the frontend Quality sort
+    (weighted percentile composite of NIMA+LAION aesthetic, sharpness,
+    pixel count, and bits-per-pixel).
+
+    Request Body:
+        JSON object with:
+            - level: Similarity level (0-3, auto-detected only)
+            - keep_count: Number of images to keep per group (default: 1)
+            - keep_percent: Percentage of images to keep (overrides keep_count).
+                          Rounded up so at least 1 image is always kept.
+            - group_hashes: Optional array of specific group hashes to prune.
+                          If omitted, prunes all groups at the level.
+
+    Returns:
+        JSON object with:
+            - trashed_count: Total number of images moved to trash
+            - group_count: Number of groups that were pruned
+            - errors: Array of error messages (if any)
+    """
+    data = request.get_json()
+    if not data:
+        return error_response('Request body is required')
+
+    level = data.get('level')
+    if level is None:
+        return error_response('level is required')
+    if not isinstance(level, int) or level < 0 or level > 3:
+        return error_response('level must be 0-3 (auto-detected duplicates only)')
+
+    keep_count = data.get('keep_count', 1)
+    keep_percent = data.get('keep_percent')
+    group_hashes = data.get('group_hashes')
+
+    if not isinstance(keep_count, int) or keep_count < 1:
+        return error_response('keep_count must be a positive integer')
+
+    db = get_db()
+
+    if not db.is_trash_enabled():
+        return error_response(
+            'Trash directory is disabled. Check that it does not '
+            'overlap an indexed folder.'
+        )
+
+    # Get groups with quality fields
+    try:
+        if group_hashes and isinstance(group_hashes, list):
+            groups = []
+            for gh in group_hashes:
+                groups.extend(
+                    db._duplicate_manager.get_group_images_ranked(level, gh)
+                )
+        else:
+            groups = db._duplicate_manager.get_group_images_ranked(level)
+    except Exception as e:
+        logger.exception('Failed to get duplicate groups for pruning')
+        return error_response(f'Failed to load groups: {str(e)}', 500)
+
+    if not groups:
+        return success_response({
+            'trashed_count': 0,
+            'group_count': 0,
+            'errors': [],
+        })
+
+    # Determine which images to trash across all groups
+    all_trash_ids = []
+    pruned_group_count = 0
+
+    for group in groups:
+        images = group['images']
+        n = len(images)
+
+        # Determine how many to keep for this group
+        if keep_percent is not None:
+            group_keep = math.ceil(n * keep_percent / 100)
+        else:
+            group_keep = keep_count
+        # Always keep at least 1
+        group_keep = max(1, min(group_keep, n))
+
+        if group_keep >= n:
+            continue  # Nothing to trash in this group
+
+        # Score and rank images
+        scores = compute_quality_scores(images, db.config)
+
+        # Sort by score descending — best first
+        ranked = sorted(images, key=lambda img: scores.get(img['id'], 0), reverse=True)
+
+        # Keep top N, trash the rest
+        trash_ids = [img['id'] for img in ranked[group_keep:]]
+        all_trash_ids.extend(trash_ids)
+        pruned_group_count += 1
+
+    if not all_trash_ids:
+        return success_response({
+            'trashed_count': 0,
+            'group_count': 0,
+            'errors': [],
+        })
+
+    # Trash all images in one batch
+    try:
+        result = db.trash_images(all_trash_ids)
+    except ValueError as e:
+        return error_response(str(e))
+
+    # Invalidate thumbnail RAM cache for trashed images
+    if result['trashed']:
+        cache = get_thumbnail_cache()
+        for image_id in result['trashed']:
+            checksum = db.get_checksum(image_id)
+            if checksum:
+                cache.remove(checksum)
+
+    # Collect error messages
+    error_messages = [
+        f'{img_id}: {msg}'
+        for img_id, msg in result.get('errors', {}).items()
+    ]
+
+    return success_response({
+        'trashed_count': len(result['trashed']),
+        'group_count': pruned_group_count,
+        'errors': error_messages,
+    })
 
 
 # =============================================================================

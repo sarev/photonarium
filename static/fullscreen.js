@@ -1281,6 +1281,15 @@ const Fullscreen = {
         const { imageList, currentIndex } = this.state;
         if (!imageId || imageList.length === 0) return;
 
+        // Guard: trash must be enabled
+        if (!AppState.status.isTrashEnabled()) {
+            App.showError(
+                'Cannot delete: trash directory is misconfigured. '
+                + 'Check that it does not overlap an indexed folder.'
+            );
+            return;
+        }
+
         console.log('[Fullscreen._deleteAndAdvance]', imageId);
 
         // Store the next image info before deletion
@@ -1306,11 +1315,11 @@ const Fullscreen = {
         }
 
         try {
-            // Delete via AppState (handles cache update, faces cleanup, API call)
+            // Move to trash via AppState (handles cache update, faces cleanup, API call)
             await AppState.images.delete(imageId);
         } catch (error) {
-            console.error('Failed to delete image:', error);
-            App.showError('Failed to delete image');
+            console.error('Failed to move image to trash:', error);
+            App.showError('Failed to move image to trash');
             // Restore by reloading the display list
             this.state.imageList = AppState.images.getDisplayList();
         }

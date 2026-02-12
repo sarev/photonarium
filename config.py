@@ -261,6 +261,15 @@ quality_weight_bpp: 0.05
 # Set to 0.0 to use LAION only, 1.0 for NIMA only.
 # Range: 0.0-1.0
 quality_alpha: 0.60
+
+# ------------------------------------------------------------------------------
+# Trash Directory
+# ------------------------------------------------------------------------------
+# When images are deleted (from Gallery, Fullscreen, or duplicate pruning),
+# they are moved to this directory instead of being permanently removed.
+# Files keep their original names (with a counter suffix on collision).
+# Leave empty to use the default: <data-dir>/trash/
+# trash_dir: /path/to/custom/trash
 """
 
 
@@ -305,6 +314,9 @@ class Config:
         quality_weight_pixels: Weight for pixel count component in quality sort.
         quality_weight_bpp: Weight for bits-per-pixel component in quality sort.
         quality_alpha: Blend ratio for NIMA vs LAION aesthetic scores (0-1).
+        trash_dir: Path to trash directory for deleted images. Empty string means
+            use the default (<data-dir>/trash/). Set to a custom path to move
+            trashed images elsewhere.
     """
 
     image_extensions: set[str] = field(default_factory=lambda: {
@@ -347,6 +359,7 @@ class Config:
     quality_weight_pixels: float = 0.15
     quality_weight_bpp: float = 0.05
     quality_alpha: float = 0.60
+    trash_dir: str = ''
 
     def __post_init__(self) -> None:
         """Validate configuration values after initialisation."""
@@ -600,6 +613,9 @@ def load_config(config_path: Path | str | None = None) -> Config:
 
     if 'quality_alpha' in config_data:
         kwargs['quality_alpha'] = float(config_data['quality_alpha'])
+
+    if 'trash_dir' in config_data:
+        kwargs['trash_dir'] = str(config_data['trash_dir'])
 
     return Config(**kwargs)
 

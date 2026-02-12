@@ -18,13 +18,13 @@ WSGI server in production.
 
 | Prefix | Purpose |
 |--------|---------|
-| `/api/images` | Image listing, metadata updates, deletion |
+| `/api/images` | Image listing, metadata updates, trash-based deletion |
 | `/api/images/:id/thumbnail` | Thumbnail retrieval (snapped to 200 or 400px) |
 | `/api/images/:id/full` | Full-resolution image serving |
 | `/api/folders` | Folder registration and removal |
 | `/api/status` | Processing status (indexing, embedding, face queues) |
 | `/api/rescan` | Trigger folder rescan |
-| `/api/duplicates` | Duplicate group retrieval by similarity level |
+| `/api/duplicates` | Duplicate group retrieval and pruning by similarity level |
 | `/api/stats` | Database and cache statistics |
 | `/api/people` | People CRUD, merge, dissolve |
 | `/api/people/:id/thumbnail` | Preferred face thumbnail for a person |

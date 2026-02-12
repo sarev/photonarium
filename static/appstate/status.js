@@ -118,6 +118,14 @@ AppState.status = (function() {
         },
 
         /**
+         * Check if the trash directory is configured and valid.
+         * @returns {boolean}
+         */
+        isTrashEnabled() {
+            return _status?.trash_enabled !== false;
+        },
+
+        /**
          * Check if backend is currently processing.
          * @returns {boolean}
          */

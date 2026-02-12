@@ -593,20 +593,16 @@ AppState.images = (function() {
         },
 
         /**
-         * Delete one or more images.
+         * Delete one or more images by moving them to the trash directory.
          * Handles cascade: faces → people → duplicates → images.
          *
          * @param {string|Array} ids - Image ID(s)
-         * @param {Object} [options]
-         * @param {boolean} [options.deleteFiles=false] - Delete files from disk
          * @returns {Promise<void>}
          */
-        delete(ids, options = {}) {
+        delete(ids) {
             if (!Array.isArray(ids)) ids = [ids];
-            const { deleteFiles = false } = options;
 
-            console.log('[AppState.images.delete]', ids.length, 'images',
-                deleteFiles ? '(with files)' : '');
+            console.log('[AppState.images.delete]', ids.length, 'images');
 
             return queueTransaction(async () => {
                 const backup = new Map();
@@ -623,13 +619,10 @@ AppState.images = (function() {
                 }
 
                 try {
-                    const deleteFileParam = deleteFiles ? '?delete_file=true' : '';
-                    for (const id of ids) {
-                        await App.apiDelete(`/images/${id}${deleteFileParam}`);
-                    }
+                    await App.apiPost('/images/trash', { image_ids: ids });
                 } catch (err) {
                     console.error('[AppState.images.delete] Persist failed:', err);
-                    broadcastError(err.message || 'Failed to delete images');
+                    broadcastError(err.message || 'Failed to move images to trash');
                     // Cascade rollback is complex - reload instead
                     AppState.faces.reload();
                     AppState.people.reload();

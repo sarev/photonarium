@@ -1823,12 +1823,21 @@ const Gallery = {
     async _deleteImages(ids) {
         if (ids.length === 0) return;
 
+        // Guard: trash must be enabled
+        if (!AppState.status.isTrashEnabled()) {
+            App.showError(
+                'Cannot delete: trash directory is misconfigured. '
+                + 'Check that it does not overlap an indexed folder.'
+            );
+            return;
+        }
+
         const count = ids.length;
         const message = count === 1
-            ? 'Are you sure you want to delete this image?'
-            : `Are you sure you want to delete ${count} images?`;
+            ? 'Move this image to the trash?'
+            : `Move ${count} images to the trash?`;
 
-        const confirmed = await App.confirm('Delete Images', message);
+        const confirmed = await App.confirm('Move to Trash', message, { okText: 'Move to Trash' });
         if (!confirmed) return;
 
         // Find the index of the first deleted image (to select next image after deletion)

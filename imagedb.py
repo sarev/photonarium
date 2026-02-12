@@ -189,6 +189,7 @@ import warnings
 # Local imports
 from config import Config, load_config, get_default_config
 from duplicates import DuplicateManager, embedding_to_numpy
+from trash import validate_trash_dir, move_to_trash
 from thumbnails import (
     DEFAULT_THUMBNAIL_DIR,
     get_thumbnail_cache_path,
@@ -4141,6 +4142,12 @@ class ImageDatabase:
         self._rotations_lock = threading.Lock()  # Lock for the counter
         self._rotations_done = threading.Condition(self._rotations_lock)  # Signal when rotations complete
 
+        # Trash directory state — resolved in startup() after folders are verified
+        self._active_trash_ops = 0  # Count of in-flight trash operations
+        self._trash_ops_lock = threading.Lock()  # Lock for the counter
+        self._trash_ops_done = threading.Condition(self._trash_ops_lock)  # Signal when trash ops complete
+        self._trash_progress: dict | None = None  # {total, done, started_at} during trash ops
+
         # Create queues
         self._ingestion_queue: queue.Queue[Path] = queue.Queue()
         self._embedding_queue: queue.Queue[str] = queue.Queue()
@@ -4189,6 +4196,9 @@ class ImageDatabase:
         missing_folders = verify_folders_exist(self.conn)
         for folder in missing_folders:
             logger.warning(f'        Folder missing: {folder}')
+
+        # Initialise trash directory (after folders are verified)
+        self._init_trash_dir()
 
         # Step 4: Optionally scan folders and queue processing
         if self._run_scan:
@@ -5005,6 +5015,12 @@ class ImageDatabase:
                 logger.info(f'Waiting for {self._active_rotations} rotation(s) to complete...')
                 self._rotations_done.wait(timeout=5.0)
 
+        # Wait for any in-flight trash operations to complete
+        with self._trash_ops_lock:
+            while self._active_trash_ops > 0:
+                logger.info(f'Waiting for {self._active_trash_ops} trash operation(s) to complete...')
+                self._trash_ops_done.wait(timeout=5.0)
+
         with self._db_lock:
             if self.conn:
                 self.conn.close()
@@ -5102,6 +5118,8 @@ class ImageDatabase:
             emit_folder_added(self.event_queue, result['path'])
             # Remove the paths list from return value
             del result['new_images']
+            # Re-validate trash dir (new folder may conflict)
+            self._validate_trash_dir()
         return result
 
     def remove_folder(self, path: str) -> bool:
@@ -5125,6 +5143,8 @@ class ImageDatabase:
                 # Re-sync directory groups (removes groups for the deleted folder)
                 self._duplicate_manager.sync_directory_groups(self.conn, self._db_lock)
                 emit_folder_removed(self.event_queue, path)
+                # Re-validate trash dir (removed folder may resolve a conflict)
+                self._validate_trash_dir()
 
             return result
         finally:
@@ -5337,6 +5357,190 @@ class ImageDatabase:
         # Remove from duplicate group cache
         self._duplicate_manager.invalidate_image(image_id)
         return result
+
+    # =========================================================================
+    # TRASH DIRECTORY
+    # =========================================================================
+
+    def _init_trash_dir(self) -> None:
+        """Initialise the trash directory from config.
+
+        Resolves the trash path, creates it if needed, and validates it
+        against indexed folders.  Sets ``self.trash_dir`` and
+        ``self._trash_enabled``.  Called from :meth:`startup` after
+        folders are verified.
+        """
+        # Resolve trash path: custom from config, or default <data-dir>/trash
+        if self.config.trash_dir:
+            self.trash_dir = Path(self.config.trash_dir)
+        else:
+            self.trash_dir = self.db_path.parent / 'trash'
+
+        # Create directory
+        try:
+            self.trash_dir.mkdir(parents=True, exist_ok=True)
+        except OSError as e:
+            logger.error(f'Failed to create trash directory {self.trash_dir}: {e}')
+            self._trash_enabled = False
+            return
+
+        # Validate against indexed folders
+        self._validate_trash_dir()
+
+    def _validate_trash_dir(self) -> None:
+        """Validate trash dir does not overlap indexed folders.
+
+        Safe to call any time — updates ``self._trash_enabled``.
+        """
+        try:
+            folders = [f['path'] for f in get_folders(self.conn)]
+            validate_trash_dir(self.trash_dir, folders)
+            self._trash_enabled = True
+            logger.info(f'        Trash directory: {self.trash_dir}')
+        except ValueError as e:
+            logger.warning(f'Trash disabled: {e}')
+            self._trash_enabled = False
+
+    def is_trash_enabled(self) -> bool:
+        """Check whether the trash directory is configured and valid.
+
+        Returns:
+            True if images can be moved to trash, False if trash is
+            disabled due to misconfiguration or overlap with indexed folders.
+        """
+        return getattr(self, '_trash_enabled', False)
+
+    def get_trash_progress(self) -> dict | None:
+        """Get progress of the current trash operation, if any.
+
+        Returns:
+            Dict with ``total``, ``done``, and ``started_at`` keys while
+            a trash operation is running, or None when idle.
+        """
+        return self._trash_progress
+
+    def trash_images(self, image_ids: list[str]) -> dict[str, Any]:
+        """Move images to the trash directory and soft-delete from DB.
+
+        File moves are parallelised using a thread pool (same pattern as
+        :meth:`rotate_images`).  DB updates are batched after all moves
+        complete.
+
+        Args:
+            image_ids: List of image UUIDs to trash.
+
+        Returns:
+            Dict with:
+                - results: Dict mapping image_id → success boolean
+                - trashed: List of successfully trashed image IDs
+                - errors: Dict mapping image_id → error message
+
+        Raises:
+            ValueError: If trash is disabled.
+        """
+        if self._closed:
+            logger.warning('trash_images: Database is closed')
+            return {'results': {id: False for id in image_ids}, 'trashed': [], 'errors': {}}
+
+        if not self._trash_enabled:
+            raise ValueError(
+                'Trash directory is disabled. Check that it does not '
+                'overlap an indexed folder.'
+            )
+
+        # Track this operation for graceful shutdown
+        with self._trash_ops_lock:
+            self._active_trash_ops += 1
+
+        try:
+            # Set up progress tracking
+            self._trash_progress = {
+                'total': len(image_ids),
+                'done': 0,
+                'started_at': datetime.now().isoformat(),
+            }
+
+            # Look up file paths for all images (single batch query)
+            paths = {}
+            with self._db_lock:
+                placeholders = ','.join('?' for _ in image_ids)
+                cursor = self.conn.execute(
+                    f'SELECT id, path FROM images WHERE id IN ({placeholders})',
+                    image_ids
+                )
+                for row in cursor.fetchall():
+                    paths[row['id']] = row['path']
+
+            results = {}
+            trashed = []
+            errors = {}
+
+            # Move files in parallel
+            max_workers = self.config.indexing_threads
+
+            def trash_one(image_id: str) -> tuple[str, bool, str | None]:
+                """Move a single image to trash. Returns (id, success, error_msg)."""
+                file_path = paths.get(image_id)
+                if not file_path:
+                    return (image_id, False, 'Image not found')
+
+                try:
+                    dest = move_to_trash(Path(file_path), self.trash_dir)
+                    if dest is None:
+                        # File was already missing — still soft-delete the DB row
+                        return (image_id, True, None)
+                    return (image_id, True, None)
+                except Exception as e:
+                    return (image_id, False, str(e))
+
+            with ThreadPoolExecutor(max_workers=max_workers) as executor:
+                futures = [executor.submit(trash_one, img_id) for img_id in image_ids]
+                for future in futures:
+                    try:
+                        image_id, success, error_msg = future.result()
+                        results[image_id] = success
+                        if success:
+                            trashed.append(image_id)
+                        elif error_msg:
+                            errors[image_id] = error_msg
+                    except Exception as e:
+                        logger.error(f'trash_images: Thread error: {e}')
+
+                    # Update progress
+                    if self._trash_progress:
+                        self._trash_progress['done'] += 1
+
+            # Batch soft-delete all successfully trashed images in one DB write
+            if trashed:
+                now = datetime.now().isoformat()
+                with self._db_lock:
+                    placeholders = ','.join('?' for _ in trashed)
+                    self.conn.execute(
+                        f'UPDATE images SET deleted = 1, updated_at = ? '
+                        f'WHERE id IN ({placeholders})',
+                        [now] + trashed
+                    )
+                    self.conn.commit()
+
+                # Clean up caches
+                with self._checksum_cache_lock:
+                    for image_id in trashed:
+                        self._checksum_cache.pop(image_id, None)
+                self._duplicate_manager.invalidate_images(trashed)
+
+            logger.info(
+                f'Trashed {len(trashed)}/{len(image_ids)} images '
+                f'({len(errors)} errors)'
+            )
+
+            return {'results': results, 'trashed': trashed, 'errors': errors}
+
+        finally:
+            # Clear progress and signal completion
+            self._trash_progress = None
+            with self._trash_ops_lock:
+                self._active_trash_ops -= 1
+                self._trash_ops_done.notify_all()
 
     def rotate_images(
         self,

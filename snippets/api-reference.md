@@ -10,7 +10,7 @@ For design principles and conventions, see the API section in `CLAUDE.md`.
 | GET | `/api/images` | List all images with metadata |
 | GET | `/api/images/:id` | Get single image metadata |
 | POST | `/api/images/:id` | Update image (description, rating) |
-| DELETE | `/api/images/:id` | Delete image from database |
+| POST | `/api/images/trash` | Move images to trash `{image_ids: []}` |
 | GET | `/api/images/:id/thumbnail?size=N` | Get thumbnail (snapped to 200 or 400px) |
 | GET | `/api/images/:id/full` | Get full-resolution image |
 | GET | `/api/images/:id/histogram` | Get image histogram data |
@@ -43,12 +43,13 @@ For design principles and conventions, see the API section in `CLAUDE.md`.
 | POST | `/api/rescan` | Queue all folders for re-indexing |
 | GET | `/api/config` | Get frontend-relevant configuration values |
 
-## Duplicates (2 routes)
+## Duplicates (3 routes)
 
 | Method | Endpoint | Description |
 |--------|----------|-------------|
 | GET | `/api/duplicates?level=N` | Get duplicate groups at level 0-3 |
 | POST | `/api/duplicates/sort-semantic` | Sort duplicate groups by semantic similarity |
+| POST | `/api/duplicates/prune` | Prune groups: keep best, trash rest `{level, keep_count}` |
 
 ## Stats (2 routes)
 

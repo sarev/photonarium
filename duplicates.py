@@ -2011,6 +2011,61 @@ class DuplicateManager:
         finally:
             conn.close()
 
+    def get_group_images_ranked(
+        self,
+        level: int,
+        group_hash: str | None = None,
+    ) -> list[dict[str, Any]]:
+        """Get groups with quality-scoring fields for each image.
+
+        Returns groups with the image metadata needed by
+        :func:`trash.compute_quality_scores` to rank images by quality.
+        Images are returned **unranked** — callers apply the scoring
+        algorithm themselves.
+
+        Args:
+            level: Similarity level (0-3 for auto-detected duplicates).
+            group_hash: If specified, return just this one group.
+                If None, return all groups at the level.
+
+        Returns:
+            List of dicts, each with ``group_hash`` and ``images`` (list
+            of dicts with ``id``, ``aesthetic_laion``, ``aesthetic_nima``,
+            ``laplacian_var``, ``width``, ``height``, ``size``).
+            Only groups with 2+ non-deleted images are included.
+        """
+        conn = self._get_db()
+        try:
+            if group_hash:
+                hashes = [group_hash]
+            else:
+                cursor = conn.execute(
+                    'SELECT DISTINCT group_hash FROM duplicate_groups WHERE level = ?',
+                    (level,)
+                )
+                hashes = [row['group_hash'] for row in cursor.fetchall()]
+
+            groups = []
+            for gh in hashes:
+                cursor = conn.execute("""
+                    SELECT i.id, i.aesthetic_laion, i.aesthetic_nima,
+                           i.laplacian_var, i.width, i.height, i.size
+                    FROM images i
+                    JOIN duplicate_groups dg ON i.id = dg.image_id
+                    WHERE dg.level = ? AND dg.group_hash = ? AND i.deleted = 0
+                """, (level, gh))
+                images = [dict(row) for row in cursor.fetchall()]
+
+                if len(images) >= 2:
+                    groups.append({
+                        'group_hash': gh,
+                        'images': images,
+                    })
+
+            return groups
+        finally:
+            conn.close()
+
     def get_groups_lightweight(self, level: int) -> list[dict[str, Any]]:
         """Get duplicate groups with minimal data for efficient display.
 

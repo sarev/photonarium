@@ -533,6 +533,37 @@ AppState.duplicates = (function() {
         },
 
         /**
+         * Prune duplicate groups by trashing lower-quality images.
+         *
+         * NOT optimistic — waits for backend completion then reloads
+         * affected data, since this is a bulk destructive operation.
+         *
+         * @param {number} level - Similarity level (0-3)
+         * @param {Object} [options]
+         * @param {number} [options.keepCount=1] - Images to keep per group
+         * @param {number} [options.keepPercent] - Percentage to keep (overrides keepCount)
+         * @param {string[]} [options.groupHashes] - Specific groups to prune
+         * @returns {Promise<{trashedCount: number, groupCount: number}>}
+         */
+        async pruneGroups(level, options = {}) {
+            const response = await App.apiPost('/duplicates/prune', {
+                level,
+                keep_count: options.keepCount,
+                keep_percent: options.keepPercent,
+                group_hashes: options.groupHashes,
+            });
+
+            // Full reload of affected data after prune completes
+            await AppState.images.load(true);
+            await this.loadLevel(level, true);
+
+            return {
+                trashedCount: response.data.trashed_count,
+                groupCount: response.data.group_count,
+            };
+        },
+
+        /**
          * Remove images from a custom group (group persists even if empty).
          *
          * @param {string} groupHash - The group identifier

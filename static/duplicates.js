@@ -190,6 +190,7 @@ const Duplicates = {
             btnSortPeople: App.$('btn-dup-sort-people'),
             semanticQuery: App.$('dup-semantic-query'),
             minGroupSize: App.$('dup-min-group-size'),
+            btnPrune: App.$('btn-dup-prune'),
             // Custom group controls
             btnGroupNew: App.$('btn-group-new'),
             btnGroupRename: App.$('btn-group-rename'),
@@ -362,6 +363,11 @@ const Duplicates = {
 
         // Min group size dropdown
         this._els.minGroupSize.addEventListener('change', () => this._onMinGroupSizeChange());
+
+        // Prune button
+        if (this._els.btnPrune) {
+            this._els.btnPrune.addEventListener('click', () => this._onPruneGroups());
+        }
 
         // Custom group controls
         if (this._els.btnGroupNew) {
@@ -1013,6 +1019,211 @@ Duplicates._onRenameGroup = async function() {
 };
 
 /**
+ * Opens the prune dialog for the current duplicate level.
+ *
+ * Selection-aware: if groups are selected, scopes to those groups only.
+ * Otherwise scopes to all groups at the current level.
+ *
+ * The dialog lets the user choose how many images to keep per group
+ * (best only, top N, or top N%), shows a live preview of the impact,
+ * and requires explicit confirmation before proceeding.
+ * @private
+ */
+Duplicates._onPruneGroups = function() {
+    const level = this.state.currentLevel;
+    if (level > 3) return;
+
+    // Guard: trash must be enabled
+    if (!AppState.status.isTrashEnabled()) {
+        App.showError(
+            'Cannot prune: trash directory is misconfigured. '
+            + 'Check that it does not overlap an indexed folder.'
+        );
+        return;
+    }
+
+    const allGroups = this.state.groups;
+    if (allGroups.length === 0) return;
+
+    // Determine scope: selected groups or all groups
+    const selectedHashes = this.state.selectedGroups;
+    const hasSelection = selectedHashes.length > 0;
+    const targetGroups = hasSelection
+        ? allGroups.filter(g => selectedHashes.includes(g.group_hash))
+        : allGroups;
+
+    if (targetGroups.length === 0) return;
+
+    const totalImages = targetGroups.reduce((sum, g) => sum + g.count, 0);
+
+    // Show the prune dialog
+    this._showPruneDialog(level, targetGroups, hasSelection, totalImages, selectedHashes);
+};
+
+/**
+ * Displays the prune options dialog and handles its lifecycle.
+ *
+ * @param {number} level - Current duplicate level
+ * @param {Array} targetGroups - Groups to prune
+ * @param {boolean} hasSelection - Whether scope is from selection
+ * @param {number} totalImages - Total images across target groups
+ * @param {string[]} selectedHashes - Selected group hashes (if any)
+ * @private
+ */
+Duplicates._showPruneDialog = function(level, targetGroups, hasSelection, totalImages, selectedHashes) {
+    const dialog     = document.getElementById('dialog-prune');
+    const scopeEl    = document.getElementById('dialog-prune-scope');
+    const summaryEl  = document.getElementById('dialog-prune-summary');
+    const okBtn      = document.getElementById('dialog-prune-ok');
+    const cancelBtn  = document.getElementById('dialog-prune-cancel');
+    const countInput = document.getElementById('dialog-prune-count');
+    const pctInput   = document.getElementById('dialog-prune-percent');
+    const radios     = dialog.querySelectorAll('input[name="prune-mode"]');
+
+    // --- Populate scope description ---
+    const groupCount = targetGroups.length;
+    if (hasSelection) {
+        scopeEl.textContent = groupCount === 1
+            ? `1 selected group (${totalImages} images)`
+            : `${groupCount} selected groups (${totalImages} images)`;
+    } else {
+        scopeEl.textContent = `All ${groupCount} groups (${totalImages} images)`;
+    }
+
+    /**
+     * Compute how many images would be trashed for the current settings.
+     * @returns {number} Count of images that would be moved to trash
+     */
+    const computeTrashCount = () => {
+        const mode = dialog.querySelector('input[name="prune-mode"]:checked')?.value || 'best';
+        let trashTotal = 0;
+
+        for (const group of targetGroups) {
+            const n = group.count;
+            let keep;
+            if (mode === 'best') {
+                keep = 1;
+            } else if (mode === 'count') {
+                keep = parseInt(countInput.value, 10) || 1;
+            } else {
+                keep = Math.ceil(n * (parseInt(pctInput.value, 10) || 1) / 100);
+            }
+            keep = Math.max(1, Math.min(keep, n));
+            trashTotal += n - keep;
+        }
+        return trashTotal;
+    };
+
+    /** Update summary text and OK button state from current settings. */
+    const updateSummary = () => {
+        const toTrash = computeTrashCount();
+        if (toTrash <= 0) {
+            summaryEl.textContent = 'Nothing to trash with these settings.';
+            summaryEl.style.color = '';
+            okBtn.disabled = true;
+            okBtn.textContent = 'Trash';
+        } else {
+            summaryEl.textContent = `${toTrash} image${toTrash > 1 ? 's' : ''} will be moved to trash.`;
+            summaryEl.style.color = 'var(--color-danger)';
+            okBtn.disabled = false;
+            okBtn.textContent = `Trash ${toTrash} images`;
+        }
+    };
+
+    // --- Bind events ---
+
+    /** Clicking a number input auto-selects its radio button. */
+    const onCountFocus = () => {
+        dialog.querySelector('input[name="prune-mode"][value="count"]').checked = true;
+        updateSummary();
+    };
+    const onPctFocus = () => {
+        dialog.querySelector('input[name="prune-mode"][value="percent"]').checked = true;
+        updateSummary();
+    };
+
+    const onInput = () => updateSummary();
+
+    const cleanup = () => {
+        radios.forEach(r => r.removeEventListener('change', onInput));
+        countInput.removeEventListener('input', onInput);
+        countInput.removeEventListener('focus', onCountFocus);
+        pctInput.removeEventListener('input', onInput);
+        pctInput.removeEventListener('focus', onPctFocus);
+        okBtn.removeEventListener('click', onOk);
+        cancelBtn.removeEventListener('click', onCancel);
+        dialog.removeEventListener('cancel', onCancel);
+        dialog.removeEventListener('keydown', onKeyDown);
+        dialog.close();
+    };
+
+    const onCancel = () => cleanup();
+
+    const onOk = async () => {
+        const toTrash = computeTrashCount();
+        if (toTrash <= 0) return;
+
+        // Build options from dialog state
+        const mode = dialog.querySelector('input[name="prune-mode"]:checked')?.value || 'best';
+        const options = {};
+        if (mode === 'best') {
+            options.keepCount = 1;
+        } else if (mode === 'count') {
+            options.keepCount = parseInt(countInput.value, 10) || 1;
+        } else {
+            options.keepPercent = parseInt(pctInput.value, 10) || 1;
+        }
+        if (hasSelection) {
+            options.groupHashes = selectedHashes;
+        }
+
+        cleanup();
+
+        // Execute the prune
+        AppState.loading.show('duplicates-prune', 'Pruning duplicate groups\u2026');
+        try {
+            const result = await AppState.duplicates.pruneGroups(level, options);
+            App.showInfo(
+                `Pruned ${result.groupCount} groups: ${result.trashedCount} images moved to trash.`
+            );
+        } catch (err) {
+            App.showError('Failed to prune groups: ' + (err.message || err));
+        } finally {
+            AppState.loading.hide('duplicates-prune');
+        }
+    };
+
+    const onKeyDown = (e) => {
+        e.stopPropagation();
+        if (e.key === 'Escape') {
+            e.preventDefault();
+            onCancel();
+        } else if (e.key === 'Enter' && document.activeElement !== cancelBtn) {
+            e.preventDefault();
+            if (!okBtn.disabled) onOk();
+        }
+    };
+
+    radios.forEach(r => r.addEventListener('change', onInput));
+    countInput.addEventListener('input', onInput);
+    countInput.addEventListener('focus', onCountFocus);
+    pctInput.addEventListener('input', onInput);
+    pctInput.addEventListener('focus', onPctFocus);
+    okBtn.addEventListener('click', onOk);
+    cancelBtn.addEventListener('click', onCancel);
+    dialog.addEventListener('cancel', onCancel);
+    dialog.addEventListener('keydown', onKeyDown);
+
+    // Reset to defaults and compute initial summary
+    dialog.querySelector('input[name="prune-mode"][value="best"]').checked = true;
+    countInput.value = '2';
+    pctInput.value = '33';
+    updateSummary();
+
+    dialog.showModal();
+};
+
+/**
  * Deletes the selected custom group(s).
  * Shows a danger confirmation dialog.
  * @private
@@ -1058,6 +1269,11 @@ Duplicates._renderGroups = function() {
     const status = this.state.currentStatus;
     const sliderPos = this._levelToSlider(level);
     const levelLabel = this.SIMILARITY_LABELS[sliderPos].toLowerCase();
+
+    // Update prune button disabled state
+    if (this._els.btnPrune) {
+        this._els.btnPrune.disabled = this.state.groups.length === 0;
+    }
 
     // Show empty/status state if no groups
     if (this.state.groups.length === 0) {

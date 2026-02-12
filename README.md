@@ -21,7 +21,7 @@ Find out more about the motivations behind Photonarium in [`BACKGROUND.md`](BACK
 - **Fast browsing** with a thumbnail grid that stays smooth on large libraries
 - **AI search** that understands what you type (for example: "sunset over mountains", "birthday cake"), with negative terms to exclude concepts (e.g. "beach -people")
 - **Face workflows**: detect faces, group unknowns, name people, and use those names later
-- **Duplicate finding** at multiple strictness levels (identical, near-identical, similar, related) plus auto-generated **directory groups** and user-curated **custom groups** (albums)
+- **Duplicate finding** at multiple strictness levels (identical, near-identical, similar, related) plus auto-generated **directory groups** and user-curated **custom groups** (albums), with one-click **prune** to keep the best image per group
 - **EXIF metadata** viewing, searching, and filtering by camera settings (camera, lens, ISO, aperture, shutter speed, and more)
 - **Ratings and descriptions** so you can build your own "favourites" system
 
@@ -110,7 +110,7 @@ Open full-screen with:
 
 ### Quick actions on selected photos
 
-- **Delete / Backspace** deletes selected images (with a confirmation).
+- **Delete / Backspace** moves selected images to the trash directory (with a confirmation).
 - **Rotate left / rotate right** fixes photos that are sideways.
 - **Reveal in folder** opens your file manager at the image location (only available when exactly one image is selected).
 
@@ -160,7 +160,7 @@ These shortcuts use Ctrl on Windows/Linux and Cmd on macOS:
 - **Ctrl/Cmd + I** ignores all unknown faces in the current image (marks them as `-`).
 - **Ctrl/Cmd + R** rotates the image right (90° clockwise).
 - **Ctrl/Cmd + L** rotates the image left (90°).
-- **Ctrl/Cmd + Backspace** or **Ctrl/Cmd + Delete** deletes the current image and advances to the next one.
+- **Ctrl/Cmd + Backspace** or **Ctrl/Cmd + Delete** moves the current image to trash and advances to the next one.
 
 ---
 
@@ -285,6 +285,7 @@ Groups helps you clean up your library by finding duplicates and also lets you o
   - **Related**, **Similar**, **Near-identical**, **Identical**
 - Double click a stack (or press **Enter**) to open that group in the Gallery, automatically sorted by quality with the best image selected.
 - While viewing a group in the Gallery, use **Alt + Left / Right** to move between groups.
+- **Prune** all groups at once: click the prune button to keep only the best image per group and move the rest to the trash directory. Uses the same quality scoring as the Gallery Quality sort.
 
 ### Directory groups
 
@@ -598,6 +599,16 @@ Settings are stored in `.photonarium.yml` (created automatically on first run). 
 * `caption_model`: BLIP model for image captioning (run `python download_models.py` after changing)
 * `caption_max_length`: maximum caption length in tokens
 * `caption_min_length`: minimum caption length (higher = more descriptive)
+* `trash_dir`: custom path for the trash directory (default: `<data-dir>/trash/`)
+
+## Trash directory
+
+When you delete images (from the Gallery, full-screen viewer, or the Groups prune button), the files are moved to a trash directory instead of being permanently deleted. By default, this is `<data-dir>/trash/`.
+
+* Files keep their original names; collisions get a counter suffix (`beach.jpg`, `beach (2).jpg`, etc.).
+* The trash directory must not overlap any indexed folder. If it does, Photonarium disables trash operations and shows a warning.
+* To recover a trashed image, move the file back into an indexed folder and rescan.
+* To customise the location, set `trash_dir` in `.photonarium.yml`.
 
 ## Tips
 
