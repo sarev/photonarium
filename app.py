@@ -1677,19 +1677,11 @@ def update_person_endpoint(person_id):
 
     db = get_db()
 
-    person = get_person(db.conn, person_id)
-    if person is None:
-        return error_response('Person not found', 404)
-
     name = data.get('name')
     if name is not None:
         name = name.strip()
         if not name:
             return error_response('Name cannot be empty')
-        # DESIGN: Defensive validation - rejects invalid request with error (see design-audit.md 1.7)
-        existing = get_person_by_name(db.conn, name)
-        if existing and existing['id'] != person_id:
-            return error_response(f'Person with name "{name}" already exists', 409)
 
     preferred_face_id = data.get('preferred_face_id')
 
@@ -1714,7 +1706,19 @@ def update_person_endpoint(person_id):
 
     ejected_face_ids = []
     faces_changed = False
+    # All reads and writes under one lock to prevent TOCTOU races
+    # (e.g. person deleted between existence check and update)
     with db._db_lock:
+        person = get_person(db.conn, person_id)
+        if person is None:
+            return error_response('Person not found', 404)
+
+        # DESIGN: Defensive validation - rejects invalid request with error (see design-audit.md 1.7)
+        if name is not None:
+            existing = get_person_by_name(db.conn, name)
+            if existing and existing['id'] != person_id:
+                return error_response(f'Person with name "{name}" already exists', 409)
+
         update_person(db.conn, person_id, **update_kwargs)
 
         # If threshold was changed to a non-null value, revalidate and reassess
