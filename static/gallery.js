@@ -1520,6 +1520,20 @@ const Gallery = {
         // Render action buttons
         this._renderMetadataActions(dialog, actions, mode, selectedFilters);
 
+        // Keyboard: Enter triggers the primary action (Close or Done),
+        // Escape closes/cancels (handled natively by <dialog>)
+        const keyHandler = (e) => {
+            if (e.key === 'Enter' && !e.target.matches('input, textarea')) {
+                e.preventDefault();
+                const primary = actions.querySelector('.action-btn.primary');
+                if (primary) primary.click();
+            }
+        };
+        dialog.addEventListener('keydown', keyHandler);
+        dialog.addEventListener('close', () => {
+            dialog.removeEventListener('keydown', keyHandler);
+        }, { once: true });
+
         dialog.showModal();
     },
 
@@ -1962,10 +1976,16 @@ const Gallery = {
             searchInput.addEventListener('keydown', (e) => e.stopPropagation());
         }
 
-        // Handle dialog close (Escape)
+        // Handle dialog keyboard shortcuts (Escape = cancel, Enter = done)
         dialog.addEventListener('cancel', (e) => {
             e.preventDefault();
             this._closeGroupPicker(false);
+        });
+        dialog.addEventListener('keydown', (e) => {
+            if (e.key === 'Enter' && !e.target.matches('input, textarea')) {
+                e.preventDefault();
+                this._closeGroupPicker(true);
+            }
         });
 
         // Drag support for available panel
