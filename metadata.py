@@ -74,17 +74,27 @@ _PATTERN_TIME_SEPARATED = re.compile(r'(\d{2})\D(\d{2})(?:\D(\d{2}))?')
 # =============================================================================
 
 def _validate_date(year: int, month: int, day: int) -> bool:
-    """Validate date components are within reasonable ranges.
+    """Validate date components are a real calendar date.
+
+    Uses datetime construction to catch invalid combinations like Feb 31.
+    Without this, an invalid date string '20240231' would pass validation
+    but then fail later when constructing a datetime, losing the timestamp.
 
     Args:
         year: Year value (should be 1900-2099).
         month: Month value (should be 1-12).
-        day: Day value (should be 1-31).
+        day: Day value (valid for the given month/year).
 
     Returns:
-        True if all components are valid, False otherwise.
+        True if all components form a valid date, False otherwise.
     """
-    return 1900 <= year <= 2099 and 1 <= month <= 12 and 1 <= day <= 31
+    if not (1900 <= year <= 2099 and 1 <= month <= 12 and 1 <= day <= 31):
+        return False
+    try:
+        datetime(year, month, day)
+        return True
+    except ValueError:
+        return False
 
 
 def _validate_time(hour: int, minute: int, second: int) -> bool:
@@ -161,11 +171,12 @@ def extract_exif_timestamp(path: Path | str) -> datetime | None:
 
     try:
         with Image.open(path) as img:
-            exif_data = img._getexif()
-            if exif_data is None:
+            exif_data = img.getexif()
+            if not exif_data:
                 return None
 
-            # Build tag name to value mapping
+            # Build tag name to value mapping (getexif() returns an Exif
+            # object keyed by tag ID — map to tag names for readability)
             exif_dict: dict[str, Any] = {}
             for tag_id, value in exif_data.items():
                 tag_name = TAGS.get(tag_id, str(tag_id))

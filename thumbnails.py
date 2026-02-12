@@ -146,11 +146,15 @@ def generate_thumbnail(
 
         # RAW files are fully decoded by rawpy (no draft mode possible),
         # standard formats can use Pillow's draft mode for large images.
+        # We track the original file-backed image so we can close it when done
+        # (prevents file handle leaks on Windows if an error occurs mid-pipeline).
+        original_img = None
         if is_raw_format(source_path):
             # raw_open_image returns a fully-decoded RGB PIL Image
             img = raw_open_image(source_path)
         else:
             img = Image.open(source_path)
+            original_img = img
 
             # For very large standard images, use draft mode to load at reduced
             # resolution — much faster and uses much less memory
@@ -175,25 +179,30 @@ def generate_thumbnail(
             # Handle EXIF orientation (already applied by raw_open_image for RAW)
             img = ImageOps.exif_transpose(img)
 
-        # Convert to RGB (handles RGBA, palette, etc.)
-        if img.mode in ('RGBA', 'LA', 'P'):
-            # Create white background for transparent images
-            background = Image.new('RGB', img.size, (255, 255, 255))
-            if img.mode == 'P':
-                img = img.convert('RGBA')
-            background.paste(img, mask=img.split()[-1] if img.mode in ('RGBA', 'LA') else None)
-            img = background
-        elif img.mode != 'RGB':
-            img = img.convert('RGB')
+        try:
+            # Convert to RGB (handles RGBA, palette, etc.)
+            if img.mode in ('RGBA', 'LA', 'P'):
+                # Create white background for transparent images
+                background = Image.new('RGB', img.size, (255, 255, 255))
+                if img.mode == 'P':
+                    img = img.convert('RGBA')
+                background.paste(img, mask=img.split()[-1] if img.mode in ('RGBA', 'LA') else None)
+                img = background
+            elif img.mode != 'RGB':
+                img = img.convert('RGB')
 
-        # Resize maintaining aspect ratio
-        img.thumbnail((size, size), Image.Resampling.LANCZOS)
+            # Resize maintaining aspect ratio
+            img.thumbnail((size, size), Image.Resampling.LANCZOS)
 
-        # Apply subtle sharpening to counteract downscale blur
-        img = img.filter(ImageFilter.UnsharpMask(radius=1.0, percent=60, threshold=3))
+            # Apply subtle sharpening to counteract downscale blur
+            img = img.filter(ImageFilter.UnsharpMask(radius=1.0, percent=60, threshold=3))
 
-        # Save as JPEG
-        img.save(dest_path, 'JPEG', quality=quality, optimize=True)
+            # Save as JPEG
+            img.save(dest_path, 'JPEG', quality=quality, optimize=True)
+        finally:
+            # Close the original file-backed image to release the file handle
+            if original_img is not None:
+                original_img.close()
 
         logger.debug(f'Generated thumbnail: {dest_path}')
         return True
