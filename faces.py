@@ -1289,14 +1289,17 @@ def search_people(
     Returns:
         List of matching person dicts with preferred_face_updated_at.
     """
+    # Escape LIKE wildcards (%, _) in user input to prevent them from
+    # acting as pattern characters in the substring match.
+    escaped = query.replace('\\', '\\\\').replace('%', '\\%').replace('_', '\\_')
     cursor = conn.execute(
         '''SELECT p.*, pf.updated_at as preferred_face_updated_at
            FROM people p
            LEFT JOIN faces pf ON pf.id = p.preferred_face_id
-           WHERE p.name LIKE ? COLLATE NOCASE
+           WHERE p.name LIKE ? ESCAPE '\\' COLLATE NOCASE
            ORDER BY p.name COLLATE NOCASE
            LIMIT ?''',
-        (f'%{query}%', limit)
+        (f'%{escaped}%', limit)
     )
     return [dict(row) for row in cursor.fetchall()]
 
