@@ -20,7 +20,15 @@ The config file now stores a `data_dir` setting, so after installation `python a
 
 **Existing users:** If Photonarium finds a `.photonarium.yml` in the current directory but no config at the new location, it will automatically migrate your settings and inject the correct `data_dir`. The old file is left in place but ignored.
 
-The **Edit Settings** button on the Database screen now opens an in-app settings editor instead of revealing the file in the OS file manager. The editor is schema-driven (the backend describes all fields, types, constraints, and help text) so it works from any device on your network — no need for local file access. A link in the dialog header still lets you reveal the YAML file in your file manager if you prefer editing it directly.
+### In-App Settings Editor
+
+The **Edit Settings** button on the Database screen now opens an in-app settings editor instead of revealing the file in the OS file manager. The editor works from any device on your network — no need for local file access.
+
+- **Schema-driven:** The backend describes all fields, types, numeric constraints, and help text in a single API response. The frontend renders a generic form with zero hardcoded knowledge of individual settings.
+- **Danger fields:** Settings that could break connectivity (`data_dir`, `server_host`, `server_port`) are highlighted with a red border and warning icon.
+- **Validation:** Client-side range checking plus full backend validation on save, with clear error messages.
+- **Restart required:** Saved changes are written to disk but don't take effect until Photonarium is restarted. The dialog shows the on-disk values, so re-opening after a save reflects what was saved.
+- **Direct editing:** A link in the dialog header lets you reveal the YAML file in your file manager if you prefer editing it by hand.
 
 ### Installation Improvements
 
