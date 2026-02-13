@@ -131,7 +131,7 @@ const Search = {
             ratingInput: App.$('filter-rating'),
             emojiBtn: App.$('btn-emoji-picker'),
             applyBtn: App.$('btn-apply-filter'),
-            clearBtn: App.$('btn-clear-filter'),
+            clearBtn: App.$('btn-clear-filter-action'),
             // People filter elements
             peopleGroup: App.$('filter-people-group'),
             peopleChips: App.$('filter-people-chips'),

@@ -466,6 +466,7 @@ const Fullscreen = {
 
         // Load the full image (with cache-bust if image was recently modified)
         this._els.image.src = ThumbnailLoader.getFullImageUrl(imageId);
+        this._els.image.alt = img.basename || '';
 
         // Show filename overlay with dimensions
         // If imageList entry lacks metadata (e.g., opened from faces screen),

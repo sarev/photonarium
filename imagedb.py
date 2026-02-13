@@ -3892,7 +3892,7 @@ EVENT_NIMA_COMPLETE = 'nima_complete'
 
 @dataclass
 class Event:
-    """Server-Sent Event data container.
+    """Event data container for frontend polling.
 
     Attributes:
         event_type: Type of event (e.g., 'folder_added', 'processing_complete').
@@ -3902,20 +3902,6 @@ class Event:
     event_type: str
     data: dict[str, Any]
     timestamp: datetime = field(default_factory=datetime.now)
-
-    def to_sse(self) -> str:
-        """Format event as Server-Sent Event string.
-
-        Returns:
-            SSE-formatted string ready to send to client.
-        """
-        # SSE format: "event: <type>\ndata: <json>\n\n"
-        json_data = json.dumps({
-            'type': self.event_type,
-            'data': self.data,
-            'timestamp': self.timestamp.isoformat(),
-        })
-        return f'event: {self.event_type}\ndata: {json_data}\n\n'
 
 
 class EventQueue:

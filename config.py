@@ -332,7 +332,7 @@ class Config:
     openclip_pretrained: str = 'openai'
     embedding_batch_size: int = 16
     perceptual_hash_threshold: int = 4
-    similarity_threshold_level2: float = 0.95
+    similarity_threshold_level2: float = 0.93
     similarity_threshold_level3: float = 0.85
     indexing_threads: int = 4
     max_incremental_duplicates: int = 500

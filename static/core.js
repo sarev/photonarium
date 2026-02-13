@@ -801,7 +801,11 @@ const App = {
             throw new Error(`API error: ${response.status} ${response.statusText}`);
         }
 
-        return response.json();
+        try {
+            return await response.json();
+        } catch {
+            throw new Error(`API ${method} ${endpoint}: invalid JSON response`);
+        }
     },
 
     /**
