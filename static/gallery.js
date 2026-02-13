@@ -1840,6 +1840,10 @@ const Gallery = {
         const confirmed = await App.confirm('Move to Trash', message, { okText: 'Move to Trash' });
         if (!confirmed) return;
 
+        // Toast fires immediately — backend file moves may take a while
+        const noun = count === 1 ? 'image' : 'images';
+        App.showInfo(`Moving ${count} ${noun} to \u2018trash\u2019\u2026`);
+
         // Find the index of the first deleted image (to select next image after deletion)
         const displayList = AppState.images.getDisplayList();
         const deletedSet = new Set(ids);
@@ -2312,8 +2316,18 @@ const Gallery = {
         const selectedIds = App.getSelectedImages();
         if (selectedIds.length === 0) return;
 
+        // Grab group name before the optimistic update removes it
+        const groupBefore = AppState.duplicates.getCustomGroups().find(
+            g => g.group_hash === filter.groupHash);
+        const groupName = groupBefore?.name || 'group';
+        const count = selectedIds.length;
+
         try {
             await AppState.duplicates.removeImages(filter.groupHash, selectedIds);
+
+            // Optimistic update is instant — show feedback immediately
+            const noun = count === 1 ? 'image' : 'images';
+            App.showInfo(`${count} ${noun} removed from \u2018${groupName}\u2019`);
 
             // Update the filter's image list to reflect removal
             const group = AppState.duplicates.getCustomGroups().find(g => g.group_hash === filter.groupHash);
