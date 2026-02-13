@@ -394,17 +394,20 @@ const Gallery = {
             // Check if there's a people filter - need to load filtered IDs first
             const filter = App.getFilter();
             const hasPeopleFilter = filter && filter.people && filter.people.length > 0;
-            if (hasPeopleFilter) {
-                this._showLoading('Filtering by people…');
+            const isDupFilter = filter && filter.type === 'duplicates' && filter.groupHash;
+            const showLoading = hasPeopleFilter || isDupFilter;
+            if (showLoading) {
+                this._showLoading(hasPeopleFilter ? 'Filtering by people…' : 'Loading group…');
                 // Ensure people filter is loaded before rendering
-                if (!filter.peopleImageIds) {
+                if (hasPeopleFilter && !filter.peopleImageIds) {
                     await this._loadPeopleFilteredImages(filter);
                 }
             }
             await this._loadImages();
-            if (hasPeopleFilter) {
+            if (showLoading) {
                 this._hideLoading();
             }
+            this._scrollToTop();
         } else {
             // Re-bind grid and selection
             this._grid.bind();
@@ -769,10 +772,13 @@ const Gallery = {
         // Determine if we need to show loading (async operations)
         const hasPeopleFilter = filter && filter.people && filter.people.length > 0;
         const hasSemanticFilter = filter && filter.type === 'semantic';
-        const showLoading = App.getScreen() === 'gallery' && (hasPeopleFilter || hasSemanticFilter);
+        const showLoading = App.getScreen() === 'gallery' && (hasPeopleFilter || hasSemanticFilter || isDupFilter);
 
         if (showLoading) {
-            this._showLoading(hasPeopleFilter ? 'Filtering by people…' : 'Applying filter…');
+            const msg = hasPeopleFilter ? 'Filtering by people…'
+                : isDupFilter ? 'Loading group…'
+                : 'Applying filter…';
+            this._showLoading(msg);
         }
 
         // If filter has people, load the filtered image IDs from the API
