@@ -22,7 +22,7 @@ The config file now stores a `data_dir` setting, so after installation `python a
 
 ### In-App Settings Editor
 
-The **Edit Settings** button on the Database screen now opens an in-app settings editor instead of revealing the file in the OS file manager. The editor works from any device on your network — no need for local file access.
+The **Edit Settings** button on the Database screen now opens an in-app settings editor. The editor works from any device on your network - no need for local file access.
 
 - **Schema-driven:** The backend describes all fields, types, numeric constraints, and help text in a single API response. The frontend renders a generic form with zero hardcoded knowledge of individual settings.
 - **Danger fields:** Settings that could break connectivity (`data_dir`, `server_host`, `server_port`) are highlighted with a red border and warning icon.
