@@ -328,7 +328,7 @@ When you open a group in the Gallery, images are automatically sorted by **Quali
 
 Each factor is ranked within the group (percentile), so the scores are always relative — a "good" score in one group doesn't necessarily equal the same absolute quality as in another.
 
-These weights can be adjusted in `.photonarium.yml` to suit your preferences:
+These weights can be adjusted in `photonarium.yml` to suit your preferences:
 
 - `quality_weight_aesthetic`, `quality_weight_sharpness`, `quality_weight_pixels`, `quality_weight_bpp` — the four component weights (should sum to 1.0).
 - `quality_alpha` — controls how the two aesthetic models are blended (0.0 = LAION only, 1.0 = NIMA only, default 0.60 = a mix of both, leaning more to NIMA).
@@ -434,6 +434,7 @@ Database is where you tell Photonarium where your photos live, and where you can
 - Add folders (scanned recursively)
 - Rescan folders to pick up changes
 - Watch progress for indexing, embeddings, and face work (with ETAs when possible)
+- Click **Edit Settings** to open the configuration file in your system's file manager for editing
 
 Supported image types include: `.jpg`, `.jpeg`, `.png`, `.gif`, `.bmp`, `.tiff`, `.tif`, `.webp`, and camera RAW formats (`.cr2`, `.cr3`, `.nef`, `.nrw`, `.arw`, `.srf`, `.dng`, `.raf`, `.rw2`, `.orf`, `.pef`, `.srw`, `.x3f`, `.3fr`, `.iiq`, `.rwl`, `.kdc`, `.dcr`, `.erf`). RAW support requires the `rawpy` package. Note that RAW files cannot be rotated within Photonarium. RAW files are also slower to process than standard formats — each file requires full demosaicing of the sensor data, so indexing and opening full-screen images will take a little longer than with JPEGs.
 
@@ -443,8 +444,10 @@ Supported image types include: `.jpg`, `.jpeg`, `.png`, `.gif`, `.bmp`, `.tiff`,
 
 ## Requirements
 
-- Python 3.11 or later
+- Python 3.11 or later (with tkinter -- see note below)
 - A CUDA-capable GPU is recommended for faster processing, but not required
+
+**tkinter note:** Photonarium uses tkinter for the native folder picker dialog. On Windows, make sure "tcl/tk and IDLE" is checked during Python installation (it is by default, but some minimal installs omit it). On Linux, install the `python3-tk` package (e.g. `sudo apt install python3-tk`). On macOS with Homebrew, `brew install python-tk@3.11`. The installer scripts will warn you if tkinter is missing.
 
 ## Quick install (recommended)
 
@@ -518,14 +521,14 @@ If you prefer to install manually, or the installer script doesn't suit your set
 
   This step is optional.
 
-  Photonarium has various aspects of its behaviour which may be tuned. To do this, you might want to run it once just to create the default configuration file. This contains all of the standard settings along with comments to explain how they work.
+  Photonarium has various aspects of its behaviour which may be tuned. To do this, you might want to create the default configuration file first. This contains all of the standard settings along with comments to explain how they work.
 
   ```bash
-  # Start the app to display the default models it is configured to use, then automatically quits
-  python app.py --list-models
+  # Create the config file at the OS default location and exit
+  python app.py --init-config .
   ```
 
-  This will create the `.photonarium.yml` configuration file. You can load this into a text editor and make changes, if you'd like. For example, you may want to select different 'models' to be used for things like generating image descriptions.
+  This will create a `photonarium.yml` configuration file at the OS-appropriate location (see [Configuration](#configuration) below). You can load this into a text editor and make changes, if you'd like. For example, you may want to select different 'models' to be used for things like generating image descriptions.
 
 5. **Download ML models**
 
@@ -553,13 +556,17 @@ If you prefer to install manually, or the installer script doesn't suit your set
 
   If you haven't looked already, take a look at the [Photonarium site](http://photonarium.org/tutorial/), and take a look at the tutorial.
 
-  **Important:** Photonarium is designed to run locally on the same machine as your images. It has not been hardened for exposure to the public internet or untrusted networks. Do not publish it or make it accessible to others — doing so may introduce security risks that are outside the scope of this project.
+  By default, the server listens on all network interfaces (`0.0.0.0`), so other devices on your local network can reach it. To restrict access to this machine only, set `server_host: 127.0.0.1` in `photonarium.yml`.
+
+  **Important:** Photonarium is designed for use on a trusted home network. It has not been hardened for exposure to the public internet or untrusted networks. Do not make it accessible outside your local network — doing so may introduce security risks that are outside the scope of this project.
 
 ### Command line options
 
 ```bash
 python app.py --port 8080              # Use a different port
-python app.py --data-dir /path/to/data # Store user data in a specific directory
+python app.py --data-dir /path/to/data # Override data directory for this session
+python app.py --config /path/to/yml    # Use a specific config file
+python app.py --init-config /data/dir  # Create config with data_dir set, then exit
 python app.py --generate-thumbnails    # Pre-generate thumbnails for all images
 python app.py --scan                   # Run folder scan on startup
 python app.py --detect-faces           # Run face detection on startup
@@ -571,9 +578,11 @@ python app.py --list-models            # Output required models as JSON (for scr
 
 By default, no processing runs at startup. Add flags to opt in to the phases you want.
 
+After running the installer (or `--init-config`), `python app.py` reads the data directory from the config file — no `--data-dir` needed.
+
 ### Changing ML models
 
-If you change model settings in `.photonarium.yml`, run the model downloader again:
+If you change model settings in `photonarium.yml`, run the model downloader again:
 
 ```bash
 python download_models.py
@@ -588,8 +597,17 @@ Available caption models (from smallest to largest):
 
 ## Configuration
 
-Settings are stored in `.photonarium.yml` (created automatically on first run). Examples:
+Settings are stored in `photonarium.yml` at the OS-appropriate location:
 
+- **Windows:** `%LOCALAPPDATA%\Photonarium\photonarium.yml`
+- **macOS:** `~/Library/Application Support/Photonarium/photonarium.yml`
+- **Linux:** `~/.config/photonarium/photonarium.yml` (or `$XDG_CONFIG_HOME`)
+
+The config file is created automatically on first run (or by the installer). Use `--config /path/to/file.yml` to override the location.
+
+Key settings:
+
+* `data_dir`: where Photonarium stores its database, thumbnails, and models (set by installer, overridable with `--data-dir`)
 * `thumbnail_quality`: JPEG quality for thumbnails (1 to 100)
 * `thumbnail_cache_size_mb`: RAM cache size for thumbnails
 * `indexing_threads`: parallel threads for scanning
@@ -608,7 +626,7 @@ When you delete images (from the Gallery, full-screen viewer, or the Groups prun
 * Files keep their original names; collisions get a counter suffix (`beach.jpg`, `beach (2).jpg`, etc.).
 * The trash directory must not overlap any indexed folder. If it does, Photonarium disables trash operations and shows a warning.
 * To recover a trashed image, move the file back into an indexed folder and rescan.
-* To customise the location, set `trash_dir` in `.photonarium.yml`.
+* To customise the location, set `trash_dir` in `photonarium.yml`.
 
 ## Tips
 

@@ -24,8 +24,10 @@ Example:
 
         $ python app.py
 
-    The server will start on http://localhost:5000 by default,
-    using the waitress WSGI server if available.
+    The server will start on port 5000 by default (accessible from your
+    local network), using the waitress WSGI server if available. Server
+    host and port are configurable in photonarium.yml (stored at the
+    OS-appropriate config location — see config.py for details).
 """
 
 # Disable tokenizers parallelism before any imports.
@@ -54,7 +56,7 @@ import orjson
 from flask import Flask, Response, request, send_file, abort
 from werkzeug.exceptions import HTTPException
 from flask import jsonify as flask_jsonify
-# flask_cors not needed for localhost-only deployment (same-origin requests)
+# flask_cors not needed — frontend is served from the same origin
 
 # Toggle between orjson and stdlib json for testing
 USE_ORJSON = True
@@ -127,19 +129,27 @@ for module in ['app', '__main__', 'imagedb', 'faces', 'thumbnails', 'duplicates'
 
 app = Flask(__name__, static_folder='static', static_url_path='')
 
-# CORS is not needed for localhost-only deployment since the frontend
-# is served from the same origin. If you need to run a separate frontend
-# dev server, uncomment and restrict origins appropriately:
+# CORS is not needed since the frontend is served from the same origin.
+# If you need to run a separate frontend dev server, uncomment and restrict
+# origins appropriately:
 # CORS(app, origins=['http://localhost:5000', 'http://127.0.0.1:5000'])
 
 
 # =============================================================================
-# Configuration
+# Configuration — resolved in __main__ before server starts
 # =============================================================================
 
 DATABASE_PATH = os.environ.get('PHOTONARIUM_DB', 'photonarium.db')
 THUMBNAIL_CACHE_DIR = os.environ.get('PHOTONARIUM_THUMBNAILS', '.thumbnails')
-CONFIG_PATH = os.environ.get('PHOTONARIUM_CONFIG', None)
+
+# The loaded Config object — set once during startup, read-only afterwards.
+# Stored at module level so get_db() can pass it to ImageDatabase without
+# re-loading from disk.
+_config: 'Config | None' = None
+
+# The resolved config file path — set once during startup.
+# Used by /api/config/reveal to locate the file on disk.
+_config_file_path: str | None = None
 
 
 # =============================================================================
@@ -217,7 +227,7 @@ def get_db() -> ImageDatabase:
         db = ImageDatabase(
             db_path=DATABASE_PATH,
             thumbnail_dir=THUMBNAIL_CACHE_DIR,
-            config_path=CONFIG_PATH,
+            config=_config,
             auto_start=True,
             run_scan=_run_scan,
             run_face_detection=_run_face_detection,
@@ -1103,6 +1113,41 @@ def get_config():
         'nima_enabled': config.nima_enabled,
         'trash_dir': str(db.trash_dir),
     })
+
+
+@app.route('/api/config/reveal', methods=['POST'])
+def reveal_config():
+    """Open the file manager with the configuration file selected.
+
+    Uses the same platform-specific commands as image reveal:
+    - Windows: explorer /select
+    - macOS: open -R
+    - Linux: xdg-open (opens containing folder)
+
+    Returns:
+        Success response, or error if the file doesn't exist.
+    """
+    config_path = _config_file_path
+    if not config_path:
+        from config import get_default_config_path
+        config_path = str(get_default_config_path())
+    config_path = os.path.abspath(config_path)
+
+    if not os.path.exists(config_path):
+        return error_response('Configuration file not found', 404)
+
+    try:
+        if sys.platform == 'win32':
+            subprocess.run(['explorer', '/select,', config_path], check=False)
+        elif sys.platform == 'darwin':
+            subprocess.run(['open', '-R', config_path], check=True)
+        else:
+            folder = os.path.dirname(config_path)
+            subprocess.run(['xdg-open', folder], check=True)
+        return success_response(message='Folder opened')
+    except Exception as e:
+        logger.exception('Failed to reveal config file')
+        return error_response(f'Failed to open folder: {str(e)}', 500)
 
 
 @app.route('/api/rescan', methods=['POST'])
@@ -3175,6 +3220,8 @@ def run_generate_thumbnails_cli():
 # =============================================================================
 
 if __name__ == '__main__':
+    from config import Config, load_config, save_config, get_default_config_path
+
     parser = argparse.ArgumentParser(description='Photonarium - Image Catalogue Server')
     parser.add_argument(
         '-s', '--scan',
@@ -3194,8 +3241,8 @@ if __name__ == '__main__':
     parser.add_argument(
         '-p', '--port',
         type=int,
-        default=5000,
-        help='Port to run the server on (default: 5000)'
+        default=None,
+        help='Port to run the server on (overrides config, default: 5000)'
     )
     parser.add_argument(
         '-g', '--generate-thumbnails',
@@ -3231,44 +3278,106 @@ if __name__ == '__main__':
         '-d', '--data-dir',
         type=str,
         default=None,
-        help='Directory for user data (database, thumbnails, config). Default: current directory'
+        help='Runtime override for data directory (database, thumbnails, models). '
+             'Does not persist to config — use --init-config for that.'
+    )
+    parser.add_argument(
+        '-c', '--config',
+        type=str,
+        default=None,
+        dest='config_path',
+        help='Path to configuration file (default: OS-appropriate location)'
+    )
+    parser.add_argument(
+        '--init-config',
+        type=str,
+        default=None,
+        metavar='DATA_DIR',
+        help='Create/update config at OS default with the given data_dir and exit. '
+             'Used by the installer to persist the chosen data directory.'
     )
     args = parser.parse_args()
 
-    # Apply --data-dir to path globals (env vars take precedence for individual paths)
+    # -------------------------------------------------------------------------
+    # Phase 1: Resolve config path and load config
+    # -------------------------------------------------------------------------
+    # Resolution order: --config > PHOTONARIUM_CONFIG env > OS default
+    _config_path_arg = args.config_path  # May be None
+
+    # Handle --init-config: create/update config and exit immediately
+    if args.init_config is not None:
+        _init_data_dir = os.path.abspath(args.init_config)
+        _config = load_config(
+            config_path=_config_path_arg,
+            initial_data_dir=_init_data_dir,
+        )
+        # If config already existed, update data_dir and re-save
+        if _config.data_dir != _init_data_dir:
+            _config.data_dir = _init_data_dir
+            _resolved_cfg_path = Path(_config_path_arg) if _config_path_arg else get_default_config_path()
+            save_config(_config, _resolved_cfg_path)
+
+        _resolved_cfg_path = Path(_config_path_arg) if _config_path_arg else get_default_config_path()
+        logger.info(f'Config initialised: {_resolved_cfg_path}')
+        logger.info(f'  data_dir = {_init_data_dir}')
+        sys.exit(0)
+
+    # Normal startup: load config (creates default if needed)
+    _config = load_config(
+        config_path=_config_path_arg,
+        initial_data_dir=args.data_dir,
+    )
+
+    # Store the resolved config file path for /api/config/reveal
+    if _config_path_arg:
+        _config_file_path = os.path.abspath(_config_path_arg)
+    elif os.environ.get('PHOTONARIUM_CONFIG'):
+        _config_file_path = os.path.abspath(os.environ['PHOTONARIUM_CONFIG'])
+    else:
+        _config_file_path = str(get_default_config_path())
+
+    # -------------------------------------------------------------------------
+    # Phase 2: Resolve data directory from config + CLI override
+    # -------------------------------------------------------------------------
+    # Resolution order: --data-dir CLI > config.data_dir > '.' (cwd)
     if args.data_dir is not None:
         _data_dir = os.path.abspath(args.data_dir)
-        os.makedirs(_data_dir, exist_ok=True)
-        if not os.environ.get('PHOTONARIUM_DB'):
-            DATABASE_PATH = os.path.join(_data_dir, 'photonarium.db')
-        if not os.environ.get('PHOTONARIUM_THUMBNAILS'):
-            THUMBNAIL_CACHE_DIR = os.path.join(_data_dir, '.thumbnails')
-        if not os.environ.get('PHOTONARIUM_CONFIG'):
-            CONFIG_PATH = os.path.join(_data_dir, '.photonarium.yml')
+    elif _config.data_dir:
+        _data_dir = os.path.abspath(_config.data_dir)
+    else:
+        _data_dir = os.path.abspath('.')
+
+    os.makedirs(_data_dir, exist_ok=True)
+
+    # Apply data_dir to path globals (env vars still take precedence)
+    if not os.environ.get('PHOTONARIUM_DB'):
+        DATABASE_PATH = os.path.join(_data_dir, 'photonarium.db')
+    if not os.environ.get('PHOTONARIUM_THUMBNAILS'):
+        THUMBNAIL_CACHE_DIR = os.path.join(_data_dir, '.thumbnails')
+
+    # -------------------------------------------------------------------------
+    # Phase 3: Handle CLI commands
+    # -------------------------------------------------------------------------
 
     # Handle list-models command (outputs JSON for download_models.py)
     if args.list_models:
         import json
-        from config import load_config
-        config = load_config(CONFIG_PATH)
-        # Resolve data directory (same directory as the database file)
-        _model_data_dir = os.path.dirname(os.path.abspath(DATABASE_PATH)) or '.'
         models = {
             'openclip': {
-                'model': config.openclip_model,
-                'pretrained': config.openclip_pretrained,
+                'model': _config.openclip_model,
+                'pretrained': _config.openclip_pretrained,
             },
             'caption': {
-                'model': config.caption_model,
+                'model': _config.caption_model,
             },
             'laion_head': {
-                'model': config.openclip_model,
-                'pretrained': config.openclip_pretrained,
-                'data_dir': _model_data_dir,
+                'model': _config.openclip_model,
+                'pretrained': _config.openclip_pretrained,
+                'data_dir': _data_dir,
             },
             'nima': {
-                'enabled': config.nima_enabled,
-                'data_dir': _model_data_dir,
+                'enabled': _config.nima_enabled,
+                'data_dir': _data_dir,
             },
         }
         print(json.dumps(models))
@@ -3378,6 +3487,10 @@ if __name__ == '__main__':
         )
         sys.exit(0)
 
+    # -------------------------------------------------------------------------
+    # Phase 4: Start the server
+    # -------------------------------------------------------------------------
+
     # Set module-level flags before initializing database
     _run_scan = args.scan
     _run_face_detection = args.detect_faces
@@ -3386,25 +3499,33 @@ if __name__ == '__main__':
     # Initialise database before starting server
     get_db()
 
+    # Resolve server host/port: CLI --port overrides config, config overrides defaults
+    server_host = db.config.server_host
+    server_port = args.port if args.port is not None else db.config.server_port
+
     # Print ready banner
     logger.info('=' * 60)
     logger.info('SERVER READY')
     logger.info('=' * 60)
-    logger.info(f'Open http://localhost:{args.port} in your browser')
+    logger.info(f'Data directory: {_data_dir}')
+    if server_host == '0.0.0.0':
+        logger.info(f'Open http://localhost:{server_port} in your browser')
+        logger.info(f'Also available to other devices on your network')
+    else:
+        logger.info(f'Open http://{server_host}:{server_port} in your browser')
     logger.info('=' * 60)
 
     # Try to use waitress (production WSGI server), fall back to Flask dev server
-    # Bind to 127.0.0.1 (localhost only) for security - no network exposure
     try:
         from waitress import serve
         logger.info('Using waitress WSGI server')
-        serve(app, host='127.0.0.1', port=args.port, threads=8)
+        serve(app, host=server_host, port=server_port, threads=8)
     except ImportError:
         logger.warning('waitress not installed, using Flask dev server (slow!)')
         logger.warning('Install with: pip install waitress')
         app.run(
-            host='127.0.0.1',
-            port=args.port,
+            host=server_host,
+            port=server_port,
             debug=False,
             threaded=True,
         )

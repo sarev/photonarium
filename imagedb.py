@@ -4068,6 +4068,7 @@ class ImageDatabase:
         db_path: Path | str = 'photonarium.db',
         thumbnail_dir: Path | str = '.thumbnails',
         config_path: Path | str | None = None,
+        config: 'Config | None' = None,
         auto_start: bool = True,
         preload_model: bool = True,
         run_scan: bool = False,
@@ -4080,6 +4081,11 @@ class ImageDatabase:
             db_path: Path to the SQLite database file.
             thumbnail_dir: Path to thumbnail cache directory.
             config_path: Path to configuration file. If None, uses default.
+                Ignored when ``config`` is provided.
+            config: Pre-loaded Config object. When provided, the config is
+                used directly instead of loading from ``config_path``. This
+                avoids a redundant load when the caller has already resolved
+                the config (e.g. app.py's startup sequence).
             auto_start: If True, start background threads automatically.
             preload_model: If True, load the OpenCLIP model during startup
                 instead of lazily on first use. This provides better console
@@ -4104,9 +4110,9 @@ class ImageDatabase:
         logger.info('PHOTONARIUM - Image Catalogue Backend')
         logger.info('=' * 60)
 
-        # Step 0: Load configuration
+        # Step 0: Load configuration (use pre-loaded Config if provided)
         logger.info('[1/5] Loading configuration...')
-        self.config = load_config(config_path)
+        self.config = config if config is not None else load_config(config_path)
 
         # Step 1-2: Initialise database
         logger.info('[2/5] Initialising database...')

@@ -1313,9 +1313,15 @@ def setup_tutorials_dir():
 
 
 def start_server():
-    """Start the Photonarium backend against the tutorials data directory."""
+    """Start the Photonarium backend against the tutorials data directory.
+
+    Uses --config to point at the demo config file inside TUTORIALS_DIR
+    (config no longer lives inside the data directory by default) and
+    --data-dir as a runtime override so the server reads demo data.
+    """
     cmd = [
         sys.executable, str(PROJECT_DIR / 'app.py'),
+        '--config', str(TUTORIALS_DIR / '.photonarium.yml'),
         '--data-dir', str(TUTORIALS_DIR),
         '--port', str(SERVER_PORT),
     ]

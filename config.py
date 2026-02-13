@@ -1,276 +1,313 @@
 """
 Configuration management for the Photonarium image database.
 
-This module handles loading and validating configuration from a YAML file.
-If no configuration file exists, a default one is created with sensible defaults.
+This module handles loading, saving, and validating configuration from a YAML
+file stored at an OS-appropriate location.
+
+Config file location (resolution order):
+    1. --config / -c CLI flag
+    2. PHOTONARIUM_CONFIG environment variable
+    3. OS default:
+       - Windows:  %LOCALAPPDATA%\\Photonarium\\photonarium.yml
+       - macOS:    ~/Library/Application Support/Photonarium/photonarium.yml
+       - Linux:    $XDG_CONFIG_HOME/photonarium/photonarium.yml
+                   (defaults to ~/.config/photonarium/photonarium.yml)
+
+On first run, if no config exists at the OS default location but a legacy
+``.photonarium.yml`` is found in the current working directory, the legacy
+file is migrated automatically (copied to the new location with ``data_dir``
+injected pointing at the old working directory).
 
 Usage:
-    from config import Config, load_config
+    from config import Config, load_config, save_config, get_default_config_path
 
-    config = load_config()  # Uses default path .photonarium.yml
-    config = load_config('/path/to/config.yml')  # Custom path
+    config = load_config()                          # OS default path
+    config = load_config('/path/to/config.yml')     # Custom path
+    save_config(config, '/path/to/config.yml')      # Write config to disk
 """
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, fields
 from pathlib import Path
 from typing import Any
 
 import logging
+import os
+import sys
+
 import yaml
 
 # Configure module logger
 logger = logging.getLogger(__name__)
 
 
-# Default configuration file path (relative to working directory)
-DEFAULT_CONFIG_PATH = Path('.photonarium.yml')
+# ---------------------------------------------------------------------------
+# OS-default config path
+# ---------------------------------------------------------------------------
 
-# Default configuration template with comments
-# This is written to disk when no config file exists
-DEFAULT_CONFIG_TEMPLATE = """\
-# Photonarium Configuration File
-# ============================
-# This file controls the behaviour of the Photonarium image database.
-# Edit values as needed. Delete this file to reset to defaults.
+def get_default_config_path() -> Path:
+    """Return the OS-appropriate default path for the configuration file.
 
-# ------------------------------------------------------------------------------
-# Image Processing
-# ------------------------------------------------------------------------------
+    - Windows:  %LOCALAPPDATA%\\Photonarium\\photonarium.yml
+    - macOS:    ~/Library/Application Support/Photonarium/photonarium.yml
+    - Linux:    $XDG_CONFIG_HOME/photonarium/photonarium.yml
+                (defaults to ~/.config/photonarium/photonarium.yml)
+    """
+    if sys.platform == 'win32':
+        base = Path(os.environ.get('LOCALAPPDATA', Path.home() / 'AppData' / 'Local'))
+        return base / 'Photonarium' / 'photonarium.yml'
+    elif sys.platform == 'darwin':
+        return Path.home() / 'Library' / 'Application Support' / 'Photonarium' / 'photonarium.yml'
+    else:
+        xdg = os.environ.get('XDG_CONFIG_HOME', '')
+        base = Path(xdg) if xdg else Path.home() / '.config'
+        return base / 'photonarium' / 'photonarium.yml'
 
-# File extensions recognised as images (lowercase, with leading dot)
-image_extensions:
-  - .jpg
-  - .jpeg
-  - .png
-  - .gif
-  - .bmp
-  - .tiff
-  - .tif
-  - .webp
-  # Camera RAW formats (require rawpy)
-  - .cr2
-  - .cr3
-  - .nef
-  - .nrw
-  - .arw
-  - .srf
-  - .dng
-  - .raf
-  - .rw2
-  - .orf
-  - .pef
-  - .srw
-  - .x3f
-  - .3fr
-  - .iiq
-  - .rwl
-  - .kdc
-  - .dcr
-  - .erf
 
-# JPEG quality for generated thumbnails (1-100, higher = better quality, larger files)
-thumbnail_quality: 85
+# Legacy config filename (pre-relocation, lived inside the data directory)
+_LEGACY_CONFIG_NAME = '.photonarium.yml'
 
-# Maximum image dimension (width or height) to process.
-# Images larger than this will be downsampled before embedding/hashing.
-# This prevents memory issues with huge panoramas or scanned images.
-# Set to 0 to disable (not recommended). Range: 0 or 1024-65536
-max_image_dimension: 16384
 
-# ------------------------------------------------------------------------------
-# OpenCLIP Embedding Model
-# ------------------------------------------------------------------------------
-# The model used for semantic image search and similarity detection.
-# Changing these settings will require re-embedding all images.
+# ---------------------------------------------------------------------------
+# CONFIG_SCHEMA — single source of truth for YAML structure and comments
+# ---------------------------------------------------------------------------
+# Each entry is (section_header, [(field_name, comment_lines), ...]).
+# comment_lines are written as YAML comments above each field.  Empty strings
+# produce blank lines for visual spacing.
 
-# Model architecture. Common options:
-#   - ViT-B-32  (fast, good quality, ~400MB VRAM)
-#   - ViT-B-16  (slower, better quality, ~400MB VRAM)
-#   - ViT-L-14  (slow, high quality, ~900MB VRAM)
-openclip_model: ViT-B-32
+CONFIG_SCHEMA: list[tuple[str, list[tuple[str, list[str]]]]] = [
+    ('Data Directory', [
+        ('data_dir', [
+            'Where Photonarium stores its database, thumbnails, and model files.',
+            'Set automatically by the installer. Use an absolute path for reliability.',
+            'Leave empty to use the current working directory.',
+        ]),
+    ]),
 
-# Pretrained weights. Common options:
-#   - openai           (original CLIP weights)
-#   - laion2b_s34b_b79k (trained on LAION-2B, often better for photos)
-#   - laion400m_e32    (trained on LAION-400M)
-openclip_pretrained: openai
+    ('Server', [
+        ('server_host', [
+            'Network interface to bind to.',
+            '  0.0.0.0   = listen on all interfaces (accessible from other devices on your network)',
+            '  127.0.0.1 = localhost only (only this machine can connect)',
+        ]),
+        ('server_port', [
+            'Port number for the web server. Range: 1024-65535',
+        ]),
+    ]),
 
-# Batch size for embedding computation (1-64)
-# Higher values are faster but use more VRAM. Reduce if you get out-of-memory errors.
-embedding_batch_size: 16
+    ('Image Processing', [
+        ('image_extensions', [
+            'File extensions recognised as images (lowercase, with leading dot)',
+        ]),
+        ('thumbnail_quality', [
+            'JPEG quality for generated thumbnails (1-100, higher = better quality, larger files)',
+        ]),
+        ('max_image_dimension', [
+            'Maximum image dimension (width or height) to process.',
+            'Images larger than this will be downsampled before embedding/hashing.',
+            'This prevents memory issues with huge panoramas or scanned images.',
+            'Set to 0 to disable (not recommended). Range: 0 or 1024-65536',
+        ]),
+    ]),
 
-# ------------------------------------------------------------------------------
-# Duplicate Detection Thresholds
-# ------------------------------------------------------------------------------
+    ('OpenCLIP Embedding Model', [
+        ('openclip_model', [
+            'The model used for semantic image search and similarity detection.',
+            'Changing these settings will require re-embedding all images.',
+            '',
+            'Model architecture. Common options:',
+            '  - ViT-B-32  (fast, good quality, ~400MB VRAM)',
+            '  - ViT-B-16  (slower, better quality, ~400MB VRAM)',
+            '  - ViT-L-14  (slow, high quality, ~900MB VRAM)',
+        ]),
+        ('openclip_pretrained', [
+            'Pretrained weights. Common options:',
+            '  - openai           (original CLIP weights)',
+            '  - laion2b_s34b_b79k (trained on LAION-2B, often better for photos)',
+            '  - laion400m_e32    (trained on LAION-400M)',
+        ]),
+        ('embedding_batch_size', [
+            'Batch size for embedding computation (1-64)',
+            'Higher values are faster but use more VRAM. Reduce if you get out-of-memory errors.',
+        ]),
+    ]),
 
-# Perceptual hash hamming distance threshold for "near-identical" (level 1)
-# Range: 0-64, lower = stricter matching. Recommended: 4-8
-perceptual_hash_threshold: 4
+    ('Duplicate Detection Thresholds', [
+        ('perceptual_hash_threshold', [
+            'Perceptual hash hamming distance threshold for "near-identical" (level 1)',
+            'Range: 0-64, lower = stricter matching. Recommended: 4-8',
+        ]),
+        ('similarity_threshold_level2', [
+            'Cosine similarity threshold for "similar" images (level 2)',
+            'Range: 0.0-1.0, higher = stricter matching. Recommended: 0.93-0.97',
+        ]),
+        ('similarity_threshold_level3', [
+            'Cosine similarity threshold for "related" images (level 3)',
+            'Range: 0.0-1.0, higher = stricter matching. Recommended: 0.80-0.90',
+        ]),
+    ]),
 
-# Cosine similarity threshold for "similar" images (level 2)
-# Range: 0.0-1.0, higher = stricter matching. Recommended: 0.93-0.97
-similarity_threshold_level2: 0.93
+    ('Performance', [
+        ('indexing_threads', [
+            'Number of threads for parallel image indexing (1-16)',
+            'Higher values speed up initial scanning but use more CPU/disk I/O.',
+            'Recommended: 4-8 for HDD, 8-16 for SSD',
+        ]),
+        ('max_incremental_duplicates', [
+            'Maximum number of new/modified images to process incrementally for duplicates.',
+            'If more images need checking, falls back to full recomputation which is faster',
+            'for large batches. Range: 1-10000',
+        ]),
+        ('incremental_threshold_percent', [
+            'Percentage of total images that triggers full recomputation instead of incremental.',
+            'If dirty_count > (total_count * threshold), does full rebuild.',
+            'Range: 5-50, recommended: 15-25',
+        ]),
+    ]),
 
-# Cosine similarity threshold for "related" images (level 3)
-# Range: 0.0-1.0, higher = stricter matching. Recommended: 0.80-0.90
-similarity_threshold_level3: 0.85
+    ('Thumbnail Loading (Frontend)', [
+        ('thumbnail_concurrent_requests', [
+            'Maximum concurrent thumbnail fetch requests from the browser.',
+            'Higher values load thumbnails faster but increase backend load.',
+            'Range: 1-12, recommended: 4-8',
+        ]),
+        ('thumbnail_extra_rows', [
+            'Extra rows above/below the viewport to prefetch thumbnails for.',
+            'Higher values reduce blank thumbnails when scrolling but increase memory usage.',
+            'Range: 1-20, recommended: 3-8',
+        ]),
+        ('thumbnail_timeout_ms', [
+            'Timeout for thumbnail fetch requests in milliseconds.',
+            'If a request takes longer than this, it\'s aborted and the slot freed.',
+            'Range: 1000-60000, recommended: 5000-15000',
+        ]),
+        ('thumbnail_scroll_throttle_ms', [
+            'Scroll event throttle in milliseconds.',
+            'How often the thumbnail queue is re-evaluated during scrolling.',
+            'Lower values = more responsive, higher values = less CPU usage.',
+            'Range: 50-1000, recommended: 150-300',
+        ]),
+        ('thumbnail_cache_size_mb', [
+            'RAM cache size for thumbnail bytes in megabytes.',
+            'Caches recently-accessed thumbnails in memory to avoid disk reads.',
+            'Set to 0 to disable caching. Range: 0-1000, recommended: 50-200',
+        ]),
+    ]),
 
-# ------------------------------------------------------------------------------
-# Performance
-# ------------------------------------------------------------------------------
+    ('Face Recognition', [
+        ('face_detection_enabled', [
+            'Enable face detection during image indexing.',
+            'When disabled, face-related UI buttons are greyed out.',
+        ]),
+        ('face_detection_min_confidence', [
+            'MTCNN confidence threshold for face detection.',
+            'Higher values = fewer false positives, may miss some faces.',
+            'Range: 0.0-1.0, recommended: 0.90-0.99',
+        ]),
+        ('face_detection_min_size', [
+            'Minimum face size in pixels (width/height of bounding box).',
+            'Faces smaller than this are ignored. Range: 20-200, recommended: 40-80',
+        ]),
+        ('face_recognition_threshold', [
+            'Cosine similarity threshold for auto-matching faces to known people.',
+            'Higher values = stricter matching (fewer false matches, more unknowns).',
+            'Range: 0.0-1.0, recommended: 0.65-0.90',
+        ]),
+        ('face_detection_batch_size', [
+            'Batch size for face detection (number of images processed together).',
+            'Higher values improve GPU utilization but use more VRAM.',
+            'Reduce if you get out-of-memory errors. Range: 1-64, recommended: 16-32',
+        ]),
+    ]),
 
-# Number of threads for parallel image indexing (1-16)
-# Higher values speed up initial scanning but use more CPU/disk I/O.
-# Recommended: 4-8 for HDD, 8-16 for SSD
-indexing_threads: 8
+    ('Image Captioning (BLIP/BLIP-2)', [
+        ('caption_model', [
+            'BLIP model to use for caption generation. Options:',
+            '  - Salesforce/blip-image-captioning-base   (~1GB, fast)',
+            '  - Salesforce/blip-image-captioning-large  (~2GB, better quality)',
+            '  - Salesforce/blip2-opt-2.7b               (~5GB, BLIP-2, best quality)',
+            '  - Salesforce/blip2-flan-t5-xl             (~8GB, BLIP-2, most descriptive)',
+        ]),
+        ('caption_max_length', [
+            'Maximum length of generated captions in tokens.',
+            'Higher values allow longer, more detailed descriptions.',
+            'Range: 10-200, recommended: 30-75',
+        ]),
+        ('caption_min_length', [
+            'Minimum length of generated captions in tokens.',
+            'Higher values force more descriptive captions.',
+            'Range: 1-50, recommended: 5-20',
+        ]),
+        ('caption_num_beams', [
+            'Number of beams for beam search during generation.',
+            'Higher values produce better quality but are slower.',
+            'Set to 1 for greedy decoding (fastest, lower quality).',
+            'Range: 1-10, recommended: 3-5',
+        ]),
+        ('caption_british_english', [
+            'Convert American English spellings to British English in generated captions.',
+            'Handles common differences like color\u2192colour, center\u2192centre, gray\u2192grey, etc.',
+        ]),
+    ]),
 
-# Maximum number of new/modified images to process incrementally for duplicates.
-# If more images need checking, falls back to full recomputation which is faster
-# for large batches. Range: 1-10000
-max_incremental_duplicates: 500
+    ('NIMA Aesthetic Scoring', [
+        ('nima_enabled', [
+            'NIMA (Neural IMage Assessment) provides a second aesthetic quality signal',
+            'alongside the LAION aesthetic predictor. The two scores are blended for',
+            'the Quality sort in Gallery and best-image ranking in duplicate groups.',
+            '',
+            'Enable NIMA aesthetic scoring during image indexing.',
+            'When disabled, the NIMA thread sits idle and quality ranking falls back to',
+            'LAION-only. Existing NIMA scores are preserved.',
+        ]),
+        ('nima_batch_size', [
+            'Batch size for NIMA scoring (1-64).',
+            'Higher values are faster but use more VRAM (~500MB base for VGG16).',
+        ]),
+    ]),
 
-# Percentage of total images that triggers full recomputation instead of incremental.
-# If dirty_count > (total_count * threshold), does full rebuild.
-# Range: 5-50, recommended: 15-25
-incremental_threshold_percent: 20
+    ('Quality Scoring Weights', [
+        ('quality_weight_aesthetic', [
+            'These weights control how the composite quality score is computed in the',
+            'frontend. They are applied at sort time and do not affect stored data.',
+            '',
+            'Component weights (should sum to ~1.0):',
+            '  aesthetic - blended NIMA+LAION aesthetic score (percentile rank)',
+            '  sharpness - log Laplacian variance (percentile rank)',
+            '  pixels    - total pixel count (percentile rank)',
+            '  bpp       - bits per pixel (percentile rank)',
+        ]),
+        ('quality_weight_sharpness', []),
+        ('quality_weight_pixels', []),
+        ('quality_weight_bpp', []),
+        ('quality_alpha', [
+            'Blend ratio for NIMA vs LAION aesthetic scores.',
+            'A = alpha * NIMA_normalised + (1 - alpha) * LAION',
+            'Set to 0.0 to use LAION only, 1.0 for NIMA only.',
+            'Range: 0.0-1.0',
+        ]),
+    ]),
 
-# ------------------------------------------------------------------------------
-# Thumbnail Loading (Frontend)
-# ------------------------------------------------------------------------------
+    ('Trash Directory', [
+        ('trash_dir', [
+            'When images are deleted (from Gallery, Fullscreen, or duplicate pruning),',
+            'they are moved to this directory instead of being permanently removed.',
+            'Files keep their original names (with a counter suffix on collision).',
+            'Leave empty to use the default: <data-dir>/trash/',
+        ]),
+    ]),
+]
 
-# Maximum concurrent thumbnail fetch requests from the browser.
-# Higher values load thumbnails faster but increase backend load.
-# Range: 1-12, recommended: 4-8
-thumbnail_concurrent_requests: 6
-
-# Extra rows above/below the viewport to prefetch thumbnails for.
-# Higher values reduce blank thumbnails when scrolling but increase memory usage.
-# Range: 1-20, recommended: 3-8
-thumbnail_extra_rows: 5
-
-# Timeout for thumbnail fetch requests in milliseconds.
-# If a request takes longer than this, it's aborted and the slot freed.
-# Range: 1000-60000, recommended: 5000-15000
-thumbnail_timeout_ms: 10000
-
-# Scroll event throttle in milliseconds.
-# How often the thumbnail queue is re-evaluated during scrolling.
-# Lower values = more responsive, higher values = less CPU usage.
-# Range: 50-1000, recommended: 150-300
-thumbnail_scroll_throttle_ms: 250
-
-# RAM cache size for thumbnail bytes in megabytes.
-# Caches recently-accessed thumbnails in memory to avoid disk reads.
-# Set to 0 to disable caching. Range: 0-1000, recommended: 50-200
-thumbnail_cache_size_mb: 100
-
-# ------------------------------------------------------------------------------
-# Face Recognition
-# ------------------------------------------------------------------------------
-
-# Enable face detection during image indexing.
-# When disabled, face-related UI buttons are greyed out.
-face_detection_enabled: true
-
-# MTCNN confidence threshold for face detection.
-# Higher values = fewer false positives, may miss some faces.
-# Range: 0.0-1.0, recommended: 0.90-0.99
-face_detection_min_confidence: 0.95
-
-# Minimum face size in pixels (width/height of bounding box).
-# Faces smaller than this are ignored. Range: 20-200, recommended: 40-80
-face_detection_min_size: 60
-
-# Cosine similarity threshold for auto-matching faces to known people.
-# Higher values = stricter matching (fewer false matches, more unknowns).
-# Range: 0.0-1.0, recommended: 0.65-0.90
-face_recognition_threshold: 0.90
-
-# Batch size for face detection (number of images processed together).
-# Higher values improve GPU utilization but use more VRAM.
-# Reduce if you get out-of-memory errors. Range: 1-64, recommended: 16-32
-face_detection_batch_size: 32
-
-# ------------------------------------------------------------------------------
-# Image Captioning (BLIP/BLIP-2)
-# ------------------------------------------------------------------------------
-
-# BLIP model to use for caption generation. Options:
-#   - Salesforce/blip-image-captioning-base   (~1GB, fast)
-#   - Salesforce/blip-image-captioning-large  (~2GB, better quality)
-#   - Salesforce/blip2-opt-2.7b               (~5GB, BLIP-2, best quality)
-#   - Salesforce/blip2-flan-t5-xl             (~8GB, BLIP-2, most descriptive)
-caption_model: Salesforce/blip-image-captioning-large
-
-# Maximum length of generated captions in tokens.
-# Higher values allow longer, more detailed descriptions.
-# Range: 10-200, recommended: 30-75
-caption_max_length: 50
-
-# Minimum length of generated captions in tokens.
-# Higher values force more descriptive captions.
-# Range: 1-50, recommended: 5-20
-caption_min_length: 10
-
-# Number of beams for beam search during generation.
-# Higher values produce better quality but are slower.
-# Set to 1 for greedy decoding (fastest, lower quality).
-# Range: 1-10, recommended: 3-5
-caption_num_beams: 5
-
-# Convert American English spellings to British English in generated captions.
-# Handles common differences like color→colour, center→centre, gray→grey, etc.
-caption_british_english: false
-
-# ------------------------------------------------------------------------------
-# NIMA Aesthetic Scoring
-# ------------------------------------------------------------------------------
-# NIMA (Neural IMage Assessment) provides a second aesthetic quality signal
-# alongside the LAION aesthetic predictor. The two scores are blended for
-# the Quality sort in Gallery and best-image ranking in duplicate groups.
-
-# Enable NIMA aesthetic scoring during image indexing.
-# When disabled, the NIMA thread sits idle and quality ranking falls back to
-# LAION-only. Existing NIMA scores are preserved.
-nima_enabled: true
-
-# Batch size for NIMA scoring (1-64).
-# Higher values are faster but use more VRAM (~500MB base for VGG16).
-nima_batch_size: 16
-
-# ------------------------------------------------------------------------------
-# Quality Scoring Weights
-# ------------------------------------------------------------------------------
-# These weights control how the composite quality score is computed in the
-# frontend. They are applied at sort time and do not affect stored data.
-
-# Component weights (should sum to ~1.0):
-#   aesthetic - blended NIMA+LAION aesthetic score (percentile rank)
-#   sharpness - log Laplacian variance (percentile rank)
-#   pixels    - total pixel count (percentile rank)
-#   bpp       - bits per pixel (percentile rank)
-quality_weight_aesthetic: 0.60
-quality_weight_sharpness: 0.20
-quality_weight_pixels: 0.15
-quality_weight_bpp: 0.05
-
-# Blend ratio for NIMA vs LAION aesthetic scores.
-# A = alpha * NIMA_normalised + (1 - alpha) * LAION
-# Set to 0.0 to use LAION only, 1.0 for NIMA only.
-# Range: 0.0-1.0
-quality_alpha: 0.60
-
-# ------------------------------------------------------------------------------
-# Trash Directory
-# ------------------------------------------------------------------------------
-# When images are deleted (from Gallery, Fullscreen, or duplicate pruning),
-# they are moved to this directory instead of being permanently removed.
-# Files keep their original names (with a counter suffix on collision).
-# Leave empty to use the default: <data-dir>/trash/
-# trash_dir: /path/to/custom/trash
-"""
+# Ordered list of image extensions for the YAML file (matches the original
+# template ordering, with a comment before the RAW formats)
+_IMAGE_EXTENSIONS_ORDERED: list[str | tuple[str, str]] = [
+    '.jpg', '.jpeg', '.png', '.gif', '.bmp', '.tiff', '.tif', '.webp',
+    ('# Camera RAW formats (require rawpy)', ''),
+    '.cr2', '.cr3', '.nef', '.nrw', '.arw', '.srf', '.dng', '.raf',
+    '.rw2', '.orf', '.pef', '.srw', '.x3f', '.3fr', '.iiq', '.rwl',
+    '.kdc', '.dcr', '.erf',
+]
 
 
 @dataclass
@@ -278,6 +315,11 @@ class Config:
     """Application configuration with validation.
 
     Attributes:
+        data_dir: Directory for user data (database, thumbnails, models).
+            Empty string means use the current working directory. Set by the
+            installer; can be overridden at runtime with ``--data-dir``.
+        server_host: Network interface to bind to ('0.0.0.0' for LAN, '127.0.0.1' for local only).
+        server_port: Port number for the web server (1024-65535).
         image_extensions: Set of lowercase file extensions to treat as images.
         thumbnail_quality: JPEG quality for thumbnails (1-100).
         max_image_dimension: Max width/height before downsampling (0 to disable).
@@ -319,6 +361,9 @@ class Config:
             trashed images elsewhere.
     """
 
+    data_dir: str = ''
+    server_host: str = '0.0.0.0'
+    server_port: int = 5000
     image_extensions: set[str] = field(default_factory=lambda: {
         '.jpg', '.jpeg', '.png', '.gif', '.bmp', '.tiff', '.tif', '.webp',
         # Camera RAW formats (require rawpy)
@@ -371,6 +416,16 @@ class Config:
         Raises:
             ValueError: If any configuration value is invalid.
         """
+        # Validate data_dir (must be a string, can be empty)
+        if not isinstance(self.data_dir, str):
+            raise ValueError('data_dir must be a string')
+
+        # Validate server settings
+        if not isinstance(self.server_host, str) or not self.server_host:
+            raise ValueError('server_host must be a non-empty string')
+        if not 1024 <= self.server_port <= 65535:
+            raise ValueError(f'server_port must be 1024-65535, got {self.server_port}')
+
         # Validate image_extensions
         if not isinstance(self.image_extensions, (set, list, tuple)):
             raise ValueError('image_extensions must be a collection')
@@ -475,11 +530,205 @@ class Config:
             raise ValueError(f'quality_alpha must be 0.0-1.0, got {self.quality_alpha}')
 
 
-def load_config(config_path: Path | str | None = None) -> Config:
-    """Load configuration from YAML file, creating default if not exists.
+# ---------------------------------------------------------------------------
+# Installer-shipped defaults — values that differ from the dataclass defaults
+# when a *new* config file is written by save_config().  The dataclass holds
+# the fallback when a key is absent from YAML; this dict holds the "first-run
+# experience" values shipped in the template.
+# ---------------------------------------------------------------------------
+_TEMPLATE_OVERRIDES: dict[str, Any] = {
+    'indexing_threads': 8,
+    'similarity_threshold_level2': 0.93,
+    'face_detection_min_size': 60,
+    'face_recognition_threshold': 0.90,
+}
+
+
+# ---------------------------------------------------------------------------
+# save_config — write a Config to disk with full comments
+# ---------------------------------------------------------------------------
+
+def _format_yaml_value(value: Any, field_name: str) -> str:
+    """Format a single Config field value as a YAML string.
+
+    Handles booleans, numbers, strings, and the special ``image_extensions``
+    list.  Returns the formatted text *without* a trailing newline.
+    """
+    if field_name == 'image_extensions':
+        # Use the canonical ordered list with inline comment for RAW formats
+        lines: list[str] = [f'{field_name}:']
+        for item in _IMAGE_EXTENSIONS_ORDERED:
+            if isinstance(item, tuple):
+                # Inline comment line (e.g. "# Camera RAW formats")
+                comment_text, _ = item
+                lines.append(f'  {comment_text}')
+            else:
+                lines.append(f'  - {item}')
+        return '\n'.join(lines)
+
+    if isinstance(value, bool):
+        return f'{field_name}: {str(value).lower()}'
+    elif isinstance(value, float):
+        return f'{field_name}: {value}'
+    elif isinstance(value, int):
+        return f'{field_name}: {value}'
+    elif isinstance(value, str):
+        if value == '':
+            # Write empty strings explicitly so YAML parser always sees the key
+            # (prevents the config upgrade logic from treating it as "missing")
+            return f"{field_name}: ''"
+        # Quote strings that contain special YAML characters or backslashes.
+        # Use single quotes (YAML literal strings) to avoid backslash
+        # interpretation — important for Windows paths like C:\Users\...
+        if any(c in value for c in ':#{}[]&*?|>!%@`\\'):
+            # Single quotes only need escaping for embedded single quotes
+            escaped = value.replace("'", "''")
+            return f"{field_name}: '{escaped}'"
+        return f'{field_name}: {value}'
+    else:
+        return f'{field_name}: {value}'
+
+
+def save_config(config: Config, config_path: Path | str) -> None:
+    """Write a Config object to disk as a commented YAML file.
+
+    The output preserves all section headers and per-field comments defined in
+    ``CONFIG_SCHEMA``.  Fields that were added since the file was last written
+    are included automatically (config upgrade).
 
     Args:
-        config_path: Path to configuration file. If None, uses DEFAULT_CONFIG_PATH.
+        config: The Config object to serialise.
+        config_path: Destination file path.
+    """
+    config_path = Path(config_path)
+    lines: list[str] = [
+        '# Photonarium Configuration File',
+        '# ============================',
+        '# This file controls the behaviour of the Photonarium image database.',
+        '# Edit values as needed. Delete this file to reset to defaults.',
+    ]
+
+    for section_header, section_fields in CONFIG_SCHEMA:
+        # Section separator
+        lines.append('')
+        lines.append(f'# {"─" * 78}')
+        lines.append(f'# {section_header}')
+        lines.append(f'# {"─" * 78}')
+
+        for field_name, comment_lines in section_fields:
+            # Blank line before each field (visual spacing)
+            lines.append('')
+
+            # Comment lines
+            for comment in comment_lines:
+                if comment == '':
+                    lines.append('#')
+                else:
+                    lines.append(f'# {comment}')
+
+            # Value
+            value = getattr(config, field_name)
+            lines.append(_format_yaml_value(value, field_name))
+
+    lines.append('')  # Trailing newline
+    config_path.write_text('\n'.join(lines), encoding='utf-8')
+
+
+# ---------------------------------------------------------------------------
+# load_config — load from YAML with auto-migration and config upgrade
+# ---------------------------------------------------------------------------
+
+def _parse_config_data(config_data: dict[str, Any]) -> Config:
+    """Build a Config from a parsed YAML dict, coercing types as needed.
+
+    Keys present in the dict are mapped to Config fields; missing keys fall
+    back to the dataclass defaults.
+    """
+    # Map of field name -> type coercion function
+    _FIELD_TYPES: dict[str, type] = {
+        f.name: f.type for f in fields(Config)
+    }
+
+    kwargs: dict[str, Any] = {}
+
+    for field_name, field_type in _FIELD_TYPES.items():
+        if field_name not in config_data:
+            continue
+
+        raw = config_data[field_name]
+
+        # Coerce to the expected type
+        if field_type == 'str':
+            kwargs[field_name] = str(raw) if raw is not None else ''
+        elif field_type == 'int':
+            kwargs[field_name] = int(raw)
+        elif field_type == 'float':
+            kwargs[field_name] = float(raw)
+        elif field_type == 'bool':
+            kwargs[field_name] = bool(raw)
+        elif field_type == "set[str]":
+            kwargs[field_name] = set(raw) if raw else set()
+        else:
+            kwargs[field_name] = raw
+
+    return Config(**kwargs)
+
+
+def _try_migrate_legacy_config(new_path: Path) -> Config | None:
+    """Attempt to migrate a legacy ``.photonarium.yml`` from cwd.
+
+    If a legacy config is found in the current working directory, it is loaded,
+    ``data_dir`` is set to the absolute cwd path, and the result is saved to
+    ``new_path``.  The old file is left untouched.
+
+    Returns:
+        A Config if migration succeeded, or None if no legacy file was found.
+    """
+    legacy_path = Path.cwd() / _LEGACY_CONFIG_NAME
+    if not legacy_path.exists():
+        return None
+
+    logger.info(f'Found legacy config at {legacy_path}, migrating to {new_path}')
+
+    # Load the legacy file
+    config_text = legacy_path.read_text(encoding='utf-8')
+    config_data = yaml.safe_load(config_text)
+
+    if config_data is None:
+        config_data = {}
+
+    # Inject data_dir pointing at the old working directory
+    config_data['data_dir'] = str(Path.cwd().resolve())
+
+    config = _parse_config_data(config_data)
+
+    # Save to new location
+    new_path.parent.mkdir(parents=True, exist_ok=True)
+    save_config(config, new_path)
+    logger.info(f'Migrated legacy config to {new_path} (data_dir={config.data_dir})')
+
+    return config
+
+
+def load_config(
+    config_path: Path | str | None = None,
+    initial_data_dir: str | None = None,
+) -> Config:
+    """Load configuration from YAML file, creating default if not exists.
+
+    Resolution order for config_path:
+        1. Explicit ``config_path`` argument (from ``--config`` CLI flag)
+        2. ``PHOTONARIUM_CONFIG`` environment variable
+        3. OS-default path from ``get_default_config_path()``
+
+    When creating a new config file (no existing file found), ``initial_data_dir``
+    is used to set the ``data_dir`` field.  This is how the installer persists the
+    user's chosen data directory into the config.
+
+    Args:
+        config_path: Explicit path to configuration file, or None for auto-resolution.
+        initial_data_dir: Data directory to inject when creating a new config.
+            Only used during file creation (--init-config / first run).
 
     Returns:
         Config object with loaded (or default) values.
@@ -488,18 +737,39 @@ def load_config(config_path: Path | str | None = None) -> Config:
         ValueError: If configuration values are invalid.
         yaml.YAMLError: If YAML parsing fails.
     """
-    if config_path is None:
-        config_path = DEFAULT_CONFIG_PATH
-    else:
+    # --- Resolve config path ---
+    if config_path is not None:
         config_path = Path(config_path)
+    else:
+        env_path = os.environ.get('PHOTONARIUM_CONFIG')
+        if env_path:
+            config_path = Path(env_path)
+        else:
+            config_path = get_default_config_path()
 
-    # Create default config file if it doesn't exist
+    # Ensure parent directory exists
+    config_path.parent.mkdir(parents=True, exist_ok=True)
+
+    # --- Load or create ---
     if not config_path.exists():
-        logger.info(f'Creating default configuration file: {config_path}')
-        config_path.write_text(DEFAULT_CONFIG_TEMPLATE, encoding='utf-8')
-        return Config()  # Return defaults
+        # Try migrating legacy config from cwd
+        migrated = _try_migrate_legacy_config(config_path)
+        if migrated is not None:
+            return migrated
 
-    # Load existing config
+        # No legacy file either — create fresh config with defaults
+        logger.info(f'Creating default configuration file: {config_path}')
+
+        # Apply template overrides for a nicer first-run experience
+        create_kwargs: dict[str, Any] = dict(_TEMPLATE_OVERRIDES)
+        if initial_data_dir is not None:
+            create_kwargs['data_dir'] = initial_data_dir
+
+        config = Config(**create_kwargs)
+        save_config(config, config_path)
+        return config
+
+    # --- Existing file: load it ---
     logger.info(f'Loading configuration from: {config_path}')
     config_text = config_path.read_text(encoding='utf-8')
     config_data = yaml.safe_load(config_text)
@@ -507,117 +777,22 @@ def load_config(config_path: Path | str | None = None) -> Config:
     if config_data is None:
         # Empty file, use defaults
         logger.warning('Configuration file is empty, using defaults')
-        return Config()
+        config_data = {}
 
-    # Map YAML keys to Config fields
-    kwargs: dict[str, Any] = {}
+    config = _parse_config_data(config_data)
 
-    if 'image_extensions' in config_data:
-        kwargs['image_extensions'] = set(config_data['image_extensions'])
+    # --- Config upgrade: re-save to pick up any new fields ---
+    # Compare the set of fields in the YAML with the set of fields in the
+    # dataclass.  If the YAML is missing any, re-save so the user gets the
+    # new settings with comments.
+    all_field_names = {f.name for f in fields(Config)}
+    yaml_keys = set(config_data.keys())
+    if not all_field_names.issubset(yaml_keys):
+        missing = all_field_names - yaml_keys
+        logger.info(f'Config upgrade: adding new settings {sorted(missing)}')
+        save_config(config, config_path)
 
-    if 'thumbnail_quality' in config_data:
-        kwargs['thumbnail_quality'] = int(config_data['thumbnail_quality'])
-
-    if 'max_image_dimension' in config_data:
-        kwargs['max_image_dimension'] = int(config_data['max_image_dimension'])
-
-    if 'openclip_model' in config_data:
-        kwargs['openclip_model'] = str(config_data['openclip_model'])
-
-    if 'openclip_pretrained' in config_data:
-        kwargs['openclip_pretrained'] = str(config_data['openclip_pretrained'])
-
-    if 'embedding_batch_size' in config_data:
-        kwargs['embedding_batch_size'] = int(config_data['embedding_batch_size'])
-
-    if 'perceptual_hash_threshold' in config_data:
-        kwargs['perceptual_hash_threshold'] = int(config_data['perceptual_hash_threshold'])
-
-    if 'similarity_threshold_level2' in config_data:
-        kwargs['similarity_threshold_level2'] = float(config_data['similarity_threshold_level2'])
-
-    if 'similarity_threshold_level3' in config_data:
-        kwargs['similarity_threshold_level3'] = float(config_data['similarity_threshold_level3'])
-
-    if 'indexing_threads' in config_data:
-        kwargs['indexing_threads'] = int(config_data['indexing_threads'])
-
-    if 'max_incremental_duplicates' in config_data:
-        kwargs['max_incremental_duplicates'] = int(config_data['max_incremental_duplicates'])
-
-    if 'incremental_threshold_percent' in config_data:
-        kwargs['incremental_threshold_percent'] = int(config_data['incremental_threshold_percent'])
-
-    if 'thumbnail_concurrent_requests' in config_data:
-        kwargs['thumbnail_concurrent_requests'] = int(config_data['thumbnail_concurrent_requests'])
-
-    if 'thumbnail_extra_rows' in config_data:
-        kwargs['thumbnail_extra_rows'] = int(config_data['thumbnail_extra_rows'])
-
-    if 'thumbnail_timeout_ms' in config_data:
-        kwargs['thumbnail_timeout_ms'] = int(config_data['thumbnail_timeout_ms'])
-
-    if 'thumbnail_scroll_throttle_ms' in config_data:
-        kwargs['thumbnail_scroll_throttle_ms'] = int(config_data['thumbnail_scroll_throttle_ms'])
-
-    if 'thumbnail_cache_size_mb' in config_data:
-        kwargs['thumbnail_cache_size_mb'] = int(config_data['thumbnail_cache_size_mb'])
-
-    if 'face_detection_enabled' in config_data:
-        kwargs['face_detection_enabled'] = bool(config_data['face_detection_enabled'])
-
-    if 'face_detection_min_confidence' in config_data:
-        kwargs['face_detection_min_confidence'] = float(config_data['face_detection_min_confidence'])
-
-    if 'face_detection_min_size' in config_data:
-        kwargs['face_detection_min_size'] = int(config_data['face_detection_min_size'])
-
-    if 'face_recognition_threshold' in config_data:
-        kwargs['face_recognition_threshold'] = float(config_data['face_recognition_threshold'])
-
-    if 'face_detection_batch_size' in config_data:
-        kwargs['face_detection_batch_size'] = int(config_data['face_detection_batch_size'])
-
-    if 'caption_model' in config_data:
-        kwargs['caption_model'] = str(config_data['caption_model'])
-
-    if 'caption_max_length' in config_data:
-        kwargs['caption_max_length'] = int(config_data['caption_max_length'])
-
-    if 'caption_min_length' in config_data:
-        kwargs['caption_min_length'] = int(config_data['caption_min_length'])
-
-    if 'caption_num_beams' in config_data:
-        kwargs['caption_num_beams'] = int(config_data['caption_num_beams'])
-
-    if 'caption_british_english' in config_data:
-        kwargs['caption_british_english'] = bool(config_data['caption_british_english'])
-
-    if 'nima_enabled' in config_data:
-        kwargs['nima_enabled'] = bool(config_data['nima_enabled'])
-
-    if 'nima_batch_size' in config_data:
-        kwargs['nima_batch_size'] = int(config_data['nima_batch_size'])
-
-    if 'quality_weight_aesthetic' in config_data:
-        kwargs['quality_weight_aesthetic'] = float(config_data['quality_weight_aesthetic'])
-
-    if 'quality_weight_sharpness' in config_data:
-        kwargs['quality_weight_sharpness'] = float(config_data['quality_weight_sharpness'])
-
-    if 'quality_weight_pixels' in config_data:
-        kwargs['quality_weight_pixels'] = float(config_data['quality_weight_pixels'])
-
-    if 'quality_weight_bpp' in config_data:
-        kwargs['quality_weight_bpp'] = float(config_data['quality_weight_bpp'])
-
-    if 'quality_alpha' in config_data:
-        kwargs['quality_alpha'] = float(config_data['quality_alpha'])
-
-    if 'trash_dir' in config_data:
-        kwargs['trash_dir'] = str(config_data['trash_dir'])
-
-    return Config(**kwargs)
+    return config
 
 
 def get_default_config() -> Config:

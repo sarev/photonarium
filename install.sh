@@ -95,6 +95,49 @@ fi
 PYTHON_VERSION="$("$PYTHON_CMD" -c "import sys; print(f'{sys.version_info.major}.{sys.version_info.minor}.{sys.version_info.micro}')")"
 echo "Using Python $PYTHON_VERSION ($PYTHON_CMD)"
 
+# Check for tkinter (needed for the folder picker dialog)
+if ! "$PYTHON_CMD" -c "import tkinter" 2>/dev/null; then
+    echo ""
+    echo "tkinter is not installed. Photonarium uses it for the folder picker"
+    echo "dialog. Attempting to install it now..."
+    echo ""
+
+    TK_INSTALLED=0
+    if [ "$PLATFORM_NAME" = "macOS" ]; then
+        if command -v brew &>/dev/null; then
+            # Extract major.minor for the brew formula
+            PY_MAJOR_MINOR="$("$PYTHON_CMD" -c "import sys; print(f'{sys.version_info.major}.{sys.version_info.minor}')")"
+            brew install "python-tk@$PY_MAJOR_MINOR" && TK_INSTALLED=1
+        fi
+    else
+        # Linux: try common package managers
+        if command -v apt-get &>/dev/null; then
+            sudo apt-get install -y python3-tk && TK_INSTALLED=1
+        elif command -v dnf &>/dev/null; then
+            sudo dnf install -y python3-tkinter && TK_INSTALLED=1
+        elif command -v pacman &>/dev/null; then
+            sudo pacman -S --noconfirm tk && TK_INSTALLED=1
+        fi
+    fi
+
+    if [ "$TK_INSTALLED" = "0" ]; then
+        echo ""
+        echo "WARNING: Could not install tkinter automatically."
+        echo "Install it manually for your system:"
+        if [ "$PLATFORM_NAME" = "macOS" ]; then
+            echo "  brew install python-tk@3.11"
+        else
+            echo "  Ubuntu/Debian:  sudo apt install python3-tk"
+            echo "  Fedora:         sudo dnf install python3-tkinter"
+            echo "  Arch:           sudo pacman -S tk"
+        fi
+        echo ""
+        echo "Photonarium will still work, but the folder picker dialog won't"
+        echo "be available. You can add folders by typing or pasting paths instead."
+        echo ""
+    fi
+fi
+
 # ---------------------------------------------------------------------------
 # 3. Ask data directory
 # ---------------------------------------------------------------------------
@@ -270,7 +313,7 @@ echo "--- Installing remaining dependencies ---"
 
 echo ""
 echo "NOTE: You may see pip warnings about \"facenet-pytorch\" dependency"
-echo "conflicts above. These are safe to ignore — facenet-pytorch declares"
+echo "conflicts above. These are safe to ignore -- facenet-pytorch declares"
 echo "strict version bounds that are too tight, so we install it with"
 echo "--no-deps and provide the correct versions ourselves."
 
@@ -283,9 +326,9 @@ echo "  Step 3/4: Initialising configuration"
 echo "============================================================"
 
 if [ -n "$DATA_DIR_FLAG" ]; then
-    "$VENV_PYTHON" app.py --data-dir "$DATA_DIR" --list-models
+    "$VENV_PYTHON" app.py --init-config "$DATA_DIR"
 else
-    "$VENV_PYTHON" app.py --list-models
+    "$VENV_PYTHON" app.py --init-config "."
 fi
 
 echo "Configuration file created."
@@ -302,11 +345,8 @@ echo "This step downloads large model files and may take a while"
 echo "depending on your internet connection."
 echo ""
 
-if [ -n "$DATA_DIR_FLAG" ]; then
-    "$VENV_PYTHON" download_models.py --data-dir "$DATA_DIR"
-else
-    "$VENV_PYTHON" download_models.py
-fi
+# Config now contains data_dir, so download_models.py reads it automatically
+"$VENV_PYTHON" download_models.py
 
 # ---------------------------------------------------------------------------
 # Final summary
@@ -342,11 +382,7 @@ echo ""
 echo "  To start Photonarium:"
 echo ""
 echo "    source $VENV_DIR/bin/activate"
-if [ -n "$DATA_DIR_FLAG" ]; then
-    echo "    python app.py --data-dir \"$DATA_DIR\""
-else
-    echo "    python app.py"
-fi
+echo "    python app.py"
 echo ""
 echo "  Then open http://localhost:5000 in your browser."
 echo ""

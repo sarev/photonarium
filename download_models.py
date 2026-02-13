@@ -4,7 +4,7 @@ Download required ML models for Photonarium.
 
 This script reads the configuration from app.py and downloads all required
 models from HuggingFace. Run this before first use or after changing model
-settings in .photonarium.yml.
+settings in photonarium.yml.
 
 Usage:
     python download_models.py
@@ -24,15 +24,21 @@ import sys
 import urllib.request
 
 
-def get_required_models(data_dir: str | None = None) -> dict:
+def get_required_models(
+    data_dir: str | None = None,
+    config_path: str | None = None,
+) -> dict:
     """Get required models by querying app.py --list-models.
 
     Args:
         data_dir: Optional data directory to forward to app.py, so that
             the returned paths (e.g. laion_head.data_dir) match the
             actual runtime directory.
+        config_path: Optional config file path to forward to app.py.
     """
     cmd = [sys.executable, 'app.py', '--list-models']
+    if config_path is not None:
+        cmd.extend(['--config', config_path])
     if data_dir is not None:
         cmd.extend(['--data-dir', data_dir])
     result = subprocess.run(cmd, capture_output=True, text=True)
@@ -197,6 +203,13 @@ def main():
         default=None,
         help='Directory for user data (forwarded to app.py so paths resolve correctly)'
     )
+    parser.add_argument(
+        '-c', '--config',
+        type=str,
+        default=None,
+        dest='config_path',
+        help='Path to configuration file (forwarded to app.py)'
+    )
     args = parser.parse_args()
 
     print('Photonarium Model Downloader')
@@ -205,9 +218,9 @@ def main():
     print('Models are cached in the HuggingFace cache directory.')
     print()
 
-    # Get required models from app.py (forward --data-dir so paths match runtime)
+    # Get required models from app.py (forward --config/--data-dir so paths match runtime)
     print('Querying required models from configuration...')
-    models = get_required_models(data_dir=args.data_dir)
+    models = get_required_models(data_dir=args.data_dir, config_path=args.config_path)
     print(f'OpenCLIP: {models["openclip"]["model"]} ({models["openclip"]["pretrained"]})')
     print(f'Caption:  {models["caption"]["model"]}')
 

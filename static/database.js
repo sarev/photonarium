@@ -142,6 +142,7 @@ const Database = {
             faceReassessStatus: App.$('face-reassess-status'),
             faceEmbeddingsRow: App.$('face-embeddings-row'),
             faceEmbeddingsStatus: App.$('face-embeddings-status'),
+            revealConfigBtn: App.$('btn-reveal-config'),
         };
 
         this._bindEvents();
@@ -230,6 +231,7 @@ const Database = {
     _bindEvents() {
         this._els.addFolderBtn.addEventListener('click', () => this._addFolder());
         this._els.rescanBtn.addEventListener('click', () => this._rescanAll());
+        this._els.revealConfigBtn.addEventListener('click', () => this._revealConfig());
     },
 
     /* ----------------------------------------------------------------------
@@ -321,7 +323,7 @@ const Database = {
             const removeBtn = document.createElement('button');
             removeBtn.type = 'button';
             removeBtn.className = 'toolbar-btn folder-remove';
-            removeBtn.title = 'Remove folder';
+            removeBtn.title = "Remove folder from Photonarium (doesn't affect the folder/files on disk!)";
             removeBtn.innerHTML = '<span class="material-symbols-outlined">delete</span>';
             removeBtn.addEventListener('click', () => this._removeFolder(folder.path));
 
@@ -369,6 +371,20 @@ const Database = {
         } catch (error) {
             console.error('Error initiating rescan:', error);
             App.showError('Could not start rescan.');
+        }
+    },
+
+    /**
+     * Opens the file manager with the configuration file selected.
+     * Lets users find and edit photonarium.yml without knowing its OS path.
+     * @private
+     */
+    async _revealConfig() {
+        try {
+            await App.apiPost('/config/reveal', {});
+        } catch (error) {
+            console.error('Error revealing config file:', error);
+            App.showError('Could not open config file location.');
         }
     },
 

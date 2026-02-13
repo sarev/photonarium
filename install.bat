@@ -63,11 +63,13 @@ if not defined PYTHON_CMD (
     echo     - "Windows installer (64-bit)"   ^(most likely^)
     echo     - "Windows installer (32-bit)"
     echo.
+    echo   During installation, make sure to check "Add Python to PATH", and
+    echo   make sure "tcl/tk and IDLE" is also checked in the installer.
+    echo.
     echo   IMPORTANT: Do NOT use the "Download Python install manager" link
     echo   at the top of the page — that installs a newer Python which is
     echo   incompatible with Photonarium's dependencies.
     echo.
-    echo   During installation, make sure to check "Add Python to PATH".
     echo.
     goto :error
 )
@@ -76,6 +78,16 @@ if not defined PYTHON_CMD (
 for /f "delims=" %%v in ('%PYTHON_CMD% -c "import sys; print(f'{sys.version_info.major}.{sys.version_info.minor}.{sys.version_info.micro}')"') do set "PYTHON_VERSION=%%v"
 echo Detected platform: Windows
 echo Using Python %PYTHON_VERSION% (%PYTHON_CMD%)
+
+:: Check for tkinter (needed for the folder picker dialog)
+%PYTHON_CMD% -c "import tkinter" 2>nul
+if !errorlevel! neq 0 (
+    echo.
+    echo WARNING: tkinter is not installed. Photonarium uses it for the
+    echo folder picker dialog. To fix this, re-run the Python installer,
+    echo click "Modify", and make sure "tcl/tk and IDLE" is checked.
+    echo.
+)
 
 :: ---------------------------------------------------------------------------
 :: 2. Ask data directory
@@ -246,7 +258,7 @@ if !errorlevel! neq 0 goto :error
 
 echo.
 echo NOTE: You may see pip warnings about "facenet-pytorch" dependency
-echo conflicts above. These are safe to ignore — facenet-pytorch declares
+echo conflicts above. These are safe to ignore -- facenet-pytorch declares
 echo strict version bounds that are too tight, so we install it with
 echo --no-deps and provide the correct versions ourselves.
 
@@ -259,9 +271,9 @@ echo   Step 3/4: Initialising configuration
 echo ============================================================
 
 if "!DATA_DIR_FLAG!"=="" (
-    "%VENV_PYTHON%" app.py --list-models
+    "%VENV_PYTHON%" app.py --init-config "."
 ) else (
-    "%VENV_PYTHON%" app.py --data-dir "!DATA_DIR!" --list-models
+    "%VENV_PYTHON%" app.py --init-config "!DATA_DIR!"
 )
 if !errorlevel! neq 0 goto :error
 echo Configuration file created.
@@ -278,11 +290,8 @@ echo This step downloads large model files and may take a while
 echo depending on your internet connection.
 echo.
 
-if "!DATA_DIR_FLAG!"=="" (
-    "%VENV_PYTHON%" download_models.py
-) else (
-    "%VENV_PYTHON%" download_models.py --data-dir "!DATA_DIR!"
-)
+:: Config now contains data_dir, so download_models.py reads it automatically
+"%VENV_PYTHON%" download_models.py
 if !errorlevel! neq 0 goto :error
 
 :: ---------------------------------------------------------------------------
@@ -312,14 +321,18 @@ if "!CUDA_AVAILABLE!"=="True" (
 )
 
 echo.
-echo   To start Photonarium:
+echo   To start Photonarium, open a terminal in this folder and run:
 echo.
-echo     %VENV_DIR%\Scripts\activate
-if "!DATA_DIR_FLAG!"=="" (
-    echo     python app.py
-) else (
-    echo     python app.py --data-dir "!DATA_DIR!"
-)
+echo     Command Prompt:
+echo       %VENV_DIR%\Scripts\activate
+echo       python app.py
+echo.
+echo     PowerShell:
+echo       %VENV_DIR%\Scripts\Activate.ps1
+echo       python app.py
+echo.
+echo     If PowerShell blocks the script, run this first:
+echo       Set-ExecutionPolicy -Scope CurrentUser RemoteSigned
 echo.
 echo   Then open http://localhost:5000 in your browser.
 echo.

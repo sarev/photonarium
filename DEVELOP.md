@@ -53,7 +53,7 @@ background processing in threads.
 - **Duplicate detection levels** — Level 0 (exact checksum), Level 1
   (perceptual hash distance), Level 2 (high embedding similarity), Level 3
   (lower embedding similarity). Thresholds are configurable in
-  `.photonarium.yml`.
+  `photonarium.yml`.
 - **Thumbnails** — Generated on demand and cached on disk keyed by image
   checksum. Most thumbnail logic lives in `thumbnails.py`; only
   database-dependent stubs remain here.
@@ -156,8 +156,12 @@ offline mode (`HF_HUB_OFFLINE=1`); models must be pre-downloaded via
 
 ### `config.py` — Configuration
 
-Loads and validates configuration from `.photonarium.yml`. If no configuration
-file exists, a default one is created with sensible defaults and comments.
+Loads, saves, and validates configuration from `photonarium.yml` stored at the
+OS-appropriate location (Windows: `%LOCALAPPDATA%\Photonarium\`, macOS:
+`~/Library/Application Support/Photonarium/`, Linux: `~/.config/photonarium/`).
+If no config exists on first run, auto-migrates a legacy `.photonarium.yml` from
+the working directory if found, otherwise creates a default with full comments.
+The `data_dir` field tells the app where to find its database and thumbnails.
 
 ### `timestamps.py` — Timestamp Extraction
 
