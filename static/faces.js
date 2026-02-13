@@ -2769,6 +2769,18 @@
                 unknownFacesSearchQuery = '';
                 // Clear pending reload flag
                 reloadPending = false;
+                // Clear loading flag — if we navigated away mid-load, the
+                // subscription handlers skipped checkLoadingComplete() because
+                // we weren't on the faces screen.  Without this reset,
+                // loadAllFaces() would bail on re-entry (isLoading guard)
+                // and the screen would be permanently blank.  Also force a
+                // full refresh on re-entry since loadAllFaces() destroyed the
+                // grids/containers but never finished rebuilding them.
+                if (isLoading) {
+                    AppState.loading.hide('faces');
+                    isLoading = false;
+                    needsRefresh = true;
+                }
             },
             markNeedsRefresh() {
                 needsRefresh = true;
