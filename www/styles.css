@@ -42,6 +42,13 @@ html {
     scroll-padding-top: var(--nav-height);
 }
 
+/* scroll-padding-top only works for in-page smooth scrolling, not for
+   fragment navigation on initial page load. scroll-margin-top ensures
+   the fixed navbar doesn't cover the target section in all cases. */
+section[id] {
+    scroll-margin-top: var(--nav-height);
+}
+
 body {
     background: var(--bg-primary);
     color: var(--text-primary);

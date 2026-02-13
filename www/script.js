@@ -65,4 +65,42 @@
         });
     });
 
+    /* ----------------------------------------------------------------
+       Query-string scroll — use e.g. ?support to scroll to #support
+       on page load. Bypasses Chrome's broken native fragment scrolling
+       which ignores scroll-margin-top and can't be reliably overridden.
+       ---------------------------------------------------------------- */
+    const section = location.search.slice(1);
+    if (section && document.getElementById(section)) {
+        /**
+         * Polls until document height stabilises (lazy images done loading),
+         * then scrolls to the bottom. Two consecutive reads 200ms apart must
+         * agree before we consider the layout settled.
+         */
+        const target = document.getElementById(section);
+
+        function scrollWhenStable() {
+            let lastHeight = 0;
+            const poll = setInterval(() => {
+                const height = document.body.scrollHeight;
+                if (height === lastHeight) {
+                    clearInterval(poll);
+                    target.scrollIntoView();
+                }
+                lastHeight = height;
+            }, 200);
+        }
+
+        if (document.hidden) {
+            document.addEventListener('visibilitychange', function onVisible() {
+                if (!document.hidden) {
+                    document.removeEventListener('visibilitychange', onVisible);
+                    scrollWhenStable();
+                }
+            });
+        } else {
+            scrollWhenStable();
+        }
+    }
+
 })();
