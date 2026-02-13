@@ -586,10 +586,7 @@ def step_groups_opening_a_group(page, ctx):
     page.wait_for_selector('#screen-gallery', state='visible', timeout=5000)
     wait_for_idle(page)
     wait_for_thumbnails(page)
-
-@step('group-in-gallery')
-def step_groups_group_in_gallery(page, ctx):
-    # Select the middle (worst) image
+    # Select the middle (worst) image to show comparison/selection
     nth_gallery_item(page, 2).click()
     wait_for_idle(page)
 
@@ -607,6 +604,12 @@ def step_groups_pruning_button(page, ctx):
     navigate_to(page, 'duplicates')
     page.wait_for_selector('.duplicate-stack', timeout=10000)
     wait_for_idle(page)
+    # Cache the 4th group's hash (aurora photos) for use in section 5.
+    # Must use Duplicates.state.groups (display order) rather than
+    # nth-child, because VirtualGrid appends DOM elements in thumbnail-
+    # load order which doesn't match visual position.
+    ctx['aurora_group_hash'] = page.evaluate(
+        '() => Duplicates.state.groups[3]?.group_hash || ""')
     highlight_element(page, '#btn-dup-prune',
                       color='rgba(255, 180, 0, 0.6)', width='3px')
 
@@ -678,15 +681,42 @@ def step_custom_groups_custom_level(page, ctx):
 
 @step('creating-a-group')
 def step_custom_groups_creating_a_group(page, ctx):
-    highlight_element(page, '#btn-group-new')
+    # Click New Group to open the prompt dialog, type a name but don't
+    # confirm yet — the screenshot should show the dialog with the name.
+    page.click('#btn-group-new')
+    page.wait_for_selector('#dialog-prompt[open]', timeout=5000)
+    page.fill('#dialog-prompt-input', 'Aurora')
+    wait_for_idle(page)
 
 @step('adding-photos-from-gallery')
 def step_custom_groups_adding_photos(page, ctx):
-    # Go to gallery to show the hover button
-    navigate_to(page, 'gallery')
-    page.wait_for_selector('.gallery-item', timeout=5000)
+    # Confirm the "Aurora" group left open by the previous step
+    page.click('#dialog-prompt-ok')
+    page.wait_for_timeout(500)
+    # Navigate to the Groups screen and open the aurora group (cached
+    # in step 4.7) — a perfect match for the "Aurora" custom group.
+    navigate_to(page, 'database')
+    navigate_to(page, 'duplicates')
+    page.evaluate('''() => {
+        document.querySelectorAll('.duplicate-stack').forEach(el => el.remove());
+        const slider = document.querySelector('#similarity-slider');
+        if (slider) {
+            slider.value = 2;
+            slider.dispatchEvent(new Event('input', { bubbles: true }));
+            slider.dispatchEvent(new Event('change', { bubbles: true }));
+        }
+    }''')
+    page.wait_for_selector('.duplicate-stack', timeout=15000)
+    wait_for_idle(page)
+    # Open the aurora group by its hash (position may vary between runs)
+    aurora_hash = ctx.get('aurora_group_hash', '')
+    page.locator(f'.duplicate-stack[data-group-hash="{aurora_hash}"]').dblclick()
+    page.wait_for_selector('#screen-gallery', state='visible', timeout=5000)
     wait_for_idle(page)
     wait_for_thumbnails(page)
+    # Select all photos so they'll all be added to the group
+    page.keyboard.press('Control+a')
+    wait_for_idle(page)
     # Hover the first thumbnail to reveal the group button
     first_item = page.locator('.gallery-item').first
     first_item.hover()
@@ -698,7 +728,6 @@ def step_custom_groups_adding_photos(page, ctx):
 def step_custom_groups_the_group_picker(page, ctx):
     # Hover a thumbnail to reveal the group badge, then click it to open
     # the Group Picker dialog (the real user flow).
-    # Leave the dialog open — the screenshot is taken after this function returns.
     first_item = page.locator('.gallery-item').first
     first_item.hover()
     page.wait_for_timeout(400)
@@ -710,11 +739,14 @@ def step_custom_groups_the_group_picker(page, ctx):
 
 @step('managing-groups')
 def step_custom_groups_managing_groups(page, ctx):
-    # Close the Group Picker left open by the previous step
-    page.click('#dialog-group-cancel')
-    page.wait_for_timeout(200)
+    # Add the selected aurora photos to the Aurora group via the picker
+    # left open by the previous step.  Click the Aurora entry then Done.
+    page.locator('.entity-picker-item:has-text("Aurora")').click()
+    page.wait_for_timeout(300)
+    page.click('#dialog-group-done')
+    page.wait_for_timeout(500)
 
-    # Create two groups so this step has something to show.
+    # Create another group so this step has multiple to show.
     # The await ensures backend persistence completes before we navigate.
     # createGroup() does an optimistic cache update followed by a forced
     # loadLevel(5, true) reload, so _groupCache[5] is correct when this
@@ -724,23 +756,23 @@ def step_custom_groups_managing_groups(page, ctx):
         const images = AppState.images.getAll();
         if (images.length < 10) return;
 
-        const setA = images.slice(0, 5).map(i => i.id);
         const setB = images.slice(5, 10).map(i => i.id);
 
-        await AppState.duplicates.createGroup('Favourites', setA);
         await AppState.duplicates.createGroup('Holiday snaps', setB);
     }''')
 
-    # Navigate to Groups screen.  We're coming from Gallery (step 5.3
-    # navigated there), so this triggers a real onLeave/onEnter cycle.
-    # The duplicates onChanged handler already set needsRefresh=true
-    # (fired by createGroup while we were on Gallery), so onEnter() will
-    # call _loadGroups() which picks up the cached level-5 data.
-    # onEnter() also syncs the slider to state.currentLevel (5 = Custom),
-    # so we must NOT manually set the slider — that would dispatch an
-    # input event triggering _setLevel() which races with _loadGroups().
+    # Navigate to Groups screen and switch to Custom level.
+    navigate_to(page, 'database')
     navigate_to(page, 'duplicates')
-
+    page.evaluate('''() => {
+        document.querySelectorAll('.duplicate-stack').forEach(el => el.remove());
+        const slider = document.querySelector('#similarity-slider');
+        if (slider) {
+            slider.value = 0;
+            slider.dispatchEvent(new Event('input', { bubbles: true }));
+            slider.dispatchEvent(new Event('change', { bubbles: true }));
+        }
+    }''')
     # Wait for the custom group stacks to render
     page.wait_for_selector('.duplicate-stack', timeout=10000)
     wait_for_idle(page)

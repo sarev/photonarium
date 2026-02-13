@@ -168,7 +168,7 @@
         },
         "groups-toolbar": {
             "title": "Toolbar",
-            "caption": "The Groups screen has its own toolbar. The slider selects the strictness level, and Min size filters out small groups.<table><tr><th>Offline</th><th>Online</th><th>Description</th></tr><tr><td class=\"icon-cell\">\u2212</td><td class=\"icon-cell\"><span class=\"material-symbols-outlined\">remove</span></td><td>Smaller thumbnails</td></tr><tr><td class=\"icon-cell\">\u271a</td><td class=\"icon-cell\"><span class=\"material-symbols-outlined\">add</span></td><td>Larger thumbnails</td></tr><tr><td colspan=\"2\" style=\"text-align:left\">Slider</td><td>Identical \u2192 Near-identical \u2192 Similar \u2192 Related \u2192 Directories \u2192 Custom</td></tr><tr><td colspan=\"2\" style=\"text-align:left\">Min size</td><td>Hide groups smaller than this (auto levels only)</td></tr><tr><td class=\"icon-cell\">\u21c5</td><td class=\"icon-cell\"><span class=\"material-symbols-outlined\">sort</span></td><td>Sort by group size</td></tr><tr><td class=\"icon-cell\">AZ</td><td class=\"icon-cell\"><span class=\"material-symbols-outlined\">sort_by_alpha</span></td><td>Sort alphabetically (named groups only)</td></tr><tr><td class=\"icon-cell\">\ud83d\udc65</td><td class=\"icon-cell\"><span class=\"material-symbols-outlined\">group</span></td><td>Sort by people</td></tr><tr><td class=\"icon-cell\">\ud83d\udd17</td><td class=\"icon-cell\"><span class=\"material-symbols-outlined\">image_search</span></td><td>Sort by semantic similarity</td></tr></table>"
+            "caption": "The Groups screen has its own toolbar. The slider selects the strictness level, and Min size filters out small groups.<table><tr><th>Offline</th><th>Online</th><th>Description</th></tr><tr><td class=\"icon-cell\">\u2212</td><td class=\"icon-cell\"><span class=\"material-symbols-outlined\">remove</span></td><td>Smaller thumbnails</td></tr><tr><td class=\"icon-cell\">\u271a</td><td class=\"icon-cell\"><span class=\"material-symbols-outlined\">add</span></td><td>Larger thumbnails</td></tr><tr><td colspan=\"2\" style=\"text-align:left\">Slider</td><td>Identical \u2192 Near-identical \u2192 Similar \u2192 Related \u2192 Directories \u2192 Custom</td></tr><tr><td colspan=\"2\" style=\"text-align:left\">Min size</td><td>Hide groups smaller than this (auto levels only)</td></tr><tr><td class=\"icon-cell\">\ud83d\uddd1\ufe0f</td><td class=\"icon-cell\"><span class=\"material-symbols-outlined\">delete_sweep</span></td><td>Prune groups (auto levels only)</td></tr><tr><td class=\"icon-cell\">\u21c5</td><td class=\"icon-cell\"><span class=\"material-symbols-outlined\">sort</span></td><td>Sort by group size</td></tr><tr><td class=\"icon-cell\">AZ</td><td class=\"icon-cell\"><span class=\"material-symbols-outlined\">sort_by_alpha</span></td><td>Sort alphabetically (named groups only)</td></tr><tr><td class=\"icon-cell\">\ud83d\udc65</td><td class=\"icon-cell\"><span class=\"material-symbols-outlined\">group</span></td><td>Sort by people</td></tr><tr><td class=\"icon-cell\">\ud83d\udd17</td><td class=\"icon-cell\"><span class=\"material-symbols-outlined\">image_search</span></td><td>Sort by semantic similarity</td></tr></table>"
         },
         "strictness": {
             "title": "Strictness",
@@ -180,11 +180,7 @@
         },
         "opening-a-group": {
             "title": "Opening a group",
-            "caption": "Double-click a thumbnail to open that group in the Gallery, where you can compare the photos and decide which ones to keep. The photos are automatically sorted by quality, and the best one is pre-selected."
-        },
-        "group-in-gallery": {
-            "title": "Group in the Gallery",
-            "caption": "Now you can see the group members together. Select any that you don\u2019t want \u2014 and press Delete to remove them, or just move on to the next group."
+            "caption": "Double-click a stack to open that group in the Gallery, where you can compare the photos side by side. They\u2019re automatically sorted by quality, with the best one pre-selected. Select any you don\u2019t want and press Delete, or just move on to the next group."
         },
         "pruning-button": {
             "title": "Pruning duplicates",
