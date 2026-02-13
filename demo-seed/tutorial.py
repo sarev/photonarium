@@ -21,6 +21,7 @@ Creates a 'tutorials' folder next to 'demo-seed' with:
     - Static HTML tutorial pages with a table of contents
 """
 
+import argparse
 import json
 import shutil
 import subprocess
@@ -63,7 +64,8 @@ SERVER_STARTUP_TIMEOUT = 30  # seconds
 VIEWPORT = {'width': 1280, 'height': 800}
 SETTLE_MS = 400             # ms to wait after actions for animations
 
-# Debug: stop after this section number (None = run all)
+# Debug: constrain which sections to run (None = run all).
+# Set via --from-section / --to-section CLI flags.
 START_FROM_SECTION = None
 STOP_AFTER_SECTION = None
 
@@ -577,8 +579,50 @@ def step_groups_strictness(page, ctx):
     highlight_element(page, '#similarity-slider',
                       color='rgba(255, 180, 0, 0.5)', width='2px')
 
+@step('opening-a-group')
+def step_groups_opening_a_group(page, ctx):
+    # Still on Related level from strictness step — open the first stack
+    page.locator('.duplicate-stack').first.dblclick()
+    page.wait_for_selector('#screen-gallery', state='visible', timeout=5000)
+    wait_for_idle(page)
+    wait_for_thumbnails(page)
+
+@step('group-in-gallery')
+def step_groups_group_in_gallery(page, ctx):
+    # Select the middle (worst) image
+    nth_gallery_item(page, 2).click()
+    wait_for_idle(page)
+
+@step('moving-between-groups')
+def step_groups_moving_between_groups(page, ctx):
+    click_toolbar(page, 'btn-next-group')
+    page.wait_for_timeout(800)
+
+@step('pruning-button')
+def step_groups_pruning_button(page, ctx):
+    # Return to the Groups screen to show the prune toolbar button.
+    # We're in Gallery group-view mode where both btn-back-gallery
+    # and btn-duplicates are hidden.  Route via Database.
+    navigate_to(page, 'database')
+    navigate_to(page, 'duplicates')
+    page.wait_for_selector('.duplicate-stack', timeout=10000)
+    wait_for_idle(page)
+    highlight_element(page, '#btn-dup-prune',
+                      color='rgba(255, 180, 0, 0.6)', width='3px')
+
+@step('pruning-dialog')
+def step_groups_pruning_dialog(page, ctx):
+    # Open the prune dialog without actually pruning — we just want
+    # to show what it looks like.  Don't click Trash!
+    page.click('#btn-dup-prune')
+    page.wait_for_selector('#dialog-prune[open]', timeout=5000)
+    wait_for_idle(page)
+
 @step('directories')
 def step_groups_directories(page, ctx):
+    # Close the prune dialog from the previous step
+    page.click('#dialog-prune-cancel')
+    page.wait_for_timeout(200)
     # Move slider to Directories (position 1)
     page.evaluate('''() => {
         const slider = document.querySelector('#similarity-slider');
@@ -601,38 +645,6 @@ def step_groups_directories(page, ctx):
     highlight_element(page, '#similarity-slider',
                       color='rgba(255, 180, 0, 0.5)', width='2px')
 
-@step('opening-a-group')
-def step_groups_opening_a_group(page, ctx):
-    # Switch from Directories back to Related.  Remove stale stacks first
-    # so wait_for_selector only matches freshly rendered ones.
-    page.evaluate('''() => {
-        document.querySelectorAll('.duplicate-stack').forEach(el => el.remove());
-        const slider = document.querySelector('#similarity-slider');
-        if (slider) {
-            slider.value = 2;
-            slider.dispatchEvent(new Event('input', { bubbles: true }));
-            slider.dispatchEvent(new Event('change', { bubbles: true }));
-        }
-    }''')
-    page.wait_for_selector('.duplicate-stack', timeout=15000)
-    wait_for_idle(page)
-    # Open the first stack (largest group, sorted by size)
-    page.locator('.duplicate-stack').first.dblclick()
-    page.wait_for_selector('#screen-gallery', state='visible', timeout=5000)
-    wait_for_idle(page)
-    wait_for_thumbnails(page)
-
-@step('group-in-gallery')
-def step_groups_group_in_gallery(page, ctx):
-    # Select the middle (worst) image
-    nth_gallery_item(page, 2).click()
-    wait_for_idle(page)
-
-@step('moving-between-groups')
-def step_groups_moving_between_groups(page, ctx):
-    click_toolbar(page, 'btn-next-group')
-    page.wait_for_timeout(800)
-
 
 # =========================================================================
 # Section 5: CUSTOM GROUPS (ALBUMS)
@@ -641,9 +653,8 @@ section('custom-groups')
 
 @step('custom-level')
 def step_custom_groups_custom_level(page, ctx):
-    # We're in Gallery group-view mode (from step 4.7) where both
-    # btn-back-gallery and btn-duplicates are hidden.  Navigate via
-    # Database (always visible) to break out, then to Groups.
+    # Navigate to Groups via Database (always visible) to ensure
+    # a clean onLeave/onEnter cycle regardless of starting screen.
     navigate_to(page, 'database')
     navigate_to(page, 'duplicates')
     page.wait_for_timeout(300)
@@ -1475,4 +1486,14 @@ def main():
 
 
 if __name__ == '__main__':
+    parser = argparse.ArgumentParser(description='Generate the Photonarium tutorial')
+    parser.add_argument('-f', '--from-section', type=int, default=None, metavar='N',
+                        help='Start from this section number (skip earlier sections)')
+    parser.add_argument('-t', '--to-section', type=int, default=None, metavar='N',
+                        help='Stop after this section number (skip later sections)')
+    args = parser.parse_args()
+
+    START_FROM_SECTION = args.from_section
+    STOP_AFTER_SECTION = args.to_section
+
     main()

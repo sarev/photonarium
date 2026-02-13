@@ -186,6 +186,14 @@
             "title": "Group in the Gallery",
             "caption": "Now you can see the group members together. Select any that you don\u2019t want \u2014 and press Delete to remove them, or just move on to the next group."
         },
+        "pruning-button": {
+            "title": "Pruning duplicates",
+            "caption": "Once you\u2019ve found duplicates, you can clean them up in bulk. The prune button (highlighted) lets you automatically keep the best images and move the rest out of the way."
+        },
+        "pruning-dialog": {
+            "title": "The prune dialog",
+            "caption": "The prune dialog gives you control over how many images to keep in each group: just the best one, a fixed number, or a percentage. A summary shows exactly how many images will be affected. Don\u2019t worry \u2014 nothing is permanently deleted. Pruned images are moved to a \u2018trash\u2019 folder, so you can always recover them."
+        },
         "moving-between-groups": {
             "title": "Moving between groups",
             "caption": "Use the toolbar arrow buttons (or Alt+Left / Alt+Right) to move to the next or previous group without going back to the Groups screen."
