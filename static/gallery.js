@@ -729,6 +729,9 @@ const Gallery = {
         const filter = App.getFilter();
         const isSemanticFilter = filter && filter.type === 'semantic';
 
+        // Clear selection so the gallery doesn't scroll back to a stale position
+        AppState.selection.clear('gallery');
+
         if (this._els.similarityControl) {
             this._els.similarityControl.style.display = isSemanticFilter ? 'flex' : 'none';
 

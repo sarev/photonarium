@@ -855,9 +855,19 @@ const Fullscreen = {
      * @private
      */
     _handleTouchStart(e) {
-        // Only track single-finger touches for swipe
+        // Only track single-finger touches
         if (e.touches.length !== 1) {
             this._touchStart = null;
+            return;
+        }
+
+        // When zoomed in, start touch-pan (mirrors mouse drag-to-pan)
+        if (this.state.zoom > 1) {
+            this.state.isPanning = true;
+            this._panStart = {
+                x: e.touches[0].clientX - this.state.panX,
+                y: e.touches[0].clientY - this.state.panY
+            };
             return;
         }
 
@@ -875,8 +885,18 @@ const Fullscreen = {
      * @private
      */
     _handleTouchMove(e) {
+        // Touch-pan while zoomed in (mirrors mouse drag-to-pan)
+        if (this.state.isPanning && this._panStart && e.touches.length === 1) {
+            e.preventDefault();
+            this.state.panX = e.touches[0].clientX - this._panStart.x;
+            this.state.panY = e.touches[0].clientY - this._panStart.y;
+            this._constrainPan();
+            this._applyTransform();
+            return;
+        }
+
         // Only process single-finger swipes when not zoomed
-        if (!this._touchStart || e.touches.length !== 1 || this.state.zoom > 1) return;
+        if (!this._touchStart || e.touches.length !== 1) return;
 
         const dx = e.touches[0].clientX - this._touchStart.x;
         const dy = e.touches[0].clientY - this._touchStart.y;
@@ -922,6 +942,13 @@ const Fullscreen = {
      * @private
      */
     _handleTouchEnd(e) {
+        // End touch-pan when zoomed (mirrors mouse up)
+        if (this.state.isPanning) {
+            this.state.isPanning = false;
+            this._panStart = null;
+            return;
+        }
+
         if (!this._touchStart) return;
 
         const touch = e.changedTouches[0];
