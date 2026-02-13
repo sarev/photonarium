@@ -3341,18 +3341,6 @@ a:hover {
     background-color: var(--color-selection);
 }
 
-/* Empty placeholder thumbnail for groups with no images */
-.entity-picker-item .entity-picker-placeholder {
-    width: 60px;
-    height: 60px;
-    border-radius: 4px;
-    background-color: var(--color-bg-tertiary);
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    color: var(--color-text-muted);
-    font-size: 1.5rem;
-}
 
 
 /* ==========================================================================
@@ -3438,6 +3426,13 @@ a:hover {
     object-fit: cover;
     border-radius: 4px;
     background-color: var(--color-bg-tertiary);
+}
+
+/* Empty group placeholder — logo centred on a muted background */
+.duplicate-stack img.placeholder-logo {
+    object-fit: contain;
+    padding: 25%;
+    opacity: 0.35;
 }
 
 .duplicate-stack-count {

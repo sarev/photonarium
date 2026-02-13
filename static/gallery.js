@@ -2217,19 +2217,16 @@ const Gallery = {
         item.draggable = true;
         item.dataset.hash = group.group_hash;
 
-        // Thumbnail or placeholder
+        // Thumbnail — falls back to app logo for empty groups
+        const img = document.createElement('img');
+        img.alt = group.name || 'Group';
         if (group.best_image?.id) {
-            const img = document.createElement('img');
-            img.alt = group.name || 'Group';
-            // Load thumbnail directly via img.src
             img.src = `/api/images/${group.best_image.id}/thumbnail?size=200`;
-            item.appendChild(img);
         } else {
-            const placeholder = document.createElement('div');
-            placeholder.className = 'entity-picker-placeholder';
-            placeholder.innerHTML = '<span class="icon" data-icon="photo_library"></span>';
-            item.appendChild(placeholder);
+            img.src = 'logo.png';
+            img.classList.add('placeholder-logo');
         }
+        item.appendChild(img);
 
         // Name
         const nameEl = document.createElement('div');

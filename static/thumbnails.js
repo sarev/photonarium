@@ -836,7 +836,20 @@ const VirtualGrid = {
                     if (state.renderedItems.has(id) || state.pendingItems.has(id)) continue;
 
                     const thumbId = config.getThumbnailId(item);
-                    if (!thumbId) continue;
+
+                    // No thumbnail available (e.g. empty custom group) —
+                    // create the element immediately with a null blobUrl
+                    // so the caller can render a placeholder.
+                    if (!thumbId) {
+                        const el = config.createItem(item, i, null);
+                        this._positionElement(el, i);
+                        this._innerContainer.appendChild(el);
+                        state.renderedItems.set(id, {el, blobUrl: null});
+                        if (config.onItemCreated) {
+                            config.onItemCreated(id, el);
+                        }
+                        continue;
+                    }
 
                     // Mark as pending
                     state.pendingItems.add(id);

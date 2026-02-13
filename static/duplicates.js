@@ -1338,13 +1338,12 @@ Duplicates._createStackElement = function(group, index, blobUrl) {
     stack.dataset.groupHash = group.group_hash;
     stack.title = 'Double-click to view this stack in the Gallery';
 
-    // Best image preview (thumbnail) with blob URL already set
+    // Best image preview (thumbnail) — falls back to app logo for empty groups
     const img = document.createElement('img');
-    if (blobUrl) {
-        img.src = blobUrl;
-    }
+    img.src = blobUrl || 'logo.png';
     img.alt = group.name || group.best_image?.basename || 'Group preview';
     img.dataset.imageId = group.best_image?.id || '';
+    if (!blobUrl) img.classList.add('placeholder-logo');
     stack.appendChild(img);
 
     if (this.state.currentLevel >= 4) {

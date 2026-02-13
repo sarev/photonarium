@@ -685,7 +685,7 @@ def step_custom_groups_creating_a_group(page, ctx):
     # confirm yet — the screenshot should show the dialog with the name.
     page.click('#btn-group-new')
     page.wait_for_selector('#dialog-prompt[open]', timeout=5000)
-    page.fill('#dialog-prompt-input', 'Aurora')
+    page.fill('#dialog-prompt-input', 'Aurorae')
     wait_for_idle(page)
 
 @step('adding-photos-from-gallery')
@@ -739,8 +739,8 @@ def step_custom_groups_the_group_picker(page, ctx):
 
 @step('managing-groups')
 def step_custom_groups_managing_groups(page, ctx):
-    # Add the selected aurora photos to the Aurora group via the picker
-    # left open by the previous step.  Click the Aurora entry then Done.
+    # Add the selected aurora photos to the Aurorae group via the picker
+    # left open by the previous step.  Click the Aurorae entry then Done.
     page.locator('.entity-picker-item:has-text("Aurora")').click()
     page.wait_for_timeout(300)
     page.click('#dialog-group-done')
