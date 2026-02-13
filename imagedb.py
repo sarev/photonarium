@@ -4723,6 +4723,15 @@ class ImageDatabase:
             self._checksum_cache = cache
         logger.info(f'        Loaded {len(cache)} checksums into cache')
 
+        # Warn about images missing checksums — these will 404 on
+        # thumbnail/histogram requests until re-scanned
+        missing = self.conn.execute(
+            'SELECT COUNT(*) FROM images WHERE checksum IS NULL AND deleted = 0'
+        ).fetchone()[0]
+        if missing:
+            logger.warning(f'        {missing} image(s) have NULL checksums — '
+                           f'run with --scan to repair')
+
     def _rescan_all_folders(self) -> None:
         """Rescan all registered folders for new/changed/deleted files."""
         folders = get_folders(self.conn)

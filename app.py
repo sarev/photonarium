@@ -52,6 +52,7 @@ from PIL import Image, ImageDraw
 
 import orjson
 from flask import Flask, Response, request, send_file, abort
+from werkzeug.exceptions import HTTPException
 from flask import jsonify as flask_jsonify
 # flask_cors not needed for localhost-only deployment (same-origin requests)
 
@@ -734,6 +735,8 @@ def get_histogram_images(image_id):
             'b': img_to_data_url(blue_img),
         })
 
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error(f'Error generating histogram for {image_id}: {e}')
         traceback.print_exc()
@@ -3119,8 +3122,36 @@ def not_found(error):
 @app.errorhandler(500)
 def internal_error(error):
     """Handle 500 errors with JSON response."""
-    logger.exception('Internal server error')
+    logger.exception('Internal server error: %s', _format_request_context())
     return error_response('Internal server error', 500)
+
+
+def _format_request_context(max_url_len: int = 200, max_body_len: int = 200) -> str:
+    """Format the current request as a concise string for error logs.
+
+    Includes method, URL (truncated), and a body preview for mutations.
+    Safe to call outside a request context (returns 'no request context').
+    """
+    try:
+        method = request.method
+        url = request.url
+        if len(url) > max_url_len:
+            url = url[:max_url_len] + '…'
+        parts = [f'{method} {url}']
+
+        # Include body preview for mutations (POST/PATCH/DELETE) to help
+        # debug batch operations without swamping the terminal
+        if method in ('POST', 'PATCH', 'DELETE'):
+            body = request.get_data(as_text=True, cache=True)
+            if body:
+                preview = body[:max_body_len]
+                if len(body) > max_body_len:
+                    preview += f'… ({len(body)} bytes total)'
+                parts.append(f'body={preview}')
+
+        return ' | '.join(parts)
+    except RuntimeError:
+        return 'no request context'
 
 
 # =============================================================================

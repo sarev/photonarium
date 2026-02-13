@@ -832,7 +832,12 @@ const Gallery = {
         if (this._selection) {
             this._selection.setSelected(selection);
         }
-        // Update info panel
+        // Defer info panel updates while fullscreen is open — the selection
+        // tracks every image the user navigates to, but rendering the info
+        // panel (including on-demand histogram generation) is wasted work
+        // when the gallery is hidden behind the fullscreen overlay.
+        // The fullscreenClosing handler triggers a catch-up update instead.
+        if (AppState.nav.isFullscreenOpen()) return;
         this._updateInfoPanel(selection);
     },
 
@@ -1803,6 +1808,12 @@ const Gallery = {
                     // Just scroll to the last viewed image
                     this._grid.scrollToId(event.imageId);
                 }
+
+                // Catch-up info panel update — selection was tracked during
+                // fullscreen but info panel updates were deferred (see
+                // _onSelectionChanged).  Force a fresh render now.
+                this._infoPanelImageId = null;
+                this._updateInfoPanel(this._selection.getSelected());
                 // Unsubscribe
                 if (this._fullscreenUnsub) {
                     this._fullscreenUnsub();
