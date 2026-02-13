@@ -79,7 +79,7 @@ _LEGACY_CONFIG_NAME = '.photonarium.yml'
 CONFIG_SCHEMA: list[tuple[str, list[tuple[str, list[str]]]]] = [
     ('Data Directory', [
         ('data_dir', [
-            'Where Photonarium stores its database, thumbnails, and model files.',
+            '[!] Where Photonarium stores its database, thumbnails, and model files.',
             'Set automatically by the installer. Use an absolute path for reliability.',
             'Leave empty to use the current working directory.',
         ]),
@@ -87,12 +87,12 @@ CONFIG_SCHEMA: list[tuple[str, list[tuple[str, list[str]]]]] = [
 
     ('Server', [
         ('server_host', [
-            'Network interface to bind to.',
+            '[!] Network interface to bind to.',
             '  0.0.0.0   = listen on all interfaces (accessible from other devices on your network)',
             '  127.0.0.1 = localhost only (only this machine can connect)',
         ]),
         ('server_port', [
-            'Port number for the web server. Range: 1024-65535',
+            '[!] Port number for the web server. Range: 1024-65535',
         ]),
     ]),
 
@@ -310,6 +310,45 @@ _IMAGE_EXTENSIONS_ORDERED: list[str | tuple[str, str]] = [
 ]
 
 
+# ---------------------------------------------------------------------------
+# FIELD_CONSTRAINTS — single source of truth for numeric ranges
+# ---------------------------------------------------------------------------
+# Maps field name → {min, max, step, [special_zero]}.  Used by both
+# _validate() and get_config_schema() so the API and validation stay in sync.
+# ``special_zero`` means 0 is accepted even when it's below ``min``.
+
+FIELD_CONSTRAINTS: dict[str, dict[str, int | float | bool]] = {
+    'server_port':                   {'min': 1024,  'max': 65535, 'step': 1},
+    'thumbnail_quality':             {'min': 1,     'max': 100,   'step': 1},
+    'max_image_dimension':           {'min': 1024,  'max': 65536, 'step': 1,    'special_zero': True},
+    'embedding_batch_size':          {'min': 1,     'max': 64,    'step': 1},
+    'perceptual_hash_threshold':     {'min': 0,     'max': 64,    'step': 1},
+    'similarity_threshold_level2':   {'min': 0.0,   'max': 1.0,   'step': 0.01},
+    'similarity_threshold_level3':   {'min': 0.0,   'max': 1.0,   'step': 0.01},
+    'indexing_threads':              {'min': 1,     'max': 16,    'step': 1},
+    'max_incremental_duplicates':    {'min': 1,     'max': 10000, 'step': 1},
+    'incremental_threshold_percent': {'min': 5,     'max': 50,    'step': 1},
+    'thumbnail_concurrent_requests': {'min': 1,     'max': 12,    'step': 1},
+    'thumbnail_extra_rows':          {'min': 1,     'max': 20,    'step': 1},
+    'thumbnail_timeout_ms':          {'min': 1000,  'max': 60000, 'step': 100},
+    'thumbnail_scroll_throttle_ms':  {'min': 50,    'max': 1000,  'step': 10},
+    'thumbnail_cache_size_mb':       {'min': 0,     'max': 1000,  'step': 1},
+    'face_detection_min_confidence': {'min': 0.0,   'max': 1.0,   'step': 0.01},
+    'face_detection_min_size':       {'min': 20,    'max': 200,   'step': 1},
+    'face_recognition_threshold':    {'min': 0.0,   'max': 1.0,   'step': 0.01},
+    'face_detection_batch_size':     {'min': 1,     'max': 64,    'step': 1},
+    'caption_max_length':            {'min': 10,    'max': 200,   'step': 1},
+    'caption_min_length':            {'min': 1,     'max': 50,    'step': 1},
+    'caption_num_beams':             {'min': 1,     'max': 10,    'step': 1},
+    'nima_batch_size':               {'min': 1,     'max': 64,    'step': 1},
+    'quality_weight_aesthetic':      {'min': 0.0,   'max': 1.0,   'step': 0.01},
+    'quality_weight_sharpness':      {'min': 0.0,   'max': 1.0,   'step': 0.01},
+    'quality_weight_pixels':         {'min': 0.0,   'max': 1.0,   'step': 0.01},
+    'quality_weight_bpp':            {'min': 0.0,   'max': 1.0,   'step': 0.01},
+    'quality_alpha':                 {'min': 0.0,   'max': 1.0,   'step': 0.01},
+}
+
+
 @dataclass
 class Config:
     """Application configuration with validation.
@@ -413,20 +452,34 @@ class Config:
     def _validate(self) -> None:
         """Validate all configuration values are within acceptable ranges.
 
+        Uses FIELD_CONSTRAINTS for numeric range checks.  Fields that need
+        non-numeric validation (strings, booleans, cross-field) are handled
+        explicitly.
+
         Raises:
             ValueError: If any configuration value is invalid.
         """
-        # Validate data_dir (must be a string, can be empty)
+        # --- String fields: must be non-empty ---
         if not isinstance(self.data_dir, str):
             raise ValueError('data_dir must be a string')
-
-        # Validate server settings
         if not isinstance(self.server_host, str) or not self.server_host:
             raise ValueError('server_host must be a non-empty string')
-        if not 1024 <= self.server_port <= 65535:
-            raise ValueError(f'server_port must be 1024-65535, got {self.server_port}')
+        if not self.openclip_model or not isinstance(self.openclip_model, str):
+            raise ValueError('openclip_model must be a non-empty string')
+        if not self.openclip_pretrained or not isinstance(self.openclip_pretrained, str):
+            raise ValueError('openclip_pretrained must be a non-empty string')
+        if not self.caption_model or not isinstance(self.caption_model, str):
+            raise ValueError('caption_model must be a non-empty string')
 
-        # Validate image_extensions
+        # --- Boolean fields ---
+        if not isinstance(self.face_detection_enabled, bool):
+            raise ValueError('face_detection_enabled must be a boolean')
+        if not isinstance(self.caption_british_english, bool):
+            raise ValueError('caption_british_english must be a boolean')
+        if not isinstance(self.nima_enabled, bool):
+            raise ValueError('nima_enabled must be a boolean')
+
+        # --- image_extensions: coerce to set of dotted lowercase strings ---
         if not isinstance(self.image_extensions, (set, list, tuple)):
             raise ValueError('image_extensions must be a collection')
         self.image_extensions = {
@@ -434,91 +487,24 @@ class Config:
             for ext in self.image_extensions
         }
 
-        # Validate thumbnail_quality
-        if not 1 <= self.thumbnail_quality <= 100:
-            raise ValueError(f'thumbnail_quality must be 1-100, got {self.thumbnail_quality}')
+        # --- Numeric range checks from FIELD_CONSTRAINTS ---
+        for field_name, c in FIELD_CONSTRAINTS.items():
+            value = getattr(self, field_name)
+            lo, hi = c['min'], c['max']
+            # special_zero: accept 0 even when it's below min
+            if c.get('special_zero') and value == 0:
+                continue
+            if not lo <= value <= hi:
+                raise ValueError(f'{field_name} must be {lo}-{hi}, got {value}')
 
-        # Validate max_image_dimension (0 = disabled, or 1024-65536)
-        if self.max_image_dimension != 0 and not 1024 <= self.max_image_dimension <= 65536:
-            raise ValueError(f'max_image_dimension must be 0 or 1024-65536, got {self.max_image_dimension}')
-
-        # Validate embedding_batch_size
-        if not 1 <= self.embedding_batch_size <= 64:
-            raise ValueError(f'embedding_batch_size must be 1-64, got {self.embedding_batch_size}')
-
-        # Validate perceptual_hash_threshold
-        if not 0 <= self.perceptual_hash_threshold <= 64:
-            raise ValueError(f'perceptual_hash_threshold must be 0-64, got {self.perceptual_hash_threshold}')
-
-        # Validate similarity thresholds
-        if not 0.0 <= self.similarity_threshold_level2 <= 1.0:
-            raise ValueError(f'similarity_threshold_level2 must be 0.0-1.0, got {self.similarity_threshold_level2}')
-        if not 0.0 <= self.similarity_threshold_level3 <= 1.0:
-            raise ValueError(f'similarity_threshold_level3 must be 0.0-1.0, got {self.similarity_threshold_level3}')
-
-        # Validate openclip_model and openclip_pretrained are non-empty strings
-        if not self.openclip_model or not isinstance(self.openclip_model, str):
-            raise ValueError('openclip_model must be a non-empty string')
-        if not self.openclip_pretrained or not isinstance(self.openclip_pretrained, str):
-            raise ValueError('openclip_pretrained must be a non-empty string')
-
-        # Validate indexing_threads
-        if not 1 <= self.indexing_threads <= 16:
-            raise ValueError(f'indexing_threads must be 1-16, got {self.indexing_threads}')
-
-        # Validate max_incremental_duplicates
-        if not 1 <= self.max_incremental_duplicates <= 10000:
-            raise ValueError(f'max_incremental_duplicates must be 1-10000, got {self.max_incremental_duplicates}')
-
-        # Validate incremental_threshold_percent
-        if not 5 <= self.incremental_threshold_percent <= 50:
-            raise ValueError(f'incremental_threshold_percent must be 5-50, got {self.incremental_threshold_percent}')
-
-        # Validate thumbnail loading settings
-        if not 1 <= self.thumbnail_concurrent_requests <= 12:
-            raise ValueError(f'thumbnail_concurrent_requests must be 1-12, got {self.thumbnail_concurrent_requests}')
-        if not 1 <= self.thumbnail_extra_rows <= 20:
-            raise ValueError(f'thumbnail_extra_rows must be 1-20, got {self.thumbnail_extra_rows}')
-        if not 1000 <= self.thumbnail_timeout_ms <= 60000:
-            raise ValueError(f'thumbnail_timeout_ms must be 1000-60000, got {self.thumbnail_timeout_ms}')
-        if not 50 <= self.thumbnail_scroll_throttle_ms <= 1000:
-            raise ValueError(f'thumbnail_scroll_throttle_ms must be 50-1000, got {self.thumbnail_scroll_throttle_ms}')
-        if not 0 <= self.thumbnail_cache_size_mb <= 1000:
-            raise ValueError(f'thumbnail_cache_size_mb must be 0-1000, got {self.thumbnail_cache_size_mb}')
-
-        # Validate face detection settings
-        if not isinstance(self.face_detection_enabled, bool):
-            raise ValueError('face_detection_enabled must be a boolean')
-        if not 0.0 <= self.face_detection_min_confidence <= 1.0:
-            raise ValueError(f'face_detection_min_confidence must be 0.0-1.0, got {self.face_detection_min_confidence}')
-        if not 20 <= self.face_detection_min_size <= 200:
-            raise ValueError(f'face_detection_min_size must be 20-200, got {self.face_detection_min_size}')
-        if not 0.0 <= self.face_recognition_threshold <= 1.0:
-            raise ValueError(f'face_recognition_threshold must be 0.0-1.0, got {self.face_recognition_threshold}')
-        if not 1 <= self.face_detection_batch_size <= 64:
-            raise ValueError(f'face_detection_batch_size must be 1-64, got {self.face_detection_batch_size}')
-
-        # Validate caption settings
-        if not self.caption_model or not isinstance(self.caption_model, str):
-            raise ValueError('caption_model must be a non-empty string')
-        if not 10 <= self.caption_max_length <= 200:
-            raise ValueError(f'caption_max_length must be 10-200, got {self.caption_max_length}')
-        if not 1 <= self.caption_min_length <= 50:
-            raise ValueError(f'caption_min_length must be 1-50, got {self.caption_min_length}')
+        # --- Cross-field validation ---
         if self.caption_min_length > self.caption_max_length:
-            raise ValueError(f'caption_min_length ({self.caption_min_length}) cannot exceed caption_max_length ({self.caption_max_length})')
-        if not 1 <= self.caption_num_beams <= 10:
-            raise ValueError(f'caption_num_beams must be 1-10, got {self.caption_num_beams}')
-        if not isinstance(self.caption_british_english, bool):
-            raise ValueError('caption_british_english must be a boolean')
+            raise ValueError(
+                f'caption_min_length ({self.caption_min_length}) cannot exceed '
+                f'caption_max_length ({self.caption_max_length})'
+            )
 
-        # Validate NIMA settings
-        if not isinstance(self.nima_enabled, bool):
-            raise ValueError('nima_enabled must be a boolean')
-        if not 1 <= self.nima_batch_size <= 64:
-            raise ValueError(f'nima_batch_size must be 1-64, got {self.nima_batch_size}')
-
-        # Validate quality scoring weights
+        # Quality weights should sum to ~1.0 (warning only, not an error)
         weight_sum = (self.quality_weight_aesthetic + self.quality_weight_sharpness
                       + self.quality_weight_pixels + self.quality_weight_bpp)
         if abs(weight_sum - 1.0) > 0.05:
@@ -526,8 +512,6 @@ class Config:
                 f'Quality weights sum to {weight_sum:.3f} (expected ~1.0). '
                 'Rankings may behave unexpectedly.'
             )
-        if not 0.0 <= self.quality_alpha <= 1.0:
-            raise ValueError(f'quality_alpha must be 0.0-1.0, got {self.quality_alpha}')
 
 
 # ---------------------------------------------------------------------------
@@ -619,12 +603,14 @@ def save_config(config: Config, config_path: Path | str) -> None:
             # Blank line before each field (visual spacing)
             lines.append('')
 
-            # Comment lines
+            # Comment lines — strip the [!] warning prefix used by the schema
+            # API; it's metadata for the frontend, not for the YAML file
             for comment in comment_lines:
                 if comment == '':
                     lines.append('#')
                 else:
-                    lines.append(f'# {comment}')
+                    clean = comment[4:] if comment.startswith('[!] ') else comment
+                    lines.append(f'# {clean}')
 
             # Value
             value = getattr(config, field_name)
@@ -632,6 +618,92 @@ def save_config(config: Config, config_path: Path | str) -> None:
 
     lines.append('')  # Trailing newline
     config_path.write_text('\n'.join(lines), encoding='utf-8')
+
+
+# ---------------------------------------------------------------------------
+# get_config_schema — schema + current values for the settings editor
+# ---------------------------------------------------------------------------
+
+# Map from Python type annotation strings to JSON-compatible type names
+_TYPE_MAP: dict[str, str] = {
+    'str': 'string',
+    'int': 'integer',
+    'float': 'number',
+    'bool': 'boolean',
+    'set[str]': 'set',
+}
+
+
+def get_config_schema(config: Config) -> dict[str, Any]:
+    """Build a JSON-serialisable schema describing all config fields.
+
+    The schema is consumed by the frontend settings editor.  Each field
+    includes its current value, JSON type, help text, optional numeric
+    constraints, and a ``warning`` flag for dangerous settings.
+
+    Args:
+        config: The currently loaded Config instance.
+
+    Returns:
+        ``{"sections": [...]}`` where each section has a ``title`` and a
+        list of ``fields``.  Each field dict contains ``key``, ``value``,
+        ``type``, ``comment``, optional ``constraints``, and optional
+        ``warning``.
+    """
+    # Build a lookup of field name → Python type string
+    field_types: dict[str, str] = {f.name: f.type for f in fields(Config)}
+
+    sections: list[dict[str, Any]] = []
+
+    for section_title, section_fields in CONFIG_SCHEMA:
+        field_defs: list[dict[str, Any]] = []
+
+        for field_name, comment_lines in section_fields:
+            # Detect and strip the [!] warning prefix
+            warning = False
+            cleaned_comments: list[str] = []
+            for line in comment_lines:
+                if line.startswith('[!] '):
+                    warning = True
+                    cleaned_comments.append(line[4:])
+                else:
+                    cleaned_comments.append(line)
+
+            # Join comment lines into help text (empty lines become newlines)
+            comment = '\n'.join(cleaned_comments).strip()
+
+            # Current value
+            value = getattr(config, field_name)
+            # Convert set to sorted list for JSON serialisation
+            if isinstance(value, set):
+                value = sorted(value)
+
+            # Derive JSON type from the dataclass field annotation
+            py_type = field_types.get(field_name, 'str')
+            json_type = _TYPE_MAP.get(py_type, 'string')
+
+            entry: dict[str, Any] = {
+                'key': field_name,
+                'value': value,
+                'type': json_type,
+                'comment': comment,
+            }
+
+            # Attach numeric constraints if defined
+            if field_name in FIELD_CONSTRAINTS:
+                entry['constraints'] = dict(FIELD_CONSTRAINTS[field_name])
+
+            if warning:
+                entry['warning'] = True
+
+            field_defs.append(entry)
+
+        sections.append({
+            'title': section_title,
+            'fields': field_defs,
+        })
+
+    return {'sections': sections}
 
 
 # ---------------------------------------------------------------------------

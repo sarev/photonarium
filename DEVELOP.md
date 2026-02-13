@@ -305,6 +305,19 @@ when the database is empty.
   detection queue sizes.
 - **Statistics** — Displays total image count.
 
+### `settings.js` — In-App Configuration Editor
+
+A standalone `Settings` object (not a screen module) that opens a modal dialog
+for editing `photonarium.yml` from the browser. The form is entirely
+schema-driven — the backend sends field types, constraints, and help text in
+one `/api/config/schema` response, and the frontend renders a generic form.
+
+- **Schema-driven** — zero hardcoded knowledge of individual settings.
+- **Field types** — text, number, checkbox, textarea (for set-type fields).
+- **Danger fields** — red border and warning icon for settings that require care.
+- **Client + server validation** — range checks in the browser plus full
+  validation on save via the Config constructor.
+
 ### `search.js` — Search and Filter Screen
 
 Create filters to narrow down the gallery view.

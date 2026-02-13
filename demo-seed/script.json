@@ -40,7 +40,7 @@
     "steps": {
         "first-launch": {
             "title": "First launch",
-            "caption": "When you first open Photonarium, you see the Database screen in the default light theme. There are no folders or photos yet \u2014 this is where you tell Photonarium where your photos live. The Edit Settings button opens your configuration file in the system file manager if you ever need to tweak advanced settings."
+            "caption": "When you first open Photonarium, you see the Database screen in the default light theme. There are no folders or photos yet \u2014 this is where you tell Photonarium where your photos live. The Edit Settings button opens an in-app settings editor where you can tweak advanced settings like model selection, face detection thresholds, and thumbnail quality."
         },
         "dark-theme": {
             "title": "Switching to dark theme",

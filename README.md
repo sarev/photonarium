@@ -434,7 +434,7 @@ Database is where you tell Photonarium where your photos live, and where you can
 - Add folders (scanned recursively)
 - Rescan folders to pick up changes
 - Watch progress for indexing, embeddings, and face work (with ETAs when possible)
-- Click **Edit Settings** to open the configuration file in your system's file manager for editing
+- Click **Edit Settings** to open the in-app settings editor (works from any device on your network)
 
 Supported image types include: `.jpg`, `.jpeg`, `.png`, `.gif`, `.bmp`, `.tiff`, `.tif`, `.webp`, and camera RAW formats (`.cr2`, `.cr3`, `.nef`, `.nrw`, `.arw`, `.srf`, `.dng`, `.raf`, `.rw2`, `.orf`, `.pef`, `.srw`, `.x3f`, `.3fr`, `.iiq`, `.rwl`, `.kdc`, `.dcr`, `.erf`). RAW support requires the `rawpy` package. Note that RAW files cannot be rotated within Photonarium. RAW files are also slower to process than standard formats — each file requires full demosaicing of the sensor data, so indexing and opening full-screen images will take a little longer than with JPEGs.
 
@@ -528,7 +528,7 @@ If you prefer to install manually, or the installer script doesn't suit your set
   python app.py --init-config .
   ```
 
-  This will create a `photonarium.yml` configuration file at the OS-appropriate location (see [Configuration](#configuration) below). You can load this into a text editor and make changes, if you'd like. For example, you may want to select different 'models' to be used for things like generating image descriptions.
+  This will create a `photonarium.yml` configuration file at the OS-appropriate location (see [Configuration](#configuration) below). You can change settings later via the in-app **Edit Settings** button on the Database screen, or by editing the YAML file directly in a text editor.
 
 5. **Download ML models**
 
@@ -597,7 +597,7 @@ Available caption models (from smallest to largest):
 
 ## Configuration
 
-Settings are stored in `photonarium.yml` at the OS-appropriate location:
+Settings can be changed via the **Edit Settings** button on the Database screen, which opens an in-app editor that works from any device on your network. Settings are stored in `photonarium.yml` at the OS-appropriate location:
 
 - **Windows:** `%LOCALAPPDATA%\Photonarium\photonarium.yml`
 - **macOS:** `~/Library/Application Support/Photonarium/photonarium.yml`

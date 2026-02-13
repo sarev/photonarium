@@ -453,7 +453,7 @@
                             <span class="icon" data-icon="refresh">↻</span>
                             Rescan All Folders
                         </button>
-                        <button id="btn-reveal-config" class="action-btn" title="Open the configuration file in your file manager for editing">
+                        <button id="btn-reveal-config" class="action-btn" title="Open the settings editor">
                             <span class="icon" data-icon="settings">⚙</span>
                             Edit Settings
                         </button>
@@ -745,6 +745,27 @@
             </div>
         </dialog>
 
+        <!-- Settings dialog (in-app configuration editor) -->
+        <dialog id="dialog-settings">
+            <div class="dialog-content settings-dialog">
+                <div class="settings-header">
+                    <h3>Settings</h3>
+                    <a href="#" id="settings-reveal-link" class="settings-reveal-link"
+                       title="Open the config file in your file manager">
+                        <span class="material-symbols-outlined">open_in_new</span>
+                        <span id="settings-config-path" class="settings-config-path"></span>
+                    </a>
+                </div>
+                <div id="settings-content" class="settings-content">
+                    <!-- Dynamically populated from schema -->
+                </div>
+                <div class="dialog-actions settings-actions">
+                    <button id="settings-cancel" class="action-btn">Cancel</button>
+                    <button id="settings-save" class="action-btn primary">Save</button>
+                </div>
+            </div>
+        </dialog>
+
         <!-- ============================================================
              LOADING OVERLAY
              Global loading indicator that sits above all screens.
@@ -785,6 +806,7 @@
     <script src="gallery.js"></script>
     <script src="fullscreen.js"></script>
     <script src="database.js"></script>
+    <script src="settings.js"></script>
     <script src="search.js"></script>
     <script src="duplicates.js"></script>
     <script src="faces.js"></script>

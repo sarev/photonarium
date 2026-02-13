@@ -231,7 +231,7 @@ const Database = {
     _bindEvents() {
         this._els.addFolderBtn.addEventListener('click', () => this._addFolder());
         this._els.rescanBtn.addEventListener('click', () => this._rescanAll());
-        this._els.revealConfigBtn.addEventListener('click', () => this._revealConfig());
+        this._els.revealConfigBtn.addEventListener('click', () => Settings.show());
     },
 
     /* ----------------------------------------------------------------------
@@ -371,20 +371,6 @@ const Database = {
         } catch (error) {
             console.error('Error initiating rescan:', error);
             App.showError('Could not start rescan.');
-        }
-    },
-
-    /**
-     * Opens the file manager with the configuration file selected.
-     * Lets users find and edit photonarium.yml without knowing its OS path.
-     * @private
-     */
-    async _revealConfig() {
-        try {
-            await App.apiPost('/config/reveal', {});
-        } catch (error) {
-            console.error('Error revealing config file:', error);
-            App.showError('Could not open config file location.');
         }
     },
 

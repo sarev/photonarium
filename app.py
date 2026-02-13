@@ -1150,6 +1150,119 @@ def reveal_config():
         return error_response(f'Failed to open folder: {str(e)}', 500)
 
 
+@app.route('/api/config/schema', methods=['GET'])
+def get_config_schema_endpoint():
+    """Get the full configuration schema for the settings editor.
+
+    Loads the config fresh from the YAML file on disk so that values
+    saved-but-not-yet-restarted are reflected correctly in the dialog.
+    Falls back to the live in-memory config if the file can't be read.
+
+    Returns:
+        JSON with ``sections`` array and ``config_path`` string.
+    """
+    from config import get_config_schema, load_config
+
+    # Read from disk so the dialog shows the on-disk state, not the
+    # stale in-memory state from when the server started.
+    config_path = _config_file_path or None
+    try:
+        disk_config = load_config(config_path)
+    except Exception:
+        logger.warning('Failed to reload config from disk, using in-memory values')
+        disk_config = _config
+
+    schema = get_config_schema(disk_config)
+    schema['config_path'] = _config_file_path or ''
+    return success_response(schema)
+
+
+@app.route('/api/config/save', methods=['POST'])
+def save_config_endpoint():
+    """Save updated configuration values to disk.
+
+    Accepts a dict of ``{key: value}`` pairs, coerces types from JSON to
+    match the Config dataclass, validates via the Config constructor, and
+    writes to the YAML file.  Does NOT hot-reload the running process —
+    a restart is required for changes to take effect.
+
+    Request Body:
+        ``{values: {field_name: value, ...}}``
+
+    Returns:
+        Success response on valid save, or 400 with the validation error
+        message if any value is out of range or cross-field checks fail.
+    """
+    from config import Config, save_config, get_default_config_path
+    from dataclasses import fields as dc_fields
+
+    data = request.get_json(silent=True)
+    if not data or 'values' not in data:
+        return error_response('Request must include "values" object')
+
+    values = data['values']
+    if not isinstance(values, dict):
+        return error_response('"values" must be an object')
+
+    # Build a mapping of field name → expected Python type for coercion
+    type_map = {f.name: f.type for f in dc_fields(Config)}
+
+    kwargs: dict = {}
+    for key, raw in values.items():
+        if key not in type_map:
+            continue  # Skip unknown keys silently
+
+        expected = type_map[key]
+        try:
+            if expected == 'bool':
+                # JSON booleans come through fine; strings need conversion
+                if isinstance(raw, str):
+                    kwargs[key] = raw.lower() in ('true', '1', 'yes')
+                else:
+                    kwargs[key] = bool(raw)
+            elif expected == 'int':
+                kwargs[key] = int(raw)
+            elif expected == 'float':
+                kwargs[key] = float(raw)
+            elif expected == 'str':
+                kwargs[key] = str(raw) if raw is not None else ''
+            elif expected == 'set[str]':
+                # Frontend sends a list of strings
+                if isinstance(raw, list):
+                    kwargs[key] = set(raw)
+                elif isinstance(raw, str):
+                    # Textarea fallback: one value per line
+                    kwargs[key] = {
+                        line.strip() for line in raw.splitlines()
+                        if line.strip()
+                    }
+                else:
+                    kwargs[key] = set(raw)
+            else:
+                kwargs[key] = raw
+        except (ValueError, TypeError) as e:
+            return error_response(f'Invalid value for {key}: {e}')
+
+    # Construct a Config to trigger validation
+    try:
+        new_config = Config(**kwargs)
+    except ValueError as e:
+        return error_response(str(e))
+
+    # Write to disk
+    config_path = _config_file_path
+    if not config_path:
+        config_path = str(get_default_config_path())
+
+    try:
+        save_config(new_config, config_path)
+    except Exception as e:
+        logger.exception('Failed to save configuration')
+        return error_response(f'Failed to write config file: {e}', 500)
+
+    return success_response(message='Settings saved. Restart Photonarium for changes to take effect.')
+
+
 @app.route('/api/rescan', methods=['POST'])
 def rescan_folders():
     """Trigger a rescan of all registered folders.

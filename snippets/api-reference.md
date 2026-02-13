@@ -35,13 +35,15 @@ For design principles and conventions, see the API section in `CLAUDE.md`.
 | POST | `/api/search` | Semantic search `{text, threshold}` |
 | GET | `/api/similar/:id` | Get images similar to a given image |
 
-## Status & Config (3 routes)
+## Status & Config (5 routes)
 
 | Method | Endpoint | Description |
 |--------|----------|-------------|
 | GET | `/api/status` | Processing status `{status, indexing_queue, embedding_queue}` |
 | POST | `/api/rescan` | Queue all folders for re-indexing |
 | GET | `/api/config` | Get frontend-relevant configuration values |
+| GET | `/api/config/schema` | Full config schema for the settings editor |
+| POST | `/api/config/save` | Save config values `{values: {key: value}}` |
 
 ## Duplicates (3 routes)
 
