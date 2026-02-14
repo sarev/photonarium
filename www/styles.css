@@ -267,6 +267,33 @@ code {
     pointer-events: none;
 }
 
+/* Floating "Photo" translations drifting in the hero background.
+   JS drives position via transform; each word drifts at a fixed velocity
+   and respawns diagonally opposite when it leaves the viewport. */
+.hero-words {
+    position: absolute;
+    inset: 0;
+    pointer-events: none;
+    z-index: 0;
+    overflow: hidden;
+    transition: opacity 1.5s ease-out;
+}
+
+.hero-words.dismissed {
+    opacity: 0;
+}
+
+.hero-words span {
+    position: absolute;
+    left: 0;
+    top: 0;
+    color: var(--accent-purple);
+    font-family: var(--font-body);
+    user-select: none;
+    white-space: nowrap;
+    will-change: transform;
+}
+
 .hero-inner {
     position: relative;
     max-width: 720px;
