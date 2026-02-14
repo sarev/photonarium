@@ -147,7 +147,7 @@ html, body {
 /* ------------------------------------------------------------------ */
 #toc-overlay {
     position: fixed; inset: 0;
-    background: rgba(0,0,0,0.88);
+    background: rgba(0,0,0,0.93);
     z-index: 50;
     display: none;
     flex-direction: column;
@@ -158,7 +158,10 @@ html, body {
 }
 #toc-overlay h2 {
     font-size: 1.6rem; margin-bottom: 1.5rem;
-    color: rgba(255,255,255,0.9);
+    background: linear-gradient(135deg, #9b59b6, #e056a0);
+    -webkit-background-clip: text;
+    background-clip: text;
+    -webkit-text-fill-color: transparent;
 }
 .toc-list {
     list-style: none; padding: 0; width: 90%; max-width: 520px;
@@ -186,20 +189,20 @@ html, body {
 }
 .toc-help {
     margin-top: 2rem;
-    font-size: 0.8rem;
+    font-size: 0.9rem;
     line-height: 1.7;
-    color: rgba(255,255,255,0.35);
+    color: rgba(255,255,255,0.6);
     text-align: center;
     max-width: 520px;
 }
 .toc-help kbd {
     display: inline-block;
     padding: 0.1em 0.45em;
-    border: 1px solid rgba(255,255,255,0.25);
+    border: 1px solid rgba(155,89,182,0.5);
     border-radius: 3px;
     font-family: inherit;
     font-size: 0.85em;
-    color: rgba(255,255,255,0.5);
+    color: rgba(255,255,255,0.75);
 }
 </style>
 </head>
@@ -240,11 +243,15 @@ html, body {
 <div id="toc-overlay">
     <h2>Getting Started with Photonarium</h2>
     <ul class="toc-list" id="toc-list"></ul>
-    <div class="toc-help">
+    <div class="toc-help" id="toc-help-desktop">
         Click or press any key to advance &middot;
         <kbd>&larr;</kbd> go back &middot;
         <kbd>Esc</kbd> this menu<br>
         Click the speaker icon (bottom-right) to toggle narration
+    </div>
+    <div class="toc-help" id="toc-help-mobile" style="display:none">
+        Swipe left to start &middot; Swipe right to go back<br>
+        Swipe up to return here &middot; Tap the speaker icon for narration
     </div>
 </div>
 
@@ -476,7 +483,7 @@ html, body {
         if (tocVisible()) {
             if (e.key === 'Escape') {
                 // Navigate back to the landing page
-                window.location.href = '../index.html';
+                window.location.href = '../index.html?getting-started';
             } else {
                 hideToc();
                 speak(currentIndex);
@@ -512,10 +519,74 @@ html, body {
         next();
     });
 
+    /* -- Swipe navigation (touch devices) ----------------------------- */
+    var touchStartX = null;
+    var touchStartY = null;
+
+    document.addEventListener('touchstart', function (e) {
+        var touch = e.touches[0];
+        touchStartX = touch.clientX;
+        touchStartY = touch.clientY;
+    }, { passive: true });
+
+    document.addEventListener('touchend', function (e) {
+        if (touchStartX === null) return;
+        var touch = e.changedTouches[0];
+        var dx = touch.clientX - touchStartX;
+        var dy = touch.clientY - touchStartY;
+        touchStartX = null;
+        touchStartY = null;
+
+        // Ignore short swipes
+        var absDx = Math.abs(dx);
+        var absDy = Math.abs(dy);
+        if (absDx < 50 && absDy < 50) return;
+
+        // Swipe up — return to menu (or to main site from menu)
+        if (absDy > absDx && dy < 0) {
+            if (tocVisible()) {
+                window.location.href = '../index.html?getting-started';
+            } else {
+                showToc();
+            }
+            return;
+        }
+
+        // Ignore mostly-vertical swipes for left/right handling
+        if (absDy > absDx) return;
+
+        if (dx < 0) {
+            // Swipe left — advance
+            if (tocVisible()) {
+                hideToc();
+                goTo(0);
+                speak(0);
+            } else {
+                next();
+            }
+        } else {
+            // Swipe right — go back
+            if (tocVisible()) {
+                window.location.href = '../index.html?getting-started';
+            } else if (currentIndex === 0) {
+                showToc();
+            } else {
+                prev();
+            }
+        }
+    });
+
     /* -- Initial render --------------------------------------------- */
     populate(activeLayer, 0);
     updateChrome();
     preload(1);
+
+    // Show touch-oriented help text on mobile devices
+    var isMobile = 'ontouchstart' in window || navigator.maxTouchPoints > 0;
+    if (isMobile) {
+        document.getElementById('toc-help-desktop').style.display = 'none';
+        document.getElementById('toc-help-mobile').style.display = '';
+    }
 
     // Start on the table of contents so the user can see the overview
     // and navigation help before the slideshow begins
