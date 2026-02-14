@@ -28,17 +28,17 @@ Usage:
 
 from __future__ import annotations
 
-from datetime import datetime
-from pathlib import Path
-from PIL import Image
-from PIL.ExifTags import TAGS, IFD
-from typing import Any
-
 import logging
 import os
 import re
+from datetime import datetime
+from pathlib import Path
+from typing import Any
 
-from rawimage import is_raw_format, extract_raw_exif
+from PIL import Image
+from PIL.ExifTags import IFD, TAGS
+
+from rawimage import extract_raw_exif, is_raw_format
 
 # Configure module logger
 logger = logging.getLogger(__name__)
@@ -72,6 +72,7 @@ _PATTERN_TIME_SEPARATED = re.compile(r'(\d{2})\D(\d{2})(?:\D(\d{2}))?')
 # =============================================================================
 # VALIDATION HELPERS
 # =============================================================================
+
 
 def _validate_date(year: int, month: int, day: int) -> bool:
     """Validate date components are a real calendar date.
@@ -114,6 +115,7 @@ def _validate_time(hour: int, minute: int, second: int) -> bool:
 # =============================================================================
 # EXIF EXTRACTION
 # =============================================================================
+
 
 def _parse_exif_datetime(exif_value: str) -> datetime | None:
     """Parse an EXIF datetime string into a datetime object.
@@ -735,7 +737,7 @@ def _normalise_exifread_tags(tags: dict[str, Any]) -> dict[str, str] | None:
                 if et >= 1:
                     result['Shutter Speed'] = f'{et:.1f}s' if et != int(et) else f'{int(et)}s'
                 else:
-                    result['Shutter Speed'] = f'1/{round(1/et)}s'
+                    result['Shutter Speed'] = f'1/{round(1 / et)}s'
         except (ValueError, ZeroDivisionError):
             pass
 
@@ -895,6 +897,7 @@ def extract_exif_data(path: Path | str) -> dict[str, str] | None:
 # FILESYSTEM TIMESTAMP
 # =============================================================================
 
+
 def extract_filesystem_timestamp(path: Path | str) -> datetime | None:
     """Extract timestamp from filesystem metadata.
 
@@ -939,6 +942,7 @@ def extract_filesystem_timestamp(path: Path | str) -> datetime | None:
 # =============================================================================
 # FILENAME/PATH PARSING
 # =============================================================================
+
 
 def _parse_date_from_string(text: str) -> tuple[int, int, int, int] | None:
     """Parse a date from a string, returning (year, month, day, position).
@@ -1109,11 +1113,11 @@ def parse_timestamp_from_path(path: Path | str) -> datetime | None:
 # =============================================================================
 
 # Confidence levels for timestamp sources (lower = more reliable)
-CONFIDENCE_USER = 0        # User assigned (via info panel)
-CONFIDENCE_EXIF = 1        # From EXIF metadata
-CONFIDENCE_FILENAME = 2    # Parsed from filename/path
+CONFIDENCE_USER = 0  # User assigned (via info panel)
+CONFIDENCE_EXIF = 1  # From EXIF metadata
+CONFIDENCE_FILENAME = 2  # Parsed from filename/path
 CONFIDENCE_FILESYSTEM = 3  # From filesystem metadata
-CONFIDENCE_UNKNOWN = 4     # None/unknown
+CONFIDENCE_UNKNOWN = 4  # None/unknown
 
 
 def derive_timestamp(path: Path | str) -> datetime | None:

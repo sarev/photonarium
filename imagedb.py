@@ -154,84 +154,90 @@ from __future__ import annotations
 # Set HuggingFace Hub to offline mode - models must be pre-downloaded.
 # Use download_models.py to download required models before first run.
 import os
+
 os.environ['HF_HUB_OFFLINE'] = '1'
 
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
-from PIL import Image, ImageFile, ImageOps
+
+from PIL import Image, ImageFile
 
 # Tolerate truncated or mildly corrupt images rather than raising errors.
 # Many real-world JPEGs are missing their EOI marker or have minor structural
 # issues but are perfectly viewable in normal image viewers.
 ImageFile.LOAD_TRUNCATED_IMAGES = True
-from typing import Any, Callable, Iterator
-
 import atexit
-import cv2
 import hashlib
-import imagehash
 import json
 import logging
-import numpy as np
-import open_clip
 import queue
-from collections import defaultdict
-from concurrent.futures import ThreadPoolExecutor, Future, as_completed
 import signal
 import sqlite3
 import threading
 import time
-import torch
 import uuid
 import warnings
+from collections import defaultdict
+from concurrent.futures import Future, ThreadPoolExecutor, as_completed
+from typing import Any, Callable, Iterator
+
+import cv2
+import imagehash
+import numpy as np
+import open_clip
+import torch
 
 # Local imports
-from config import Config, load_config, get_default_config
+from config import Config, get_default_config, load_config
 from duplicates import DuplicateManager, embedding_to_numpy
-from trash import validate_trash_dir, move_to_trash
-from thumbnails import (
-    DEFAULT_THUMBNAIL_DIR,
-    get_thumbnail_cache_path,
-    generate_thumbnail,
-    rotate_image_file,
-    delete_thumbnails_for_checksum,
-)
 from faces import (
-    init_face_tables,
     FaceDetector,
+    compute_unknown_face_groups,
     create_face,
-    get_face,
-    get_faces_for_image,
-    has_faces_detected,
-    mark_no_faces_detected,
-    rotate_faces_for_image,
-    get_all_known_face_embeddings,
+    delete_face_thumbnail,
+    delete_people_without_faces,
     find_best_match,
     generate_face_thumbnail,
     generate_face_thumbnails_for_image,
-    get_face_thumbnail_path,
-    delete_face_thumbnail,
-    delete_people_without_faces,
-    compute_unknown_face_groups,
-    get_group_computation_status,
-    update_face_semantic_embedding,
-    get_faces_without_semantic_embedding,
     get_all_faces_for_thumbnail_regen,
+    get_all_known_face_embeddings,
+    get_face,
+    get_face_thumbnail_path,
+    get_faces_for_image,
+    get_faces_without_semantic_embedding,
+    get_group_computation_status,
+    has_faces_detected,
+    init_face_tables,
+    mark_no_faces_detected,
+    rotate_faces_for_image,
+    update_face_semantic_embedding,
 )
 from metadata import (
+    CONFIDENCE_UNKNOWN,
     derive_timestamp,
     derive_timestamp_with_confidence,
     extract_exif_data,
-    CONFIDENCE_UNKNOWN,
 )
 from rawimage import (
     RAW_EXTENSIONS,
-    is_raw_format,
-    open_image as raw_open_image,
-    open_image_as_numpy as raw_open_image_as_numpy,
     get_raw_dimensions,
+    is_raw_format,
 )
+from rawimage import (
+    open_image as raw_open_image,
+)
+from rawimage import (
+    open_image_as_numpy as raw_open_image_as_numpy,
+)
+from thumbnails import (
+    DEFAULT_THUMBNAIL_DIR,
+    delete_thumbnails_for_checksum,
+    generate_thumbnail,
+    get_thumbnail_cache_path,
+    rotate_image_file,
+)
+from trash import move_to_trash, validate_trash_dir
 
 # Configure module logger
 logger = logging.getLogger(__name__)
@@ -294,21 +300,21 @@ CREATE TABLE IF NOT EXISTS images (
 # established pattern — don't just add an ALTER TABLE here and call it done.
 _SQL_MIGRATIONS = [
     # → _backfill_description_embeddings() (query-based idempotency, re-checks each startup)
-    "ALTER TABLE images ADD COLUMN description_embedding BLOB",
+    'ALTER TABLE images ADD COLUMN description_embedding BLOB',
     # → backfilled inline in _process_image() during scan (per-image, no startup migration)
-    "ALTER TABLE images ADD COLUMN mtime REAL",
+    'ALTER TABLE images ADD COLUMN mtime REAL',
     # → _migrate_duplicate_epoch_to_metadata()
-    "ALTER TABLE duplicate_groups ADD COLUMN updated_at TEXT",
+    'ALTER TABLE duplicate_groups ADD COLUMN updated_at TEXT',
     # → _migrate_add_timestamp_confidence()
-    "ALTER TABLE images ADD COLUMN timestamp_confidence INTEGER NOT NULL DEFAULT 4",
+    'ALTER TABLE images ADD COLUMN timestamp_confidence INTEGER NOT NULL DEFAULT 4',
     # → _backfill_aesthetic_laion()
-    "ALTER TABLE images ADD COLUMN aesthetic_laion REAL",
+    'ALTER TABLE images ADD COLUMN aesthetic_laion REAL',
     # → _queue_images_for_nima() (queue-based, re-checks each startup)
-    "ALTER TABLE images ADD COLUMN aesthetic_nima REAL",
+    'ALTER TABLE images ADD COLUMN aesthetic_nima REAL',
     # → _migrate_renumber_custom_groups_to_level5(), _migrate_initial_directory_groups()
-    "ALTER TABLE custom_groups ADD COLUMN source_path TEXT",
+    'ALTER TABLE custom_groups ADD COLUMN source_path TEXT',
     # → _migrate_add_exif_metadata()
-    "ALTER TABLE images ADD COLUMN exif_data TEXT",
+    'ALTER TABLE images ADD COLUMN exif_data TEXT',
 ]
 
 # SQL schema for the image_metadata table (indexed EXIF key-value pairs for search)
@@ -361,23 +367,24 @@ CREATE TABLE IF NOT EXISTS metadata (
 
 # Index definitions for performance
 _SQL_CREATE_INDEXES = [
-    "CREATE INDEX IF NOT EXISTS idx_images_path ON images(path)",
-    "CREATE INDEX IF NOT EXISTS idx_images_checksum ON images(checksum)",
-    "CREATE INDEX IF NOT EXISTS idx_images_perceptual_hash ON images(perceptual_hash)",
-    "CREATE INDEX IF NOT EXISTS idx_images_deleted ON images(deleted)",
-    "CREATE INDEX IF NOT EXISTS idx_images_timestamp ON images(timestamp)",
+    'CREATE INDEX IF NOT EXISTS idx_images_path ON images(path)',
+    'CREATE INDEX IF NOT EXISTS idx_images_checksum ON images(checksum)',
+    'CREATE INDEX IF NOT EXISTS idx_images_perceptual_hash ON images(perceptual_hash)',
+    'CREATE INDEX IF NOT EXISTS idx_images_deleted ON images(deleted)',
+    'CREATE INDEX IF NOT EXISTS idx_images_timestamp ON images(timestamp)',
     # Composite index for efficient gallery listing (covers WHERE deleted=0 ORDER BY timestamp DESC)
-    "CREATE INDEX IF NOT EXISTS idx_images_deleted_timestamp ON images(deleted, timestamp DESC)",
-    "CREATE INDEX IF NOT EXISTS idx_dup_level_group ON duplicate_groups(level, group_hash)",
-    "CREATE INDEX IF NOT EXISTS idx_dup_updated_at ON duplicate_groups(updated_at)",
+    'CREATE INDEX IF NOT EXISTS idx_images_deleted_timestamp ON images(deleted, timestamp DESC)',
+    'CREATE INDEX IF NOT EXISTS idx_dup_level_group ON duplicate_groups(level, group_hash)',
+    'CREATE INDEX IF NOT EXISTS idx_dup_updated_at ON duplicate_groups(updated_at)',
     # Index for cascade deletes when an image is removed
-    "CREATE INDEX IF NOT EXISTS idx_dup_image_id ON duplicate_groups(image_id)",
+    'CREATE INDEX IF NOT EXISTS idx_dup_image_id ON duplicate_groups(image_id)',
     # Index for custom group name lookups
-    "CREATE INDEX IF NOT EXISTS idx_custom_groups_name ON custom_groups(name)",
+    'CREATE INDEX IF NOT EXISTS idx_custom_groups_name ON custom_groups(name)',
     # Unique index for directory group source paths (partial: only non-NULL)
-    "CREATE UNIQUE INDEX IF NOT EXISTS idx_custom_groups_source_path ON custom_groups(source_path) WHERE source_path IS NOT NULL",
+    'CREATE UNIQUE INDEX IF NOT EXISTS idx_custom_groups_source_path'
+    ' ON custom_groups(source_path) WHERE source_path IS NOT NULL',
     # Index for searching metadata by key+value (e.g. Camera = 'Nikon D850')
-    "CREATE INDEX IF NOT EXISTS idx_image_metadata_key_value ON image_metadata(key, value COLLATE NOCASE)",
+    'CREATE INDEX IF NOT EXISTS idx_image_metadata_key_value ON image_metadata(key, value COLLATE NOCASE)',
 ]
 
 
@@ -472,10 +479,7 @@ def has_migration_run(conn: sqlite3.Connection, migration_id: str) -> bool:
     Returns:
         True if migration has been applied, False otherwise.
     """
-    cursor = conn.execute(
-        'SELECT 1 FROM migrations WHERE id = ?',
-        (migration_id,)
-    )
+    cursor = conn.execute('SELECT 1 FROM migrations WHERE id = ?', (migration_id,))
     return cursor.fetchone() is not None
 
 
@@ -486,10 +490,7 @@ def record_migration(conn: sqlite3.Connection, migration_id: str) -> None:
         conn: Database connection.
         migration_id: Unique identifier for the migration.
     """
-    conn.execute(
-        'INSERT OR REPLACE INTO migrations (id, applied_at) VALUES (?, datetime("now"))',
-        (migration_id,)
-    )
+    conn.execute('INSERT OR REPLACE INTO migrations (id, applied_at) VALUES (?, datetime("now"))', (migration_id,))
     conn.commit()
 
 
@@ -522,6 +523,7 @@ def rows_to_dicts(rows: list[sqlite3.Row]) -> list[dict[str, Any]]:
 # =============================================================================
 # FOLDER MANAGEMENT
 # =============================================================================
+
 
 def canonicalise_path(path: Path | str) -> Path:
     """Canonicalise a path to an absolute, resolved form.
@@ -579,7 +581,8 @@ def get_folders(conn: sqlite3.Connection) -> list[dict[str, Any]]:
     # Use range query instead of LIKE for index efficiency (see folder_path_upper_bound)
     # The separator before '~' prevents /photos from matching /photography
     sep_tilde = os.sep + '~'
-    cursor = conn.execute("""
+    cursor = conn.execute(
+        """
         SELECT
             f.path,
             COUNT(i.id) as count
@@ -587,7 +590,9 @@ def get_folders(conn: sqlite3.Connection) -> list[dict[str, Any]]:
         LEFT JOIN images i ON i.path >= f.path AND i.path < f.path || ? AND i.deleted = 0
         GROUP BY f.path
         ORDER BY f.path
-    """, (sep_tilde,))
+    """,
+        (sep_tilde,),
+    )
     rows = cursor.fetchall()
 
     return [{'path': row['path'], 'count': row['count']} for row in rows]
@@ -678,23 +683,15 @@ def remove_folder(conn: sqlite3.Connection, path: Path | str) -> bool:
         # Build query to find images not in any remaining folder
         # An image is orphaned if its path doesn't start with any remaining folder path
         # Use range queries instead of LIKE for index efficiency
-        conditions = ' AND '.join(
-            ['NOT (path >= ? AND path < ?)'] * len(remaining_folders)
-        )
+        conditions = ' AND '.join(['NOT (path >= ? AND path < ?)'] * len(remaining_folders))
         # Build params: each folder needs (folder_path, folder_path + '~')
         params = [datetime.now().isoformat()]
         for folder in remaining_folders:
             params.extend([folder, folder_path_upper_bound(folder)])
-        conn.execute(
-            f'UPDATE images SET deleted = 1, updated_at = ? WHERE {conditions}',
-            params
-        )
+        conn.execute(f'UPDATE images SET deleted = 1, updated_at = ? WHERE {conditions}', params)
     else:
         # No folders left, mark all images as deleted
-        conn.execute(
-            'UPDATE images SET deleted = 1, updated_at = ? WHERE deleted = 0',
-            (datetime.now().isoformat(),)
-        )
+        conn.execute('UPDATE images SET deleted = 1, updated_at = ? WHERE deleted = 0', (datetime.now().isoformat(),))
 
     conn.commit()
 
@@ -793,6 +790,7 @@ def verify_folders_exist(conn: sqlite3.Connection) -> list[str]:
 # =============================================================================
 # IMAGE CRUD OPERATIONS
 # =============================================================================
+
 
 def get_all_images(
     conn: sqlite3.Connection,
@@ -902,19 +900,22 @@ def get_images_delta(
         - deleted_ids: List of IDs for images that are now deleted
     """
     # Get current epoch (max updated_at)
-    epoch_cursor = conn.execute("SELECT MAX(updated_at) as epoch FROM images")
+    epoch_cursor = conn.execute('SELECT MAX(updated_at) as epoch FROM images')
     epoch_row = epoch_cursor.fetchone()
     current_epoch = epoch_row['epoch'] if epoch_row and epoch_row['epoch'] else since
 
     # Get all images changed since the given timestamp
-    cursor = conn.execute("""
+    cursor = conn.execute(
+        """
         SELECT id, path, basename, size, width, height, timestamp, timestamp_confidence,
                rating, description, aesthetic_laion, aesthetic_nima, laplacian_var,
                deleted, updated_at
         FROM images
         WHERE updated_at > ?
         ORDER BY updated_at ASC
-    """, (since,))
+    """,
+        (since,),
+    )
 
     updated = []
     deleted_ids = []
@@ -945,7 +946,7 @@ def get_current_epoch(conn: sqlite3.Connection) -> str | None:
     Returns:
         ISO timestamp string of the most recent update, or None if no images.
     """
-    cursor = conn.execute("SELECT MAX(updated_at) as epoch FROM images")
+    cursor = conn.execute('SELECT MAX(updated_at) as epoch FROM images')
     row = cursor.fetchone()
     return row['epoch'] if row else None
 
@@ -963,14 +964,17 @@ def get_image(conn: sqlite3.Connection, image_id: str) -> dict[str, Any] | None:
     Returns:
         Image dictionary with all metadata fields, or None if not found.
     """
-    cursor = conn.execute("""
+    cursor = conn.execute(
+        """
         SELECT id, path, basename, size, width, height, timestamp,
                timestamp_confidence, checksum, perceptual_hash, laplacian_var,
                lossless, description, rating, deleted, created_at, updated_at,
                mtime
         FROM images
         WHERE id = ?
-    """, (image_id,))
+    """,
+        (image_id,),
+    )
 
     row = cursor.fetchone()
     if row is None:
@@ -993,10 +997,7 @@ def get_image_exif(conn: sqlite3.Connection, image_id: str) -> dict[str, str] | 
     Returns:
         Dictionary of EXIF key-value pairs, or None.
     """
-    cursor = conn.execute(
-        'SELECT exif_data FROM images WHERE id = ? AND deleted = 0',
-        (image_id,)
-    )
+    cursor = conn.execute('SELECT exif_data FROM images WHERE id = ? AND deleted = 0', (image_id,))
     row = cursor.fetchone()
     if row is None:
         return None
@@ -1028,10 +1029,7 @@ def get_image_thumbnail_info(
     Returns:
         Tuple of (checksum, path) or None if not found or no checksum.
     """
-    cursor = conn.execute(
-        'SELECT checksum, path FROM images WHERE id = ? AND deleted = 0',
-        (image_id,)
-    )
+    cursor = conn.execute('SELECT checksum, path FROM images WHERE id = ? AND deleted = 0', (image_id,))
     row = cursor.fetchone()
     if row is None or row[0] is None:
         return None
@@ -1050,14 +1048,17 @@ def get_image_by_path(conn: sqlite3.Connection, path: Path | str) -> dict[str, A
     """
     path_str = str(canonicalise_path(path))
 
-    cursor = conn.execute("""
+    cursor = conn.execute(
+        """
         SELECT id, path, basename, size, width, height, timestamp,
                timestamp_confidence, checksum, perceptual_hash, laplacian_var,
                lossless, description, rating, embedding, description_embedding,
                deleted, created_at, updated_at, mtime, aesthetic_nima, exif_data
         FROM images
         WHERE path = ?
-    """, (path_str,))
+    """,
+        (path_str,),
+    )
 
     return row_to_dict(cursor.fetchone())
 
@@ -1114,18 +1115,36 @@ def create_image(
     timestamp_str = timestamp.isoformat() if timestamp else None
     exif_json = json.dumps(exif_data) if exif_data else None
 
-    conn.execute("""
+    conn.execute(
+        """
         INSERT INTO images (
             id, path, basename, size, width, height, timestamp, timestamp_confidence,
             checksum, perceptual_hash, laplacian_var, lossless, mtime,
             description, rating, embedding, deleted, created_at, updated_at,
             exif_data
         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, 0, ?, ?, ?)
-    """, (
-        image_id, path_str, basename, size, width, height, timestamp_str, timestamp_confidence,
-        checksum, perceptual_hash, laplacian_var, int(lossless), mtime,
-        description, rating, now, now, exif_json
-    ))
+    """,
+        (
+            image_id,
+            path_str,
+            basename,
+            size,
+            width,
+            height,
+            timestamp_str,
+            timestamp_confidence,
+            checksum,
+            perceptual_hash,
+            laplacian_var,
+            int(lossless),
+            mtime,
+            description,
+            rating,
+            now,
+            now,
+            exif_json,
+        ),
+    )
 
     # Populate indexed metadata table for search
     if exif_data:
@@ -1193,9 +1212,20 @@ def update_image(
 
     # Allowed fields for update
     allowed_fields = {
-        'description', 'rating', 'size', 'width', 'height', 'timestamp',
-        'timestamp_confidence', 'checksum', 'perceptual_hash', 'laplacian_var',
-        'lossless', 'embedding', 'description_embedding', 'deleted'
+        'description',
+        'rating',
+        'size',
+        'width',
+        'height',
+        'timestamp',
+        'timestamp_confidence',
+        'checksum',
+        'perceptual_hash',
+        'laplacian_var',
+        'lossless',
+        'embedding',
+        'description_embedding',
+        'deleted',
     }
 
     # Filter to only allowed fields that are present in data
@@ -1214,13 +1244,10 @@ def update_image(
 
     # Build UPDATE query
     updates['updated_at'] = datetime.now().isoformat()
-    set_clause = ', '.join(f'{k} = ?' for k in updates.keys())
+    set_clause = ', '.join(f'{k} = ?' for k in updates)
     values = list(updates.values()) + [image_id]
 
-    conn.execute(
-        f'UPDATE images SET {set_clause} WHERE id = ?',
-        values
-    )
+    conn.execute(f'UPDATE images SET {set_clause} WHERE id = ?', values)
     conn.commit()
 
     logger.debug(f'Updated image: {image_id}')
@@ -1271,7 +1298,8 @@ def update_image_metadata(
     now = datetime.now().isoformat()
     exif_json = json.dumps(exif_data) if exif_data else None
 
-    cursor = conn.execute("""
+    cursor = conn.execute(
+        """
         UPDATE images SET
             size = ?,
             width = ?,
@@ -1287,10 +1315,23 @@ def update_image_metadata(
             embedding = NULL,
             updated_at = ?
         WHERE id = ?
-    """, (
-        size, width, height, timestamp_str, timestamp_confidence, checksum,
-        perceptual_hash, laplacian_var, int(lossless), mtime, exif_json, now, image_id
-    ))
+    """,
+        (
+            size,
+            width,
+            height,
+            timestamp_str,
+            timestamp_confidence,
+            checksum,
+            perceptual_hash,
+            laplacian_var,
+            int(lossless),
+            mtime,
+            exif_json,
+            now,
+            image_id,
+        ),
+    )
 
     # Update indexed metadata table for search
     if exif_data is not None:
@@ -1324,7 +1365,7 @@ def _upsert_image_metadata(
     if exif_data:
         conn.executemany(
             'INSERT INTO image_metadata (image_id, key, value) VALUES (?, ?, ?)',
-            [(image_id, k, v) for k, v in exif_data.items()]
+            [(image_id, k, v) for k, v in exif_data.items()],
         )
 
 
@@ -1370,7 +1411,7 @@ def search_image_metadata(
         cursor = conn.execute(
             """SELECT image_id FROM image_metadata
                WHERE key = ? AND value LIKE ? ESCAPE '\\'""",
-            (key, like_pattern)
+            (key, like_pattern),
         )
         ids = {row[0] for row in cursor.fetchall()}
         result_sets.append(ids)
@@ -1398,9 +1439,7 @@ def get_metadata_keys(conn: sqlite3.Connection) -> list[str]:
     Returns:
         Sorted list of distinct key names (e.g. ['Aperture', 'Camera', ...]).
     """
-    cursor = conn.execute(
-        'SELECT DISTINCT key FROM image_metadata ORDER BY key'
-    )
+    cursor = conn.execute('SELECT DISTINCT key FROM image_metadata ORDER BY key')
     return [row[0] for row in cursor.fetchall()]
 
 
@@ -1419,10 +1458,7 @@ def get_metadata_values(
     Returns:
         Sorted list of distinct values for the key.
     """
-    cursor = conn.execute(
-        'SELECT DISTINCT value FROM image_metadata WHERE key = ? ORDER BY value',
-        (key,)
-    )
+    cursor = conn.execute('SELECT DISTINCT value FROM image_metadata WHERE key = ? ORDER BY value', (key,))
     return [row[0] for row in cursor.fetchall()]
 
 
@@ -1489,10 +1525,7 @@ def delete_image(
     else:
         # Soft delete
         now = datetime.now().isoformat()
-        conn.execute(
-            'UPDATE images SET deleted = 1, updated_at = ? WHERE id = ?',
-            (now, image_id)
-        )
+        conn.execute('UPDATE images SET deleted = 1, updated_at = ? WHERE id = ?', (now, image_id))
         conn.commit()
         logger.info(f'Soft deleted image: {image_id}')
 
@@ -1511,10 +1544,7 @@ def restore_image(conn: sqlite3.Connection, image_id: str) -> bool:
     """
     now = datetime.now().isoformat()
 
-    cursor = conn.execute(
-        'UPDATE images SET deleted = 0, updated_at = ? WHERE id = ? AND deleted = 1',
-        (now, image_id)
-    )
+    cursor = conn.execute('UPDATE images SET deleted = 0, updated_at = ? WHERE id = ? AND deleted = 1', (now, image_id))
     conn.commit()
 
     if cursor.rowcount > 0:
@@ -1565,23 +1595,29 @@ def get_images_in_folder(
     folder_upper = folder_path_upper_bound(folder_str)
 
     if include_deleted:
-        cursor = conn.execute("""
+        cursor = conn.execute(
+            """
             SELECT id, path, basename, size, width, height, timestamp,
                    timestamp_confidence, checksum, perceptual_hash, laplacian_var,
                    lossless, description, rating, deleted, created_at, updated_at
             FROM images
             WHERE path >= ? AND path < ?
             ORDER BY path ASC
-        """, (folder_str, folder_upper))
+        """,
+            (folder_str, folder_upper),
+        )
     else:
-        cursor = conn.execute("""
+        cursor = conn.execute(
+            """
             SELECT id, path, basename, size, width, height, timestamp,
                    timestamp_confidence, checksum, perceptual_hash, laplacian_var,
                    lossless, description, rating, deleted, created_at, updated_at
             FROM images
             WHERE path >= ? AND path < ? AND deleted = 0
             ORDER BY path ASC
-        """, (folder_str, folder_upper))
+        """,
+            (folder_str, folder_upper),
+        )
 
     return rows_to_dicts(cursor.fetchall())
 
@@ -1648,10 +1684,7 @@ def compute_perceptual_hash(
                 scale = max_dimension / max_dim
                 new_w = int(w * scale)
                 new_h = int(h * scale)
-                logger.info(
-                    f'Downsampling oversized image for phash {path}: '
-                    f'{w}x{h} -> {new_w}x{new_h}'
-                )
+                logger.info(f'Downsampling oversized image for phash {path}: {w}x{h} -> {new_w}x{new_h}')
                 img = img.resize((new_w, new_h), Image.Resampling.LANCZOS)
         phash = imagehash.phash(img)
         return str(phash)
@@ -1690,10 +1723,7 @@ def compute_laplacian_variance(
                 scale = max_dimension / max_dim
                 new_w = int(w * scale)
                 new_h = int(h * scale)
-                logger.info(
-                    f'Downsampling oversized image for laplacian {path}: '
-                    f'{w}x{h} -> {new_w}x{new_h}'
-                )
+                logger.info(f'Downsampling oversized image for laplacian {path}: {w}x{h} -> {new_w}x{new_h}')
                 img = cv2.resize(img, (new_w, new_h), interpolation=cv2.INTER_LANCZOS4)
 
         gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
@@ -1762,6 +1792,7 @@ class ImageMetadata:
         lossless: Whether the format is lossless.
         exif_data: Normalised EXIF key-value pairs (may be None).
     """
+
     path: Path
     size: int
     mtime: float
@@ -1853,6 +1884,7 @@ def extract_image_metadata(
 # =============================================================================
 # INGESTION THREAD
 # =============================================================================
+
 
 class IngestionThread(threading.Thread):
     """Background thread for ingesting images into the database.
@@ -1991,10 +2023,7 @@ class IngestionThread(threading.Thread):
                 if now - last_progress_time >= progress_interval:
                     remaining = self.ingestion_queue.qsize() + len(pending_futures)
                     if remaining > 0:
-                        logger.info(
-                            f'Indexing progress: {self._processed_count} done, '
-                            f'{remaining} remaining'
-                        )
+                        logger.info(f'Indexing progress: {self._processed_count} done, {remaining} remaining')
                     last_progress_time = now
 
                 # Small sleep if no work to prevent busy-waiting
@@ -2065,10 +2094,7 @@ class IngestionThread(threading.Thread):
                 # NOTE: Don't update updated_at here - mtime backfill is not a content change
                 logger.debug(f'Backfilling mtime for: {path}')
                 with self._db_lock:
-                    self.conn.execute(
-                        'UPDATE images SET mtime = ? WHERE id = ?',
-                        (current_mtime, existing['id'])
-                    )
+                    self.conn.execute('UPDATE images SET mtime = ? WHERE id = ?', (current_mtime, existing['id']))
                     self.conn.commit()
                 existing_mtime = current_mtime  # Continue with normal checks
 
@@ -2123,12 +2149,10 @@ class IngestionThread(threading.Thread):
                     with self._db_lock:
                         self.conn.execute(
                             'UPDATE images SET exif_data = ?, updated_at = ? WHERE id = ?',
-                            (exif_json, datetime.now().isoformat(), existing['id'])
+                            (exif_json, datetime.now().isoformat(), existing['id']),
                         )
                         if exif_data:
-                            _upsert_image_metadata(
-                                self.conn, existing['id'], exif_data
-                            )
+                            _upsert_image_metadata(self.conn, existing['id'], exif_data)
                         self.conn.commit()
                     logger.debug(f'Backfilled EXIF data for: {path}')
                 if not needs_embedding:
@@ -2245,6 +2269,7 @@ def queue_images_for_ingestion(
 # EMBEDDING THREAD (OpenCLIP)
 # =============================================================================
 
+
 class OpenCLIPModel:
     """Wrapper for OpenCLIP model with lazy loading.
 
@@ -2301,10 +2326,7 @@ class OpenCLIPModel:
                     scale = self.max_dimension / max_dim
                     new_w = int(w * scale)
                     new_h = int(h * scale)
-                    logger.info(
-                        f'Downsampling oversized image {path}: '
-                        f'{w}x{h} -> {new_w}x{new_h}'
-                    )
+                    logger.info(f'Downsampling oversized image {path}: {w}x{h} -> {new_w}x{new_h}')
                     img = img.resize((new_w, new_h), Image.Resampling.LANCZOS)
 
             return img.convert('RGB')
@@ -2565,7 +2587,7 @@ def parse_semantic_query(query: str) -> tuple[list[str], list[str]]:
             # Token starts with '-' and has content after it -> negative
             word = token[1:]
             negative_parts.append(word)
-        elif token == '-':
+        elif token == '-':  # noqa: S105
             # Bare '-' is ignored
             continue
         else:
@@ -2684,6 +2706,7 @@ class EmbeddingThread(threading.Thread):
 
             try:
                 import torch
+
                 state_dict = torch.load(str(head_path), map_location='cpu', weights_only=True)
 
                 weight = state_dict['weight'].numpy().flatten()  # shape: (embed_dim,)
@@ -2764,8 +2787,7 @@ class EmbeddingThread(threading.Thread):
                         remaining = self.embedding_queue.qsize()
                         if remaining > 0 or self._processed_count > 0:
                             logger.info(
-                                f'Image embedding progress: {self._processed_count} done, '
-                                f'{remaining} remaining'
+                                f'Image embedding progress: {self._processed_count} done, {remaining} remaining'
                             )
                         last_progress_time = now
                 else:
@@ -2797,7 +2819,7 @@ class EmbeddingThread(threading.Thread):
 
         # Collect successful embeddings for batch commit
         updates = []
-        for (idx, embedding), image_id in zip(results, image_ids):
+        for (_idx, embedding), image_id in zip(results, image_ids, strict=True):
             try:
                 if embedding is not None:
                     embedding_bytes = embedding.astype(np.float32).tobytes()
@@ -2819,8 +2841,7 @@ class EmbeddingThread(threading.Thread):
         if updates:
             with self._db_lock:
                 self.conn.executemany(
-                    'UPDATE images SET embedding = ?, aesthetic_laion = ?, updated_at = ? WHERE id = ?',
-                    updates
+                    'UPDATE images SET embedding = ?, aesthetic_laion = ?, updated_at = ? WHERE id = ?', updates
                 )
                 self.conn.commit()
 
@@ -3159,9 +3180,7 @@ class FaceDetectionThread(threading.Thread):
             return
 
         # Run GPU face detection on pre-loaded images
-        results = self.face_detector.detect_faces_from_preloaded(
-            loaded_images, stop_event=self.stop_event
-        )
+        results = self.face_detector.detect_faces_from_preloaded(loaded_images, stop_event=self.stop_event)
 
         # Get known face embeddings for auto-recognition
         with self._db_lock:
@@ -3192,8 +3211,7 @@ class FaceDetectionThread(threading.Thread):
                 if match:
                     _, person_id, similarity = match
                     logger.debug(
-                        f'Auto-matched face in {path.name} to person {person_id} '
-                        f'(similarity: {similarity:.3f})'
+                        f'Auto-matched face in {path.name} to person {person_id} (similarity: {similarity:.3f})'
                     )
 
                 # Generate face thumbnail first (needed for semantic embedding)
@@ -3213,9 +3231,7 @@ class FaceDetectionThread(threading.Thread):
                 # Generate semantic embedding from face thumbnail using CLIP
                 semantic_embedding = None
                 if thumb_path.exists():
-                    semantic_embedding = self.embedding_thread.clip_model.encode_image(
-                        thumb_path
-                    )
+                    semantic_embedding = self.embedding_thread.clip_model.encode_image(thumb_path)
 
                 # Create face record with semantic embedding
                 with self._db_lock:
@@ -3418,19 +3434,13 @@ class NimaThread(threading.Thread):
             now = time.time()
             if now - last_progress_time >= progress_interval:
                 remaining = self.nima_queue.qsize()
-                logger.info(
-                    f'NIMA scoring: {self._processed_count} done, '
-                    f'{remaining} remaining'
-                )
+                logger.info(f'NIMA scoring: {self._processed_count} done, {remaining} remaining')
                 last_progress_time = now
 
             # Yield GIL briefly to avoid blocking Flask request handling
             time.sleep(0.01)
 
-        logger.info(
-            f'NIMA scoring thread stopped '
-            f'(scored {self._processed_count}, errors {self._error_count})'
-        )
+        logger.info(f'NIMA scoring thread stopped (scored {self._processed_count}, errors {self._error_count})')
 
     def _process_batch(self, image_ids: list[str]) -> None:
         """Score a batch of images using their 400px thumbnails.
@@ -3448,10 +3458,7 @@ class NimaThread(threading.Thread):
         # Look up checksums for these image IDs
         with self._db_lock:
             placeholders = ','.join('?' * len(image_ids))
-            cursor = self.conn.execute(
-                f'SELECT id, checksum FROM images WHERE id IN ({placeholders})',
-                image_ids
-            )
+            cursor = self.conn.execute(f'SELECT id, checksum FROM images WHERE id IN ({placeholders})', image_ids)
             rows = {row['id']: row['checksum'] for row in cursor.fetchall()}
 
         # Load 400px thumbnails from disk
@@ -3463,9 +3470,7 @@ class NimaThread(threading.Thread):
                 logger.debug(f'No checksum for image {image_id}, skipping NIMA')
                 continue
 
-            thumb_path = get_thumbnail_cache_path(
-                checksum, 400, thumbnail_dir=self._thumbnail_dir
-            )
+            thumb_path = get_thumbnail_cache_path(checksum, 400, thumbnail_dir=self._thumbnail_dir)
             if not Path(thumb_path).exists():
                 logger.debug(f'No 400px thumbnail for {image_id}, skipping NIMA')
                 continue
@@ -3486,17 +3491,15 @@ class NimaThread(threading.Thread):
 
         # Score the batch
         from nima import score_images_batch
+
         scores = score_images_batch(self._model, pil_images, device=self._device)
 
         # Batch commit to database
         now = datetime.now().isoformat()
-        updates = [(score, now, vid) for score, vid in zip(scores, valid_ids)]
+        updates = [(score, now, vid) for score, vid in zip(scores, valid_ids, strict=True)]
 
         with self._db_lock:
-            self.conn.executemany(
-                'UPDATE images SET aesthetic_nima = ?, updated_at = ? WHERE id = ?',
-                updates
-            )
+            self.conn.executemany('UPDATE images SET aesthetic_nima = ?, updated_at = ? WHERE id = ?', updates)
             self.conn.commit()
 
         self._processed_count += len(updates)
@@ -3514,9 +3517,7 @@ class NimaThread(threading.Thread):
             return
 
         total_dequeued = self._processed_count + self._skipped_count + self._error_count
-        if (total_dequeued > 0
-                and self.ingestion_thread.is_idle
-                and self.nima_queue.empty()):
+        if total_dequeued > 0 and self.ingestion_thread.is_idle and self.nima_queue.empty():
             self._completion_triggered = True
             parts = []
             if self._processed_count:
@@ -3528,9 +3529,12 @@ class NimaThread(threading.Thread):
             logger.info(f'NIMA scoring complete — {", ".join(parts)}')
 
             if self._event_queue:
-                self._event_queue.emit(EVENT_NIMA_COMPLETE, {
-                    'scored_count': self._processed_count,
-                })
+                self._event_queue.emit(
+                    EVENT_NIMA_COMPLETE,
+                    {
+                        'scored_count': self._processed_count,
+                    },
+                )
 
 
 def get_metadata(conn: sqlite3.Connection, key: str) -> str | None:
@@ -3558,16 +3562,14 @@ def set_metadata(conn: sqlite3.Connection, key: str, value: str) -> None:
         key: Metadata key.
         value: Value to store.
     """
-    conn.execute(
-        'INSERT OR REPLACE INTO metadata (key, value) VALUES (?, ?)',
-        (key, value)
-    )
+    conn.execute('INSERT OR REPLACE INTO metadata (key, value) VALUES (?, ?)', (key, value))
     conn.commit()
 
 
 # =============================================================================
 # SEMANTIC SEARCH
 # =============================================================================
+
 
 def semantic_search(
     conn: sqlite3.Connection,
@@ -3678,13 +3680,16 @@ def semantic_search(
 
     # Fetch full image data for the top results
     placeholders = ','.join('?' * len(top_ids))
-    cursor = conn.execute(f"""
+    cursor = conn.execute(
+        f"""
         SELECT id, path, basename, size, width, height, timestamp,
                timestamp_confidence, checksum, perceptual_hash, laplacian_var,
                lossless, description, rating
         FROM images
         WHERE id IN ({placeholders})
-    """, top_ids)
+    """,
+        top_ids,
+    )
 
     results = []
     for row in cursor.fetchall():
@@ -3767,6 +3772,7 @@ def get_images_by_similarity(
 # =============================================================================
 # Note: Most thumbnail functions are in thumbnails.py
 # Only database-dependent functions remain here.
+
 
 def get_or_create_thumbnail(
     conn: sqlite3.Connection,
@@ -3896,6 +3902,7 @@ class Event:
         data: Event payload as dictionary.
         timestamp: Unix timestamp (seconds) from time.time().
     """
+
     event_type: str
     data: dict[str, Any]
     timestamp: float = field(default_factory=time.time)
@@ -3937,7 +3944,7 @@ class EventQueue:
             self._events.append(event)
             # Trim oldest events if queue is too large
             if len(self._events) > self.MAX_EVENTS:
-                self._events = self._events[-self.MAX_EVENTS:]
+                self._events = self._events[-self.MAX_EVENTS :]
         logger.debug(f'Event queued: {event_type} (buffered: {len(self._events)})')
 
     def get_pending_count(self) -> int:
@@ -3974,7 +3981,7 @@ class EventQueue:
             # Stale detection: client had a cursor (since > 0), the buffer
             # is full, and the cursor is older than our oldest event.
             stale = False
-            if since > 0 and len(self._events) >= self.MAX_EVENTS:
+            if since > 0 and len(self._events) >= self.MAX_EVENTS:  # noqa: SIM102
                 if self._events and since < self._events[0].timestamp:
                     stale = True
 
@@ -3991,6 +3998,7 @@ class EventQueue:
 
 
 # Convenience functions for emitting specific events
+
 
 def emit_folder_added(event_queue: EventQueue, folder_path: str) -> None:
     """Emit a folder_added event.
@@ -4058,15 +4066,19 @@ def emit_faces_reassessed(
         matched_count: Number of faces that were auto-matched.
         person_id: If reassessment was for a specific person, their ID.
     """
-    event_queue.emit(EVENT_FACES_REASSESSED, {
-        'matched_count': matched_count,
-        'person_id': person_id,
-    })
+    event_queue.emit(
+        EVENT_FACES_REASSESSED,
+        {
+            'matched_count': matched_count,
+            'person_id': person_id,
+        },
+    )
 
 
 # =============================================================================
 # IMAGE DATABASE CLASS (STARTUP SEQUENCE)
 # =============================================================================
+
 
 class ImageDatabase:
     """Main image database class that coordinates all components.
@@ -4097,7 +4109,7 @@ class ImageDatabase:
         db_path: Path | str = 'photonarium.db',
         thumbnail_dir: Path | str = '.thumbnails',
         config_path: Path | str | None = None,
-        config: 'Config | None' = None,
+        config: Config | None = None,
         auto_start: bool = True,
         preload_model: bool = True,
         run_scan: bool = False,
@@ -4307,8 +4319,7 @@ class ImageDatabase:
 
                 with self._db_lock:
                     self.conn.execute(
-                        'UPDATE images SET description_embedding = ? WHERE id = ?',
-                        (embedding_bytes, image_id)
+                        'UPDATE images SET description_embedding = ? WHERE id = ?', (embedding_bytes, image_id)
                     )
                 count += 1
             except Exception as e:
@@ -4382,10 +4393,7 @@ class ImageDatabase:
         # Acquire _db_lock since the embedding thread may be writing concurrently.
         if updates:
             with self._db_lock:
-                self.conn.executemany(
-                    'UPDATE images SET aesthetic_laion = ?, updated_at = ? WHERE id = ?',
-                    updates
-                )
+                self.conn.executemany('UPDATE images SET aesthetic_laion = ?, updated_at = ? WHERE id = ?', updates)
                 self.conn.commit()
 
         # Only record migration as complete if we weren't interrupted
@@ -4568,8 +4576,7 @@ class ImageDatabase:
                 new_timestamp = derive_timestamp(path)
                 if new_timestamp:
                     self.conn.execute(
-                        'UPDATE images SET timestamp = ? WHERE id = ?',
-                        (new_timestamp.isoformat(), image_id)
+                        'UPDATE images SET timestamp = ? WHERE id = ?', (new_timestamp.isoformat(), image_id)
                     )
                     updated += 1
             except Exception as e:
@@ -4647,7 +4654,7 @@ class ImageDatabase:
                 timestamp_str = new_timestamp.isoformat() if new_timestamp else None
                 self.conn.execute(
                     'UPDATE images SET timestamp = ?, timestamp_confidence = ? WHERE id = ?',
-                    (timestamp_str, confidence, image_id)
+                    (timestamp_str, confidence, image_id),
                 )
                 updated += 1
             except Exception as e:
@@ -4670,9 +4677,7 @@ class ImageDatabase:
         if has_migration_run(self.conn, migration_id):
             return
 
-        cursor = self.conn.execute(
-            'SELECT COUNT(*) as cnt FROM duplicate_groups WHERE level = 4'
-        )
+        cursor = self.conn.execute('SELECT COUNT(*) as cnt FROM duplicate_groups WHERE level = 4')
         count = cursor.fetchone()['cnt']
 
         if count > 0:
@@ -4701,9 +4706,7 @@ class ImageDatabase:
             return
 
         # Check if there are any images to group
-        cursor = self.conn.execute(
-            'SELECT COUNT(*) as cnt FROM images WHERE deleted = 0'
-        )
+        cursor = self.conn.execute('SELECT COUNT(*) as cnt FROM images WHERE deleted = 0')
         count = cursor.fetchone()['cnt']
 
         if count > 0:
@@ -4729,15 +4732,12 @@ class ImageDatabase:
             return
 
         # Count images that need EXIF extraction
-        cursor = self.conn.execute(
-            'SELECT COUNT(*) as cnt FROM images WHERE deleted = 0 AND exif_data IS NULL'
-        )
+        cursor = self.conn.execute('SELECT COUNT(*) as cnt FROM images WHERE deleted = 0 AND exif_data IS NULL')
         count = cursor.fetchone()['cnt']
 
         if count > 0:
             logger.info(
-                f'Added EXIF metadata support — {count} images will be '
-                f'backfilled on next rescan (one-time migration)'
+                f'Added EXIF metadata support — {count} images will be backfilled on next rescan (one-time migration)'
             )
         else:
             logger.info('Added EXIF metadata support (one-time migration)')
@@ -4750,9 +4750,7 @@ class ImageDatabase:
         Called during startup to populate the cache. This eliminates
         DB queries for thumbnail lookups.
         """
-        cursor = self.conn.execute(
-            'SELECT id, checksum FROM images WHERE checksum IS NOT NULL AND deleted = 0'
-        )
+        cursor = self.conn.execute('SELECT id, checksum FROM images WHERE checksum IS NOT NULL AND deleted = 0')
         cache = {row[0]: row[1] for row in cursor}
         with self._checksum_cache_lock:
             self._checksum_cache = cache
@@ -4760,12 +4758,9 @@ class ImageDatabase:
 
         # Warn about images missing checksums — these will 404 on
         # thumbnail/histogram requests until re-scanned
-        missing = self.conn.execute(
-            'SELECT COUNT(*) FROM images WHERE checksum IS NULL AND deleted = 0'
-        ).fetchone()[0]
+        missing = self.conn.execute('SELECT COUNT(*) FROM images WHERE checksum IS NULL AND deleted = 0').fetchone()[0]
         if missing:
-            logger.warning(f'        {missing} image(s) have NULL checksums — '
-                           f'run with --scan to repair')
+            logger.warning(f'        {missing} image(s) have NULL checksums — run with --scan to repair')
 
     def _rescan_all_folders(self) -> None:
         """Rescan all registered folders for new/changed/deleted files."""
@@ -4811,8 +4806,7 @@ class ImageDatabase:
             with self._db_lock:
                 for path in missing_paths:
                     self.conn.execute(
-                        'UPDATE images SET deleted = 1, updated_at = ? WHERE path = ? AND deleted = 0',
-                        (now, path)
+                        'UPDATE images SET deleted = 1, updated_at = ? WHERE path = ? AND deleted = 0', (now, path)
                     )
                 self.conn.commit()
 
@@ -4828,7 +4822,7 @@ class ImageDatabase:
             return
 
         # Find images without face detection
-        cursor = self.conn.execute('''
+        cursor = self.conn.execute("""
             SELECT i.id
             FROM images i
             WHERE i.deleted = 0
@@ -4836,7 +4830,7 @@ class ImageDatabase:
               AND NOT EXISTS (
                   SELECT 1 FROM faces f WHERE f.image_id = i.id
               )
-        ''')
+        """)
         rows = cursor.fetchall()
 
         if rows:
@@ -4853,10 +4847,10 @@ class ImageDatabase:
         if not self.config.nima_enabled:
             return
 
-        cursor = self.conn.execute('''
+        cursor = self.conn.execute("""
             SELECT id FROM images
             WHERE aesthetic_nima IS NULL AND deleted = 0 AND checksum IS NOT NULL
-        ''')
+        """)
         rows = cursor.fetchall()
 
         if rows:
@@ -4880,8 +4874,7 @@ class ImageDatabase:
         if stored_model is not None:
             # Model has changed — wipe all NIMA scores
             logger.info(
-                f'NIMA model changed ({stored_model} → {current_model}), '
-                'clearing existing scores for re-computation'
+                f'NIMA model changed ({stored_model} → {current_model}), clearing existing scores for re-computation'
             )
             with self._db_lock:
                 self.conn.execute('UPDATE images SET aesthetic_nima = NULL')
@@ -4915,10 +4908,7 @@ class ImageDatabase:
             # Compute unknown face groups (similar to duplicate grouping)
             if self.config.face_detection_enabled:
                 with self._db_lock:
-                    compute_unknown_face_groups(
-                        self.conn,
-                        threshold=self.config.face_recognition_threshold
-                    )
+                    compute_unknown_face_groups(self.conn, threshold=self.config.face_recognition_threshold)
                 # Backfill semantic embeddings for faces that don't have them
                 # (e.g., faces added before this feature existed)
                 self.backfill_face_semantic_embeddings()
@@ -5057,7 +5047,7 @@ class ImageDatabase:
                 self.conn = None
                 logger.info('Database connection closed')
 
-    def __enter__(self) -> 'ImageDatabase':
+    def __enter__(self) -> ImageDatabase:
         """Context manager entry - returns self."""
         return self
 
@@ -5221,10 +5211,7 @@ class ImageDatabase:
         folder_str = str(folder)
 
         # Get all remaining folders (excluding the one being removed)
-        cursor = self.conn.execute(
-            'SELECT path FROM folders WHERE path != ?',
-            (folder_str,)
-        )
+        cursor = self.conn.execute('SELECT path FROM folders WHERE path != ?', (folder_str,))
         remaining_folders = [row['path'] for row in cursor.fetchall()]
 
         # Find images in this folder that won't be covered by remaining folders
@@ -5233,22 +5220,18 @@ class ImageDatabase:
 
         if remaining_folders:
             # Images that start with this folder but don't start with any remaining folder
-            not_conditions = ' AND '.join(
-                ['NOT (path >= ? AND path < ?)'] * len(remaining_folders)
-            )
+            not_conditions = ' AND '.join(['NOT (path >= ? AND path < ?)'] * len(remaining_folders))
             # Build params: folder range, then each remaining folder's range
             params = [folder_str, folder_upper]
             for remaining in remaining_folders:
                 params.extend([remaining, folder_path_upper_bound(remaining)])
             cursor = self.conn.execute(
-                f'SELECT id FROM images WHERE path >= ? AND path < ? AND deleted = 0 AND {not_conditions}',
-                params
+                f'SELECT id FROM images WHERE path >= ? AND path < ? AND deleted = 0 AND {not_conditions}', params
             )
         else:
             # No other folders, all images in this folder will be orphaned
             cursor = self.conn.execute(
-                'SELECT id FROM images WHERE path >= ? AND path < ? AND deleted = 0',
-                (folder_str, folder_upper)
+                'SELECT id FROM images WHERE path >= ? AND path < ? AND deleted = 0', (folder_str, folder_upper)
             )
 
         return [row['id'] for row in cursor.fetchall()]
@@ -5328,10 +5311,7 @@ class ImageDatabase:
         """
         # Read path under lock (quick DB read)
         with self._db_lock:
-            cursor = self.conn.execute(
-                'SELECT path FROM images WHERE id = ? AND deleted = 0',
-                (image_id,)
-            )
+            cursor = self.conn.execute('SELECT path FROM images WHERE id = ? AND deleted = 0', (image_id,))
             row = cursor.fetchone()
         if not row:
             return False
@@ -5346,10 +5326,7 @@ class ImageDatabase:
 
         # Write results under lock
         with self._db_lock:
-            self.conn.execute(
-                'UPDATE images SET exif_data = ? WHERE id = ?',
-                (exif_json, image_id)
-            )
+            self.conn.execute('UPDATE images SET exif_data = ? WHERE id = ?', (exif_json, image_id))
             if exif_data:
                 _upsert_image_metadata(self.conn, image_id, exif_data)
             self.conn.commit()
@@ -5376,10 +5353,7 @@ class ImageDatabase:
         if checksum is None:
             return None
         # Still need path from DB (could cache this too, but it's less critical)
-        cursor = self.conn.execute(
-            'SELECT path FROM images WHERE id = ? AND deleted = 0',
-            (image_id,)
-        )
+        cursor = self.conn.execute('SELECT path FROM images WHERE id = ? AND deleted = 0', (image_id,))
         row = cursor.fetchone()
         if row is None:
             return None
@@ -5504,10 +5478,7 @@ class ImageDatabase:
             return {'results': {id: False for id in image_ids}, 'trashed': [], 'errors': {}}
 
         if not self._trash_enabled:
-            raise ValueError(
-                'Trash directory is disabled. Check that it does not '
-                'overlap an indexed folder.'
-            )
+            raise ValueError('Trash directory is disabled. Check that it does not overlap an indexed folder.')
 
         # Track this operation for graceful shutdown
         with self._trash_ops_lock:
@@ -5525,10 +5496,7 @@ class ImageDatabase:
             paths = {}
             with self._db_lock:
                 placeholders = ','.join('?' for _ in image_ids)
-                cursor = self.conn.execute(
-                    f'SELECT id, path FROM images WHERE id IN ({placeholders})',
-                    image_ids
-                )
+                cursor = self.conn.execute(f'SELECT id, path FROM images WHERE id IN ({placeholders})', image_ids)
                 for row in cursor.fetchall():
                     paths[row['id']] = row['path']
 
@@ -5577,9 +5545,7 @@ class ImageDatabase:
                 with self._db_lock:
                     placeholders = ','.join('?' for _ in trashed)
                     self.conn.execute(
-                        f'UPDATE images SET deleted = 1, updated_at = ? '
-                        f'WHERE id IN ({placeholders})',
-                        [now] + trashed
+                        f'UPDATE images SET deleted = 1, updated_at = ? WHERE id IN ({placeholders})', [now] + trashed
                     )
                     self.conn.commit()
 
@@ -5589,10 +5555,7 @@ class ImageDatabase:
                         self._checksum_cache.pop(image_id, None)
                 self._duplicate_manager.invalidate_images(trashed)
 
-            logger.info(
-                f'Trashed {len(trashed)}/{len(image_ids)} images '
-                f'({len(errors)} errors)'
-            )
+            logger.info(f'Trashed {len(trashed)}/{len(image_ids)} images ({len(errors)} errors)')
 
             return {'results': results, 'trashed': trashed, 'errors': errors}
 
@@ -5747,16 +5710,23 @@ class ImageDatabase:
             try:
                 with self._db_lock:
                     self.conn.execute(
-                        '''UPDATE images SET
+                        """UPDATE images SET
                             checksum = ?,
                             size = ?,
                             width = ?,
                             height = ?,
                             mtime = ?,
                             updated_at = ?
-                        WHERE id = ?''',
-                        (new_checksum, new_size, new_width, new_height, new_mtime,
-                         datetime.now().isoformat(), image_id)
+                        WHERE id = ?""",
+                        (
+                            new_checksum,
+                            new_size,
+                            new_width,
+                            new_height,
+                            new_mtime,
+                            datetime.now().isoformat(),
+                            image_id,
+                        ),
                     )
                     self.conn.commit()
 
@@ -5788,13 +5758,20 @@ class ImageDatabase:
                             thumb_path = get_face_thumbnail_path(face_id, self.thumbnail_dir)
                             thumb_existed = thumb_path.exists()
                             deleted = delete_face_thumbnail(face_id, self.thumbnail_dir)
-                            logger.debug(f'rotate_image: Face {face_id[:8]}... old_bbox={old_bbox}, thumb_existed={thumb_existed}, deleted={deleted}')
+                            logger.debug(
+                                f'rotate_image: Face {face_id[:8]}... old_bbox={old_bbox}, '
+                                f'thumb_existed={thumb_existed}, deleted={deleted}'
+                            )
 
                             # Get updated face coordinates (after rotation)
                             updated_face = get_face(self.conn, face_id)
                             if updated_face:
-                                new_bbox = (updated_face['box_x'], updated_face['box_y'],
-                                            updated_face['box_w'], updated_face['box_h'])
+                                new_bbox = (
+                                    updated_face['box_x'],
+                                    updated_face['box_y'],
+                                    updated_face['box_w'],
+                                    updated_face['box_h'],
+                                )
                                 logger.debug(f'rotate_image: Face {face_id[:8]}... new_bbox={new_bbox}')
 
                                 # Regenerate face thumbnail with new coordinates
@@ -5810,9 +5787,16 @@ class ImageDatabase:
                                         quality=self.config.thumbnail_quality,
                                     )
                                     thumb_exists_now = thumb_path.exists()
-                                    logger.debug(f'rotate_image: Face {face_id[:8]}... regen_success={success}, thumb_exists_now={thumb_exists_now}, thumb_path={thumb_path}')
+                                    logger.debug(
+                                        f'rotate_image: Face {face_id[:8]}... '
+                                        f'regen_success={success}, '
+                                        f'thumb_exists_now={thumb_exists_now}, '
+                                        f'thumb_path={thumb_path}'
+                                    )
                                 except Exception as e:
-                                    logger.warning(f'rotate_image: Failed to regenerate face thumbnail for {face_id}: {e}')
+                                    logger.warning(
+                                        f'rotate_image: Failed to regenerate face thumbnail for {face_id}: {e}'
+                                    )
             except Exception as e:
                 logger.warning(f'rotate_image: Failed to rotate faces: {e}')
                 # Non-fatal - image was still rotated successfully
@@ -5873,8 +5857,7 @@ class ImageDatabase:
         # Get embeddings for the specified images
         placeholders = ','.join('?' * len(image_ids))
         cursor = self.conn.execute(
-            f'SELECT id, embedding FROM images WHERE id IN ({placeholders}) AND embedding IS NOT NULL',
-            image_ids
+            f'SELECT id, embedding FROM images WHERE id IN ({placeholders}) AND embedding IS NOT NULL', image_ids
         )
 
         results = []
@@ -5900,10 +5883,7 @@ class ImageDatabase:
             no embedding.
         """
         # Get the reference image's embedding
-        cursor = self.conn.execute(
-            'SELECT id, embedding, deleted FROM images WHERE id = ?',
-            (reference_image_id,)
-        )
+        cursor = self.conn.execute('SELECT id, embedding, deleted FROM images WHERE id = ?', (reference_image_id,))
         row = cursor.fetchone()
 
         # Debug logging
@@ -5911,7 +5891,10 @@ class ImageDatabase:
             logger.warning(f'get_similar_images: No row found for id={reference_image_id}')
             return None
 
-        logger.info(f'get_similar_images: id={reference_image_id}, deleted={row["deleted"]}, has_embedding={row["embedding"] is not None}')
+        logger.info(
+            f'get_similar_images: id={reference_image_id}, '
+            f'deleted={row["deleted"]}, has_embedding={row["embedding"] is not None}'
+        )
 
         if row['deleted']:
             logger.warning('get_similar_images: Image is deleted')
@@ -5961,15 +5944,15 @@ class ImageDatabase:
         """
         success = True
         for size in (200, 400):
-            cache_path = get_thumbnail_cache_path(
-                checksum, size=size, thumbnail_dir=self.thumbnail_dir
-            )
+            cache_path = get_thumbnail_cache_path(checksum, size=size, thumbnail_dir=self.thumbnail_dir)
             if cache_path.exists():
                 continue
             if not generate_thumbnail(
-                source_path, cache_path,
-                size=size, quality=self.config.thumbnail_quality,
-                max_source_dimension=self.config.max_image_dimension
+                source_path,
+                cache_path,
+                size=size,
+                quality=self.config.thumbnail_quality,
+                max_source_dimension=self.config.max_image_dimension,
             ):
                 success = False
         return success
@@ -6064,9 +6047,7 @@ class ImageDatabase:
 
     def get_stats(self) -> dict[str, Any]:
         """Get database statistics."""
-        cursor = self.conn.execute(
-            'SELECT COUNT(*) as count FROM images WHERE deleted = 0'
-        )
+        cursor = self.conn.execute('SELECT COUNT(*) as count FROM images WHERE deleted = 0')
         total_images = cursor.fetchone()['count']
 
         cursor = self.conn.execute('SELECT COUNT(*) as count FROM folders')
@@ -6075,9 +6056,7 @@ class ImageDatabase:
         cursor = self.conn.execute('SELECT COUNT(*) as count FROM people')
         total_people = cursor.fetchone()['count']
 
-        cursor = self.conn.execute(
-            'SELECT COUNT(*) as count FROM faces WHERE suppressed = 0'
-        )
+        cursor = self.conn.execute('SELECT COUNT(*) as count FROM faces WHERE suppressed = 0')
         total_faces = cursor.fetchone()['count']
 
         return {
@@ -6112,23 +6091,20 @@ class ImageDatabase:
         face_reassess_computing = face_reassess_status is not None and face_reassess_status.get('status') == 'computing'
 
         # Determine overall status (NIMA queue also contributes to 'updating')
-        queues_empty = (indexing_count == 0 and embedding_count == 0
-                        and face_count == 0 and nima_count == 0)
-        phase4_idle = not (duplicates_computing or face_grouping_computing or face_embedding_computing or face_reassess_computing)
+        queues_empty = indexing_count == 0 and embedding_count == 0 and face_count == 0 and nima_count == 0
+        phase4_idle = not (
+            duplicates_computing or face_grouping_computing or face_embedding_computing or face_reassess_computing
+        )
         status = 'up_to_date' if (queues_empty and phase4_idle) else 'updating'
 
         # Get counts for live updates during processing
-        cursor = self.conn.execute(
-            'SELECT COUNT(*) as count FROM images WHERE deleted = 0'
-        )
+        cursor = self.conn.execute('SELECT COUNT(*) as count FROM images WHERE deleted = 0')
         total_images = cursor.fetchone()['count']
 
         cursor = self.conn.execute('SELECT COUNT(*) as count FROM people')
         total_people = cursor.fetchone()['count']
 
-        cursor = self.conn.execute(
-            'SELECT COUNT(*) as count FROM faces WHERE suppressed = 0'
-        )
+        cursor = self.conn.execute('SELECT COUNT(*) as count FROM faces WHERE suppressed = 0')
         total_faces = cursor.fetchone()['count']
 
         # Build response - only include Phase 4 statuses if they're active
@@ -6148,10 +6124,7 @@ class ImageDatabase:
         # Include duplicate status if computing
         if duplicates_computing:
             # Find which level is currently computing
-            computing_level = next(
-                (level for level, s in duplicate_status.items() if s == 'computing'),
-                None
-            )
+            computing_level = next((level for level, s in duplicate_status.items() if s == 'computing'), None)
             result['duplicates'] = {
                 'status': 'computing',
                 'level': computing_level,
@@ -6202,7 +6175,7 @@ class ImageDatabase:
         Uses synchronous reassessment to ensure completion before
         emit_processing_complete is called.
         """
-        from faces import reassess_unknown_faces, get_cached_known_embeddings
+        from faces import get_cached_known_embeddings, reassess_unknown_faces
 
         # Check if there are any known people with locked faces to match against
         with self._db_lock:
@@ -6220,10 +6193,7 @@ class ImageDatabase:
 
         try:
             with self._db_lock:
-                matches = reassess_unknown_faces(
-                    self.conn,
-                    threshold=self.config.face_recognition_threshold
-                )
+                matches = reassess_unknown_faces(self.conn, threshold=self.config.face_recognition_threshold)
             if matches:
                 logger.info(f'Face reassessment: matched {len(matches)} faces to known people')
                 # Emit event so frontend can refresh
@@ -6285,10 +6255,7 @@ class ImageDatabase:
             and 'stale' (bool).
         """
         result = self.event_queue.get_since(since)
-        result['events'] = [
-            {'type': e.event_type, 'data': e.data}
-            for e in result['events']
-        ]
+        result['events'] = [{'type': e.event_type, 'data': e.data} for e in result['events']]
         return result
 
     def get_pending_event_count(self) -> int:

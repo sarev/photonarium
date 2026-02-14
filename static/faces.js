@@ -186,7 +186,7 @@
         forceRefresh: () => {
             renderFacesGrid();
             console.log('[FacesFlow] Force refreshed from AppState');
-        }
+        },
     };
 
     /** @type {number} Saved scroll position for unknown faces container */
@@ -529,7 +529,7 @@
                     pickPreferredFaces.map(f => ({
                         id: f.id.slice(0, 8),
                         mt: f.manually_tagged,
-                        type: typeof f.manually_tagged
+                        type: typeof f.manually_tagged,
                     })));
                 if (pickerSelection) pickerSelection.pruneToValidIds();
                 renderPickerContent();
@@ -959,7 +959,7 @@
                 }
                 // Restore input state if this is the card we were typing in
                 FacesRefresh.maybeRestoreInput(id, el, unknownContainer);
-            }
+            },
         });
     }
 
@@ -985,7 +985,7 @@
                 const input = card?.querySelector('.face-card-input');
                 if (input) input.focus();
             },
-            onDeleteRequested: (ids) => handleDeleteFaces(ids),
+            onDeleteRequested: (ids) => handleFacesDeleteRequested(ids),
         });
     }
 
@@ -1028,7 +1028,7 @@
                 }
                 // Restore input state if this is the card we were typing in
                 FacesRefresh.maybeRestoreInput(id, el, pickerGridContainer);
-            }
+            },
         });
     }
 
@@ -1054,7 +1054,7 @@
             onDeleteRequested: handlePickPreferredDeleteRequested,
             enableKeyboard: true,
             enableDragBox: true,
-            enableLongPress: true
+            enableLongPress: true,
         });
     }
 
@@ -1570,7 +1570,7 @@
         // Fetch authoritative data from backend (for threshold and any server-side changes)
         Promise.all([
             AppState.people.fetchById(personId),       // For recognition_threshold
-            AppState.faces.fetchForPerson(personId)    // All faces for this person
+            AppState.faces.fetchForPerson(personId),    // All faces for this person
         ]).then(([personResult, faces]) => {
             // Only update if still in pick-preferred mode for this person
             if (viewMode !== 'pick-preferred' || pickPreferredPersonId !== personId) return;
@@ -2080,7 +2080,7 @@
             // Delegate to AppState - it handles optimistic updates and broadcasts
             // The subscription will refresh the pick-preferred view
             await AppState.faces.identify(faceIds, name, {
-                preferredFaceId: typedFaceId
+                preferredFaceId: typedFaceId,
             });
 
             // Check if all faces moved out - if so, delete the empty person and exit
@@ -2107,7 +2107,7 @@
     async function callIdentifyBatchApi(faceIds, name, preferredFaceId = null) {
         try {
             const result = await AppState.faces.identify(faceIds, name, {
-                preferredFaceId
+                preferredFaceId,
             });
             // Return format compatible with legacy callers
             return {
@@ -2115,14 +2115,14 @@
                 data: {
                     person: {
                         id: result.personId,
-                        name: name
-                    }
-                }
+                        name: name,
+                    },
+                },
             };
         } catch (error) {
             return {
                 success: false,
-                error: error.message || 'Failed to identify faces'
+                error: error.message || 'Failed to identify faces',
             };
         }
     }
@@ -2157,7 +2157,7 @@
             // Delegate to AppState - it handles optimistic updates and broadcasts
             // The subscription will trigger renderFacesGrid() automatically
             await AppState.faces.identify(faceIds, name, {
-                preferredFaceId: options.preferredFaceId
+                preferredFaceId: options.preferredFaceId,
             });
             facesLog('  -> Success');
             return true;
@@ -2317,8 +2317,8 @@
                     // Show after items added (so :empty rule doesn't hide it)
                     autocompleteEl.style.display = 'block';
                 },
-                onSelect: true  // Enable _selectValue on dialog
-            }
+                onSelect: true,  // Enable _selectValue on dialog
+            },
         );
 
         // null means cancelled
@@ -2348,14 +2348,14 @@
             await AppState.people.load();
             const existingPeople = AppState.people.getAll();
             const collision = existingPeople.find(p =>
-                p.name.toLowerCase() === trimmedName.toLowerCase() && p.id !== pickPreferredPersonId
+                p.name.toLowerCase() === trimmedName.toLowerCase() && p.id !== pickPreferredPersonId,
             );
 
             if (collision) {
                 // Case C: Merge - move all faces to existing person, delete original
                 const confirmed = await App.confirm(
                     'Merge People',
-                    `Merge "${pickPreferredPersonName}" into "${collision.name}"? All faces will be moved to "${collision.name}".`
+                    `Merge "${pickPreferredPersonName}" into "${collision.name}"? All faces will be moved to "${collision.name}".`,
                 );
                 if (!confirmed) return;
 
@@ -2366,7 +2366,7 @@
                 // Case D: Dissolve - unidentify all faces, delete person
                 const confirmed = await App.confirm(
                     'Remove Person',
-                    `Remove "${pickPreferredPersonName}"? All faces will return to the unknown pool.`
+                    `Remove "${pickPreferredPersonName}"? All faces will return to the unknown pool.`,
                 );
                 if (!confirmed) return;
 
@@ -2411,7 +2411,7 @@
 
                 // Check if person was deleted (all faces ejected)
                 if (data.deleted) {
-                    App.showError(`All faces ejected - person deleted`);
+                    App.showError('All faces ejected - person deleted');
                     exitPickPreferredMode();
                     AppState.people.invalidate();
                     loadAllFaces();
@@ -2438,7 +2438,7 @@
                             pickPreferredFaces.map(f => ({
                                 id: f.id.slice(0, 8),
                                 mt: f.manually_tagged,
-                                type: typeof f.manually_tagged
+                                type: typeof f.manually_tagged,
                             })));
 
                         // Clear any pending reload flag (we're handling the update ourselves)
@@ -2579,7 +2579,7 @@
             onDeleteRequested: handleFacesDeleteRequested,
             enableKeyboard: true,
             enableDragBox: true,
-            enableLongPress: true
+            enableLongPress: true,
         });
     }
 
@@ -2825,7 +2825,7 @@
             },
             markNeedsRefresh() {
                 needsRefresh = true;
-            }
+            },
         });
     }
 
@@ -3481,7 +3481,7 @@
                 if (facesSelection && facesSelection.isSelected(id)) {
                     el.classList.add('selected');
                 }
-            }
+            },
         });
 
         // Render the grid
@@ -3704,7 +3704,7 @@
         if (faceCount > 1) {
             const badge = document.createElement('div');
             badge.className = 'face-card-badge';
-            badge.innerHTML = `<span class="material-symbols-outlined">star</span>`;
+            badge.innerHTML = '<span class="material-symbols-outlined">star</span>';
             badge.title = `${faceCount} faces`;
             card.appendChild(badge);
         }
@@ -3712,13 +3712,13 @@
         // Add filter badge (left side) - click to filter gallery by this person
         const filterBadge = document.createElement('div');
         filterBadge.className = 'face-card-filter-badge';
-        filterBadge.innerHTML = `<span class="material-symbols-outlined">filter_alt</span>`;
+        filterBadge.innerHTML = '<span class="material-symbols-outlined">filter_alt</span>';
         filterBadge.title = `Show all images with ${person.name}`;
         filterBadge.addEventListener('click', (e) => {
             e.stopPropagation(); // Don't trigger card selection
             // Set filter to show only this person's images and navigate to gallery
             App.setFilter({
-                people: [{ id: person.id, name: person.name }]
+                people: [{ id: person.id, name: person.name }],
             });
             App.navigateTo('gallery');
         });
@@ -3762,9 +3762,8 @@
                 e.preventDefault();
                 e.dataTransfer.dropEffect = 'move';
                 card.classList.add('drop-target');
-            }
-            // Check if dragging another person card (for merge)
-            else if (e.dataTransfer.types.includes('application/x-person-id')) {
+            } else if (e.dataTransfer.types.includes('application/x-person-id')) {
+                // Dragging another person card (for merge)
                 e.preventDefault();
                 e.dataTransfer.dropEffect = 'move';
                 card.classList.add('drop-target');
@@ -3811,7 +3810,7 @@
                     // Show merge confirmation dialog
                     const confirmed = await App.confirm(
                         'Merge People',
-                        `Merge "${draggedPersonName}" into "${person.name}"? All faces will be moved to "${person.name}".`
+                        `Merge "${draggedPersonName}" into "${person.name}"? All faces will be moved to "${person.name}".`,
                     );
                     if (confirmed) {
                         await AppState.people.merge(draggedPersonId, person.id);
@@ -5380,7 +5379,7 @@
                     } finally {
                         suppressOverlayReload = false;
                     }
-                }
+                },
             });
         });
 

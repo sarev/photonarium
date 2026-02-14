@@ -71,7 +71,7 @@ const Gallery = {
         needsRefresh: true,
         lastImageCount: 0,
         pendingSelection: null,  // Selection to apply when item loads
-        prevSort: null            // Sort to restore when leaving group view
+        prevSort: null,            // Sort to restore when leaving group view
     },
 
     /**
@@ -168,7 +168,7 @@ const Gallery = {
                 offsetTop: grid.offsetTop,
                 offsetLeft: grid.offsetLeft,
                 hidden: grid.hidden,
-                display: getComputedStyle(grid).display
+                display: getComputedStyle(grid).display,
             });
         } else {
             console.log('Grid container: NOT FOUND');
@@ -185,12 +185,12 @@ const Gallery = {
                 totalHeight: vgState?.totalHeight,
                 visibleRows: vgState?.visibleRows,
                 renderedCount: vgState?.renderedItems?.size,
-                pendingCount: vgState?.pendingItems?.size
+                pendingCount: vgState?.pendingItems?.size,
             });
             console.log('VirtualGrid._config:', {
                 gap: vgConfig?.gap,
                 padding: vgConfig?.padding,
-                itemCount: vgConfig?.getItems?.()?.length
+                itemCount: vgConfig?.getItems?.()?.length,
             });
             console.log('VirtualGrid._bound:', this._grid._bound);
 
@@ -201,7 +201,7 @@ const Gallery = {
                     clientHeight: inner.clientHeight,
                     styleHeight: inner.style.height,
                     childCount: inner.children.length,
-                    backgroundPosition: inner.style.backgroundPosition
+                    backgroundPosition: inner.style.backgroundPosition,
                 });
             }
         } else {
@@ -215,7 +215,7 @@ const Gallery = {
             console.log(`Image ${imageId}:`, {
                 indexInDisplayList: index,
                 inRenderedItems: this._grid._state?.renderedItems?.has(imageId),
-                inPendingItems: this._grid._state?.pendingItems?.has(imageId)
+                inPendingItems: this._grid._state?.pendingItems?.has(imageId),
             });
 
             if (index >= 0 && this._grid._state) {
@@ -225,8 +225,8 @@ const Gallery = {
                 const col = index % itemsPerRow;
                 const expectedTop = padding + row * itemHeight;
                 const expectedLeft = padding + col * (itemWidth + gap);
-                console.log(`Image expected position:`, {
-                    row, col, expectedTop, expectedLeft
+                console.log('Image expected position:', {
+                    row, col, expectedTop, expectedLeft,
                 });
             }
 
@@ -240,7 +240,7 @@ const Gallery = {
                     styleHeight: el.style.height,
                     offsetTop: el.offsetTop,
                     offsetLeft: el.offsetLeft,
-                    className: el.className
+                    className: el.className,
                 });
             } else {
                 console.log('Image DOM element: NOT IN DOM');
@@ -272,7 +272,7 @@ const Gallery = {
             btnNextGroup: App.$('btn-next-group'),
             dupGroupNavSeparator: document.querySelector('.dup-group-nav-separator'),
             // Remove from group button
-            btnRemoveFromGroup: App.$('btn-remove-from-group')
+            btnRemoveFromGroup: App.$('btn-remove-from-group'),
         };
 
         // Create scroll indicator overlay
@@ -348,7 +348,7 @@ const Gallery = {
                     el.classList.add('throb');
                     el.addEventListener('animationend', () => el.classList.remove('throb'), { once: true });
                 }
-            }
+            },
         });
 
         // Create GridSelection instance
@@ -374,7 +374,7 @@ const Gallery = {
             },
             onGroupNavigate: (direction) => {
                 this._navigateDupGroup(direction);
-            }
+            },
         });
 
         // Set up similarity slider handler
@@ -792,7 +792,7 @@ const Gallery = {
         if (showLoading) {
             const msg = hasPeopleFilter ? 'Filtering by people…'
                 : isDupFilter ? 'Loading group…'
-                : 'Applying filter…';
+                    : 'Applying filter…';
             this._showLoading(msg);
         }
 
@@ -938,7 +938,7 @@ const Gallery = {
     _createThumbnailItem(img, blobUrl) {
         const item = App.createElement('div', {
             className: 'gallery-item loaded',
-            dataId: img.id
+            dataId: img.id,
         });
 
         // Thumbnail tooltip: always show path + raw aesthetic scores (zero cost,
@@ -962,7 +962,7 @@ const Gallery = {
         const thumb = App.createElement('img', {
             src: blobUrl,
             alt: img.basename,
-            title
+            title,
         });
 
         // Basename label
@@ -971,7 +971,7 @@ const Gallery = {
         // Group hover button (opens group picker on click)
         const groupBtn = App.createElement('button', {
             className: 'gallery-item-group-btn',
-            title: 'Manage groups'
+            title: 'Manage groups',
         });
         // Use Material Symbol if available, otherwise Unicode fallback
         if (document.fonts?.check('24px "Material Symbols Outlined"')) {
@@ -1174,7 +1174,7 @@ const Gallery = {
             this._cachedOverlayHeight = this._scrollOverlay.getBoundingClientRect().height;
             this._scrollOverlayAnchor = {
                 scrollTop: scrollTop,
-                overlayY: parseFloat(this._scrollOverlay.style.top) || 0
+                overlayY: parseFloat(this._scrollOverlay.style.top) || 0,
             };
         } else {
             this._updateScrollOverlayFromScroll(scrollTop);
@@ -1640,7 +1640,7 @@ const Gallery = {
             'Camera', 'Lens', 'Focal Length', 'Aperture', 'Shutter Speed',
             'ISO', 'Exposure Comp', 'Exposure Program', 'Metering', 'Flash',
             'White Balance', 'Color Space', 'Software', 'Artist', 'Copyright',
-            'GPS', 'Date Taken'
+            'GPS', 'Date Taken',
         ];
 
         // Sort keys: ordered keys first, then any extras alphabetically
@@ -1695,7 +1695,7 @@ const Gallery = {
                         App.$('dialog-metadata'),
                         App.$('dialog-metadata-actions'),
                         'readonly',
-                        selectedFilters
+                        selectedFilters,
                     );
                 });
 
@@ -1921,7 +1921,7 @@ const Gallery = {
         if (!AppState.status.isTrashEnabled()) {
             App.showError(
                 'Cannot delete: trash directory is misconfigured. '
-                + 'Check that it does not overlap an indexed folder.'
+                + 'Check that it does not overlap an indexed folder.',
             );
             return;
         }
@@ -2151,11 +2151,11 @@ const Gallery = {
             imageIds: imageIds,
             // Groups that ALL selected images belong to (for batch operations)
             originalGroups: new Set(
-                AppState.duplicates.getGroupsForImages(imageIds).map(g => g.group_hash)
+                AppState.duplicates.getGroupsForImages(imageIds).map(g => g.group_hash),
             ),
             selectedGroups: new Set(
-                AppState.duplicates.getGroupsForImages(imageIds).map(g => g.group_hash)
-            )
+                AppState.duplicates.getGroupsForImages(imageIds).map(g => g.group_hash),
+            ),
         };
 
         // Update title
@@ -2367,7 +2367,7 @@ const Gallery = {
         try {
             const groupHash = await AppState.duplicates.createGroup(
                 name.trim(),
-                this._groupPickerState.imageIds
+                this._groupPickerState.imageIds,
             );
             // Add to selected set
             this._groupPickerState.selectedGroups.add(groupHash);
@@ -2426,7 +2426,7 @@ const Gallery = {
                 // Update filter with remaining images
                 App.setFilter({
                     ...filter,
-                    imageIds: group.image_ids
+                    imageIds: group.image_ids,
                 });
             } else {
                 // Group is now empty - return to groups screen
@@ -2457,7 +2457,7 @@ const Gallery = {
      */
     _hideLoading() {
         AppState.loading.hide('gallery');
-    }
+    },
 };
 
 // Register module with App

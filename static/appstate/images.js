@@ -346,7 +346,7 @@ AppState.images = (function() {
          */
         get(id) {
             return _cache?.get(id) || null;
-        }
+        },
     };
 
     // =========================================================================
@@ -368,7 +368,7 @@ AppState.images = (function() {
             if (face.person_id) {
                 const existing = personUpdates.get(face.person_id) || {
                     decrement: 0,
-                    wasPreferred: false
+                    wasPreferred: false,
                 };
                 existing.decrement++;
 
@@ -393,15 +393,15 @@ AppState.images = (function() {
             const person = AppState.people._internal.get(personId);
             if (person && updates.wasPreferred) {
                 const remainingFace = AppState.faces._internal.getFirstForPerson(
-                    personId, { excludingImageId: imageId }
+                    personId, { excludingImageId: imageId },
                 );
                 if (remainingFace) {
                     AppState.people._internal.update(personId, {
-                        preferred_face_id: remainingFace.id
+                        preferred_face_id: remainingFace.id,
                     });
                     AppState.people._internal.bustThumbnail(personId);
                     AppState.faces._internal.update(remainingFace.id, {
-                        manually_tagged: true
+                        manually_tagged: true,
                     });
                 }
             }
@@ -708,7 +708,7 @@ AppState.images = (function() {
             const response = await App.apiGet(`/similar/${referenceId}`);
             _similarities = {
                 referenceId,
-                scores: new Map(response.data.results.map(r => [r.id, r.similarity]))
+                scores: new Map(response.data.results.map(r => [r.id, r.similarity])),
             };
             _markDisplayListDirty();
             broadcast({ type: 'changed', property: 'similarities' });
@@ -788,7 +788,7 @@ AppState.images = (function() {
          */
         async getFilteredByPeople(peopleIds) {
             const response = await App.apiGet(
-                `/images?people=${encodeURIComponent(peopleIds.join(','))}`
+                `/images?people=${encodeURIComponent(peopleIds.join(','))}`,
             );
             const images = response.data.images || [];
             return new Set(images.map(img => String(img.id)));
@@ -832,6 +832,6 @@ AppState.images = (function() {
         invalidate() {
             _cache = null;
             _cacheEpoch = null;
-        }
+        },
     };
 })();

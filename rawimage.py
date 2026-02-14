@@ -32,13 +32,13 @@ Usage:
 
 from __future__ import annotations
 
+import logging
 from datetime import datetime
 from pathlib import Path
-from PIL import Image, ImageOps
 
 import cv2
-import logging
 import numpy as np
+from PIL import Image, ImageOps
 
 # Configure module logger
 logger = logging.getLogger(__name__)
@@ -47,6 +47,7 @@ logger = logging.getLogger(__name__)
 # gracefully if it's missing (RAW files simply won't load).
 try:
     import rawpy
+
     _HAS_RAWPY = True
 except ImportError:
     _HAS_RAWPY = False
@@ -55,6 +56,7 @@ except ImportError:
 # Try to import exifread — needed for RAW EXIF timestamps.
 try:
     import exifread
+
     _HAS_EXIFREAD = True
 except ImportError:
     _HAS_EXIFREAD = False
@@ -67,27 +69,29 @@ except ImportError:
 
 # All recognised camera RAW file extensions (lowercase, with leading dot).
 # This is a frozenset for fast O(1) membership tests during folder scanning.
-RAW_EXTENSIONS: frozenset[str] = frozenset({
-    '.cr2',   # Canon (older)
-    '.cr3',   # Canon (newer, HEIF-based)
-    '.nef',   # Nikon
-    '.nrw',   # Nikon (compact cameras)
-    '.arw',   # Sony
-    '.srf',   # Sony (older)
-    '.dng',   # Adobe Digital Negative (universal)
-    '.raf',   # Fujifilm
-    '.rw2',   # Panasonic
-    '.orf',   # Olympus (OM System)
-    '.pef',   # Pentax
-    '.srw',   # Samsung
-    '.x3f',   # Sigma (Foveon sensor)
-    '.3fr',   # Hasselblad
-    '.iiq',   # Phase One
-    '.rwl',   # Leica
-    '.kdc',   # Kodak
-    '.dcr',   # Kodak (older)
-    '.erf',   # Epson
-})
+RAW_EXTENSIONS: frozenset[str] = frozenset(
+    {
+        '.cr2',  # Canon (older)
+        '.cr3',  # Canon (newer, HEIF-based)
+        '.nef',  # Nikon
+        '.nrw',  # Nikon (compact cameras)
+        '.arw',  # Sony
+        '.srf',  # Sony (older)
+        '.dng',  # Adobe Digital Negative (universal)
+        '.raf',  # Fujifilm
+        '.rw2',  # Panasonic
+        '.orf',  # Olympus (OM System)
+        '.pef',  # Pentax
+        '.srw',  # Samsung
+        '.x3f',  # Sigma (Foveon sensor)
+        '.3fr',  # Hasselblad
+        '.iiq',  # Phase One
+        '.rwl',  # Leica
+        '.kdc',  # Kodak
+        '.dcr',  # Kodak (older)
+        '.erf',  # Epson
+    }
+)
 
 
 def is_raw_format(path: Path | str) -> bool:
@@ -105,6 +109,7 @@ def is_raw_format(path: Path | str) -> bool:
 # ============================================================================
 # IMAGE LOADING — PIL
 # ============================================================================
+
 
 def open_image(path: Path | str) -> Image.Image:
     """Open an image file and return a PIL Image with correct orientation.
@@ -159,10 +164,7 @@ def _open_raw_as_pil(path: Path) -> Image.Image:
         rawpy.LibRawError: If the RAW file cannot be decoded.
     """
     if not _HAS_RAWPY:
-        raise RuntimeError(
-            f'Cannot open RAW file {path}: rawpy is not installed. '
-            f'Install it with: pip install rawpy'
-        )
+        raise RuntimeError(f'Cannot open RAW file {path}: rawpy is not installed. Install it with: pip install rawpy')
 
     with rawpy.imread(str(path)) as raw:
         # use_camera_wb=True  — use the white balance recorded by the camera
@@ -176,6 +178,7 @@ def _open_raw_as_pil(path: Path) -> Image.Image:
 # ============================================================================
 # IMAGE LOADING — NUMPY / OPENCV
 # ============================================================================
+
 
 def open_image_as_numpy(path: Path | str) -> np.ndarray | None:
     """Open an image file and return a BGR numpy array for OpenCV processing.
@@ -219,9 +222,7 @@ def _open_raw_as_bgr(path: Path) -> np.ndarray:
         RuntimeError: If rawpy is not installed.
     """
     if not _HAS_RAWPY:
-        raise RuntimeError(
-            f'Cannot open RAW file {path}: rawpy is not installed.'
-        )
+        raise RuntimeError(f'Cannot open RAW file {path}: rawpy is not installed.')
 
     with rawpy.imread(str(path)) as raw:
         rgb = raw.postprocess(use_camera_wb=True, output_bps=8)
@@ -233,6 +234,7 @@ def _open_raw_as_bgr(path: Path) -> np.ndarray:
 # ============================================================================
 # RAW METADATA — DIMENSIONS
 # ============================================================================
+
 
 def get_raw_dimensions(path: Path | str) -> tuple[int, int] | None:
     """Get the output dimensions of a RAW file without full demosaicing.
@@ -269,6 +271,7 @@ def get_raw_dimensions(path: Path | str) -> tuple[int, int] | None:
 # ============================================================================
 # RAW METADATA — EXIF TIMESTAMPS
 # ============================================================================
+
 
 def extract_raw_exif(path: Path | str) -> datetime | None:
     """Extract a timestamp from a RAW file's EXIF data using exifread.

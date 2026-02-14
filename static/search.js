@@ -105,7 +105,7 @@ const Search = {
     _getAllPeopleSorted() {
         // Spread to avoid mutating AppState's internal array (sort is in-place)
         return [...AppState.people.getAll()].sort((a, b) =>
-            a.name.localeCompare(b.name, undefined, { sensitivity: 'base' })
+            a.name.localeCompare(b.name, undefined, { sensitivity: 'base' }),
         );
     },
 
@@ -145,7 +145,7 @@ const Search = {
             peopleCancelBtn: App.$('dialog-people-cancel'),
             // Metadata filter elements
             metadataChips: App.$('filter-metadata-chips'),
-            metadataPickerBtn: App.$('btn-metadata-picker')
+            metadataPickerBtn: App.$('btn-metadata-picker'),
         };
 
         // Check face detection status
@@ -445,24 +445,6 @@ const Search = {
     },
 
     /**
-     * Fuzzy/subsequence match - each char in query appears in order in target.
-     * @param {string} query - Search query (lowercase)
-     * @param {string} target - Target string (lowercase)
-     * @returns {boolean}
-     * @private
-     */
-    _fuzzyMatch(query, target) {
-        if (!query) return true;
-        let qi = 0;
-        for (let ti = 0; ti < target.length && qi < query.length; ti++) {
-            if (target[ti] === query[qi]) {
-                qi++;
-            }
-        }
-        return qi === query.length;
-    },
-
-    /**
      * Renders the available people panel in the picker.
      * @private
      */
@@ -692,7 +674,7 @@ const Search = {
             dateEnd: dateEnd || null,
             rating: rating || null,
             people: people,
-            metadata: metadata
+            metadata: metadata,
         };
     },
 
@@ -734,7 +716,7 @@ const Search = {
             if (start > end) {
                 return {
                     valid: false,
-                    message: 'Start date cannot be after end date'
+                    message: 'Start date cannot be after end date',
                 };
             }
         }
@@ -799,7 +781,7 @@ const Search = {
         if (filter && filter.metadata) {
             try {
                 const response = await App.apiPost('/metadata-search', {
-                    criteria: filter.metadata
+                    criteria: filter.metadata,
                 });
                 if (response?.data?.image_ids) {
                     filter.metadataImageIds = new Set(response.data.image_ids);
@@ -988,7 +970,7 @@ const Search = {
             'Camera', 'Lens', 'Focal Length', 'Aperture', 'Shutter Speed',
             'ISO', 'Exposure Comp', 'Exposure Program', 'Metering', 'Flash',
             'White Balance', 'Color Space', 'Software', 'Artist', 'Copyright',
-            'GPS'
+            'GPS',
         ];
 
         // Sort: ordered first, then extras alphabetically. Skip 'Date Taken'.
@@ -1054,7 +1036,7 @@ const Search = {
             'Color Space': 'sRGB',
             'Software': 'Lightroom',
             'Artist': 'Name',
-            'Copyright': '2024'
+            'Copyright': '2024',
         };
         return hints[key] || 'value';
     },
@@ -1183,7 +1165,7 @@ const Search = {
             }
         }
         return html;
-    }
+    },
 };
 
 // Register module with App

@@ -111,9 +111,9 @@ AppState.events = (function() {
                 AppState.images.load();
                 break;
 
-            // -----------------------------------------------------------------
-            // Multi-client mutation events
-            // -----------------------------------------------------------------
+                // -----------------------------------------------------------------
+                // Multi-client mutation events
+                // -----------------------------------------------------------------
 
             case 'faces_changed':
                 // data: { updated?: [{id, person_id?, ...}], removed?: [id] }
@@ -472,16 +472,9 @@ AppState.events = (function() {
         /**
          * Start polling for events.
          * Safe to call multiple times - only starts one timer.
-         * Skips polling in mock mode.
          * @param {number} [intervalMs=2000] - Polling interval in ms
          */
         startPolling(intervalMs = 2000) {
-            // Skip in mock mode (no backend to poll)
-            if (typeof App !== 'undefined' && App.mockMode) {
-                console.log('[AppState.events.startPolling] Skipping in mock mode');
-                return;
-            }
-
             if (_pollTimer) return;
 
             _intervalMs = intervalMs;
@@ -515,6 +508,6 @@ AppState.events = (function() {
          * Manually trigger a poll (e.g., after user action).
          * @returns {Promise<void>}
          */
-        poll
+        poll,
     };
 })();

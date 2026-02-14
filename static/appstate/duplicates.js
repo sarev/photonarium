@@ -110,7 +110,7 @@ AppState.duplicates = (function() {
             if (changed) {
                 markDirty(domainRef);
             }
-        }
+        },
     };
 
     // =========================================================================
@@ -138,7 +138,7 @@ AppState.duplicates = (function() {
                 _statusCache[level] = {
                     status: newStatus,
                     progress: data.progress,
-                    total: data.total
+                    total: data.total,
                 };
 
                 if (newStatus !== 'computing' && newStatus !== 'pending') {
@@ -180,7 +180,7 @@ AppState.duplicates = (function() {
         if (!groups) return [];
         return groups.map(g => ({
             ...g,
-            image_ids: [...g.image_ids]
+            image_ids: [...g.image_ids],
         }));
     }
 
@@ -245,7 +245,7 @@ AppState.duplicates = (function() {
                 _statusCache[level] = {
                     status: data.status,
                     progress: data.progress,
-                    total: data.total
+                    total: data.total,
                 };
                 _epochCache[level] = Date.now();
 
@@ -305,7 +305,7 @@ AppState.duplicates = (function() {
             const groups = _groupCache[5] || [];
             if (!imageIds || imageIds.length === 0) return [];
             return groups.filter(g =>
-                imageIds.every(id => g.image_ids.includes(id))
+                imageIds.every(id => g.image_ids.includes(id)),
             );
         },
 
@@ -365,7 +365,7 @@ AppState.duplicates = (function() {
         async sortSemantic(query, imageIds) {
             const response = await App.apiPost('/duplicates/sort-semantic', {
                 query,
-                image_ids: imageIds
+                image_ids: imageIds,
             });
             return response.data?.scores || [];
         },
@@ -609,6 +609,6 @@ AppState.duplicates = (function() {
                 broadcastError(err.message || 'Failed to remove images from group');
                 throw err;
             }
-        }
+        },
     };
 })();

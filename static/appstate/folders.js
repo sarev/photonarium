@@ -227,6 +227,6 @@ AppState.folders = (function() {
          */
         isUpdating() {
             return _status?.status === 'updating';
-        }
+        },
     };
 })();

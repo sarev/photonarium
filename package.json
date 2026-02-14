@@ -1,0 +1,9 @@
+{
+    "private": true,
+    "devDependencies": {
+        "@stylistic/eslint-plugin": "^5.8.0",
+        "eslint": "^10.0.0",
+        "globals": "^17.3.0",
+        "typescript": "^5.9.3"
+    }
+}

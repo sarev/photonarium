@@ -111,10 +111,10 @@ Notes
 
 from __future__ import annotations
 
-from dataclasses import dataclass
-from typing import Hashable, List, Mapping, Optional, Sequence, Tuple
-
 import heapq
+from dataclasses import dataclass
+from typing import Hashable, Mapping, Sequence
+
 import numpy as np
 
 
@@ -137,7 +137,7 @@ class OrderConfig:
     knn_batch: int = 2048
 
 
-def _as_matrix(groups: Mapping[Hashable, Sequence[float]]) -> Tuple[List[Hashable], np.ndarray]:
+def _as_matrix(groups: Mapping[Hashable, Sequence[float]]) -> tuple[list[Hashable], np.ndarray]:
     keys = list(groups.keys())
     if not keys:
         return [], np.empty((0, 0), dtype=np.float32)
@@ -149,9 +149,9 @@ def _as_matrix(groups: Mapping[Hashable, Sequence[float]]) -> Tuple[List[Hashabl
         if dim is None:
             dim = int(v.shape[0])
             if dim == 0:
-                raise ValueError("Embeddings must be non-empty vectors.")
+                raise ValueError('Embeddings must be non-empty vectors.')
         elif v.shape[0] != dim:
-            raise ValueError(f"All embeddings must share the same dimension (got {v.shape[0]} vs {dim}).")
+            raise ValueError(f'All embeddings must share the same dimension (got {v.shape[0]} vs {dim}).')
         vecs.append(v)
 
     X = np.vstack(vecs).astype(np.float32, copy=False)
@@ -176,7 +176,7 @@ def _reduce_pca_incremental(X: np.ndarray, target_dim: int, batch: int, seed: in
     try:
         from sklearn.decomposition import IncrementalPCA  # type: ignore
     except Exception as e:
-        raise RuntimeError("scikit-learn is required for PCA reduction. Install with: pip install scikit-learn") from e
+        raise RuntimeError('scikit-learn is required for PCA reduction. Install with: pip install scikit-learn') from e
 
     ipca = IncrementalPCA(n_components=target_dim, batch_size=batch)
 
@@ -192,7 +192,7 @@ def _reduce_pca_incremental(X: np.ndarray, target_dim: int, batch: int, seed: in
     return Y
 
 
-def _build_knn_hnsw(X32: np.ndarray, k: int, cfg: OrderConfig) -> Tuple[np.ndarray, np.ndarray]:
+def _build_knn_hnsw(X32: np.ndarray, k: int, cfg: OrderConfig) -> tuple[np.ndarray, np.ndarray]:
     """
     Returns (labels, distances) arrays of shape (n, k) where distances are cosine distances.
     Requires: pip install hnswlib
@@ -200,12 +200,12 @@ def _build_knn_hnsw(X32: np.ndarray, k: int, cfg: OrderConfig) -> Tuple[np.ndarr
     try:
         import hnswlib  # type: ignore
     except Exception as e:
-        raise RuntimeError("hnswlib is required at this scale. Install it with: pip install hnswlib") from e
+        raise RuntimeError('hnswlib is required at this scale. Install it with: pip install hnswlib') from e
 
     n, dim = X32.shape
     k = max(1, min(k, n - 1))
 
-    index = hnswlib.Index(space="cosine", dim=dim)
+    index = hnswlib.Index(space='cosine', dim=dim)
     index.init_index(
         max_elements=n,
         ef_construction=cfg.ef_construction,
@@ -243,7 +243,7 @@ def _build_knn_hnsw(X32: np.ndarray, k: int, cfg: OrderConfig) -> Tuple[np.ndarr
     return out_labels, out_dists
 
 
-def _mst_from_knn(knn_labels: np.ndarray, knn_dists: np.ndarray) -> List[List[int]]:
+def _mst_from_knn(knn_labels: np.ndarray, knn_dists: np.ndarray) -> list[list[int]]:
     """
     Build an MST using Prim’s algorithm over the implicit symmetrised kNN graph.
     We avoid Python tuple-heavy adjacency lists for the full graph.
@@ -251,12 +251,12 @@ def _mst_from_knn(knn_labels: np.ndarray, knn_dists: np.ndarray) -> List[List[in
     """
     n, k = knn_labels.shape
     in_tree = np.zeros(n, dtype=bool)
-    tree: List[List[int]] = [[] for _ in range(n)]
+    tree: list[list[int]] = [[] for _ in range(n)]
 
     # For Prim: best known edge to each node not yet in tree.
     best_w = np.full(n, np.inf, dtype=np.float32)
     best_parent = np.full(n, -1, dtype=np.int32)
-    heap: List[Tuple[float, int]] = []
+    heap: list[tuple[float, int]] = []
 
     def relax_from(u: int) -> None:
         # Consider directed edges u -> v, but treat as usable undirected candidates.
@@ -294,18 +294,18 @@ def _mst_from_knn(knn_labels: np.ndarray, knn_dists: np.ndarray) -> List[List[in
     return tree
 
 
-def _dfs_order(tree: List[List[int]]) -> List[int]:
+def _dfs_order(tree: list[list[int]]) -> list[int]:
     n = len(tree)
     if n == 0:
         return []
 
     visited = np.zeros(n, dtype=bool)
-    order: List[int] = []
+    order: list[int] = []
 
     # Start on a fringe for a more “walk-in” feel.
     start = min(range(n), key=lambda i: (len(tree[i]), i))
 
-    stack: List[Tuple[int, int]] = [(start, -1)]
+    stack: list[tuple[int, int]] = [(start, -1)]
     while stack:
         u, parent = stack.pop()
         if visited[u]:
@@ -340,8 +340,8 @@ def _dfs_order(tree: List[List[int]]) -> List[int]:
 def order_groups_semantic_flow(
     groups: Mapping[Hashable, Sequence[float]],
     *,
-    config: Optional[OrderConfig] = None,
-) -> List[Hashable]:
+    config: OrderConfig | None = None,
+) -> list[Hashable]:
     """
     Input:  {group_key: embedding_vector} (one vector per group, typically centroid)
     Output: [group_key, ...] in a semantically smoother order.
@@ -375,8 +375,8 @@ def order_groups_semantic_flow(
 
 
 # --- Example usage (remove in your integration) ---
-if __name__ == "__main__":
+if __name__ == '__main__':
     rng = np.random.default_rng(0)
-    groups = {f"g{i}": rng.normal(size=(512,)).astype(np.float32) for i in range(5000)}
+    groups = {f'g{i}': rng.normal(size=(512,)).astype(np.float32) for i in range(5000)}
     order = order_groups_semantic_flow(groups)
     print(order[:10])

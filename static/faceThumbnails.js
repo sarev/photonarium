@@ -79,5 +79,5 @@ const FaceThumbnails = {
      */
     clear() {
         this._cacheBust.clear();
-    }
+    },
 };

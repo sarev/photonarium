@@ -125,6 +125,6 @@ AppState.search = (function() {
             _query = null;
             _threshold = null;
             broadcast({ type: 'changed' });
-        }
+        },
     };
 })();

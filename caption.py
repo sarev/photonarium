@@ -37,7 +37,7 @@ os.environ['TOKENIZERS_PARALLELISM'] = 'false'
 os.environ['HF_HUB_OFFLINE'] = '1'
 
 import torch
-from PIL import Image
+
 from rawimage import open_image as raw_open_image
 
 
@@ -65,21 +65,27 @@ _US_TO_UK_SUBSTRINGS = [
     ('savior', 'saviour'),
     ('vapor', 'vapour'),
     # -ize → -ise (longer suffixes avoid "size", "prize", "seize")
-    ('ognize', 'ognise'),   # recognize
-    ('alize', 'alise'),     # realize, specialize, normalize, generalize, localize...
-    ('ganize', 'ganise'),   # organize, reorganize
-    ('orize', 'orise'),     # authorize, memorize, categorize
-    ('icize', 'icise'),     # criticize, publicize
-    ('asize', 'asise'),     # emphasize
-    ('imize', 'imise'),     # minimize, maximize, optimize
+    ('ognize', 'ognise'),  # recognize
+    ('alize', 'alise'),  # realize, specialize, normalize, generalize, localize...
+    ('ganize', 'ganise'),  # organize, reorganize
+    ('orize', 'orise'),  # authorize, memorize, categorize
+    ('icize', 'icise'),  # criticize, publicize
+    ('asize', 'asise'),  # emphasize
+    ('imize', 'imise'),  # minimize, maximize, optimize
     # -yze → -yse
-    ('alyze', 'alyse'),     # analyze, paralyze
+    ('alyze', 'alyse'),  # analyze, paralyze
     # Doubled consonants before -ing/-ed/-er
-    ('aveling', 'avelling'), ('aveled', 'avelled'), ('aveler', 'aveller'),  # travel
-    ('anceling', 'ancelling'), ('anceled', 'ancelled'),  # cancel
-    ('ueling', 'uelling'), ('ueled', 'uelled'),  # fuel
-    ('abeling', 'abelling'), ('abeled', 'abelled'),  # label
-    ('odeling', 'odelling'), ('odeled', 'odelled'),  # model
+    ('aveling', 'avelling'),
+    ('aveled', 'avelled'),
+    ('aveler', 'aveller'),  # travel
+    ('anceling', 'ancelling'),
+    ('anceled', 'ancelled'),  # cancel
+    ('ueling', 'uelling'),
+    ('ueled', 'uelled'),  # fuel
+    ('abeling', 'abelling'),
+    ('abeled', 'abelled'),  # label
+    ('odeling', 'odelling'),
+    ('odeled', 'odelled'),  # model
     # Other
     ('jewelry', 'jewellery'),
     ('pajamas', 'pyjamas'),
@@ -88,11 +94,17 @@ _US_TO_UK_SUBSTRINGS = [
 # Whole-word replacements (need word boundaries to avoid false positives)
 _US_TO_UK_WORDS = [
     # -er → -re (can't use substring - "er" too common)
-    ('center', 'centre'), ('centers', 'centres'), ('centered', 'centred'),
-    ('fiber', 'fibre'), ('fibers', 'fibres'),
-    ('liter', 'litre'), ('liters', 'litres'),
-    ('meter', 'metre'), ('meters', 'metres'),
-    ('theater', 'theatre'), ('theaters', 'theatres'),
+    ('center', 'centre'),
+    ('centers', 'centres'),
+    ('centered', 'centred'),
+    ('fiber', 'fibre'),
+    ('fibers', 'fibres'),
+    ('liter', 'litre'),
+    ('liters', 'litres'),
+    ('meter', 'metre'),
+    ('meters', 'metres'),
+    ('theater', 'theatre'),
+    ('theaters', 'theatres'),
     # Other whole words
     ('gray', 'grey'),
     ('airplane', 'aeroplane'),
@@ -194,7 +206,8 @@ class CaptionGenerator:
 
             if self._is_blip2:
                 # BLIP-2 models (larger, more capable)
-                from transformers import Blip2Processor, Blip2ForConditionalGeneration
+                from transformers import Blip2ForConditionalGeneration, Blip2Processor
+
                 self._processor = Blip2Processor.from_pretrained(
                     self.model_name,
                     clean_up_tokenization_spaces=False,
@@ -205,7 +218,8 @@ class CaptionGenerator:
                 )
             else:
                 # Standard BLIP models (smaller, faster)
-                from transformers import BlipProcessor, BlipForConditionalGeneration
+                from transformers import BlipForConditionalGeneration, BlipProcessor
+
                 self._processor = BlipProcessor.from_pretrained(
                     self.model_name,
                     clean_up_tokenization_spaces=False,
@@ -252,13 +266,14 @@ class CaptionGenerator:
         for us, uk in _US_TO_UK_SUBSTRINGS:
             if us in result.lower():
                 # Case-preserving replace
-                def replace_preserving_case(match):
+                def replace_preserving_case(match, uk=uk):
                     original = match.group()
                     if original.isupper():
                         return uk.upper()
                     elif original[0].isupper():
                         return uk[0].upper() + uk[1:]
                     return uk
+
                 result = re.sub(re.escape(us), replace_preserving_case, result, flags=re.IGNORECASE)
 
         # Whole-word replacements (need word boundaries)
@@ -272,6 +287,7 @@ class CaptionGenerator:
                 elif original[0].isupper():
                     return uk[0].upper() + uk[1:]
                 return uk
+
             result = pattern.sub(replace_word, result)
 
         return result
@@ -316,9 +332,7 @@ class CaptionGenerator:
                 )
 
             # Decode tokens to text
-            caption = self.processor.batch_decode(
-                generated_ids, skip_special_tokens=True
-            )[0].strip()
+            caption = self.processor.batch_decode(generated_ids, skip_special_tokens=True)[0].strip()
 
             # Fix common formatting issues
             if caption:

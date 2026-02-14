@@ -83,7 +83,7 @@
     const required = [
         'createSubscriberSystem', 'transaction', 'queueTransaction', 'markDirty',
         'view', 'nav', 'filter', 'selection', 'status', 'search',
-        'folders', 'duplicates', 'faces', 'people', 'images', 'loading', 'events'
+        'folders', 'duplicates', 'faces', 'people', 'images', 'loading', 'events',
     ];
 
     const missing = required.filter(name => !AppState[name]);
@@ -97,6 +97,6 @@
     AppState.version = '2.0.0';
     AppState.domains = [
         'view', 'nav', 'filter', 'selection', 'status', 'search',
-        'folders', 'duplicates', 'faces', 'people', 'images', 'loading', 'events'
+        'folders', 'duplicates', 'faces', 'people', 'images', 'loading', 'events',
     ];
 })();

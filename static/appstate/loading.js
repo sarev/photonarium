@@ -170,6 +170,6 @@ AppState.loading = (function() {
          */
         getMessage() {
             return _message;
-        }
+        },
     };
 })();

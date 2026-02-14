@@ -139,7 +139,7 @@ const ThumbnailLoader = {
     _scrollState: {
         itemsPerRow: 1,
         visibleStartRow: 0,
-        visibleEndRow: 0
+        visibleEndRow: 0,
     },
 
     /**
@@ -163,7 +163,7 @@ const ThumbnailLoader = {
         this._scrollState = {
             itemsPerRow,
             visibleStartRow,
-            visibleEndRow
+            visibleEndRow,
         };
 
         // Prune in-flight requests that are now outside buffer zone
@@ -347,7 +347,7 @@ const ThumbnailLoader = {
 
         try {
             const response = await fetch(url, {
-                signal: controller.signal
+                signal: controller.signal,
             });
 
             clearTimeout(timeoutId);
@@ -409,9 +409,9 @@ const ThumbnailLoader = {
             queueLength: this._queue.length,
             inFlightCount: this._inFlight.size,
             activeCount: this._activeCount,
-            cacheBustCount: this._cacheBust.size
+            cacheBustCount: this._cacheBust.size,
         };
-    }
+    },
 };
 
 // Make ThumbnailLoader available globally
@@ -501,7 +501,7 @@ const VirtualGrid = {
                 getItemHeight: config.getItemHeight || null,
                 onItemCreated: config.onItemCreated || null,
                 getThumbnailUrl: config.getThumbnailUrl || null,
-                getThumbSize: config.getThumbSize || null
+                getThumbSize: config.getThumbSize || null,
             },
 
             // ---------------------------------------------------------------
@@ -526,7 +526,7 @@ const VirtualGrid = {
                 // Used to avoid duplicate requests for the same item.
                 pendingItems: new Set(),
 
-                lastScrollProcess: 0    // Timestamp for scroll throttle
+                lastScrollProcess: 0,    // Timestamp for scroll throttle
             },
 
             // Inner container: positioned relative, contains all absolutely
@@ -1136,14 +1136,14 @@ const VirtualGrid = {
                 const firstRow = Math.max(0, Math.floor((rect.top - padding) / itemHeight));
                 const lastRow = Math.min(
                     Math.ceil(totalCount / itemsPerRow) - 1,
-                    Math.floor((rect.bottom - padding) / itemHeight)
+                    Math.floor((rect.bottom - padding) / itemHeight),
                 );
 
                 // Column range that could intersect
                 const firstCol = Math.max(0, Math.floor((rect.left - padding) / colStride));
                 const lastCol = Math.min(
                     itemsPerRow - 1,
-                    Math.floor((rect.right - padding) / colStride)
+                    Math.floor((rect.right - padding) / colStride),
                 );
 
                 const ids = [];
@@ -1272,14 +1272,14 @@ const VirtualGrid = {
                     }
                     this._state.renderedItems.delete(id);
                 }
-            }
+            },
         };
 
         // Initialise
         instance._init();
 
         return instance;
-    }
+    },
 };
 
 // Make VirtualGrid available globally
@@ -1402,7 +1402,7 @@ const GridSelection = {
                 enableKeyboard: config.enableKeyboard !== false,
                 enableDragBox: config.enableDragBox !== false,
                 enableLongPress: config.enableLongPress !== false,
-                focusContainer: config.focusContainer || null
+                focusContainer: config.focusContainer || null,
             },
 
             // Selection state
@@ -1611,7 +1611,7 @@ const GridSelection = {
                     box: null,
                     autoScrollInterval: null,
                     lastMouseEvent: null,
-                    scrollDirection: 0
+                    scrollDirection: 0,
                 };
 
                 // Create selection box element
@@ -1752,10 +1752,10 @@ const GridSelection = {
                     // during auto-scroll) are still included in the selection.
                     const boxStyle = box.style;
                     const contentRect = {
-                        left:   parseFloat(boxStyle.left),
-                        top:    parseFloat(boxStyle.top),
-                        right:  parseFloat(boxStyle.left) + parseFloat(boxStyle.width),
-                        bottom: parseFloat(boxStyle.top) + parseFloat(boxStyle.height)
+                        left: parseFloat(boxStyle.left),
+                        top: parseFloat(boxStyle.top),
+                        right: parseFloat(boxStyle.left) + parseFloat(boxStyle.width),
+                        bottom: parseFloat(boxStyle.top) + parseFloat(boxStyle.height),
                     };
                     const idsInBox = this._config.grid.getItemIdsInRect(contentRect);
 
@@ -2342,11 +2342,11 @@ const GridSelection = {
                 this.unbind();
                 this._selected.clear();
                 this._anchor = null;
-            }
+            },
         };
 
         return instance;
-    }
+    },
 };
 
 // Make GridSelection available globally

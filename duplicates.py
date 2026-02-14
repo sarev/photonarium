@@ -33,13 +33,14 @@ from config import Config, get_default_config
 logger = logging.getLogger(__name__)
 
 # Semantic constants for group levels (avoids magic numbers throughout)
-LEVEL_DIRECTORY = 4   # Auto-generated groups mirroring filesystem directories
-LEVEL_CUSTOM = 5      # User-curated albums/groups
+LEVEL_DIRECTORY = 4  # Auto-generated groups mirroring filesystem directories
+LEVEL_CUSTOM = 5  # User-curated albums/groups
 
 
 # =============================================================================
 # UTILITY FUNCTIONS
 # =============================================================================
+
 
 def embedding_to_numpy(embedding_bytes: bytes) -> np.ndarray:
     """Convert stored embedding bytes back to numpy array.
@@ -149,6 +150,7 @@ def rows_to_dicts(rows: list) -> list[dict[str, Any]]:
 # UNION-FIND DATA STRUCTURE
 # =============================================================================
 
+
 class UnionFind:
     """Union-Find (Disjoint Set Union) data structure with path compression and union-by-rank.
 
@@ -253,7 +255,7 @@ class UnionFind:
             Root ID of the set containing this element.
         """
         if self._id_to_idx is None:
-            raise ValueError("UnionFind not initialized with IDs")
+            raise ValueError('UnionFind not initialized with IDs')
         idx = self._id_to_idx[id_]
         root_idx = self.find(idx)
         return self._ids[root_idx]
@@ -269,7 +271,7 @@ class UnionFind:
             True if the sets were merged, False if already in same set.
         """
         if self._id_to_idx is None:
-            raise ValueError("UnionFind not initialized with IDs")
+            raise ValueError('UnionFind not initialized with IDs')
         return self.union(self._id_to_idx[id1], self._id_to_idx[id2])
 
     def connected(self, x: int, y: int) -> bool:
@@ -307,7 +309,7 @@ class UnionFind:
             Only includes groups with more than one member.
         """
         if self._ids is None:
-            raise ValueError("UnionFind not initialized with IDs")
+            raise ValueError('UnionFind not initialized with IDs')
 
         groups: dict[str, list[str]] = {}
         for i in range(self._n):
@@ -328,8 +330,7 @@ class UnionFind:
             Dict mapping root index to list of member indices.
         """
         all_groups = self.extract_groups()
-        return {root: members for root, members in all_groups.items()
-                if len(members) >= min_size}
+        return {root: members for root, members in all_groups.items() if len(members) >= min_size}
 
     def load_existing_groups(self, groups: list[set[str]]) -> None:
         """Initialize from existing groups (ID mode).
@@ -340,7 +341,7 @@ class UnionFind:
             groups: List of sets, each containing IDs in the same group.
         """
         if self._id_to_idx is None:
-            raise ValueError("UnionFind not initialized with IDs")
+            raise ValueError('UnionFind not initialized with IDs')
 
         for group in groups:
             group_list = list(group)
@@ -361,6 +362,7 @@ class UnionFind:
 # DATABASE HELPER FUNCTIONS
 # =============================================================================
 
+
 def _get_metadata(conn: sqlite3.Connection, key: str) -> str | None:
     """Get a metadata value by key."""
     cursor = conn.execute('SELECT value FROM metadata WHERE key = ?', (key,))
@@ -370,10 +372,7 @@ def _get_metadata(conn: sqlite3.Connection, key: str) -> str | None:
 
 def _set_metadata(conn: sqlite3.Connection, key: str, value: str) -> None:
     """Set a metadata value."""
-    conn.execute(
-        'INSERT OR REPLACE INTO metadata (key, value) VALUES (?, ?)',
-        (key, value)
-    )
+    conn.execute('INSERT OR REPLACE INTO metadata (key, value) VALUES (?, ?)', (key, value))
     conn.commit()
 
 
@@ -410,7 +409,7 @@ def _insert_duplicate_group(
     for image_id in image_ids:
         conn.execute(
             'INSERT INTO duplicate_groups (level, group_hash, image_id, updated_at) VALUES (?, ?, ?, ?)',
-            (level, group_hash, image_id, now)
+            (level, group_hash, image_id, now),
         )
 
 
@@ -433,28 +432,25 @@ def _get_dirty_image_ids(conn: sqlite3.Connection, epoch: str) -> list[str]:
         return [row['id'] for row in cursor.fetchall()]
 
     # Images modified after last duplicate computation
-    cursor = conn.execute("""
+    cursor = conn.execute(
+        """
         SELECT id FROM images
         WHERE deleted = 0 AND updated_at > ?
-    """, (epoch,))
+    """,
+        (epoch,),
+    )
     return [row['id'] for row in cursor.fetchall()]
 
 
 def _get_group_count(conn: sqlite3.Connection, level: int) -> int:
     """Get the number of duplicate groups at a level."""
-    cursor = conn.execute(
-        'SELECT COUNT(DISTINCT group_hash) as cnt FROM duplicate_groups WHERE level = ?',
-        (level,)
-    )
+    cursor = conn.execute('SELECT COUNT(DISTINCT group_hash) as cnt FROM duplicate_groups WHERE level = ?', (level,))
     return cursor.fetchone()['cnt']
 
 
 def _get_image_to_group_mapping(conn: sqlite3.Connection, level: int) -> dict[str, str]:
     """Get mapping of image IDs to their group hashes."""
-    cursor = conn.execute(
-        'SELECT image_id, group_hash FROM duplicate_groups WHERE level = ?',
-        (level,)
-    )
+    cursor = conn.execute('SELECT image_id, group_hash FROM duplicate_groups WHERE level = ?', (level,))
     return {row['image_id']: row['group_hash'] for row in cursor.fetchall()}
 
 
@@ -468,7 +464,7 @@ def _add_image_to_group(
     now = datetime.now().isoformat()
     conn.execute(
         'INSERT INTO duplicate_groups (level, group_hash, image_id, updated_at) VALUES (?, ?, ?, ?)',
-        (level, group_hash, image_id, now)
+        (level, group_hash, image_id, now),
     )
 
 
@@ -486,16 +482,17 @@ def _merge_groups(
         return
     now = datetime.now().isoformat()
     conn.execute(
-        '''UPDATE duplicate_groups
+        """UPDATE duplicate_groups
            SET group_hash = ?, updated_at = ?
-           WHERE level = ? AND group_hash = ?''',
-        (group_hash_keep, now, level, group_hash_merge)
+           WHERE level = ? AND group_hash = ?""",
+        (group_hash_keep, now, level, group_hash_merge),
     )
 
 
 # =============================================================================
 # LEVEL 0: IDENTICAL DUPLICATES (CHECKSUM)
 # =============================================================================
+
 
 def _compute_duplicates_level0(conn: sqlite3.Connection) -> int:
     """Compute level 0 duplicates (identical checksum).
@@ -543,10 +540,7 @@ def _compute_duplicates_level0_incremental(
 
     # Get checksums for dirty images
     placeholders = ','.join('?' * len(dirty_ids))
-    cursor = conn.execute(
-        f'SELECT id, checksum FROM images WHERE id IN ({placeholders}) AND deleted = 0',
-        dirty_ids
-    )
+    cursor = conn.execute(f'SELECT id, checksum FROM images WHERE id IN ({placeholders}) AND deleted = 0', dirty_ids)
     dirty_checksums = {row['id']: row['checksum'] for row in cursor.fetchall()}
 
     new_groups = 0
@@ -557,8 +551,7 @@ def _compute_duplicates_level0_incremental(
 
         # Find all images with this checksum (excluding the dirty one)
         cursor = conn.execute(
-            'SELECT id FROM images WHERE checksum = ? AND deleted = 0 AND id != ?',
-            (checksum, dirty_id)
+            'SELECT id FROM images WHERE checksum = ? AND deleted = 0 AND id != ?', (checksum, dirty_id)
         )
         matches = [row['id'] for row in cursor.fetchall()]
 
@@ -676,10 +669,7 @@ def _find_matches_in_bucket_vectorized(
     )
 
     # Convert bucket-local indices to global indices
-    matches = [
-        (int(bucket_idx_arr[i]), int(bucket_idx_arr[j]))
-        for i, j in zip(i_indices, j_indices)
-    ]
+    matches = [(int(bucket_idx_arr[i]), int(bucket_idx_arr[j])) for i, j in zip(i_indices, j_indices, strict=True)]
 
     return matches
 
@@ -709,13 +699,11 @@ def _compute_level1_brute_force(
     distances = _popcount_vectorized(xor_matrix.ravel()).reshape(n, n)
 
     # Find matches in upper triangle
-    i_indices, j_indices = np.where(
-        (distances <= threshold) & (np.triu(np.ones((n, n), dtype=bool), k=1))
-    )
+    i_indices, j_indices = np.where((distances <= threshold) & (np.triu(np.ones((n, n), dtype=bool), k=1)))
 
     # Union all matches
     matches = len(i_indices)
-    for i, j in zip(i_indices, j_indices):
+    for i, j in zip(i_indices, j_indices, strict=True):
         uf.union(int(i), int(j))
 
     comparisons = n * (n - 1) // 2
@@ -755,7 +743,7 @@ def _compute_level1_lsh(
     # Build inverted index: band_value -> list of image indices
     band_indices: list[dict[int, list[int]]] = [{} for _ in range(num_bands)]
 
-    for idx, (img_id, hash_int) in enumerate(image_data):
+    for idx, (_img_id, hash_int) in enumerate(image_data):
         for band in range(num_bands):
             shift = band * bits_per_band
             if band == num_bands - 1:
@@ -771,15 +759,8 @@ def _compute_level1_lsh(
 
     # Compute bucket statistics for metrics
     total_buckets = sum(len(band) for band in band_indices)
-    non_singleton_buckets = sum(
-        1 for band in band_indices
-        for bucket in band.values()
-        if len(bucket) > 1
-    )
-    max_bucket_size = max(
-        (len(bucket) for band in band_indices for bucket in band.values()),
-        default=0
-    )
+    non_singleton_buckets = sum(1 for band in band_indices for bucket in band.values() if len(bucket) > 1)
+    max_bucket_size = max((len(bucket) for band in band_indices for bucket in band.values()), default=0)
 
     # Pre-extract hashes into numpy array for vectorized operations
     hashes = np.array([h for _, h in image_data], dtype=np.uint64)
@@ -800,9 +781,7 @@ def _compute_level1_lsh(
 
             if bucket_size >= _VECTORIZE_MIN_BUCKET:
                 # Vectorized comparison for larger buckets
-                bucket_matches = _find_matches_in_bucket_vectorized(
-                    bucket, hashes, threshold
-                )
+                bucket_matches = _find_matches_in_bucket_vectorized(bucket, hashes, threshold)
                 for idx1, idx2 in bucket_matches:
                     # Normalize pair ordering
                     if idx1 > idx2:
@@ -825,9 +804,7 @@ def _compute_level1_lsh(
                             continue
                         compared.add(pair)
 
-                        dist = _hamming_distance_fast(
-                            int(hashes[idx1]), int(hashes[idx2])
-                        )
+                        dist = _hamming_distance_fast(int(hashes[idx1]), int(hashes[idx2]))
                         comparisons += 1
 
                         if dist <= threshold:
@@ -916,10 +893,7 @@ def _compute_duplicates_level1(conn: sqlite3.Connection, threshold: int = 4) -> 
             f'  LSH config: {metrics["num_bands"]} bands × {metrics["bits_per_band"]} bits, '
             f'{metrics["candidate_pairs"]:,} candidate pairs'
         )
-        logger.info(
-            f'  Completed: {comparisons:,} comparisons ({reduction:.1f}% reduction), '
-            f'{matches:,} matches'
-        )
+        logger.info(f'  Completed: {comparisons:,} comparisons ({reduction:.1f}% reduction), {matches:,} matches')
         if metrics['max_bucket_size'] > 100:
             logger.debug(
                 f'  Bucket stats: {metrics["non_singleton_buckets"]} non-singleton buckets, '
@@ -957,9 +931,7 @@ def _compute_duplicates_level1_incremental(
     image_to_group = _get_image_to_group_mapping(conn, level=1)
 
     # Get all images with perceptual hashes for comparison
-    cursor = conn.execute(
-        'SELECT id, perceptual_hash FROM images WHERE deleted = 0 AND perceptual_hash IS NOT NULL'
-    )
+    cursor = conn.execute('SELECT id, perceptual_hash FROM images WHERE deleted = 0 AND perceptual_hash IS NOT NULL')
     all_images = {row['id']: row['perceptual_hash'] for row in cursor.fetchall()}
 
     dirty_hashes = {img_id: all_images.get(img_id) for img_id in dirty_ids if img_id in all_images}
@@ -1019,6 +991,7 @@ def _compute_duplicates_level1_incremental(
 # =============================================================================
 # LEVELS 2 & 3: EMBEDDING-BASED DUPLICATES
 # =============================================================================
+
 
 def _normalize_embeddings(embeddings: np.ndarray) -> np.ndarray:
     """Normalize embeddings to unit length for cosine similarity.
@@ -1093,7 +1066,7 @@ def _compute_embedding_duplicates_chunked(
             # Only check j > i_global (upper triangle)
             if i_global + 1 < n:
                 # Get similarities for this row, only for j > i_global
-                row_sims = similarities[i_local, i_global + 1:]
+                row_sims = similarities[i_local, i_global + 1 :]
                 # Find indices where similarity >= threshold
                 matches = np.where(row_sims >= threshold)[0]
                 # Convert to global indices
@@ -1184,9 +1157,7 @@ def _compute_duplicates_level2(conn: sqlite3.Connection, threshold: float = 0.95
 
     logger.info(f'Processing {n} images ({embeddings.shape[1]}-dim embeddings)')
 
-    groups, metrics = _compute_embedding_duplicates_chunked(
-        image_ids, embeddings, threshold, chunk_size=1000
-    )
+    groups, metrics = _compute_embedding_duplicates_chunked(image_ids, embeddings, threshold, chunk_size=1000)
 
     logger.info(
         f'  Chunked processing: {metrics["chunks_processed"]} chunks, '
@@ -1234,9 +1205,7 @@ def _compute_duplicates_level3(conn: sqlite3.Connection, threshold: float = 0.85
 
     logger.info(f'Processing {n} images ({embeddings.shape[1]}-dim embeddings)')
 
-    groups, metrics = _compute_embedding_duplicates_chunked(
-        image_ids, embeddings, threshold, chunk_size=1000
-    )
+    groups, metrics = _compute_embedding_duplicates_chunked(image_ids, embeddings, threshold, chunk_size=1000)
 
     logger.info(
         f'  Chunked processing: {metrics["chunks_processed"]} chunks, '
@@ -1289,16 +1258,13 @@ def _compute_duplicates_embedding_incremental(
     image_to_group = _get_image_to_group_mapping(conn, level=level)
 
     # Get total count for chunking
-    cursor = conn.execute(
-        'SELECT COUNT(*) as cnt FROM images WHERE deleted = 0 AND embedding IS NOT NULL'
-    )
+    cursor = conn.execute('SELECT COUNT(*) as cnt FROM images WHERE deleted = 0 AND embedding IS NOT NULL')
     total_count = cursor.fetchone()['cnt']
 
     if total_count < 2:
         return 0
 
     # Load dirty image embeddings first (these we need to keep in memory)
-    dirty_id_set = set(dirty_ids)
     dirty_embeddings: dict[str, np.ndarray] = {}
 
     # Fetch dirty embeddings - these are typically few so OK to load at once
@@ -1306,7 +1272,7 @@ def _compute_duplicates_embedding_incremental(
         placeholders = ','.join('?' * len(dirty_ids))
         cursor = conn.execute(
             f'SELECT id, embedding FROM images WHERE id IN ({placeholders}) AND deleted = 0 AND embedding IS NOT NULL',
-            dirty_ids
+            dirty_ids,
         )
         for row in cursor:
             emb = embedding_to_numpy(row['embedding'])
@@ -1335,11 +1301,11 @@ def _compute_duplicates_embedding_incremental(
     while offset < total_count:
         # Load a chunk of embeddings from database
         cursor = conn.execute(
-            '''SELECT id, embedding FROM images
+            """SELECT id, embedding FROM images
                WHERE deleted = 0 AND embedding IS NOT NULL
                ORDER BY id
-               LIMIT ? OFFSET ?''',
-            (chunk_size, offset)
+               LIMIT ? OFFSET ?""",
+            (chunk_size, offset),
         )
         chunk_rows = cursor.fetchall()
 
@@ -1424,18 +1390,23 @@ def _compute_duplicates_embedding_incremental(
 # GROUP RETRIEVAL FUNCTIONS
 # =============================================================================
 
+
 def _get_duplicate_groups(conn: sqlite3.Connection, level: int) -> list[dict[str, Any]]:
     """Get duplicate groups at a specific level with full image data."""
-    cursor = conn.execute("""
+    cursor = conn.execute(
+        """
         SELECT DISTINCT group_hash
         FROM duplicate_groups
         WHERE level = ?
-    """, (level,))
+    """,
+        (level,),
+    )
     group_hashes = [row['group_hash'] for row in cursor.fetchall()]
 
     groups = []
     for group_hash in group_hashes:
-        cursor = conn.execute("""
+        cursor = conn.execute(
+            """
             SELECT i.id, i.path, i.basename, i.size, i.width, i.height,
                    i.timestamp, i.timestamp_confidence, i.checksum,
                    i.perceptual_hash, i.laplacian_var, i.lossless,
@@ -1444,15 +1415,19 @@ def _get_duplicate_groups(conn: sqlite3.Connection, level: int) -> list[dict[str
             JOIN duplicate_groups dg ON i.id = dg.image_id
             WHERE dg.level = ? AND dg.group_hash = ? AND i.deleted = 0
             ORDER BY i.size DESC, i.path ASC
-        """, (level, group_hash))
+        """,
+            (level, group_hash),
+        )
 
         images = rows_to_dicts(cursor.fetchall())
 
         if len(images) > 1:
-            groups.append({
-                'group_hash': group_hash,
-                'images': images,
-            })
+            groups.append(
+                {
+                    'group_hash': group_hash,
+                    'images': images,
+                }
+            )
 
     return groups
 
@@ -1464,7 +1439,8 @@ def _get_duplicate_groups_lightweight(conn: sqlite3.Connection, level: int) -> l
     best focus (Laplacian variance), with deterministic ID tiebreak.
     NULL aesthetic scores sort last (SQLite NULL < any value with DESC).
     """
-    cursor = conn.execute("""
+    cursor = conn.execute(
+        """
         WITH ranked AS (
             SELECT
                 dg.group_hash,
@@ -1496,27 +1472,34 @@ def _get_duplicate_groups_lightweight(conn: sqlite3.Connection, level: int) -> l
         JOIN group_counts gc ON r.group_hash = gc.group_hash
         WHERE r.rank = 1
         ORDER BY gc.cnt DESC
-    """, (level,))
+    """,
+        (level,),
+    )
 
     groups = []
     for row in cursor.fetchall():
-        id_cursor = conn.execute("""
+        id_cursor = conn.execute(
+            """
             SELECT i.id
             FROM images i
             JOIN duplicate_groups dg ON i.id = dg.image_id
             WHERE dg.level = ? AND dg.group_hash = ? AND i.deleted = 0
-        """, (level, row['group_hash']))
+        """,
+            (level, row['group_hash']),
+        )
         image_ids = [r['id'] for r in id_cursor.fetchall()]
 
-        groups.append({
-            'group_hash': row['group_hash'],
-            'count': row['count'],
-            'image_ids': image_ids,
-            'best_image': {
-                'id': row['best_id'],
-                'basename': row['best_basename'],
-            },
-        })
+        groups.append(
+            {
+                'group_hash': row['group_hash'],
+                'count': row['count'],
+                'image_ids': image_ids,
+                'best_image': {
+                    'id': row['best_id'],
+                    'basename': row['best_basename'],
+                },
+            }
+        )
 
     return groups
 
@@ -1535,6 +1518,7 @@ def _set_duplicate_epoch(conn: sqlite3.Connection, epoch: str) -> None:
 # =============================================================================
 # SIMILARITY SEARCH
 # =============================================================================
+
 
 def _get_images_by_similarity(
     conn: sqlite3.Connection,
@@ -1584,6 +1568,7 @@ def _get_images_by_similarity(
 # DUPLICATE MANAGER CLASS
 # =============================================================================
 
+
 class DuplicateManager:
     """Manages duplicate detection and grouping for images.
 
@@ -1620,7 +1605,7 @@ class DuplicateManager:
         # In-memory group cache (lazy loaded)
         self._cache_lock = threading.Lock()
         self._group_cache: dict[int, dict[str, set[str]]] | None = None  # level -> group_hash -> image_ids
-        self._image_to_group: dict[int, dict[str, str]] | None = None    # level -> image_id -> group_hash
+        self._image_to_group: dict[int, dict[str, str]] | None = None  # level -> image_id -> group_hash
         self._cache_loaded = False
 
     def _get_db(self) -> sqlite3.Connection:
@@ -1654,12 +1639,15 @@ class DuplicateManager:
             try:
                 # Load auto-detected duplicate groups (levels 0-3)
                 for level in range(4):
-                    cursor = conn.execute("""
+                    cursor = conn.execute(
+                        """
                         SELECT dg.group_hash, dg.image_id
                         FROM duplicate_groups dg
                         JOIN images i ON i.id = dg.image_id
                         WHERE dg.level = ? AND i.deleted = 0
-                    """, (level,))
+                    """,
+                        (level,),
+                    )
 
                     for row in cursor.fetchall():
                         group_hash = row['group_hash']
@@ -1672,12 +1660,15 @@ class DuplicateManager:
 
                 # Load named groups (levels 4 and 5) — images can belong to multiple groups
                 for named_level in (LEVEL_DIRECTORY, LEVEL_CUSTOM):
-                    cursor = conn.execute("""
+                    cursor = conn.execute(
+                        """
                         SELECT dg.group_hash, dg.image_id
                         FROM duplicate_groups dg
                         JOIN images i ON i.id = dg.image_id
                         WHERE dg.level = ? AND i.deleted = 0
-                    """, (named_level,))
+                    """,
+                        (named_level,),
+                    )
                     for row in cursor.fetchall():
                         group_hash = row['group_hash']
                         image_id = row['image_id']
@@ -1690,7 +1681,8 @@ class DuplicateManager:
                 # Also load empty custom groups (they persist when empty)
                 # source_path IS NULL = custom groups (level 5)
                 # source_path IS NOT NULL = directory groups (level 4)
-                cursor = conn.execute("""
+                cursor = conn.execute(
+                    """
                     SELECT cg.group_hash,
                            CASE WHEN cg.source_path IS NOT NULL THEN ? ELSE ? END AS level
                     FROM custom_groups cg
@@ -1699,7 +1691,9 @@ class DuplicateManager:
                         FROM duplicate_groups dg
                         WHERE dg.level IN (?, ?)
                     )
-                """, (LEVEL_DIRECTORY, LEVEL_CUSTOM, LEVEL_DIRECTORY, LEVEL_CUSTOM))
+                """,
+                    (LEVEL_DIRECTORY, LEVEL_CUSTOM, LEVEL_DIRECTORY, LEVEL_CUSTOM),
+                )
                 for row in cursor.fetchall():
                     self._group_cache[row['level']][row['group_hash']] = set()
 
@@ -1763,7 +1757,7 @@ class DuplicateManager:
 
             # Named groups (levels 4-5): remove image but never dissolve empty groups
             for named_level in (LEVEL_DIRECTORY, LEVEL_CUSTOM):
-                for group_hash, members in list(self._group_cache.get(named_level, {}).items()):
+                for _group_hash, members in list(self._group_cache.get(named_level, {}).items()):
                     members.discard(image_id)
 
     def _remove_image_from_db_groups(self, image_id: str) -> None:
@@ -1777,20 +1771,14 @@ class DuplicateManager:
         conn = self._get_db()
         try:
             # Get all groups this image belongs to (before removing)
-            cursor = conn.execute(
-                'SELECT level, group_hash FROM duplicate_groups WHERE image_id = ?',
-                (image_id,)
-            )
+            cursor = conn.execute('SELECT level, group_hash FROM duplicate_groups WHERE image_id = ?', (image_id,))
             affected_groups = [(row['level'], row['group_hash']) for row in cursor.fetchall()]
 
             if not affected_groups:
                 return
 
             # Remove the image from all groups
-            conn.execute(
-                'DELETE FROM duplicate_groups WHERE image_id = ?',
-                (image_id,)
-            )
+            conn.execute('DELETE FROM duplicate_groups WHERE image_id = ?', (image_id,))
 
             # Check each affected group for singleton status
             for level, group_hash in affected_groups:
@@ -1800,16 +1788,13 @@ class DuplicateManager:
 
                 cursor = conn.execute(
                     'SELECT COUNT(*) as cnt FROM duplicate_groups WHERE level = ? AND group_hash = ?',
-                    (level, group_hash)
+                    (level, group_hash),
                 )
                 count = cursor.fetchone()['cnt']
 
                 # If only 1 member left, dissolve the group (no longer a duplicate)
                 if count <= 1:
-                    conn.execute(
-                        'DELETE FROM duplicate_groups WHERE level = ? AND group_hash = ?',
-                        (level, group_hash)
-                    )
+                    conn.execute('DELETE FROM duplicate_groups WHERE level = ? AND group_hash = ?', (level, group_hash))
                     logger.debug(f'Dissolved singleton group {group_hash} at level {level}')
 
             conn.commit()
@@ -1840,8 +1825,7 @@ class DuplicateManager:
             # Get all affected groups before removing
             placeholders = ','.join('?' * len(image_ids))
             cursor = conn.execute(
-                f'SELECT DISTINCT level, group_hash FROM duplicate_groups WHERE image_id IN ({placeholders})',
-                image_ids
+                f'SELECT DISTINCT level, group_hash FROM duplicate_groups WHERE image_id IN ({placeholders})', image_ids
             )
             affected_groups = [(row['level'], row['group_hash']) for row in cursor.fetchall()]
 
@@ -1851,15 +1835,12 @@ class DuplicateManager:
             # Count how many images were actually in groups
             cursor = conn.execute(
                 f'SELECT COUNT(DISTINCT image_id) as cnt FROM duplicate_groups WHERE image_id IN ({placeholders})',
-                image_ids
+                image_ids,
             )
             affected_count = cursor.fetchone()['cnt']
 
             # Remove all images from groups in one query
-            conn.execute(
-                f'DELETE FROM duplicate_groups WHERE image_id IN ({placeholders})',
-                image_ids
-            )
+            conn.execute(f'DELETE FROM duplicate_groups WHERE image_id IN ({placeholders})', image_ids)
 
             # Check each affected group for singleton status
             dissolved_count = 0
@@ -1870,15 +1851,12 @@ class DuplicateManager:
 
                 cursor = conn.execute(
                     'SELECT COUNT(*) as cnt FROM duplicate_groups WHERE level = ? AND group_hash = ?',
-                    (level, group_hash)
+                    (level, group_hash),
                 )
                 count = cursor.fetchone()['cnt']
 
                 if count <= 1:
-                    conn.execute(
-                        'DELETE FROM duplicate_groups WHERE level = ? AND group_hash = ?',
-                        (level, group_hash)
-                    )
+                    conn.execute('DELETE FROM duplicate_groups WHERE level = ? AND group_hash = ?', (level, group_hash))
                     dissolved_count += 1
 
             conn.commit()
@@ -1907,7 +1885,7 @@ class DuplicateManager:
                     del self._group_cache[level][group_hash]
             # Named groups (levels 4-5): remove image but never dissolve
             for named_level in (LEVEL_DIRECTORY, LEVEL_CUSTOM):
-                for group_hash, members in list(self._group_cache.get(named_level, {}).items()):
+                for _group_hash, members in list(self._group_cache.get(named_level, {}).items()):
                     members.discard(img_id)
 
         if self._cache_loaded:
@@ -2039,28 +2017,30 @@ class DuplicateManager:
             if group_hash:
                 hashes = [group_hash]
             else:
-                cursor = conn.execute(
-                    'SELECT DISTINCT group_hash FROM duplicate_groups WHERE level = ?',
-                    (level,)
-                )
+                cursor = conn.execute('SELECT DISTINCT group_hash FROM duplicate_groups WHERE level = ?', (level,))
                 hashes = [row['group_hash'] for row in cursor.fetchall()]
 
             groups = []
             for gh in hashes:
-                cursor = conn.execute("""
+                cursor = conn.execute(
+                    """
                     SELECT i.id, i.aesthetic_laion, i.aesthetic_nima,
                            i.laplacian_var, i.width, i.height, i.size
                     FROM images i
                     JOIN duplicate_groups dg ON i.id = dg.image_id
                     WHERE dg.level = ? AND dg.group_hash = ? AND i.deleted = 0
-                """, (level, gh))
+                """,
+                    (level, gh),
+                )
                 images = [dict(row) for row in cursor.fetchall()]
 
                 if len(images) >= 2:
-                    groups.append({
-                        'group_hash': gh,
-                        'images': images,
-                    })
+                    groups.append(
+                        {
+                            'group_hash': gh,
+                            'images': images,
+                        }
+                    )
 
             return groups
         finally:
@@ -2088,7 +2068,8 @@ class DuplicateManager:
         conn = self._get_db()
         try:
             # Query for best image per group (still needs DB for sorting)
-            cursor = conn.execute("""
+            cursor = conn.execute(
+                """
                 WITH ranked AS (
                     SELECT
                         dg.group_hash,
@@ -2120,7 +2101,9 @@ class DuplicateManager:
                 JOIN group_counts gc ON r.group_hash = gc.group_hash
                 WHERE r.rank = 1
                 ORDER BY gc.cnt DESC
-            """, (level,))
+            """,
+                (level,),
+            )
 
             groups = []
             with self._cache_lock:
@@ -2130,15 +2113,17 @@ class DuplicateManager:
                     # Get image_ids from cache instead of DB query
                     image_ids = list(self._group_cache[level].get(group_hash, set()))
 
-                    groups.append({
-                        'group_hash': group_hash,
-                        'count': row['count'],
-                        'image_ids': image_ids,
-                        'best_image': {
-                            'id': row['best_id'],
-                            'basename': row['best_basename'],
-                        },
-                    })
+                    groups.append(
+                        {
+                            'group_hash': group_hash,
+                            'count': row['count'],
+                            'image_ids': image_ids,
+                            'best_image': {
+                                'id': row['best_id'],
+                                'basename': row['best_basename'],
+                            },
+                        }
+                    )
 
             return groups
         finally:
@@ -2171,7 +2156,8 @@ class DuplicateManager:
 
             # Get best image per non-empty group
             best_images = {}
-            cursor = conn.execute("""
+            cursor = conn.execute(
+                """
                 WITH ranked AS (
                     SELECT
                         dg.group_hash,
@@ -2191,7 +2177,9 @@ class DuplicateManager:
                 SELECT group_hash, id, basename
                 FROM ranked
                 WHERE rank = 1
-            """, (LEVEL_CUSTOM,))
+            """,
+                (LEVEL_CUSTOM,),
+            )
             for row in cursor.fetchall():
                 best_images[row['group_hash']] = {
                     'id': row['id'],
@@ -2204,13 +2192,15 @@ class DuplicateManager:
                     group_hash = row['group_hash']
                     image_ids = list(self._group_cache[LEVEL_CUSTOM].get(group_hash, set()))
 
-                    groups.append({
-                        'group_hash': group_hash,
-                        'name': row['name'],
-                        'count': len(image_ids),
-                        'image_ids': image_ids,
-                        'best_image': best_images.get(group_hash),
-                    })
+                    groups.append(
+                        {
+                            'group_hash': group_hash,
+                            'name': row['name'],
+                            'count': len(image_ids),
+                            'image_ids': image_ids,
+                            'best_image': best_images.get(group_hash),
+                        }
+                    )
 
             return groups
         finally:
@@ -2242,7 +2232,8 @@ class DuplicateManager:
 
             # Get best image per non-empty group
             best_images = {}
-            cursor = conn.execute("""
+            cursor = conn.execute(
+                """
                 WITH ranked AS (
                     SELECT
                         dg.group_hash,
@@ -2262,7 +2253,9 @@ class DuplicateManager:
                 SELECT group_hash, id, basename
                 FROM ranked
                 WHERE rank = 1
-            """, (LEVEL_DIRECTORY,))
+            """,
+                (LEVEL_DIRECTORY,),
+            )
             for row in cursor.fetchall():
                 best_images[row['group_hash']] = {
                     'id': row['id'],
@@ -2275,14 +2268,16 @@ class DuplicateManager:
                     group_hash = row['group_hash']
                     image_ids = list(self._group_cache[LEVEL_DIRECTORY].get(group_hash, set()))
 
-                    groups.append({
-                        'group_hash': group_hash,
-                        'name': row['name'],
-                        'source_path': row['source_path'],
-                        'count': len(image_ids),
-                        'image_ids': image_ids,
-                        'best_image': best_images.get(group_hash),
-                    })
+                    groups.append(
+                        {
+                            'group_hash': group_hash,
+                            'name': row['name'],
+                            'source_path': row['source_path'],
+                            'count': len(image_ids),
+                            'image_ids': image_ids,
+                            'best_image': best_images.get(group_hash),
+                        }
+                    )
 
             return groups
         finally:
@@ -2320,9 +2315,7 @@ class DuplicateManager:
 
         # ── Step 1: gather directories with non-deleted images ──
         with db_lock:
-            cursor = conn.execute(
-                'SELECT id, path FROM images WHERE deleted = 0'
-            )
+            cursor = conn.execute('SELECT id, path FROM images WHERE deleted = 0')
             rows = cursor.fetchall()
 
         # Map directory → set of image IDs
@@ -2335,9 +2328,7 @@ class DuplicateManager:
 
         # ── Step 2: get existing directory groups ──
         with db_lock:
-            cursor = conn.execute(
-                'SELECT group_hash, source_path FROM custom_groups WHERE source_path IS NOT NULL'
-            )
+            cursor = conn.execute('SELECT group_hash, source_path FROM custom_groups WHERE source_path IS NOT NULL')
             existing = {row['source_path']: row['group_hash'] for row in cursor.fetchall()}
 
         # ── Step 3: compute shortest-unique-suffix display names ──
@@ -2361,32 +2352,36 @@ class DuplicateManager:
                     # Group exists — sync membership and name
                     group_hash = existing[dir_path]
                     conn.execute(
-                        'DELETE FROM duplicate_groups WHERE level = ? AND group_hash = ?',
-                        (LEVEL_DIRECTORY, group_hash)
+                        'DELETE FROM duplicate_groups WHERE level = ? AND group_hash = ?', (LEVEL_DIRECTORY, group_hash)
                     )
                     for image_id in image_ids:
                         conn.execute(
-                            'INSERT INTO duplicate_groups (level, group_hash, image_id, updated_at) VALUES (?, ?, ?, ?)',
-                            (LEVEL_DIRECTORY, group_hash, image_id, now)
+                            'INSERT INTO duplicate_groups'
+                            ' (level, group_hash, image_id, updated_at)'
+                            ' VALUES (?, ?, ?, ?)',
+                            (LEVEL_DIRECTORY, group_hash, image_id, now),
                         )
                     conn.execute(
                         'UPDATE custom_groups SET name = ?, updated_at = ? WHERE group_hash = ?',
-                        (display_name, now, group_hash)
+                        (display_name, now, group_hash),
                     )
                     updated += 1
                 else:
                     # New directory — create group
                     import uuid
+
                     group_hash = str(uuid.uuid4())
                     conn.execute(
                         'INSERT INTO custom_groups (group_hash, name, source_path, created_at, updated_at) '
                         'VALUES (?, ?, ?, ?, ?)',
-                        (group_hash, display_name, dir_path, now, now)
+                        (group_hash, display_name, dir_path, now, now),
                     )
                     for image_id in image_ids:
                         conn.execute(
-                            'INSERT INTO duplicate_groups (level, group_hash, image_id, updated_at) VALUES (?, ?, ?, ?)',
-                            (LEVEL_DIRECTORY, group_hash, image_id, now)
+                            'INSERT INTO duplicate_groups'
+                            ' (level, group_hash, image_id, updated_at)'
+                            ' VALUES (?, ?, ?, ?)',
+                            (LEVEL_DIRECTORY, group_hash, image_id, now),
                         )
                     created += 1
 
@@ -2394,13 +2389,9 @@ class DuplicateManager:
             for source_path, group_hash in existing.items():
                 if source_path not in needed_paths:
                     conn.execute(
-                        'DELETE FROM duplicate_groups WHERE level = ? AND group_hash = ?',
-                        (LEVEL_DIRECTORY, group_hash)
+                        'DELETE FROM duplicate_groups WHERE level = ? AND group_hash = ?', (LEVEL_DIRECTORY, group_hash)
                     )
-                    conn.execute(
-                        'DELETE FROM custom_groups WHERE group_hash = ?',
-                        (group_hash,)
-                    )
+                    conn.execute('DELETE FROM custom_groups WHERE group_hash = ?', (group_hash,))
                     removed += 1
 
             conn.commit()
@@ -2418,8 +2409,7 @@ class DuplicateManager:
                         # Look up newly created group hash
                         with db_lock:
                             cursor = conn.execute(
-                                'SELECT group_hash FROM custom_groups WHERE source_path = ?',
-                                (dir_path,)
+                                'SELECT group_hash FROM custom_groups WHERE source_path = ?', (dir_path,)
                             )
                             row = cursor.fetchone()
                             if row:
@@ -2477,9 +2467,7 @@ class DuplicateManager:
             # Get dirty images (or all images if force_full)
             if force_full:
                 # Treat all images as dirty for full recomputation
-                cursor = conn.execute(
-                    'SELECT id FROM images WHERE deleted = 0'
-                )
+                cursor = conn.execute('SELECT id FROM images WHERE deleted = 0')
                 dirty_ids = [row['id'] for row in cursor.fetchall()]
                 logger.info(f'Force full: treating all {len(dirty_ids)} images as dirty')
             else:
@@ -2531,50 +2519,36 @@ class DuplicateManager:
                     # Level 1 always uses full computation (LSH is more efficient)
                     if level == 1:
                         logger.info(f'Level {level}: full computation (LSH)')
-                        results[level] = _compute_duplicates_level1(
-                            conn, self._config.perceptual_hash_threshold
-                        )
+                        results[level] = _compute_duplicates_level1(conn, self._config.perceptual_hash_threshold)
                     elif group_count == 0:
                         # No existing groups - must do full computation
                         logger.info(f'Level {level}: no existing groups, full computation')
                         if level == 0:
                             results[level] = _compute_duplicates_level0(conn)
                         elif level == 2:
-                            results[level] = _compute_duplicates_level2(
-                                conn, self._config.similarity_threshold_level2
-                            )
+                            results[level] = _compute_duplicates_level2(conn, self._config.similarity_threshold_level2)
                         else:
-                            results[level] = _compute_duplicates_level3(
-                                conn, self._config.similarity_threshold_level3
-                            )
+                            results[level] = _compute_duplicates_level3(conn, self._config.similarity_threshold_level3)
                     elif use_incremental:
                         logger.info(f'Level {level}: {group_count} groups, incremental update')
                         if level == 0:
-                            results[level] = _compute_duplicates_level0_incremental(
-                                conn, dirty_ids
-                            )
+                            results[level] = _compute_duplicates_level0_incremental(conn, dirty_ids)
                         elif level == 2:
                             results[level] = _compute_duplicates_embedding_incremental(
-                                conn, dirty_ids, level=2,
-                                threshold=self._config.similarity_threshold_level2
+                                conn, dirty_ids, level=2, threshold=self._config.similarity_threshold_level2
                             )
                         else:
                             results[level] = _compute_duplicates_embedding_incremental(
-                                conn, dirty_ids, level=3,
-                                threshold=self._config.similarity_threshold_level3
+                                conn, dirty_ids, level=3, threshold=self._config.similarity_threshold_level3
                             )
                     else:
                         logger.info(f'Level {level}: over threshold, full recomputation')
                         if level == 0:
                             results[level] = _compute_duplicates_level0(conn)
                         elif level == 2:
-                            results[level] = _compute_duplicates_level2(
-                                conn, self._config.similarity_threshold_level2
-                            )
+                            results[level] = _compute_duplicates_level2(conn, self._config.similarity_threshold_level2)
                         else:
-                            results[level] = _compute_duplicates_level3(
-                                conn, self._config.similarity_threshold_level3
-                            )
+                            results[level] = _compute_duplicates_level3(conn, self._config.similarity_threshold_level3)
 
                 except Exception as e:
                     logger.error(f'Error computing level {level} duplicates: {e}')
@@ -2636,12 +2610,14 @@ class DuplicateManager:
         try:
             conn.execute(
                 'INSERT INTO custom_groups (group_hash, name, created_at, updated_at) VALUES (?, ?, ?, ?)',
-                (group_hash, name, now, now)
+                (group_hash, name, now, now),
             )
             for image_id in image_ids:
                 conn.execute(
-                    'INSERT OR IGNORE INTO duplicate_groups (level, group_hash, image_id, updated_at) VALUES (?, ?, ?, ?)',
-                    (LEVEL_CUSTOM, group_hash, image_id, now)
+                    'INSERT OR IGNORE INTO duplicate_groups'
+                    ' (level, group_hash, image_id, updated_at)'
+                    ' VALUES (?, ?, ?, ?)',
+                    (LEVEL_CUSTOM, group_hash, image_id, now),
                 )
             conn.commit()
             logger.info(f'Created custom group "{name}" ({group_hash}) with {len(image_ids)} images')
@@ -2664,8 +2640,7 @@ class DuplicateManager:
         conn = self._get_db()
         try:
             conn.execute(
-                'UPDATE custom_groups SET name = ?, updated_at = ? WHERE group_hash = ?',
-                (name, now, group_hash)
+                'UPDATE custom_groups SET name = ?, updated_at = ? WHERE group_hash = ?', (name, now, group_hash)
             )
             conn.commit()
             logger.info(f'Renamed custom group {group_hash} to "{name}"')
@@ -2683,10 +2658,7 @@ class DuplicateManager:
         conn = self._get_db()
         try:
             conn.execute('DELETE FROM custom_groups WHERE group_hash = ?', (group_hash,))
-            conn.execute(
-                'DELETE FROM duplicate_groups WHERE level = ? AND group_hash = ?',
-                (LEVEL_CUSTOM, group_hash)
-            )
+            conn.execute('DELETE FROM duplicate_groups WHERE level = ? AND group_hash = ?', (LEVEL_CUSTOM, group_hash))
             conn.commit()
             logger.info(f'Deleted custom group {group_hash}')
         finally:
@@ -2711,12 +2683,14 @@ class DuplicateManager:
         try:
             for image_id in image_ids:
                 conn.execute(
-                    'INSERT OR IGNORE INTO duplicate_groups (level, group_hash, image_id, updated_at) VALUES (?, ?, ?, ?)',
-                    (LEVEL_CUSTOM, group_hash, image_id, now)
+                    'INSERT OR IGNORE INTO duplicate_groups'
+                    ' (level, group_hash, image_id, updated_at)'
+                    ' VALUES (?, ?, ?, ?)',
+                    (LEVEL_CUSTOM, group_hash, image_id, now),
                 )
             conn.execute(
                 'UPDATE custom_groups SET updated_at = ? WHERE group_hash = ?',
-                (now, group_hash)
+                (now, group_hash),
             )
             conn.commit()
             logger.info(f'Added {len(image_ids)} images to custom group {group_hash}')
@@ -2743,12 +2717,9 @@ class DuplicateManager:
             placeholders = ','.join('?' * len(image_ids))
             conn.execute(
                 f'DELETE FROM duplicate_groups WHERE level = ? AND group_hash = ? AND image_id IN ({placeholders})',
-                [LEVEL_CUSTOM, group_hash] + image_ids
+                [LEVEL_CUSTOM, group_hash] + image_ids,
             )
-            conn.execute(
-                'UPDATE custom_groups SET updated_at = ? WHERE group_hash = ?',
-                (now, group_hash)
-            )
+            conn.execute('UPDATE custom_groups SET updated_at = ? WHERE group_hash = ?', (now, group_hash))
             conn.commit()
             logger.info(f'Removed {len(image_ids)} images from custom group {group_hash}')
         finally:

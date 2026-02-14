@@ -33,6 +33,7 @@ Example:
 # Disable tokenizers parallelism before any imports.
 # Prevents Ctrl+C issues on Windows caused by Rust threads.
 import os
+
 os.environ['TOKENIZERS_PARALLELISM'] = 'false'
 
 import argparse
@@ -47,15 +48,16 @@ import sys
 import threading
 import time
 import traceback
-from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeoutError
+from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import TimeoutError as FuturesTimeoutError
 from pathlib import Path
 
-from PIL import Image, ImageDraw
-
 import orjson
-from flask import Flask, Response, request, send_file, abort
-from werkzeug.exceptions import HTTPException
+from flask import Flask, Response, abort, request, send_file
 from flask import jsonify as flask_jsonify
+from PIL import Image, ImageDraw
+from werkzeug.exceptions import HTTPException
+
 # flask_cors not needed — frontend is served from the same origin
 
 # Toggle between orjson and stdlib json for testing
@@ -65,59 +67,60 @@ USE_ORJSON = True
 def jsonify(data):
     """JSON response - uses orjson when USE_ORJSON is True."""
     if USE_ORJSON:
-        return Response(
-            orjson.dumps(data),
-            mimetype='application/json'
-        )
+        return Response(orjson.dumps(data), mimetype='application/json')
     else:
         return flask_jsonify(data)
 
 
 from caption import CaptionGenerator
-from imagedb import (
-    ImageDatabase, register_signal_handlers,
-    EVENT_FACES_CHANGED, EVENT_PEOPLE_CHANGED,
-    EVENT_IMAGES_CHANGED, EVENT_GROUPS_CHANGED,
-)
-from trash import compute_quality_scores
-from rawimage import is_raw_format, open_image as raw_open_image
-from thumbnails import (
-    get_thumbnail_cache_path,
-    generate_thumbnail,
-    generate_missing_thumbnails,
-    ThumbnailCache,
-)
 from faces import (
-    get_all_people,
-    get_person,
-    get_person_by_name,
+    batch_identify_faces,
+    clear_reassessment_result,
     create_person,
-    update_person,
+    delete_face,
+    delete_people_without_faces,
     delete_person,
-    search_people,
-    get_face,
+    generate_face_thumbnail,
     get_all_faces,
+    get_all_people,
+    get_face,
+    get_face_matches,
+    get_face_thumbnail_path,
     get_faces_for_image,
     get_faces_for_images,
     get_faces_for_person,
-    get_face_matches,
-    update_face_person,
-    toggle_face_manual_tag,
-    suppress_face,
-    delete_face,
-    get_face_thumbnail_path,
-    generate_face_thumbnail,
+    get_group_computation_status,
     get_images_with_people,
     get_people_names_bulk,
-    delete_people_without_faces,
-    batch_identify_faces,
-    reassess_unknown_faces_async,
+    get_person,
+    get_person_by_name,
     get_reassessment_status,
-    clear_reassessment_result,
-    get_group_computation_status,
+    reassess_unknown_faces_async,
     revalidate_person_faces,
+    search_people,
     search_unknown_faces_semantic,
+    suppress_face,
+    toggle_face_manual_tag,
+    update_face_person,
+    update_person,
 )
+from imagedb import (
+    EVENT_FACES_CHANGED,
+    EVENT_GROUPS_CHANGED,
+    EVENT_IMAGES_CHANGED,
+    EVENT_PEOPLE_CHANGED,
+    ImageDatabase,
+    register_signal_handlers,
+)
+from rawimage import is_raw_format
+from rawimage import open_image as raw_open_image
+from thumbnails import (
+    ThumbnailCache,
+    generate_missing_thumbnails,
+    generate_thumbnail,
+    get_thumbnail_cache_path,
+)
+from trash import compute_quality_scores
 
 # Configure logging - set root logger to WARNING, our modules to INFO
 logging.basicConfig(
@@ -253,7 +256,9 @@ def _prepopulate_images_cache(database: ImageDatabase):
     json_bytes = orjson.dumps(data)
     _set_images_cache(epoch, json_bytes)
     elapsed = time.perf_counter() - t0
-    logger.info(f'Images cache pre-populated: {len(images)} images, {len(json_bytes)//1024//1024}MB, {elapsed*1000:.0f}ms')
+    logger.info(
+        f'Images cache pre-populated: {len(images)} images, {len(json_bytes) // 1024 // 1024}MB, {elapsed * 1000:.0f}ms'
+    )
 
 
 def shutdown_db():
@@ -303,6 +308,7 @@ def get_thumbnail_cache() -> ThumbnailCache:
 # Helper Functions
 # =============================================================================
 
+
 def success_response(data=None, message=None):
     """Build a successful JSON response.
 
@@ -339,6 +345,7 @@ def error_response(message, status_code=400):
 # Static File Serving (Development)
 # =============================================================================
 
+
 @app.route('/')
 def serve_index():
     """Serve the main application HTML file.
@@ -355,6 +362,7 @@ def serve_index():
 # =============================================================================
 # Image Endpoints
 # =============================================================================
+
 
 @app.route('/api/images', methods=['GET'])
 def get_images():
@@ -392,10 +400,7 @@ def get_images():
             db = get_db()
             matching_image_ids = set(get_images_with_people(db.conn, person_ids))
             if 'updated' in delta:
-                delta['updated'] = [
-                    img for img in delta['updated']
-                    if img['id'] in matching_image_ids
-                ]
+                delta['updated'] = [img for img in delta['updated'] if img['id'] in matching_image_ids]
 
         return success_response(delta)
     else:
@@ -604,9 +609,12 @@ def trash_images():
                 cache.remove(checksum)
 
         # Broadcast for other clients
-        db.event_queue.emit(EVENT_IMAGES_CHANGED, {
-            'removed_ids': result['trashed'],
-        })
+        db.event_queue.emit(
+            EVENT_IMAGES_CHANGED,
+            {
+                'removed_ids': result['trashed'],
+            },
+        )
 
     return success_response(result)
 
@@ -649,8 +657,7 @@ def get_thumbnail(image_id):
             abort(404)
         _, source_path = info
         if not generate_thumbnail(
-            source_path, thumbnail_path, size,
-            db.config.thumbnail_quality, db.config.max_image_dimension
+            source_path, thumbnail_path, size, db.config.thumbnail_quality, db.config.max_image_dimension
         ):
             abort(404)
 
@@ -660,7 +667,7 @@ def get_thumbnail(image_id):
             data = f.read()
         cache.put(checksum, size, data)
         return Response(data, mimetype='image/jpeg')
-    except IOError:
+    except OSError:
         abort(404)
 
 
@@ -707,8 +714,7 @@ def get_histogram_images(image_id):
                     abort(404)
                 _, source_path = info
                 if not generate_thumbnail(
-                    source_path, thumbnail_path, size,
-                    db.config.thumbnail_quality, db.config.max_image_dimension
+                    source_path, thumbnail_path, size, db.config.thumbnail_quality, db.config.max_image_dimension
                 ):
                     abort(404)
 
@@ -753,11 +759,13 @@ def get_histogram_images(image_id):
             b64 = base64.b64encode(buffer.getvalue()).decode('ascii')
             return f'data:image/png;base64,{b64}'
 
-        return success_response({
-            'r': img_to_data_url(red_img),
-            'g': img_to_data_url(green_img),
-            'b': img_to_data_url(blue_img),
-        })
+        return success_response(
+            {
+                'r': img_to_data_url(red_img),
+                'g': img_to_data_url(green_img),
+                'b': img_to_data_url(blue_img),
+            }
+        )
 
     except HTTPException:
         raise
@@ -841,7 +849,7 @@ def reveal_image(image_id):
         return success_response(message='Folder opened')
     except Exception as e:
         logger.exception('Failed to open folder')
-        return error_response(f'Failed to open folder: {str(e)}', 500)
+        return error_response(f'Failed to open folder: {e!s}', 500)
 
 
 @app.route('/api/images/rotate', methods=['POST'])
@@ -914,6 +922,7 @@ def get_images_people_names():
 # Folder Endpoints
 # =============================================================================
 
+
 @app.route('/api/folders', methods=['GET'])
 def get_folders():
     """List all registered image source folders.
@@ -963,6 +972,7 @@ def pick_folder():
             def on_timeout():
                 if root:
                     root.destroy()
+
             root.after(dialog_timeout_ms, on_timeout)
 
             # Show folder selection dialog
@@ -1057,6 +1067,7 @@ def remove_folder(folder_path):
 # Status Endpoints
 # =============================================================================
 
+
 @app.route('/api/status', methods=['GET'])
 def get_status():
     """Get the current processing status of the database.
@@ -1114,19 +1125,21 @@ def get_config():
     """
     db = get_db()
     config = db.config
-    return success_response({
-        'thumbnail_concurrent_requests': config.thumbnail_concurrent_requests,
-        'thumbnail_extra_rows': config.thumbnail_extra_rows,
-        'thumbnail_timeout_ms': config.thumbnail_timeout_ms,
-        'thumbnail_scroll_throttle_ms': config.thumbnail_scroll_throttle_ms,
-        'quality_weight_aesthetic': config.quality_weight_aesthetic,
-        'quality_weight_sharpness': config.quality_weight_sharpness,
-        'quality_weight_pixels': config.quality_weight_pixels,
-        'quality_weight_bpp': config.quality_weight_bpp,
-        'quality_alpha': config.quality_alpha,
-        'nima_enabled': config.nima_enabled,
-        'trash_dir': str(db.trash_dir),
-    })
+    return success_response(
+        {
+            'thumbnail_concurrent_requests': config.thumbnail_concurrent_requests,
+            'thumbnail_extra_rows': config.thumbnail_extra_rows,
+            'thumbnail_timeout_ms': config.thumbnail_timeout_ms,
+            'thumbnail_scroll_throttle_ms': config.thumbnail_scroll_throttle_ms,
+            'quality_weight_aesthetic': config.quality_weight_aesthetic,
+            'quality_weight_sharpness': config.quality_weight_sharpness,
+            'quality_weight_pixels': config.quality_weight_pixels,
+            'quality_weight_bpp': config.quality_weight_bpp,
+            'quality_alpha': config.quality_alpha,
+            'nima_enabled': config.nima_enabled,
+            'trash_dir': str(db.trash_dir),
+        }
+    )
 
 
 @app.route('/api/config/reveal', methods=['POST'])
@@ -1144,6 +1157,7 @@ def reveal_config():
     config_path = _config_file_path
     if not config_path:
         from config import get_default_config_path
+
         config_path = str(get_default_config_path())
     config_path = os.path.abspath(config_path)
 
@@ -1161,7 +1175,7 @@ def reveal_config():
         return success_response(message='Folder opened')
     except Exception as e:
         logger.exception('Failed to reveal config file')
-        return error_response(f'Failed to open folder: {str(e)}', 500)
+        return error_response(f'Failed to open folder: {e!s}', 500)
 
 
 @app.route('/api/config/schema', methods=['GET'])
@@ -1207,8 +1221,9 @@ def save_config_endpoint():
         Success response on valid save, or 400 with the validation error
         message if any value is out of range or cross-field checks fail.
     """
-    from config import Config, save_config, get_default_config_path
     from dataclasses import fields as dc_fields
+
+    from config import Config, get_default_config_path, save_config
 
     data = request.get_json(silent=True)
     if not data or 'values' not in data:
@@ -1246,10 +1261,7 @@ def save_config_endpoint():
                     kwargs[key] = set(raw)
                 elif isinstance(raw, str):
                     # Textarea fallback: one value per line
-                    kwargs[key] = {
-                        line.strip() for line in raw.splitlines()
-                        if line.strip()
-                    }
+                    kwargs[key] = {line.strip() for line in raw.splitlines() if line.strip()}
                 else:
                     kwargs[key] = set(raw)
             else:
@@ -1296,6 +1308,7 @@ def rescan_folders():
 # Duplicates Endpoints
 # =============================================================================
 
+
 @app.route('/api/duplicates', methods=['GET'])
 def get_duplicates():
     """Get duplicate image groups at a specified similarity level.
@@ -1338,20 +1351,24 @@ def get_duplicates():
 
     # Named groups (levels 4-5) skip epoch caching — always return fresh data
     if level < 4 and since and since == epoch and status == 'done':
-        return success_response({
-            'groups': [],
-            'status': status,
-            'epoch': epoch,
-            'unchanged': True,
-        })
+        return success_response(
+            {
+                'groups': [],
+                'status': status,
+                'epoch': epoch,
+                'unchanged': True,
+            }
+        )
 
     # Return lightweight group data
     groups = db.get_duplicate_groups_lightweight(level)
-    return success_response({
-        'groups': groups,
-        'status': status,
-        'epoch': epoch,
-    })
+    return success_response(
+        {
+            'groups': groups,
+            'status': status,
+            'epoch': epoch,
+        }
+    )
 
 
 @app.route('/api/duplicates/sort-semantic', methods=['POST'])
@@ -1389,7 +1406,7 @@ def sort_duplicates_semantic():
         return success_response({'scores': scores})
     except Exception as e:
         logger.exception('Semantic sort failed')
-        return error_response(f'Semantic sort failed: {str(e)}', 500)
+        return error_response(f'Semantic sort failed: {e!s}', 500)
 
 
 @app.route('/api/duplicates/prune', methods=['POST'])
@@ -1439,31 +1456,28 @@ def prune_duplicates():
     db = get_db()
 
     if not db.is_trash_enabled():
-        return error_response(
-            'Trash directory is disabled. Check that it does not '
-            'overlap an indexed folder.'
-        )
+        return error_response('Trash directory is disabled. Check that it does not overlap an indexed folder.')
 
     # Get groups with quality fields
     try:
         if group_hashes and isinstance(group_hashes, list):
             groups = []
             for gh in group_hashes:
-                groups.extend(
-                    db._duplicate_manager.get_group_images_ranked(level, gh)
-                )
+                groups.extend(db._duplicate_manager.get_group_images_ranked(level, gh))
         else:
             groups = db._duplicate_manager.get_group_images_ranked(level)
     except Exception as e:
         logger.exception('Failed to get duplicate groups for pruning')
-        return error_response(f'Failed to load groups: {str(e)}', 500)
+        return error_response(f'Failed to load groups: {e!s}', 500)
 
     if not groups:
-        return success_response({
-            'trashed_count': 0,
-            'group_count': 0,
-            'errors': [],
-        })
+        return success_response(
+            {
+                'trashed_count': 0,
+                'group_count': 0,
+                'errors': [],
+            }
+        )
 
     # Determine which images to trash across all groups
     all_trash_ids = []
@@ -1496,11 +1510,13 @@ def prune_duplicates():
         pruned_group_count += 1
 
     if not all_trash_ids:
-        return success_response({
-            'trashed_count': 0,
-            'group_count': 0,
-            'errors': [],
-        })
+        return success_response(
+            {
+                'trashed_count': 0,
+                'group_count': 0,
+                'errors': [],
+            }
+        )
 
     # Trash all images in one batch
     try:
@@ -1517,30 +1533,37 @@ def prune_duplicates():
                 cache.remove(checksum)
 
     # Collect error messages
-    error_messages = [
-        f'{img_id}: {msg}'
-        for img_id, msg in result.get('errors', {}).items()
-    ]
+    error_messages = [f'{img_id}: {msg}' for img_id, msg in result.get('errors', {}).items()]
 
     # Broadcast for other clients
     if result['trashed']:
-        db.event_queue.emit(EVENT_IMAGES_CHANGED, {
-            'removed_ids': result['trashed'],
-        })
-    db.event_queue.emit(EVENT_GROUPS_CHANGED, {
-        'level': level, 'invalidate': True,
-    })
+        db.event_queue.emit(
+            EVENT_IMAGES_CHANGED,
+            {
+                'removed_ids': result['trashed'],
+            },
+        )
+    db.event_queue.emit(
+        EVENT_GROUPS_CHANGED,
+        {
+            'level': level,
+            'invalidate': True,
+        },
+    )
 
-    return success_response({
-        'trashed_count': len(result['trashed']),
-        'group_count': pruned_group_count,
-        'errors': error_messages,
-    })
+    return success_response(
+        {
+            'trashed_count': len(result['trashed']),
+            'group_count': pruned_group_count,
+            'errors': error_messages,
+        }
+    )
 
 
 # =============================================================================
 # Custom Group Endpoints (Albums)
 # =============================================================================
+
 
 @app.route('/api/groups', methods=['POST'])
 def create_group():
@@ -1579,7 +1602,7 @@ def create_group():
         return success_response(message='Group created')
     except Exception as e:
         logger.exception('Failed to create custom group')
-        return error_response(f'Failed to create group: {str(e)}', 500)
+        return error_response(f'Failed to create group: {e!s}', 500)
 
 
 @app.route('/api/groups/<group_hash>', methods=['PATCH'])
@@ -1611,7 +1634,7 @@ def rename_group(group_hash):
         return success_response(message='Group renamed')
     except Exception as e:
         logger.exception('Failed to rename custom group')
-        return error_response(f'Failed to rename group: {str(e)}', 500)
+        return error_response(f'Failed to rename group: {e!s}', 500)
 
 
 @app.route('/api/groups/<group_hash>', methods=['DELETE'])
@@ -1631,7 +1654,7 @@ def delete_group(group_hash):
         return success_response(message='Group deleted')
     except Exception as e:
         logger.exception('Failed to delete custom group')
-        return error_response(f'Failed to delete group: {str(e)}', 500)
+        return error_response(f'Failed to delete group: {e!s}', 500)
 
 
 @app.route('/api/groups/<group_hash>/images', methods=['POST'])
@@ -1661,7 +1684,7 @@ def add_images_to_group(group_hash):
         return success_response(message='Images added to group')
     except Exception as e:
         logger.exception('Failed to add images to custom group')
-        return error_response(f'Failed to add images: {str(e)}', 500)
+        return error_response(f'Failed to add images: {e!s}', 500)
 
 
 @app.route('/api/groups/<group_hash>/images/remove', methods=['POST'])
@@ -1694,12 +1717,13 @@ def remove_images_from_group(group_hash):
         return success_response(message='Images removed from group')
     except Exception as e:
         logger.exception('Failed to remove images from custom group')
-        return error_response(f'Failed to remove images: {str(e)}', 500)
+        return error_response(f'Failed to remove images: {e!s}', 500)
 
 
 # =============================================================================
 # Search Endpoints
 # =============================================================================
+
 
 @app.route('/api/search', methods=['POST'])
 def search_images():
@@ -1735,7 +1759,7 @@ def search_images():
         return success_response({'results': results})
     except Exception as e:
         logger.exception('Search failed')
-        return error_response(f'Search failed: {str(e)}', 500)
+        return error_response(f'Search failed: {e!s}', 500)
 
 
 @app.route('/api/similar/<image_id>', methods=['GET'])
@@ -1764,12 +1788,13 @@ def get_similar_images(image_id):
         return success_response({'results': results})
     except Exception as e:
         logger.exception('Similarity search failed')
-        return error_response(f'Similarity search failed: {str(e)}', 500)
+        return error_response(f'Similarity search failed: {e!s}', 500)
 
 
 # =============================================================================
 # Metadata Search Endpoints
 # =============================================================================
+
 
 @app.route('/api/metadata-search', methods=['POST'])
 def metadata_search():
@@ -1800,7 +1825,7 @@ def metadata_search():
         return success_response({'image_ids': image_ids})
     except Exception as e:
         logger.exception('Metadata search failed')
-        return error_response(f'Metadata search failed: {str(e)}', 500)
+        return error_response(f'Metadata search failed: {e!s}', 500)
 
 
 @app.route('/api/metadata-keys', methods=['GET'])
@@ -1819,7 +1844,7 @@ def metadata_keys():
         return success_response({'keys': keys})
     except Exception as e:
         logger.exception('Failed to get metadata keys')
-        return error_response(f'Failed to get metadata keys: {str(e)}', 500)
+        return error_response(f'Failed to get metadata keys: {e!s}', 500)
 
 
 @app.route('/api/metadata-values', methods=['GET'])
@@ -1844,12 +1869,13 @@ def metadata_values():
         return success_response({'values': values})
     except Exception as e:
         logger.exception('Failed to get metadata values')
-        return error_response(f'Failed to get metadata values: {str(e)}', 500)
+        return error_response(f'Failed to get metadata values: {e!s}', 500)
 
 
 # =============================================================================
 # Stats Endpoints
 # =============================================================================
+
 
 @app.route('/api/stats', methods=['GET'])
 def get_stats():
@@ -1889,6 +1915,7 @@ def get_cache_stats():
 # Events Polling Endpoint
 # =============================================================================
 
+
 @app.route('/api/events', methods=['GET'])
 def get_events():
     """Poll for pending events using cursor-based pagination.
@@ -1926,6 +1953,7 @@ def get_event_count():
 # =============================================================================
 # People Endpoints
 # =============================================================================
+
 
 @app.route('/api/people', methods=['GET'])
 def get_people():
@@ -2004,9 +2032,12 @@ def create_person_endpoint():
 
     # Broadcast for other clients
     if created_person:
-        db.event_queue.emit(EVENT_PEOPLE_CHANGED, {
-            'upserted': [dict(created_person)],
-        })
+        db.event_queue.emit(
+            EVENT_PEOPLE_CHANGED,
+            {
+                'upserted': [dict(created_person)],
+            },
+        )
 
     return success_response(message='Person created')
 
@@ -2108,15 +2139,20 @@ def update_person_endpoint(person_id):
                     delete_person(db.conn, person_id)
                     # Broadcast for other clients — person deleted, faces ejected
                     db.event_queue.emit(EVENT_PEOPLE_CHANGED, {'removed': [person_id]})
-                    db.event_queue.emit(EVENT_FACES_CHANGED, {
-                        'updated': [{'id': fid, 'person_id': None} for fid in ejected_face_ids],
-                    })
+                    db.event_queue.emit(
+                        EVENT_FACES_CHANGED,
+                        {
+                            'updated': [{'id': fid, 'person_id': None} for fid in ejected_face_ids],
+                        },
+                    )
                     # DESIGN: Response flags report cascade results (see design-audit.md 1.6)
-                    return success_response({
-                        'deleted': True,
-                        'unassigned': ejected_face_ids,  # AppState expects 'unassigned'
-                        'message': 'All faces ejected, person deleted'
-                    })
+                    return success_response(
+                        {
+                            'deleted': True,
+                            'unassigned': ejected_face_ids,  # AppState expects 'unassigned'
+                            'message': 'All faces ejected, person deleted',
+                        }
+                    )
                 faces_changed = True
 
         updated_person = get_person(db.conn, person_id)
@@ -2143,13 +2179,19 @@ def update_person_endpoint(person_id):
 
     # Broadcast for other clients
     if updated_person:
-        db.event_queue.emit(EVENT_PEOPLE_CHANGED, {
-            'upserted': [dict(updated_person)],
-        })
+        db.event_queue.emit(
+            EVENT_PEOPLE_CHANGED,
+            {
+                'upserted': [dict(updated_person)],
+            },
+        )
     if ejected_face_ids:
-        db.event_queue.emit(EVENT_FACES_CHANGED, {
-            'updated': [{'id': fid, 'person_id': None} for fid in ejected_face_ids],
-        })
+        db.event_queue.emit(
+            EVENT_FACES_CHANGED,
+            {
+                'updated': [{'id': fid, 'person_id': None} for fid in ejected_face_ids],
+            },
+        )
 
     return success_response(response_data)
 
@@ -2182,9 +2224,12 @@ def delete_person_endpoint(person_id):
     # Broadcast for other clients
     db.event_queue.emit(EVENT_PEOPLE_CHANGED, {'removed': [person_id]})
     if affected_face_ids:
-        db.event_queue.emit(EVENT_FACES_CHANGED, {
-            'updated': [{'id': fid, 'person_id': None} for fid in affected_face_ids],
-        })
+        db.event_queue.emit(
+            EVENT_FACES_CHANGED,
+            {
+                'updated': [{'id': fid, 'person_id': None} for fid in affected_face_ids],
+            },
+        )
 
     return success_response(message=f'Person "{person["name"]}" deleted')
 
@@ -2249,10 +2294,13 @@ def get_person_thumbnail(person_id):
     thumb_exists = thumb_path.exists()
     thumb_mtime = thumb_path.stat().st_mtime if thumb_exists else None
 
-    logger.debug(f'get_person_thumbnail: person={person_id[:8]}... '
-                 f'preferred_face_id={person.get("preferred_face_id", "None")[:8] if person.get("preferred_face_id") else "None"}... '
-                 f'face_id={face_id[:8]}... fallback={fallback_used} '
-                 f'exists={thumb_exists} mtime={thumb_mtime} path={thumb_path}')
+    logger.debug(
+        f'get_person_thumbnail: person={person_id[:8]}... '
+        f'preferred_face_id='
+        f'{person.get("preferred_face_id", "None")[:8] if person.get("preferred_face_id") else "None"}... '
+        f'face_id={face_id[:8]}... fallback={fallback_used} '
+        f'exists={thumb_exists} mtime={thumb_mtime} path={thumb_path}'
+    )
 
     if not thumb_exists:
         return error_response('Face thumbnail not found', 404)
@@ -2267,6 +2315,7 @@ def get_person_thumbnail(person_id):
 # =============================================================================
 # Face Endpoints
 # =============================================================================
+
 
 @app.route('/api/images/<image_id>/faces', methods=['GET'])
 def get_image_faces(image_id):
@@ -2386,6 +2435,7 @@ def get_face_matches_endpoint(face_id):
 # Simple Face Endpoints (AppState-driven, no business logic)
 # =============================================================================
 
+
 @app.route('/api/faces/assign', methods=['POST'])
 def assign_faces():
     """Assign faces to a person (simple batch operation).
@@ -2455,14 +2505,15 @@ def assign_faces():
     # Broadcast for other clients
     if assigned_count > 0:
         person_name = person['name'] if person else None
-        db.event_queue.emit(EVENT_FACES_CHANGED, {
-            'updated': [{'id': fid, 'person_id': person_id, 'person_name': person_name}
-                        for fid in face_ids],
-        })
+        db.event_queue.emit(
+            EVENT_FACES_CHANGED,
+            {
+                'updated': [{'id': fid, 'person_id': person_id, 'person_name': person_name} for fid in face_ids],
+            },
+        )
 
     return success_response(
-        message=f'{assigned_count} faces assigned',
-        data={'reassessment_triggered': reassessment_triggered}
+        message=f'{assigned_count} faces assigned', data={'reassessment_triggered': reassessment_triggered}
     )
 
 
@@ -2508,9 +2559,12 @@ def unassign_faces_simple():
 
     # Broadcast for other clients
     if unassigned_count > 0:
-        db.event_queue.emit(EVENT_FACES_CHANGED, {
-            'updated': [{'id': fid, 'person_id': None} for fid in face_ids],
-        })
+        db.event_queue.emit(
+            EVENT_FACES_CHANGED,
+            {
+                'updated': [{'id': fid, 'person_id': None} for fid in face_ids],
+            },
+        )
 
     return success_response(message=f'{unassigned_count} faces unassigned')
 
@@ -2556,9 +2610,12 @@ def suppress_faces_batch():
 
     # Broadcast for other clients
     if suppressed_count > 0:
-        db.event_queue.emit(EVENT_FACES_CHANGED, {
-            'updated': [{'id': fid, 'suppressed': True} for fid in face_ids],
-        })
+        db.event_queue.emit(
+            EVENT_FACES_CHANGED,
+            {
+                'updated': [{'id': fid, 'suppressed': True} for fid in face_ids],
+            },
+        )
 
     return success_response(message=f'{suppressed_count} faces suppressed')
 
@@ -2602,7 +2659,7 @@ def update_faces_batch():
                 # Update manually_tagged flag
                 db.conn.execute(
                     "UPDATE faces SET manually_tagged = ?, updated_at = datetime('now') WHERE id = ?",
-                    (1 if locked else 0, face_id)
+                    (1 if locked else 0, face_id),
                 )
                 updated_count += 1
 
@@ -2610,9 +2667,12 @@ def update_faces_batch():
 
     # Broadcast for other clients
     if updated_count > 0 and locked is not None:
-        db.event_queue.emit(EVENT_FACES_CHANGED, {
-            'updated': [{'id': fid, 'manually_tagged': locked} for fid in face_ids],
-        })
+        db.event_queue.emit(
+            EVENT_FACES_CHANGED,
+            {
+                'updated': [{'id': fid, 'manually_tagged': locked} for fid in face_ids],
+            },
+        )
 
     return success_response(message=f'{updated_count} faces updated')
 
@@ -2620,6 +2680,7 @@ def update_faces_batch():
 # =============================================================================
 # Legacy Face Endpoints (complex business logic - being phased out)
 # =============================================================================
+
 
 @app.route('/api/faces/<face_id>/identify', methods=['POST'])
 def identify_face(face_id):
@@ -2676,18 +2737,27 @@ def identify_face(face_id):
             del face['embedding']
 
     # Broadcast for other clients
-    db.event_queue.emit(EVENT_FACES_CHANGED, {
-        'updated': [{'id': face_id, 'person_id': person_id,
-                      'person_name': person['name'], 'manually_tagged': True}],
-    })
-    db.event_queue.emit(EVENT_PEOPLE_CHANGED, {
-        'upserted': [{'id': person_id, 'name': person['name']}],
-    })
+    db.event_queue.emit(
+        EVENT_FACES_CHANGED,
+        {
+            'updated': [
+                {'id': face_id, 'person_id': person_id, 'person_name': person['name'], 'manually_tagged': True}
+            ],
+        },
+    )
+    db.event_queue.emit(
+        EVENT_PEOPLE_CHANGED,
+        {
+            'upserted': [{'id': person_id, 'name': person['name']}],
+        },
+    )
 
-    return success_response({
-        'face': face,
-        'person': person,
-    })
+    return success_response(
+        {
+            'face': face,
+            'person': person,
+        }
+    )
 
 
 @app.route('/api/faces/identify-batch', methods=['POST'])
@@ -2736,12 +2806,7 @@ def identify_faces_batch():
             if face and face.get('person_id'):
                 source_person_ids.add(face['person_id'])
 
-        result = batch_identify_faces(
-            db.conn,
-            face_ids,
-            name,
-            preferred_face_id
-        )
+        result = batch_identify_faces(db.conn, face_ids, name, preferred_face_id)
 
         if result['person'] is None:
             return error_response('Failed to identify faces')
@@ -2769,7 +2834,9 @@ def identify_faces_batch():
                 new_preferred = remaining_faces[-1]['id']
                 update_person(db.conn, source_id, preferred_face_id=new_preferred)
                 # Lock the new preferred face (prevents auto-reassignment)
-                db.conn.execute("UPDATE faces SET manually_tagged = 1, updated_at = datetime('now') WHERE id = ?", (new_preferred,))
+                db.conn.execute(
+                    "UPDATE faces SET manually_tagged = 1, updated_at = datetime('now') WHERE id = ?", (new_preferred,)
+                )
 
         # Delete source persons with no more faces
         delete_people_without_faces(db.conn)
@@ -2791,17 +2858,32 @@ def identify_faces_batch():
 
     # Broadcast for other clients
     target_person = result['person']
-    db.event_queue.emit(EVENT_FACES_CHANGED, {
-        'updated': [{'id': fid, 'person_id': target_person['id'],
-                      'person_name': target_person['name'], 'manually_tagged': True}
-                     for fid in result['faces']],
-    })
-    db.event_queue.emit(EVENT_PEOPLE_CHANGED, {
-        'upserted': [target_person],
-        'removed': list(source_person_ids),  # Persons that may have been deleted
-    })
+    db.event_queue.emit(
+        EVENT_FACES_CHANGED,
+        {
+            'updated': [
+                {
+                    'id': fid,
+                    'person_id': target_person['id'],
+                    'person_name': target_person['name'],
+                    'manually_tagged': True,
+                }
+                for fid in result['faces']
+            ],
+        },
+    )
+    db.event_queue.emit(
+        EVENT_PEOPLE_CHANGED,
+        {
+            'upserted': [target_person],
+            'removed': list(source_person_ids),  # Persons that may have been deleted
+        },
+    )
 
-    logger.info(f'[FacesFlow] identify-batch SUCCESS: person_id={result["person"]["id"]}, identified={len(result["faces"])} faces')
+    logger.info(
+        f'[FacesFlow] identify-batch SUCCESS: person_id={result["person"]["id"]}, '
+        f'identified={len(result["faces"])} faces'
+    )
     return success_response(response_data)
 
 
@@ -2886,13 +2968,19 @@ def unidentify_face(face_id):
             person_deleted = person_before is not None and person_after is None
 
     # Broadcast for other clients
-    db.event_queue.emit(EVENT_FACES_CHANGED, {
-        'updated': [{'id': face_id, 'person_id': None}],
-    })
+    db.event_queue.emit(
+        EVENT_FACES_CHANGED,
+        {
+            'updated': [{'id': face_id, 'person_id': None}],
+        },
+    )
     if person_deleted:
-        db.event_queue.emit(EVENT_PEOPLE_CHANGED, {
-            'removed': [old_person_id],
-        })
+        db.event_queue.emit(
+            EVENT_PEOPLE_CHANGED,
+            {
+                'removed': [old_person_id],
+            },
+        )
 
     return success_response(message='Face unidentified')
 
@@ -2939,11 +3027,11 @@ def suppress_face_endpoint(face_id):
         if old_person_id:
             # Check if person still has faces
             remaining_faces = db.conn.execute(
-                '''SELECT id FROM faces
+                """SELECT id FROM faces
                    WHERE person_id = ? AND suppressed = 0
                    ORDER BY created_at DESC
-                   LIMIT 1''',
-                (old_person_id,)
+                   LIMIT 1""",
+                (old_person_id,),
             ).fetchone()
 
             if not remaining_faces:
@@ -2955,33 +3043,42 @@ def suppress_face_endpoint(face_id):
                 new_preferred_id = remaining_faces['id']
                 db.conn.execute(
                     "UPDATE people SET preferred_face_id = ?, updated_at = datetime('now') WHERE id = ?",
-                    (new_preferred_id, old_person_id)
+                    (new_preferred_id, old_person_id),
                 )
                 # Lock the new preferred face (prevents auto-reassignment)
-                db.conn.execute("UPDATE faces SET manually_tagged = 1, updated_at = datetime('now') WHERE id = ?", (new_preferred_id,))
+                db.conn.execute(
+                    "UPDATE faces SET manually_tagged = 1, updated_at = datetime('now') WHERE id = ?",
+                    (new_preferred_id,),
+                )
                 db.conn.commit()
                 new_preferred_selected = True
 
     # Broadcast for other clients
-    db.event_queue.emit(EVENT_FACES_CHANGED, {
-        'updated': [{'id': face_id, 'suppressed': True}],
-    })
+    db.event_queue.emit(
+        EVENT_FACES_CHANGED,
+        {
+            'updated': [{'id': face_id, 'suppressed': True}],
+        },
+    )
     if person_deleted and old_person_id:
         db.event_queue.emit(EVENT_PEOPLE_CHANGED, {'removed': [old_person_id]})
     elif old_person_id and not person_deleted:
         # Person still exists — face count changed, possibly preferred face too
         updated_person = get_person(db.conn, old_person_id)
         if updated_person:
-            db.event_queue.emit(EVENT_PEOPLE_CHANGED, {
-                'upserted': [dict(updated_person)],
-            })
+            db.event_queue.emit(
+                EVENT_PEOPLE_CHANGED,
+                {
+                    'upserted': [dict(updated_person)],
+                },
+            )
 
     return success_response(
         message='Face suppressed',
         data={
             'person_deleted': person_deleted,
             'new_preferred_selected': new_preferred_selected,
-        }
+        },
     )
 
 
@@ -3007,14 +3104,14 @@ def toggle_face_manual_tag_endpoint(face_id):
             return error_response('Face not found', 404)
 
     # Broadcast for other clients
-    db.event_queue.emit(EVENT_FACES_CHANGED, {
-        'updated': [{'id': face_id, 'manually_tagged': new_value}],
-    })
-
-    return success_response(
-        message='Manual tag toggled',
-        data={'manually_tagged': new_value}
+    db.event_queue.emit(
+        EVENT_FACES_CHANGED,
+        {
+            'updated': [{'id': face_id, 'manually_tagged': new_value}],
+        },
     )
+
+    return success_response(message='Manual tag toggled', data={'manually_tagged': new_value})
 
 
 @app.route('/api/faces/<face_id>', methods=['DELETE'])
@@ -3169,7 +3266,9 @@ def unassign_face(face_id):
                 new_preferred = remaining_faces[-1]['id']
                 update_person(db.conn, old_person_id, preferred_face_id=new_preferred)
                 # Lock the new preferred face (prevents auto-reassignment)
-                db.conn.execute("UPDATE faces SET manually_tagged = 1, updated_at = datetime('now') WHERE id = ?", (new_preferred,))
+                db.conn.execute(
+                    "UPDATE faces SET manually_tagged = 1, updated_at = datetime('now') WHERE id = ?", (new_preferred,)
+                )
 
         # DESIGN: Global cleanup of empty people - prevents orphaned records (see design-audit.md 1.3)
         delete_people_without_faces(db.conn)
@@ -3182,23 +3281,34 @@ def unassign_face(face_id):
     # or via explicit "Rescan" request.
 
     # Broadcast for other clients
-    db.event_queue.emit(EVENT_FACES_CHANGED, {
-        'updated': [{'id': face_id, 'person_id': None}],
-    })
+    db.event_queue.emit(
+        EVENT_FACES_CHANGED,
+        {
+            'updated': [{'id': face_id, 'person_id': None}],
+        },
+    )
     if updated_person:
-        db.event_queue.emit(EVENT_PEOPLE_CHANGED, {
-            'upserted': [dict(updated_person)],
-        })
+        db.event_queue.emit(
+            EVENT_PEOPLE_CHANGED,
+            {
+                'upserted': [dict(updated_person)],
+            },
+        )
     else:
         # Person was deleted (no faces left)
-        db.event_queue.emit(EVENT_PEOPLE_CHANGED, {
-            'removed': [old_person_id],
-        })
+        db.event_queue.emit(
+            EVENT_PEOPLE_CHANGED,
+            {
+                'removed': [old_person_id],
+            },
+        )
 
-    return success_response({
-        'message': 'Face unassigned',
-        'person': updated_person,  # Will be None if person was deleted
-    })
+    return success_response(
+        {
+            'message': 'Face unassigned',
+            'person': updated_person,  # Will be None if person was deleted
+        }
+    )
 
 
 @app.route('/api/faces/unassign-batch', methods=['POST'])
@@ -3269,7 +3379,9 @@ def unassign_faces_batch():
                 new_preferred = remaining_faces[-1]['id']
                 update_person(db.conn, person_id, preferred_face_id=new_preferred)
                 # Lock the new preferred face (prevents auto-reassignment)
-                db.conn.execute("UPDATE faces SET manually_tagged = 1, updated_at = datetime('now') WHERE id = ?", (new_preferred,))
+                db.conn.execute(
+                    "UPDATE faces SET manually_tagged = 1, updated_at = datetime('now') WHERE id = ?", (new_preferred,)
+                )
 
         # DESIGN: Global cleanup of empty people - prevents orphaned records (see design-audit.md 1.3)
         # Phase 3: Delete people with no more faces
@@ -3281,21 +3393,27 @@ def unassign_faces_batch():
 
     # Broadcast for other clients
     if unassigned_count > 0:
-        db.event_queue.emit(EVENT_FACES_CHANGED, {
-            'updated': [{'id': fid, 'person_id': None} for fid in face_ids],
-        })
+        db.event_queue.emit(
+            EVENT_FACES_CHANGED,
+            {
+                'updated': [{'id': fid, 'person_id': None} for fid in face_ids],
+            },
+        )
         # People may have been deleted or had face counts change
-        db.event_queue.emit(EVENT_PEOPLE_CHANGED, {
-            'removed': [pid for pid in affected_person_ids
-                        if get_person(db.conn, pid) is None],
-            'upserted': [dict(p) for pid in affected_person_ids
-                         if (p := get_person(db.conn, pid)) is not None],
-        })
+        db.event_queue.emit(
+            EVENT_PEOPLE_CHANGED,
+            {
+                'removed': [pid for pid in affected_person_ids if get_person(db.conn, pid) is None],
+                'upserted': [dict(p) for pid in affected_person_ids if (p := get_person(db.conn, pid)) is not None],
+            },
+        )
 
-    return success_response({
-        'message': f'{unassigned_count} faces unassigned',
-        'unassigned_count': unassigned_count,
-    })
+    return success_response(
+        {
+            'message': f'{unassigned_count} faces unassigned',
+            'unassigned_count': unassigned_count,
+        }
+    )
 
 
 @app.route('/api/faces/group-status', methods=['GET'])
@@ -3359,12 +3477,18 @@ def set_preferred_face(person_id):
         updated_person = get_person(db.conn, person_id)
 
     # Broadcast for other clients
-    db.event_queue.emit(EVENT_PEOPLE_CHANGED, {
-        'upserted': [dict(updated_person)],
-    })
-    db.event_queue.emit(EVENT_FACES_CHANGED, {
-        'updated': [{'id': face_id, 'manually_tagged': True}],
-    })
+    db.event_queue.emit(
+        EVENT_PEOPLE_CHANGED,
+        {
+            'upserted': [dict(updated_person)],
+        },
+    )
+    db.event_queue.emit(
+        EVENT_FACES_CHANGED,
+        {
+            'updated': [{'id': face_id, 'manually_tagged': True}],
+        },
+    )
 
     return success_response(updated_person)
 
@@ -3411,8 +3535,8 @@ def merge_person(person_id):
 
         # Move all faces from source to target
         db.conn.execute(
-            '''UPDATE faces SET person_id = ?, updated_at = datetime('now') WHERE person_id = ?''',
-            (target_id, person_id)
+            """UPDATE faces SET person_id = ?, updated_at = datetime('now') WHERE person_id = ?""",
+            (target_id, person_id),
         )
 
         # Delete the source person (face_count is computed dynamically via JOIN)
@@ -3427,21 +3551,27 @@ def merge_person(person_id):
         updated_person = get_person(db.conn, target_id)
 
     # Broadcast for other clients
-    db.event_queue.emit(EVENT_PEOPLE_CHANGED, {
-        'removed': [person_id],
-        'upserted': [dict(updated_person)] if updated_person else [],
-    })
+    db.event_queue.emit(
+        EVENT_PEOPLE_CHANGED,
+        {
+            'removed': [person_id],
+            'upserted': [dict(updated_person)] if updated_person else [],
+        },
+    )
     if merged_face_ids:
-        db.event_queue.emit(EVENT_FACES_CHANGED, {
-            'updated': [{'id': fid, 'person_id': target_id,
-                          'person_name': updated_person['name']}
-                         for fid in merged_face_ids],
-        })
+        db.event_queue.emit(
+            EVENT_FACES_CHANGED,
+            {
+                'updated': [
+                    {'id': fid, 'person_id': target_id, 'person_name': updated_person['name']}
+                    for fid in merged_face_ids
+                ],
+            },
+        )
 
-    return success_response({
-        'message': f'Merged "{from_person["name"]}" into "{to_person["name"]}"',
-        'person': updated_person
-    })
+    return success_response(
+        {'message': f'Merged "{from_person["name"]}" into "{to_person["name"]}"', 'person': updated_person}
+    )
 
 
 @app.route('/api/people/<person_id>/dissolve', methods=['POST'])
@@ -3466,16 +3596,16 @@ def dissolve_person(person_id):
 
         # Get face IDs before dissolving (for event payload)
         dissolved_faces = db.conn.execute(
-            'SELECT id FROM faces WHERE person_id = ? AND suppressed = 0',
-            (person_id,)
+            'SELECT id FROM faces WHERE person_id = ? AND suppressed = 0', (person_id,)
         ).fetchall()
         dissolved_face_ids = [f['id'] for f in dissolved_faces]
         face_count = len(dissolved_face_ids)
 
         # Unidentify all faces (set person_id to NULL)
         db.conn.execute(
-            '''UPDATE faces SET person_id = NULL, manually_tagged = 0, updated_at = datetime('now') WHERE person_id = ?''',
-            (person_id,)
+            """UPDATE faces SET person_id = NULL, manually_tagged = 0,
+            updated_at = datetime('now') WHERE person_id = ?""",
+            (person_id,),
         )
 
         # Delete the person
@@ -3485,19 +3615,20 @@ def dissolve_person(person_id):
     # Broadcast for other clients
     db.event_queue.emit(EVENT_PEOPLE_CHANGED, {'removed': [person_id]})
     if dissolved_face_ids:
-        db.event_queue.emit(EVENT_FACES_CHANGED, {
-            'updated': [{'id': fid, 'person_id': None} for fid in dissolved_face_ids],
-        })
+        db.event_queue.emit(
+            EVENT_FACES_CHANGED,
+            {
+                'updated': [{'id': fid, 'person_id': None} for fid in dissolved_face_ids],
+            },
+        )
 
-    return success_response({
-        'message': f'Dissolved "{person["name"]}"',
-        'faces_released': face_count
-    })
+    return success_response({'message': f'Dissolved "{person["name"]}"', 'faces_released': face_count})
 
 
 # =============================================================================
 # Error Handlers
 # =============================================================================
+
 
 @app.errorhandler(404)
 def not_found(error):
@@ -3544,6 +3675,7 @@ def _format_request_context(max_url_len: int = 200, max_body_len: int = 200) -> 
 # CLI Commands
 # =============================================================================
 
+
 def run_generate_thumbnails_cli():
     """CLI wrapper for generate_missing_thumbnails."""
     db = get_db()
@@ -3561,83 +3693,83 @@ def run_generate_thumbnails_cli():
 # =============================================================================
 
 if __name__ == '__main__':
-    from config import Config, load_config, save_config, get_default_config_path
+    from config import Config, get_default_config_path, load_config, save_config
 
     parser = argparse.ArgumentParser(description='Photonarium - Image Catalogue Server')
     parser.add_argument(
-        '-s', '--scan',
+        '-s', '--scan', action='store_true', help='Scan folders and compute image CLIP embeddings on startup'
+    )
+    parser.add_argument(
+        '-f',
+        '--detect-faces',
         action='store_true',
-        help='Scan folders and compute image CLIP embeddings on startup'
+        help='Run face detection after image CLIP embeddings complete (requires --scan)',
     )
     parser.add_argument(
-        '-f', '--detect-faces',
+        '-F',
+        '--group-faces',
         action='store_true',
-        help='Run face detection after image CLIP embeddings complete (requires --scan)'
+        help='Compute face/duplicate grouping after face detection (requires --detect-faces)',
     )
     parser.add_argument(
-        '-F', '--group-faces',
+        '-p', '--port', type=int, default=None, help='Port to run the server on (overrides config, default: 5000)'
+    )
+    parser.add_argument(
+        '-g', '--generate-thumbnails', action='store_true', help='Generate missing thumbnails for all images and exit'
+    )
+    parser.add_argument(
+        '-r',
+        '--rebuild-duplicates',
         action='store_true',
-        help='Compute face/duplicate grouping after face detection (requires --detect-faces)'
+        help='Force full recomputation of all duplicate groups and exit',
     )
     parser.add_argument(
-        '-p', '--port',
-        type=int,
-        default=None,
-        help='Port to run the server on (overrides config, default: 5000)'
-    )
-    parser.add_argument(
-        '-g', '--generate-thumbnails',
+        '-e',
+        '--generate-face-embeddings',
         action='store_true',
-        help='Generate missing thumbnails for all images and exit'
+        help='Generate CLIP embeddings for faces (for text search) and exit',
     )
     parser.add_argument(
-        '-r', '--rebuild-duplicates',
+        '-t',
+        '--regenerate-face-thumbnails',
         action='store_true',
-        help='Force full recomputation of all duplicate groups and exit'
+        help='Regenerate all face thumbnails with non-distorted rendering and exit',
     )
     parser.add_argument(
-        '-e', '--generate-face-embeddings',
+        '-x', '--extract-exif', action='store_true', help='Extract EXIF metadata for all images missing it and exit'
+    )
+    parser.add_argument(
+        '-m',
+        '--list-models',
         action='store_true',
-        help='Generate CLIP embeddings for faces (for text search) and exit'
+        help='Output required ML models as JSON and exit (for download_models.py)',
     )
     parser.add_argument(
-        '-t', '--regenerate-face-thumbnails',
-        action='store_true',
-        help='Regenerate all face thumbnails with non-distorted rendering and exit'
-    )
-    parser.add_argument(
-        '-x', '--extract-exif',
-        action='store_true',
-        help='Extract EXIF metadata for all images missing it and exit'
-    )
-    parser.add_argument(
-        '-m', '--list-models',
-        action='store_true',
-        help='Output required ML models as JSON and exit (for download_models.py)'
-    )
-    parser.add_argument(
-        '-d', '--data-dir',
+        '-d',
+        '--data-dir',
         type=str,
         default=None,
         help='Runtime override for data directory (database, thumbnails, models). '
-             'Does not persist to config — use --init-config for that.'
+        'Does not persist to config — use --init-config for that.',
     )
     parser.add_argument(
-        '-c', '--config',
+        '-c',
+        '--config',
         type=str,
         default=None,
         dest='config_path',
-        help='Path to configuration file (default: OS-appropriate location)'
+        help='Path to configuration file (default: OS-appropriate location)',
     )
     parser.add_argument(
-        '-a', '--add-folder',
+        '-a',
+        '--add-folder',
         type=str,
         action='append',
         default=None,
         metavar='PATH',
         help='Register a folder for indexing (repeatable). '
-             'Adds the folder to the database and exits. '
-             'Useful for headless servers where the GUI folder picker is unavailable.'
+        'Adds the folder to the database and exits. '
+        'Useful for headless servers where the GUI folder picker is unavailable.',
     )
     parser.add_argument(
         '--init-config',
@@ -3645,7 +3777,7 @@ if __name__ == '__main__':
         default=None,
         metavar='DATA_DIR',
         help='Create/update config at OS default with the given data_dir and exit. '
-             'Used by the installer to persist the chosen data directory.'
+        'Used by the installer to persist the chosen data directory.',
     )
     args = parser.parse_args()
 
@@ -3713,6 +3845,7 @@ if __name__ == '__main__':
     # Handle list-models command (outputs JSON for download_models.py)
     if args.list_models:
         import json
+
         models = {
             'openclip': {
                 'model': _config.openclip_model,
@@ -3750,8 +3883,7 @@ if __name__ == '__main__':
                 logger.info(f'Added folder: {abs_path}')
                 added += 1
         if added:
-            logger.info(f'Registered {added} new folder(s). '
-                        'Run with --scan to index their images.')
+            logger.info(f'Registered {added} new folder(s). Run with --scan to index their images.')
         sys.exit(0)
 
     # Handle thumbnail generation command
@@ -3819,10 +3951,7 @@ if __name__ == '__main__':
         executor = ThreadPoolExecutor(max_workers=num_workers)
 
         try:
-            futures = {
-                executor.submit(db.extract_exif_for_image, row['id']): row
-                for row in rows
-            }
+            futures = {executor.submit(db.extract_exif_for_image, row['id']): row for row in rows}
 
             for future in as_completed(futures):
                 try:
@@ -3837,10 +3966,7 @@ if __name__ == '__main__':
                 processed += 1
 
                 if processed % 100 == 0 or processed == total:
-                    logger.info(
-                        f'  Progress: {processed}/{total} '
-                        f'({extracted} extracted, {skipped} no EXIF)'
-                    )
+                    logger.info(f'  Progress: {processed}/{total} ({extracted} extracted, {skipped} no EXIF)')
 
         except KeyboardInterrupt:
             logger.warning('Interrupted! Cancelling pending tasks...')
@@ -3852,10 +3978,7 @@ if __name__ == '__main__':
 
         elapsed = time.time() - start_time
         status = 'interrupted' if interrupted else 'completed'
-        logger.info(
-            f'EXIF extraction {status} in {elapsed:.1f}s: '
-            f'{extracted} extracted, {skipped} no EXIF'
-        )
+        logger.info(f'EXIF extraction {status} in {elapsed:.1f}s: {extracted} extracted, {skipped} no EXIF')
         sys.exit(0)
 
     # -------------------------------------------------------------------------
@@ -3881,7 +4004,7 @@ if __name__ == '__main__':
     logger.info(f'Data directory: {_data_dir}')
     if server_host == '0.0.0.0':
         logger.info(f'Open http://localhost:{server_port} in your browser')
-        logger.info(f'Also available to other devices on your network')
+        logger.info('Also available to other devices on your network')
     else:
         logger.info(f'Open http://{server_host}:{server_port} in your browser')
     logger.info('=' * 60)
@@ -3889,6 +4012,7 @@ if __name__ == '__main__':
     # Try to use waitress (production WSGI server), fall back to Flask dev server
     try:
         from waitress import serve
+
         logger.info('Using waitress WSGI server')
         serve(app, host=server_host, port=server_port, threads=8)
     except ImportError:

@@ -37,22 +37,21 @@ Usage:
 
 from __future__ import annotations
 
+import logging
+import sqlite3
+import threading
+import time
+import uuid
 from collections import defaultdict
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
 from pathlib import Path
-from PIL import Image, ImageOps, ImageFilter
-from typing import Any, TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
-import logging
 import numpy as np
-import sqlite3
-import threading
-import time
 import torch
-import uuid
-
 from facenet_pytorch import MTCNN, InceptionResnetV1
+from PIL import Image, ImageFilter
 
 from duplicates import UnionFind
 from rawimage import open_image as raw_open_image
@@ -98,33 +97,33 @@ CREATE TABLE IF NOT EXISTS faces (
 
 # Index definitions for face tables
 _SQL_CREATE_FACE_INDEXES = [
-    "CREATE INDEX IF NOT EXISTS idx_faces_image ON faces(image_id)",
-    "CREATE INDEX IF NOT EXISTS idx_faces_person ON faces(person_id)",
-    "CREATE INDEX IF NOT EXISTS idx_faces_suppressed ON faces(suppressed)",
-    "CREATE INDEX IF NOT EXISTS idx_people_name ON people(name COLLATE NOCASE)",
+    'CREATE INDEX IF NOT EXISTS idx_faces_image ON faces(image_id)',
+    'CREATE INDEX IF NOT EXISTS idx_faces_person ON faces(person_id)',
+    'CREATE INDEX IF NOT EXISTS idx_faces_suppressed ON faces(suppressed)',
+    'CREATE INDEX IF NOT EXISTS idx_people_name ON people(name COLLATE NOCASE)',
     # Composite index for efficient face count queries (used by get_all_people)
     # Without this, SQLite uses idx_faces_suppressed which causes full scans
-    "CREATE INDEX IF NOT EXISTS idx_faces_person_suppressed ON faces(person_id, suppressed)",
+    'CREATE INDEX IF NOT EXISTS idx_faces_person_suppressed ON faces(person_id, suppressed)',
     # Index for unknown_group_id to speed up window functions in get_all_faces
-    "CREATE INDEX IF NOT EXISTS idx_faces_unknown_group ON faces(unknown_group_id)",
+    'CREATE INDEX IF NOT EXISTS idx_faces_unknown_group ON faces(unknown_group_id)',
 ]
 
 # Migrations for schema updates
 _MIGRATIONS = [
     # Add unknown_group_id column for grouping similar unknown faces
-    ("faces", "unknown_group_id", "ALTER TABLE faces ADD COLUMN unknown_group_id TEXT"),
+    ('faces', 'unknown_group_id', 'ALTER TABLE faces ADD COLUMN unknown_group_id TEXT'),
     # Add per-person recognition threshold (NULL = use global default)
-    ("people", "recognition_threshold", "ALTER TABLE people ADD COLUMN recognition_threshold REAL"),
+    ('people', 'recognition_threshold', 'ALTER TABLE people ADD COLUMN recognition_threshold REAL'),
     # Add semantic embedding for text-based face search (OpenCLIP, distinct from face recognition embedding)
-    ("faces", "semantic_embedding", "ALTER TABLE faces ADD COLUMN semantic_embedding BLOB"),
+    ('faces', 'semantic_embedding', 'ALTER TABLE faces ADD COLUMN semantic_embedding BLOB'),
     # Add manually_tagged flag to track user-tagged vs auto-matched faces
     # 0 = auto-tagged (or not yet tagged), 1 = manually tagged by user
-    ("faces", "manually_tagged", "ALTER TABLE faces ADD COLUMN manually_tagged INTEGER DEFAULT 0"),
+    ('faces', 'manually_tagged', 'ALTER TABLE faces ADD COLUMN manually_tagged INTEGER DEFAULT 0'),
     # Add updated_at for optimistic concurrency control in background processes
     # Allows background tasks to skip faces that were modified since they started
     # Note: SQLite ALTER TABLE doesn't allow function defaults, so we add with NULL default
     # and backfill in _run_migrations()
-    ("faces", "updated_at", "ALTER TABLE faces ADD COLUMN updated_at TEXT"),
+    ('faces', 'updated_at', 'ALTER TABLE faces ADD COLUMN updated_at TEXT'),
 ]
 
 
@@ -164,28 +163,27 @@ def _run_migrations(conn: sqlite3.Connection) -> None:
 
     for table, column, sql in _MIGRATIONS:
         # Check if column exists
-        cursor = conn.execute(f"PRAGMA table_info({table})")
+        cursor = conn.execute(f'PRAGMA table_info({table})')
         columns = [row[1] for row in cursor.fetchall()]
         if column not in columns:
             try:
                 conn.execute(sql)
                 newly_added_columns.add((table, column))
-                logger.info(f"Migration: added {table}.{column}")
+                logger.info(f'Migration: added {table}.{column}')
             except sqlite3.OperationalError as e:
-                logger.warning(f"Migration failed for {table}.{column}: {e}")
+                logger.warning(f'Migration failed for {table}.{column}: {e}')
 
     # Backfill updated_at for existing faces (set to created_at if NULL)
     # Always run this, not just when column is newly added, in case previous backfill failed
-    cursor = conn.execute(
-        "UPDATE faces SET updated_at = created_at WHERE updated_at IS NULL"
-    )
+    cursor = conn.execute('UPDATE faces SET updated_at = created_at WHERE updated_at IS NULL')
     if cursor.rowcount > 0:
-        logger.info(f"Migration: backfilled updated_at for {cursor.rowcount} existing faces")
+        logger.info(f'Migration: backfilled updated_at for {cursor.rowcount} existing faces')
 
 
 # =============================================================================
 # DATA CLASSES
 # =============================================================================
+
 
 @dataclass
 class DetectedFace:
@@ -199,6 +197,7 @@ class DetectedFace:
         confidence: Detection confidence score (0-1).
         embedding: 512D face embedding as numpy array.
     """
+
     box_x: float
     box_y: float
     box_w: float
@@ -210,6 +209,7 @@ class DetectedFace:
 # =============================================================================
 # FACE DETECTOR CLASS
 # =============================================================================
+
 
 class FaceDetector:
     """Face detection and embedding using facenet-pytorch.
@@ -330,10 +330,7 @@ class FaceDetector:
 
             # Filter by confidence FIRST, then extract only valid faces
             # This ensures index correspondence between boxes and face tensors
-            valid_mask = [
-                prob is not None and prob >= self.min_confidence
-                for prob in probs
-            ]
+            valid_mask = [prob is not None and prob >= self.min_confidence for prob in probs]
             valid_boxes = boxes[valid_mask]
             valid_probs = probs[valid_mask]
 
@@ -404,11 +401,13 @@ class FaceDetector:
                     logger.debug(f'Skipping small face: {face_pixels:.0f}px')
                     continue
 
-                valid_faces.append((
-                    i,  # tensor index
-                    (norm_x, norm_y, norm_w, norm_h),  # normalized box
-                    float(prob),  # confidence
-                ))
+                valid_faces.append(
+                    (
+                        i,  # tensor index
+                        (norm_x, norm_y, norm_w, norm_h),  # normalized box
+                        float(prob),  # confidence
+                    )
+                )
 
             if not valid_faces:
                 return []
@@ -431,14 +430,16 @@ class FaceDetector:
             detected_faces = []
             for idx, (_, norm_box, confidence) in enumerate(valid_faces):
                 norm_x, norm_y, norm_w, norm_h = norm_box
-                detected_faces.append(DetectedFace(
-                    box_x=float(norm_x),
-                    box_y=float(norm_y),
-                    box_w=float(norm_w),
-                    box_h=float(norm_h),
-                    confidence=confidence,
-                    embedding=embeddings_batch[idx],
-                ))
+                detected_faces.append(
+                    DetectedFace(
+                        box_x=float(norm_x),
+                        box_y=float(norm_y),
+                        box_w=float(norm_w),
+                        box_h=float(norm_h),
+                        confidence=confidence,
+                        embedding=embeddings_batch[idx],
+                    )
+                )
 
             logger.debug(f'Detected {len(detected_faces)} faces in {image_path.name}')
             return detected_faces
@@ -522,6 +523,7 @@ class FaceDetector:
         Returns:
             Dict mapping each image path to its list of DetectedFace objects.
         """
+
         def should_stop():
             return stop_event is not None and stop_event.is_set()
 
@@ -576,10 +578,7 @@ class FaceDetector:
                     continue
 
                 # Filter by confidence FIRST
-                valid_mask = [
-                    prob is not None and prob >= self.min_confidence
-                    for prob in probs
-                ]
+                valid_mask = [prob is not None and prob >= self.min_confidence for prob in probs]
                 valid_boxes = boxes[valid_mask]
                 valid_probs = probs[valid_mask]
 
@@ -632,12 +631,14 @@ class FaceDetector:
                         continue
 
                     # Clone tensor to CPU immediately to avoid keeping GPU tensor alive
-                    all_faces_data.append((
-                        image_path,
-                        faces_tensor[i].clone().cpu(),
-                        (norm_x, norm_y, norm_w, norm_h),
-                        float(prob),
-                    ))
+                    all_faces_data.append(
+                        (
+                            image_path,
+                            faces_tensor[i].clone().cpu(),
+                            (norm_x, norm_y, norm_w, norm_h),
+                            float(prob),
+                        )
+                    )
 
                 # Release GPU memory for this image's face tensors
                 del faces_tensor
@@ -686,14 +687,16 @@ class FaceDetector:
         # Phase 5: Build results dict
         for idx, (image_path, norm_box, confidence) in enumerate(all_faces_metadata):
             norm_x, norm_y, norm_w, norm_h = norm_box
-            results[image_path].append(DetectedFace(
-                box_x=float(norm_x),
-                box_y=float(norm_y),
-                box_w=float(norm_w),
-                box_h=float(norm_h),
-                confidence=confidence,
-                embedding=embeddings_batch[idx],
-            ))
+            results[image_path].append(
+                DetectedFace(
+                    box_x=float(norm_x),
+                    box_y=float(norm_y),
+                    box_w=float(norm_w),
+                    box_h=float(norm_h),
+                    confidence=confidence,
+                    embedding=embeddings_batch[idx],
+                )
+            )
 
         return results
 
@@ -747,6 +750,7 @@ class FaceDetector:
 # =============================================================================
 # FACE THUMBNAIL GENERATION
 # =============================================================================
+
 
 def _create_face_thumbnail(
     img: Image.Image,
@@ -825,9 +829,7 @@ def _create_face_thumbnail(
         thumb = background
 
     # Apply subtle sharpening
-    thumb = thumb.filter(
-        ImageFilter.UnsharpMask(radius=1.0, percent=60, threshold=3)
-    )
+    thumb = thumb.filter(ImageFilter.UnsharpMask(radius=1.0, percent=60, threshold=3))
 
     return thumb
 
@@ -993,6 +995,7 @@ def delete_face_thumbnail(
 # PEOPLE CRUD OPERATIONS
 # =============================================================================
 
+
 def create_person(
     conn: sqlite3.Connection,
     name: str,
@@ -1011,10 +1014,7 @@ def create_person(
     if person_id is None:
         person_id = str(uuid.uuid4())
 
-    conn.execute(
-        '''INSERT INTO people (id, name) VALUES (?, ?)''',
-        (person_id, name)
-    )
+    conn.execute("""INSERT INTO people (id, name) VALUES (?, ?)""", (person_id, name))
     conn.commit()
     logger.debug(f'Created person: {name} ({person_id})')
     return person_id
@@ -1036,12 +1036,12 @@ def get_person(
     # DESIGN: Computed face_count in GET response - standard API efficiency pattern,
     # avoids frontend needing separate query for counts (see design-audit.md 1.5)
     cursor = conn.execute(
-        '''SELECT p.*, COUNT(f.id) as face_count
+        """SELECT p.*, COUNT(f.id) as face_count
            FROM people p
            LEFT JOIN faces f ON f.person_id = p.id AND f.suppressed = 0
            WHERE p.id = ?
-           GROUP BY p.id''',
-        (person_id,)
+           GROUP BY p.id""",
+        (person_id,),
     )
     row = cursor.fetchone()
     return dict(row) if row else None
@@ -1060,10 +1060,7 @@ def get_person_by_name(
     Returns:
         Person dict or None if not found.
     """
-    cursor = conn.execute(
-        '''SELECT * FROM people WHERE name = ? COLLATE NOCASE''',
-        (name,)
-    )
+    cursor = conn.execute("""SELECT * FROM people WHERE name = ? COLLATE NOCASE""", (name,))
     row = cursor.fetchone()
     return dict(row) if row else None
 
@@ -1079,14 +1076,14 @@ def get_all_people(conn: sqlite3.Connection) -> list[dict[str, Any]]:
     """
     # DESIGN: Computed face_count in GET response - standard API efficiency pattern,
     # avoids frontend needing separate query for counts (see design-audit.md 1.5)
-    cursor = conn.execute('''
+    cursor = conn.execute("""
         SELECT p.*, COUNT(f.id) as face_count, pf.updated_at as preferred_face_updated_at
         FROM people p
         LEFT JOIN faces f ON f.person_id = p.id AND f.suppressed = 0
         LEFT JOIN faces pf ON pf.id = p.preferred_face_id
         GROUP BY p.id
         ORDER BY p.name COLLATE NOCASE
-    ''')
+    """)
     return [dict(row) for row in cursor.fetchall()]
 
 
@@ -1134,10 +1131,7 @@ def update_person(
     updates.append("updated_at = datetime('now')")
     params.append(person_id)
 
-    cursor = conn.execute(
-        f'''UPDATE people SET {', '.join(updates)} WHERE id = ?''',
-        params
-    )
+    cursor = conn.execute(f"""UPDATE people SET {', '.join(updates)} WHERE id = ?""", params)
     conn.commit()
     return cursor.rowcount > 0
 
@@ -1169,9 +1163,9 @@ def revalidate_person_faces(
     # Include manually_tagged so we can skip locked faces during ejection,
     # but still use their embeddings for similarity comparison
     cursor = conn.execute(
-        '''SELECT id, embedding, manually_tagged FROM faces
-           WHERE person_id = ? AND suppressed = 0''',
-        (person_id,)
+        """SELECT id, embedding, manually_tagged FROM faces
+           WHERE person_id = ? AND suppressed = 0""",
+        (person_id,),
     )
     faces = []
     for row in cursor.fetchall():
@@ -1202,7 +1196,7 @@ def revalidate_person_faces(
 
     # Find faces that don't meet threshold (skip locked faces - user confirmed these)
     ejected_ids = []
-    for i, (face_id, max_sim) in enumerate(zip(face_ids, max_similarities)):
+    for i, (face_id, max_sim) in enumerate(zip(face_ids, max_similarities, strict=True)):
         if face_locked[i]:
             continue  # Locked faces are never ejected
         if max_sim < threshold:
@@ -1222,17 +1216,14 @@ def revalidate_person_faces(
         if person and person.get('preferred_face_id') in ejected_ids:
             # Get remaining faces
             remaining = conn.execute(
-                '''SELECT id FROM faces
+                """SELECT id FROM faces
                    WHERE person_id = ? AND suppressed = 0
-                   ORDER BY id''',
-                (person_id,)
+                   ORDER BY id""",
+                (person_id,),
             ).fetchall()
             if remaining:
                 new_preferred = remaining[0]['id']
-                conn.execute(
-                    'UPDATE people SET preferred_face_id = ? WHERE id = ?',
-                    (new_preferred, person_id)
-                )
+                conn.execute('UPDATE people SET preferred_face_id = ? WHERE id = ?', (new_preferred, person_id))
                 conn.commit()
 
         # Invalidate embedding cache since faces moved
@@ -1262,14 +1253,11 @@ def delete_person(
     """
     # Clear manually_tagged before delete - ON DELETE SET NULL only nulls person_id
     conn.execute(
-        '''UPDATE faces SET manually_tagged = 0, updated_at = datetime('now')
-           WHERE person_id = ? AND manually_tagged = 1''',
-        (person_id,)
+        """UPDATE faces SET manually_tagged = 0, updated_at = datetime('now')
+           WHERE person_id = ? AND manually_tagged = 1""",
+        (person_id,),
     )
-    cursor = conn.execute(
-        '''DELETE FROM people WHERE id = ?''',
-        (person_id,)
-    )
+    cursor = conn.execute("""DELETE FROM people WHERE id = ?""", (person_id,))
     conn.commit()
     return cursor.rowcount > 0
 
@@ -1293,13 +1281,13 @@ def search_people(
     # acting as pattern characters in the substring match.
     escaped = query.replace('\\', '\\\\').replace('%', '\\%').replace('_', '\\_')
     cursor = conn.execute(
-        '''SELECT p.*, pf.updated_at as preferred_face_updated_at
+        """SELECT p.*, pf.updated_at as preferred_face_updated_at
            FROM people p
            LEFT JOIN faces pf ON pf.id = p.preferred_face_id
            WHERE p.name LIKE ? ESCAPE '\\' COLLATE NOCASE
            ORDER BY p.name COLLATE NOCASE
-           LIMIT ?''',
-        (f'%{escaped}%', limit)
+           LIMIT ?""",
+        (f'%{escaped}%', limit),
     )
     return [dict(row) for row in cursor.fetchall()]
 
@@ -1313,14 +1301,14 @@ def delete_people_without_faces(conn: sqlite3.Connection) -> int:
     Returns:
         Number of people deleted.
     """
-    cursor = conn.execute('''
+    cursor = conn.execute("""
         DELETE FROM people
         WHERE id NOT IN (
             SELECT DISTINCT person_id
             FROM faces
             WHERE person_id IS NOT NULL AND suppressed = 0
         )
-    ''')
+    """)
     conn.commit()
     deleted = cursor.rowcount
     if deleted > 0:
@@ -1331,6 +1319,7 @@ def delete_people_without_faces(conn: sqlite3.Connection) -> int:
 # =============================================================================
 # FACES CRUD OPERATIONS
 # =============================================================================
+
 
 def create_face(
     conn: sqlite3.Connection,
@@ -1375,12 +1364,11 @@ def create_face(
         semantic_bytes = semantic_embedding.astype(np.float32).tobytes()
 
     conn.execute(
-        '''INSERT INTO faces
+        """INSERT INTO faces
            (id, image_id, box_x, box_y, box_w, box_h, confidence, embedding,
             person_id, semantic_embedding, created_at, updated_at)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'), datetime('now'))''',
-        (face_id, image_id, box_x, box_y, box_w, box_h, confidence,
-         embedding_bytes, person_id, semantic_bytes)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'), datetime('now'))""",
+        (face_id, image_id, box_x, box_y, box_w, box_h, confidence, embedding_bytes, person_id, semantic_bytes),
     )
     conn.commit()
     return face_id
@@ -1403,8 +1391,7 @@ def update_face_semantic_embedding(
     """
     semantic_bytes = semantic_embedding.astype(np.float32).tobytes()
     cursor = conn.execute(
-        "UPDATE faces SET semantic_embedding = ?, updated_at = datetime('now') WHERE id = ?",
-        (semantic_bytes, face_id)
+        "UPDATE faces SET semantic_embedding = ?, updated_at = datetime('now') WHERE id = ?", (semantic_bytes, face_id)
     )
     conn.commit()
     return cursor.rowcount > 0
@@ -1452,9 +1439,7 @@ def get_faces_without_semantic_embedding(
     Returns:
         List of face IDs.
     """
-    cursor = conn.execute(
-        'SELECT id FROM faces WHERE semantic_embedding IS NULL AND suppressed = 0'
-    )
+    cursor = conn.execute('SELECT id FROM faces WHERE semantic_embedding IS NULL AND suppressed = 0')
     return [row['id'] for row in cursor.fetchall()]
 
 
@@ -1472,11 +1457,11 @@ def get_face(
         Face dict with person_name if identified, or None if not found.
     """
     cursor = conn.execute(
-        '''SELECT f.*, p.name as person_name
+        """SELECT f.*, p.name as person_name
            FROM faces f
            LEFT JOIN people p ON f.person_id = p.id
-           WHERE f.id = ?''',
-        (face_id,)
+           WHERE f.id = ?""",
+        (face_id,),
     )
     row = cursor.fetchone()
     if row is None:
@@ -1506,19 +1491,19 @@ def get_faces_for_image(
     """
     if include_suppressed:
         cursor = conn.execute(
-            '''SELECT f.*, p.name as person_name
+            """SELECT f.*, p.name as person_name
                FROM faces f
                LEFT JOIN people p ON f.person_id = p.id
-               WHERE f.image_id = ?''',
-            (image_id,)
+               WHERE f.image_id = ?""",
+            (image_id,),
         )
     else:
         cursor = conn.execute(
-            '''SELECT f.*, p.name as person_name
+            """SELECT f.*, p.name as person_name
                FROM faces f
                LEFT JOIN people p ON f.person_id = p.id
-               WHERE f.image_id = ? AND f.suppressed = 0''',
-            (image_id,)
+               WHERE f.image_id = ? AND f.suppressed = 0""",
+            (image_id,),
         )
 
     faces = []
@@ -1550,15 +1535,15 @@ def get_faces_for_images(
     # Use parameterized query with placeholder for each ID
     placeholders = ','.join('?' * len(image_ids))
     cursor = conn.execute(
-        f'''SELECT f.id, f.image_id, f.box_x, f.box_y, f.box_w, f.box_h,
+        f"""SELECT f.id, f.image_id, f.box_x, f.box_y, f.box_w, f.box_h,
                    f.confidence, f.person_id, f.created_at, f.manually_tagged,
                    f.unknown_group_id, f.suppressed,
                    p.name as person_name
             FROM faces f
             LEFT JOIN people p ON f.person_id = p.id
             WHERE f.image_id IN ({placeholders}) AND f.suppressed = 0
-            ORDER BY f.image_id, f.created_at''',
-        image_ids
+            ORDER BY f.image_id, f.created_at""",
+        image_ids,
     )
 
     return [dict(row) for row in cursor.fetchall()]
@@ -1578,7 +1563,7 @@ def get_faces_for_person(
         List of face dicts with is_preferred and image_timestamp.
     """
     cursor = conn.execute(
-        '''SELECT f.*,
+        """SELECT f.*,
                   i.timestamp as image_timestamp,
                   i.basename as image_basename,
                   CASE WHEN f.id = p.preferred_face_id THEN 1 ELSE 0 END as is_preferred
@@ -1586,8 +1571,8 @@ def get_faces_for_person(
            JOIN images i ON f.image_id = i.id
            JOIN people p ON f.person_id = p.id
            WHERE f.person_id = ? AND f.suppressed = 0
-           ORDER BY i.timestamp''',
-        (person_id,)
+           ORDER BY i.timestamp""",
+        (person_id,),
     )
 
     faces = []
@@ -1620,7 +1605,7 @@ def get_all_faces(
         # Return unknown faces sorted by group size and timestamp
         # Note: When unknown_group_id is NULL, treat as singleton (group_size=1)
         cursor = conn.execute(
-            '''SELECT f.id, f.image_id, f.box_x, f.box_y, f.box_w, f.box_h,
+            """SELECT f.id, f.image_id, f.box_x, f.box_y, f.box_w, f.box_h,
                       f.confidence, f.person_id, f.created_at,
                       f.unknown_group_id,
                       NULL as person_name,
@@ -1636,11 +1621,11 @@ def get_all_faces(
                    CASE WHEN f.unknown_group_id IS NULL THEN 0 ELSE
                        COUNT(*) OVER (PARTITION BY f.unknown_group_id) END DESC,
                    f.unknown_group_id,
-                   i.timestamp'''
+                   i.timestamp"""
         )
     else:
         cursor = conn.execute(
-            '''SELECT f.id, f.image_id, f.box_x, f.box_y, f.box_w, f.box_h,
+            """SELECT f.id, f.image_id, f.box_x, f.box_y, f.box_w, f.box_h,
                       f.confidence, f.person_id, f.created_at,
                       f.unknown_group_id,
                       p.name as person_name,
@@ -1662,7 +1647,7 @@ def get_all_faces(
                             THEN COUNT(*) OVER (PARTITION BY f.unknown_group_id)
                             ELSE 0 END END DESC,
                    f.unknown_group_id,
-                   i.timestamp'''
+                   i.timestamp"""
         )
 
     return [dict(row) for row in cursor.fetchall()]
@@ -1688,9 +1673,9 @@ def get_all_known_face_embeddings(
         List of (face_id, person_id, embedding) tuples.
     """
     cursor = conn.execute(
-        '''SELECT id, person_id, embedding
+        """SELECT id, person_id, embedding
            FROM faces
-           WHERE person_id IS NOT NULL AND suppressed = 0 AND manually_tagged = 1'''
+           WHERE person_id IS NOT NULL AND suppressed = 0 AND manually_tagged = 1"""
     )
 
     results = []
@@ -1723,10 +1708,7 @@ def get_face_matches(
         - similarity: Cosine similarity score (0-1)
     """
     # Get the target face's embedding
-    cursor = conn.execute(
-        'SELECT embedding FROM faces WHERE id = ? AND suppressed = 0',
-        (face_id,)
-    )
+    cursor = conn.execute('SELECT embedding FROM faces WHERE id = ? AND suppressed = 0', (face_id,))
     row = cursor.fetchone()
     if not row or not row['embedding']:
         return []
@@ -1735,11 +1717,11 @@ def get_face_matches(
 
     # Get all locked face embeddings with person info
     cursor = conn.execute(
-        '''SELECT f.id, f.person_id, f.embedding, p.name as person_name
+        """SELECT f.id, f.person_id, f.embedding, p.name as person_name
            FROM faces f
            JOIN people p ON f.person_id = p.id
            WHERE f.suppressed = 0 AND f.manually_tagged = 1
-             AND p.name != '-' '''
+             AND p.name != '-' """
     )
 
     # Build list of (face_id, person_id, person_name, embedding)
@@ -1809,13 +1791,12 @@ def update_face_person(
     """
     if manually_tagged is None:
         cursor = conn.execute(
-            '''UPDATE faces SET person_id = ?, updated_at = datetime('now') WHERE id = ?''',
-            (person_id, face_id)
+            """UPDATE faces SET person_id = ?, updated_at = datetime('now') WHERE id = ?""", (person_id, face_id)
         )
     else:
         cursor = conn.execute(
-            '''UPDATE faces SET person_id = ?, manually_tagged = ?, updated_at = datetime('now') WHERE id = ?''',
-            (person_id, 1 if manually_tagged else 0, face_id)
+            """UPDATE faces SET person_id = ?, manually_tagged = ?, updated_at = datetime('now') WHERE id = ?""",
+            (person_id, 1 if manually_tagged else 0, face_id),
         )
     conn.commit()
     return cursor.rowcount > 0
@@ -1835,10 +1816,7 @@ def toggle_face_manual_tag(
         The new manually_tagged value (True/False), or None if face not found.
     """
     # Get current value
-    cursor = conn.execute(
-        '''SELECT manually_tagged FROM faces WHERE id = ?''',
-        (face_id,)
-    )
+    cursor = conn.execute("""SELECT manually_tagged FROM faces WHERE id = ?""", (face_id,))
     row = cursor.fetchone()
     if row is None:
         return None
@@ -1848,8 +1826,7 @@ def toggle_face_manual_tag(
     new_value = 0 if current else 1
 
     conn.execute(
-        '''UPDATE faces SET manually_tagged = ?, updated_at = datetime('now') WHERE id = ?''',
-        (new_value, face_id)
+        """UPDATE faces SET manually_tagged = ?, updated_at = datetime('now') WHERE id = ?""", (new_value, face_id)
     )
     conn.commit()
 
@@ -1873,8 +1850,7 @@ def suppress_face(
         True if updated, False if face not found.
     """
     cursor = conn.execute(
-        '''UPDATE faces SET suppressed = 1, person_id = NULL, updated_at = datetime('now') WHERE id = ?''',
-        (face_id,)
+        """UPDATE faces SET suppressed = 1, person_id = NULL, updated_at = datetime('now') WHERE id = ?""", (face_id,)
     )
     conn.commit()
     return cursor.rowcount > 0
@@ -1904,11 +1880,11 @@ def mark_no_faces_detected(
     # marking "no faces found", not real faces. They appear in the database
     # as suppressed faces with zero dimensions. Do not treat as a bug.
     conn.execute(
-        '''INSERT INTO faces
+        """INSERT INTO faces
            (id, image_id, box_x, box_y, box_w, box_h, confidence, embedding,
             person_id, suppressed, created_at, updated_at)
-           VALUES (?, ?, 0, 0, 0, 0, 0, ?, NULL, 1, datetime('now'), datetime('now'))''',
-        (face_id, image_id, dummy_embedding)
+           VALUES (?, ?, 0, 0, 0, 0, 0, ?, NULL, 1, datetime('now'), datetime('now'))""",
+        (face_id, image_id, dummy_embedding),
     )
     conn.commit()
     return face_id
@@ -1927,10 +1903,7 @@ def delete_face(
     Returns:
         True if deleted, False if face not found.
     """
-    cursor = conn.execute(
-        '''DELETE FROM faces WHERE id = ?''',
-        (face_id,)
-    )
+    cursor = conn.execute("""DELETE FROM faces WHERE id = ?""", (face_id,))
     conn.commit()
     return cursor.rowcount > 0
 
@@ -1948,10 +1921,7 @@ def delete_faces_for_image(
     Returns:
         Number of faces deleted.
     """
-    cursor = conn.execute(
-        '''DELETE FROM faces WHERE image_id = ?''',
-        (image_id,)
-    )
+    cursor = conn.execute("""DELETE FROM faces WHERE image_id = ?""", (image_id,))
     conn.commit()
     return cursor.rowcount
 
@@ -1999,10 +1969,7 @@ def rotate_faces_for_image(
         return 0
 
     # Get all faces for this image
-    cursor = conn.execute(
-        '''SELECT id, box_x, box_y, box_w, box_h FROM faces WHERE image_id = ?''',
-        (image_id,)
-    )
+    cursor = conn.execute("""SELECT id, box_x, box_y, box_w, box_h FROM faces WHERE image_id = ?""", (image_id,))
     faces = cursor.fetchall()
 
     if not faces:
@@ -2033,10 +2000,15 @@ def rotate_faces_for_image(
             logger.warning(f'Arbitrary rotation angle {degrees}° not supported for face bboxes')
             continue
 
-        logger.debug(f'rotate_faces_for_image: {face_id[:8]}... ({box_x:.3f},{box_y:.3f},{box_w:.3f},{box_h:.3f}) -> ({new_x:.3f},{new_y:.3f},{new_w:.3f},{new_h:.3f})')
+        logger.debug(
+            f'rotate_faces_for_image: {face_id[:8]}... '
+            f'({box_x:.3f},{box_y:.3f},{box_w:.3f},{box_h:.3f}) -> '
+            f'({new_x:.3f},{new_y:.3f},{new_w:.3f},{new_h:.3f})'
+        )
         conn.execute(
-            '''UPDATE faces SET box_x = ?, box_y = ?, box_w = ?, box_h = ?, updated_at = datetime('now') WHERE id = ?''',
-            (new_x, new_y, new_w, new_h, face_id)
+            """UPDATE faces SET box_x = ?, box_y = ?, box_w = ?, box_h = ?,
+            updated_at = datetime('now') WHERE id = ?""",
+            (new_x, new_y, new_w, new_h, face_id),
         )
         updated_count += 1
 
@@ -2061,16 +2033,14 @@ def has_faces_detected(
     Returns:
         True if face detection has been run on this image.
     """
-    cursor = conn.execute(
-        '''SELECT 1 FROM faces WHERE image_id = ? LIMIT 1''',
-        (image_id,)
-    )
+    cursor = conn.execute("""SELECT 1 FROM faces WHERE image_id = ? LIMIT 1""", (image_id,))
     return cursor.fetchone() is not None
 
 
 # =============================================================================
 # AUTO-RECOGNITION
 # =============================================================================
+
 
 def find_best_match(
     embedding: np.ndarray,
@@ -2156,11 +2126,8 @@ def auto_recognize_face(
     match = find_best_match(face['embedding'], known_embeddings, threshold)
 
     if match:
-        matched_face_id, person_id, similarity = match
-        logger.debug(
-            f'Auto-matched face {face_id} to person {person_id} '
-            f'(similarity: {similarity:.3f})'
-        )
+        _matched_face_id, person_id, similarity = match
+        logger.debug(f'Auto-matched face {face_id} to person {person_id} (similarity: {similarity:.3f})')
         update_face_person(conn, face_id, person_id)
         return person_id
 
@@ -2170,6 +2137,7 @@ def auto_recognize_face(
 # =============================================================================
 # IMAGE QUERIES WITH PEOPLE FILTER
 # =============================================================================
+
 
 def get_images_with_people(
     conn: sqlite3.Connection,
@@ -2192,10 +2160,10 @@ def get_images_with_people(
     queries = []
     params = []
     for person_id in person_ids:
-        queries.append('''
+        queries.append("""
             SELECT DISTINCT image_id FROM faces
             WHERE person_id = ? AND suppressed = 0
-        ''')
+        """)
         params.append(person_id)
 
     query = ' INTERSECT '.join(queries)
@@ -2218,13 +2186,16 @@ def get_people_names_for_image(
     Returns:
         List of person names, sorted alphabetically (case-insensitive).
     """
-    cursor = conn.execute('''
+    cursor = conn.execute(
+        """
         SELECT DISTINCT p.name
         FROM faces f
         JOIN people p ON f.person_id = p.id
         WHERE f.image_id = ? AND f.suppressed = 0
         ORDER BY p.name COLLATE NOCASE
-    ''', (image_id,))
+    """,
+        (image_id,),
+    )
     return [row['name'] for row in cursor.fetchall()]
 
 
@@ -2242,13 +2213,13 @@ def get_people_names_bulk(
     Returns:
         Dict mapping image_id to comma-separated people names (sorted alphabetically).
     """
-    cursor = conn.execute('''
+    cursor = conn.execute("""
         SELECT f.image_id, GROUP_CONCAT(DISTINCT p.name) as names
         FROM faces f
         JOIN people p ON f.person_id = p.id
         WHERE f.suppressed = 0
         GROUP BY f.image_id
-    ''')
+    """)
     result = {}
     for row in cursor.fetchall():
         # Sort the names alphabetically (GROUP_CONCAT doesn't guarantee order)
@@ -2264,8 +2235,8 @@ def get_people_names_bulk(
 
 # Global cache for embeddings (populated on demand)
 _embedding_cache = {
-    'known': None,      # List of (face_id, person_id, embedding)
-    'unknown': None,    # List of (face_id, embedding)
+    'known': None,  # List of (face_id, person_id, embedding)
+    'unknown': None,  # List of (face_id, embedding)
     'lock': threading.Lock(),
     'valid': False,
 }
@@ -2311,9 +2282,9 @@ def get_all_unknown_face_embeddings(
         List of (face_id, embedding) tuples.
     """
     cursor = conn.execute(
-        '''SELECT id, embedding
+        """SELECT id, embedding
            FROM faces
-           WHERE person_id IS NULL AND suppressed = 0 AND embedding IS NOT NULL'''
+           WHERE person_id IS NULL AND suppressed = 0 AND embedding IS NOT NULL"""
     )
 
     results = []
@@ -2379,7 +2350,7 @@ def batch_identify_faces(
             updated_faces.append(face_id)
 
     # Set preferred face if specified and person doesn't have one
-    if preferred_face_id and preferred_face_id in updated_faces:
+    if preferred_face_id and preferred_face_id in updated_faces:  # noqa: SIM102
         if not person.get('preferred_face_id'):
             update_person(conn, person_id, preferred_face_id=preferred_face_id)
             person = get_person(conn, person_id)
@@ -2442,7 +2413,9 @@ def reassess_unknown_faces(
         overall_std = np.std(emb_matrix)
         # mean_vals = np.mean(emb_matrix, axis=0)
 
-        logger.debug(f'{name}: overall std={overall_std:.6f}, per-dim std range=[{std_vals.min():.6f}, {std_vals.max():.6f}]')
+        logger.debug(
+            f'{name}: overall std={overall_std:.6f}, per-dim std range=[{std_vals.min():.6f}, {std_vals.max():.6f}]'
+        )
 
         # Check pairwise similarity of first few
         if len(embs) >= 2:
@@ -2457,10 +2430,10 @@ def reassess_unknown_faces(
     if person_id:
         # Only get embeddings for the specified person
         cursor = conn.execute(
-            '''SELECT id, person_id, embedding
+            """SELECT id, person_id, embedding
                FROM faces
-               WHERE person_id = ? AND suppressed = 0''',
-            (person_id,)
+               WHERE person_id = ? AND suppressed = 0""",
+            (person_id,),
         )
         known_embeddings = []
         for row in cursor.fetchall():
@@ -2472,10 +2445,10 @@ def reassess_unknown_faces(
     # Get candidate embeddings: unknown faces AND unlocked faces
     # This allows faces to be reassigned to better-matching people
     cursor = conn.execute(
-        '''SELECT id, embedding, person_id
+        """SELECT id, embedding, person_id
            FROM faces
            WHERE (person_id IS NULL OR manually_tagged = 0)
-             AND suppressed = 0 AND embedding IS NOT NULL'''
+             AND suppressed = 0 AND embedding IS NOT NULL"""
     )
     candidate_embeddings = []
     candidate_person_ids: dict[str, str | None] = {}  # face_id -> current person_id
@@ -2504,12 +2477,17 @@ def reassess_unknown_faces(
     known_norms = np.linalg.norm(known_matrix, axis=1)
     candidate_norms = np.linalg.norm(candidate_matrix, axis=1)
     if not np.allclose(known_norms, 1.0, atol=0.01):
-        logger.warning(f'Known embeddings not normalized! norms: min={known_norms.min():.3f}, max={known_norms.max():.3f}')
+        logger.warning(
+            f'Known embeddings not normalized! norms: min={known_norms.min():.3f}, max={known_norms.max():.3f}'
+        )
         # Re-normalize (guard against zero-norm from corruption)
         known_norms[known_norms == 0] = 1
         known_matrix = known_matrix / known_norms[:, np.newaxis]
     if not np.allclose(candidate_norms, 1.0, atol=0.01):
-        logger.warning(f'Candidate embeddings not normalized! norms: min={candidate_norms.min():.3f}, max={candidate_norms.max():.3f}')
+        logger.warning(
+            f'Candidate embeddings not normalized! norms: '
+            f'min={candidate_norms.min():.3f}, max={candidate_norms.max():.3f}'
+        )
         # Re-normalize (guard against zero-norm from corruption)
         candidate_norms[candidate_norms == 0] = 1
         candidate_matrix = candidate_matrix / candidate_norms[:, np.newaxis]
@@ -2546,24 +2524,18 @@ def reassess_unknown_faces(
         log_parts = []
         if matched:
             sims = [m[2] for m in matched]
-            log_parts.append(
-                f'matched {len(matched)} (similarity {min(sims):.2f}-{max(sims):.2f})'
-            )
+            log_parts.append(f'matched {len(matched)} (similarity {min(sims):.2f}-{max(sims):.2f})')
         if unmatched:
             log_parts.append(f'unassigned {len(unmatched)}')
         logger.info(
-            f'Face reassessment: {", ".join(log_parts)} '
-            f'of {len(candidate_ids)} candidates (threshold={threshold:.2f})'
+            f'Face reassessment: {", ".join(log_parts)} of {len(candidate_ids)} candidates (threshold={threshold:.2f})'
         )
     else:
         logger.debug(f'Face reassessment: no changes from {len(candidate_ids)} candidate faces')
 
     # Apply matches (auto-matched, not manually tagged)
     for face_id, matched_person_id, similarity in matched:
-        logger.debug(
-            f'Auto-matched face {face_id} to person {matched_person_id} '
-            f'(similarity: {similarity:.3f})'
-        )
+        logger.debug(f'Auto-matched face {face_id} to person {matched_person_id} (similarity: {similarity:.3f})')
         update_face_person(conn, face_id, matched_person_id, manually_tagged=False)
 
     # Unassign faces that no longer meet any threshold
@@ -2592,6 +2564,7 @@ _grouping_status: dict | None = None  # {status: 'idle'|'computing'|'done', prog
 # =============================================================================
 # UNKNOWN FACE GROUPING
 # =============================================================================
+
 
 def compute_unknown_face_groups(
     conn: sqlite3.Connection,
@@ -2697,13 +2670,13 @@ def _compute_unknown_face_groups_impl(
     # Clear all existing group IDs first (set updated_at per concurrency contract)
     conn.execute(
         "UPDATE faces SET unknown_group_id = NULL, updated_at = datetime('now') "
-        "WHERE person_id IS NULL AND unknown_group_id IS NOT NULL"
+        'WHERE person_id IS NULL AND unknown_group_id IS NOT NULL'
     )
 
     # Assign new group IDs (batch to avoid SQLite variable limit of ~999)
     BATCH_SIZE = 500  # Leave room for the group_id parameter
     n_groups = 0
-    for root_id, members in groups.items():
+    for _root_id, members in groups.items():
         if len(members) > 1:
             # Generate a group ID
             group_id = str(uuid.uuid4())[:8]
@@ -2711,12 +2684,9 @@ def _compute_unknown_face_groups_impl(
 
             # Update faces in batches to avoid "too many SQL variables" error
             for i in range(0, len(members), BATCH_SIZE):
-                batch = members[i:i + BATCH_SIZE]
+                batch = members[i : i + BATCH_SIZE]
                 placeholders = ','.join('?' * len(batch))
-                conn.execute(
-                    f"UPDATE faces SET unknown_group_id = ? WHERE id IN ({placeholders})",
-                    [group_id] + batch
-                )
+                conn.execute(f'UPDATE faces SET unknown_group_id = ? WHERE id IN ({placeholders})', [group_id] + batch)
 
     conn.commit()
     logger.info(f'Created {n_groups} unknown face groups')
@@ -2724,9 +2694,9 @@ def _compute_unknown_face_groups_impl(
 
 
 def compute_unknown_face_groups_async(
-    db: 'ImageDatabase',
+    db: ImageDatabase,
     threshold: float = 0.65,
-    callback: callable = None,
+    callback: callable | None = None,
 ) -> None:
     """Compute unknown face groups in a background thread.
 
@@ -2823,7 +2793,7 @@ def compute_unknown_face_groups_async(
                 # pure-Python nested loop with a single np.where call.
                 local_rows, cols = np.where(similarities >= threshold)
                 chunk_pairs = 0  # [PERF-LOG]
-                for local_idx, j in zip(local_rows, cols):
+                for local_idx, j in zip(local_rows, cols, strict=True):
                     global_idx = i + int(local_idx)
                     if j > global_idx:
                         uf.union_ids(face_ids[global_idx], face_ids[int(j)])
@@ -2832,12 +2802,10 @@ def compute_unknown_face_groups_async(
 
                 # [PERF-LOG] Log pair counts to aid V&V
                 if chunk_idx % 5 == 0 or chunk_idx == n_chunks - 1:
-                    logger.info(f'    Chunk {chunk_idx + 1}: {chunk_pairs} pairs '
-                                f'from {len(local_rows)} raw matches')
+                    logger.info(f'    Chunk {chunk_idx + 1}: {chunk_pairs} pairs from {len(local_rows)} raw matches')
 
             # [PERF-LOG] Summary
-            logger.info(f'Chunked similarity done: {total_pairs} above-threshold '
-                        f'pairs found across {n_chunks} chunks')
+            logger.info(f'Chunked similarity done: {total_pairs} above-threshold pairs found across {n_chunks} chunks')
 
             # Extract groups
             logger.info('Extracting groups from UnionFind structure...')
@@ -2846,8 +2814,10 @@ def compute_unknown_face_groups_async(
 
             # [PERF-LOG] Total COMPUTE phase time
             _compute_elapsed = time.time() - _compute_start
-            logger.info(f'[PERF] COMPUTE phase: {_compute_elapsed:.2f}s '
-                        f'({n_faces} faces, {n_chunks} chunks, {total_pairs} pairs)')
+            logger.info(
+                f'[PERF] COMPUTE phase: {_compute_elapsed:.2f}s '
+                f'({n_faces} faces, {n_chunks} chunks, {total_pairs} pairs)'
+            )
 
             logger.debug('Async face grouping: COMPUTE phase done')
 
@@ -2864,26 +2834,26 @@ def compute_unknown_face_groups_async(
                 # (set updated_at per concurrency contract)
                 db.conn.execute(
                     "UPDATE faces SET unknown_group_id = NULL, updated_at = datetime('now') "
-                    "WHERE person_id IS NULL AND suppressed = 0 AND unknown_group_id IS NOT NULL"
+                    'WHERE person_id IS NULL AND suppressed = 0 AND unknown_group_id IS NOT NULL'
                 )
 
                 # Assign new group IDs (batch to avoid SQLite variable limit)
                 # Only update faces that are still unknown and not suppressed
                 BATCH_SIZE = 500
                 n_groups = 0
-                for root_id, members in groups.items():
+                for _root_id, members in groups.items():
                     if len(members) > 1:
                         group_id = str(uuid.uuid4())[:8]
                         n_groups += 1
 
                         for i in range(0, len(members), BATCH_SIZE):
-                            batch = members[i:i + BATCH_SIZE]
+                            batch = members[i : i + BATCH_SIZE]
                             placeholders = ','.join('?' * len(batch))
                             db.conn.execute(
-                                f"UPDATE faces SET unknown_group_id = ? "
-                                f"WHERE id IN ({placeholders}) "
-                                f"AND person_id IS NULL AND suppressed = 0",
-                                [group_id] + batch
+                                f'UPDATE faces SET unknown_group_id = ? '
+                                f'WHERE id IN ({placeholders}) '
+                                f'AND person_id IS NULL AND suppressed = 0',
+                                [group_id] + batch,
                             )
 
                 db.conn.commit()
@@ -2971,20 +2941,22 @@ def get_unknown_faces_grouped(conn: sqlite3.Connection) -> list[dict]:
 
     faces = []
     for row in cursor:
-        faces.append({
-            'id': row['id'],
-            'image_id': row['image_id'],
-            'box_x': row['box_x'],
-            'box_y': row['box_y'],
-            'box_w': row['box_w'],
-            'box_h': row['box_h'],
-            'confidence': row['confidence'],
-            'unknown_group_id': row['unknown_group_id'],
-            'created_at': row['created_at'],
-            'image_timestamp': row['image_timestamp'],
-            'basename': row['basename'],
-            'group_size': row['group_size'] if row['unknown_group_id'] else 1,
-        })
+        faces.append(
+            {
+                'id': row['id'],
+                'image_id': row['image_id'],
+                'box_x': row['box_x'],
+                'box_y': row['box_y'],
+                'box_w': row['box_w'],
+                'box_h': row['box_h'],
+                'confidence': row['confidence'],
+                'unknown_group_id': row['unknown_group_id'],
+                'created_at': row['created_at'],
+                'image_timestamp': row['image_timestamp'],
+                'basename': row['basename'],
+                'group_size': row['group_size'] if row['unknown_group_id'] else 1,
+            }
+        )
 
     return faces
 
@@ -3040,20 +3012,22 @@ def search_unknown_faces_semantic(
         # Compute cosine similarity (embeddings are normalized)
         similarity = float(np.dot(query_norm, emb))
 
-        faces.append({
-            'id': row['id'],
-            'image_id': row['image_id'],
-            'box_x': row['box_x'],
-            'box_y': row['box_y'],
-            'box_w': row['box_w'],
-            'box_h': row['box_h'],
-            'confidence': row['confidence'],
-            'unknown_group_id': row['unknown_group_id'],
-            'created_at': row['created_at'],
-            'image_timestamp': row['image_timestamp'],
-            'basename': row['basename'],
-            'similarity': similarity,
-        })
+        faces.append(
+            {
+                'id': row['id'],
+                'image_id': row['image_id'],
+                'box_x': row['box_x'],
+                'box_y': row['box_y'],
+                'box_w': row['box_w'],
+                'box_h': row['box_h'],
+                'confidence': row['confidence'],
+                'unknown_group_id': row['unknown_group_id'],
+                'created_at': row['created_at'],
+                'image_timestamp': row['image_timestamp'],
+                'basename': row['basename'],
+                'similarity': similarity,
+            }
+        )
 
     # Sort by similarity descending
     faces.sort(key=lambda f: f['similarity'], reverse=True)
@@ -3092,10 +3066,10 @@ def clear_reassessment_result() -> None:
 
 
 def reassess_unknown_faces_async(
-    db: 'ImageDatabase',
+    db: ImageDatabase,
     threshold: float = 0.65,
     person_id: str | None = None,
-    callback: callable = None,
+    callback: callable | None = None,
 ) -> None:
     """Re-assess unknown faces in a background thread.
 
@@ -3133,10 +3107,10 @@ def reassess_unknown_faces_async(
                 # Get known embeddings
                 if person_id:
                     cursor = db.conn.execute(
-                        '''SELECT id, person_id, embedding
+                        """SELECT id, person_id, embedding
                            FROM faces
-                           WHERE person_id = ? AND suppressed = 0''',
-                        (person_id,)
+                           WHERE person_id = ? AND suppressed = 0""",
+                        (person_id,),
                     )
                     known_embeddings = []
                     for row in cursor.fetchall():
@@ -3155,21 +3129,21 @@ def reassess_unknown_faces_async(
                 # match better. Locked faces (manually_tagged = 1) are never candidates.
                 if person_id:
                     cursor = db.conn.execute(
-                        '''SELECT id, embedding, updated_at, person_id
+                        """SELECT id, embedding, updated_at, person_id
                            FROM faces
                            WHERE (person_id IS NULL OR (person_id != ? AND manually_tagged = 0))
-                             AND suppressed = 0 AND embedding IS NOT NULL''',
-                        (person_id,)
+                             AND suppressed = 0 AND embedding IS NOT NULL""",
+                        (person_id,),
                     )
                 else:
                     # Full sweep reassessment: unknown faces AND unlocked faces
                     # This allows faces to be reassigned to better-matching people
                     # or ejected to unknown if they no longer meet any threshold
                     cursor = db.conn.execute(
-                        '''SELECT id, embedding, updated_at, person_id
+                        """SELECT id, embedding, updated_at, person_id
                            FROM faces
                            WHERE (person_id IS NULL OR manually_tagged = 0)
-                             AND suppressed = 0 AND embedding IS NOT NULL'''
+                             AND suppressed = 0 AND embedding IS NOT NULL"""
                     )
                 candidate_embeddings = []
                 face_timestamps: dict[str, str | None] = {}  # face_id -> updated_at
@@ -3178,9 +3152,12 @@ def reassess_unknown_faces_async(
                     embedding = np.frombuffer(row['embedding'], dtype=np.float32)
                     candidate_embeddings.append((row['id'], embedding))
                     face_timestamps[row['id']] = row['updated_at']
-                    candidate_person_ids[row['id']] = row['person_id'] if 'person_id' in row.keys() else None
+                    candidate_person_ids[row['id']] = row.get('person_id', None)
 
-                logger.debug(f'Async reassessment: READ phase done - {len(known_embeddings)} known, {len(candidate_embeddings)} candidates')
+                logger.debug(
+                    f'Async reassessment: READ phase done - '
+                    f'{len(known_embeddings)} known, {len(candidate_embeddings)} candidates'
+                )
 
             # Early exit if nothing to compare
             if not known_embeddings or not candidate_embeddings:
@@ -3224,16 +3201,16 @@ def reassess_unknown_faces_async(
             n_known = len(known_ids)
 
             # Best match index and score for every candidate (one numpy call)
-            best_indices = np.argmax(similarities, axis=1)              # shape: (N,)
+            best_indices = np.argmax(similarities, axis=1)  # shape: (N,)
             best_scores = similarities[np.arange(n_candidates), best_indices]  # shape: (N,)
 
             # Build per-known-face threshold vector (one entry per column in
             # similarities).  Looked up from person_thresholds dict, falling
             # back to global threshold.  Built once, O(M) where M = known faces.
-            known_thresholds = np.array([
-                threshold if person_thresholds.get(pid) is None else person_thresholds[pid]
-                for _, pid in known_ids
-            ], dtype=np.float32)  # shape: (M,)
+            known_thresholds = np.array(
+                [threshold if person_thresholds.get(pid) is None else person_thresholds[pid] for _, pid in known_ids],
+                dtype=np.float32,
+            )  # shape: (M,)
 
             # Look up effective threshold for each candidate's best match
             effective_thresholds = known_thresholds[best_indices]  # shape: (N,) — numpy fancy indexing
@@ -3267,11 +3244,15 @@ def reassess_unknown_faces_async(
 
             # [PERF-LOG] COMPUTE phase timing and stats
             _compute_elapsed = time.time() - _compute_start
-            logger.info(f'[PERF] Reassessment COMPUTE: {_compute_elapsed:.2f}s '
-                        f'({n_candidates} candidates × {n_known} known, '
-                        f'{len(matched)} matches)')
+            logger.info(
+                f'[PERF] Reassessment COMPUTE: {_compute_elapsed:.2f}s '
+                f'({n_candidates} candidates × {n_known} known, '
+                f'{len(matched)} matches)'
+            )
 
-            logger.debug(f'Async reassessment: COMPUTE phase done - {len(matched)} matches from {len(candidate_ids)} candidates')
+            logger.debug(
+                f'Async reassessment: COMPUTE phase done - {len(matched)} matches from {len(candidate_ids)} candidates'
+            )
 
             # ================================================================
             # PHASE 3: WRITE (with lock) - persist matches and build response
@@ -3292,24 +3273,23 @@ def reassess_unknown_faces_async(
                     # This handles all cases: suppressed, identified, deleted, etc.
                     if original_timestamp is not None:
                         cursor = db.conn.execute(
-                            '''UPDATE faces
+                            """UPDATE faces
                                SET person_id = ?, manually_tagged = 0, updated_at = datetime('now')
-                               WHERE id = ? AND updated_at = ?''',
-                            (matched_person_id, face_id, original_timestamp)
+                               WHERE id = ? AND updated_at = ?""",
+                            (matched_person_id, face_id, original_timestamp),
                         )
                     else:
                         # No timestamp (legacy row) - fall back to checking not locked
                         cursor = db.conn.execute(
-                            '''UPDATE faces
+                            """UPDATE faces
                                SET person_id = ?, manually_tagged = 0, updated_at = datetime('now')
-                               WHERE id = ? AND manually_tagged = 0 AND suppressed = 0''',
-                            (matched_person_id, face_id)
+                               WHERE id = ? AND manually_tagged = 0 AND suppressed = 0""",
+                            (matched_person_id, face_id),
                         )
 
                     if cursor.rowcount > 0:
                         logger.debug(
-                            f'Auto-matched face {face_id} to person {matched_person_id} '
-                            f'(similarity: {similarity:.3f})'
+                            f'Auto-matched face {face_id} to person {matched_person_id} (similarity: {similarity:.3f})'
                         )
                         actually_updated.append((face_id, matched_person_id, similarity))
                     else:
@@ -3322,17 +3302,17 @@ def reassess_unknown_faces_async(
 
                     if original_timestamp is not None:
                         cursor = db.conn.execute(
-                            '''UPDATE faces
+                            """UPDATE faces
                                SET person_id = NULL, manually_tagged = 0, updated_at = datetime('now')
-                               WHERE id = ? AND updated_at = ?''',
-                            (face_id, original_timestamp)
+                               WHERE id = ? AND updated_at = ?""",
+                            (face_id, original_timestamp),
                         )
                     else:
                         cursor = db.conn.execute(
-                            '''UPDATE faces
+                            """UPDATE faces
                                SET person_id = NULL, manually_tagged = 0, updated_at = datetime('now')
-                               WHERE id = ? AND manually_tagged = 0 AND suppressed = 0''',
-                            (face_id,)
+                               WHERE id = ? AND manually_tagged = 0 AND suppressed = 0""",
+                            (face_id,),
                         )
 
                     if cursor.rowcount > 0:
@@ -3356,25 +3336,28 @@ def reassess_unknown_faces_async(
                     person_ids_list = list(set(m[1] for m in actually_updated))
                     placeholders = ','.join('?' * len(person_ids_list))
                     cursor = db.conn.execute(
-                        f'SELECT id, name FROM people WHERE id IN ({placeholders})',
-                        person_ids_list
+                        f'SELECT id, name FROM people WHERE id IN ({placeholders})', person_ids_list
                     )
                     person_names = {row['id']: row['name'] for row in cursor.fetchall()}
 
-                    for face_id, pid, similarity in actually_updated:
-                        updated_faces.append({
-                            'face_id': face_id,
-                            'person_id': pid,
-                            'person_name': person_names.get(pid, ''),
-                        })
+                    for face_id, pid, _similarity in actually_updated:
+                        updated_faces.append(
+                            {
+                                'face_id': face_id,
+                                'person_id': pid,
+                                'person_name': person_names.get(pid, ''),
+                            }
+                        )
 
                 # Add unassigned faces to the event (person_id = None)
                 for face_id in actually_unassigned:
-                    updated_faces.append({
-                        'face_id': face_id,
-                        'person_id': None,
-                        'person_name': None,
-                    })
+                    updated_faces.append(
+                        {
+                            'face_id': face_id,
+                            'person_id': None,
+                            'person_name': None,
+                        }
+                    )
 
                 logger.debug('Async reassessment: WRITE phase done')
 
@@ -3386,9 +3369,7 @@ def reassess_unknown_faces_async(
                 log_parts = []
                 if matched:
                     sims = [m[2] for m in matched]
-                    log_parts.append(
-                        f'matched {len(matched)} (similarity {min(sims):.2f}-{max(sims):.2f})'
-                    )
+                    log_parts.append(f'matched {len(matched)} (similarity {min(sims):.2f}-{max(sims):.2f})')
                 if actually_unassigned:
                     log_parts.append(f'unassigned {len(actually_unassigned)}')
                 logger.info(
@@ -3408,12 +3389,15 @@ def reassess_unknown_faces_async(
 
             # Emit event so frontend can update
             if hasattr(db, 'event_queue') and db.event_queue:
-                db.event_queue.emit('faces_reassessed', {
-                    'matched_count': len(matched),
-                    'unassigned_count': len(actually_unassigned),
-                    'person_id': person_id,
-                    'updated_faces': updated_faces,
-                })
+                db.event_queue.emit(
+                    'faces_reassessed',
+                    {
+                        'matched_count': len(matched),
+                        'unassigned_count': len(actually_unassigned),
+                        'person_id': person_id,
+                        'updated_faces': updated_faces,
+                    },
+                )
 
             if callback:
                 callback(len(matched))

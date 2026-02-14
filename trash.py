@@ -32,6 +32,7 @@ logger = logging.getLogger(__name__)
 # TRASH DIRECTORY FUNCTIONS
 # =============================================================================
 
+
 def validate_trash_dir(trash_dir: Path, indexed_folders: list[str]) -> None:
     """Check that the trash directory does not overlap any indexed folder.
 
@@ -106,10 +107,7 @@ def resolve_trash_path(basename: str, trash_dir: Path) -> Path:
         if not dest.exists():
             return dest
 
-    raise RuntimeError(
-        f'Could not resolve unique trash path for {basename} '
-        f'after 10000 attempts'
-    )
+    raise RuntimeError(f'Could not resolve unique trash path for {basename} after 10000 attempts')
 
 
 def move_to_trash(src: Path, trash_dir: Path) -> Path | None:
@@ -140,6 +138,7 @@ def move_to_trash(src: Path, trash_dir: Path) -> Path | None:
 # =============================================================================
 # QUALITY SCORING (Python port of frontend _computeQualityScores)
 # =============================================================================
+
 
 def _percentile_ranks(values: list[float]) -> list[float]:
     """Convert raw values to percentile ranks in [0..1] with average-rank
@@ -223,47 +222,28 @@ def compute_quality_scores(
     has_nima = any(img.get('aesthetic_nima') is not None for img in images)
 
     if has_nima:
-        laion_ranks = _percentile_ranks(
-            [img.get('aesthetic_laion') or 0 for img in images]
-        )
-        nima_ranks = _percentile_ranks(
-            [img.get('aesthetic_nima') or 0 for img in images]
-        )
+        laion_ranks = _percentile_ranks([img.get('aesthetic_laion') or 0 for img in images])
+        nima_ranks = _percentile_ranks([img.get('aesthetic_nima') or 0 for img in images])
         # Blend, then re-rank
         blended = []
         for idx, img in enumerate(images):
             if img.get('aesthetic_nima') is None:
                 blended.append(laion_ranks[idx])
             else:
-                blended.append(
-                    alpha * nima_ranks[idx] + (1 - alpha) * laion_ranks[idx]
-                )
+                blended.append(alpha * nima_ranks[idx] + (1 - alpha) * laion_ranks[idx])
         aesthetic_raw = _percentile_ranks(blended)
     else:
-        aesthetic_raw = _percentile_ranks(
-            [img.get('aesthetic_laion') or 0 for img in images]
-        )
+        aesthetic_raw = _percentile_ranks([img.get('aesthetic_laion') or 0 for img in images])
 
     # Other components — percentile-ranked
-    sharpness = _percentile_ranks(
-        [math.log1p(img.get('laplacian_var') or 0) for img in images]
-    )
-    pixels = _percentile_ranks(
-        [img['width'] * img['height'] for img in images]
-    )
-    bpp = _percentile_ranks(
-        [8 * img['size'] / max(1, img['width'] * img['height']) for img in images]
-    )
+    sharpness = _percentile_ranks([math.log1p(img.get('laplacian_var') or 0) for img in images])
+    pixels = _percentile_ranks([img['width'] * img['height'] for img in images])
+    bpp = _percentile_ranks([8 * img['size'] / max(1, img['width'] * img['height']) for img in images])
 
     # Combine with configurable weights
     scores = {}
     for i, img in enumerate(images):
-        total = (
-            w_a * aesthetic_raw[i]
-            + w_s * sharpness[i]
-            + w_p * pixels[i]
-            + w_b * bpp[i]
-        )
+        total = w_a * aesthetic_raw[i] + w_s * sharpness[i] + w_p * pixels[i] + w_b * bpp[i]
         scores[img['id']] = total
 
     return scores

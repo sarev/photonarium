@@ -135,6 +135,6 @@ AppState.filter = (function() {
          */
         getPeople() {
             return _filter?.people || null;
-        }
+        },
     };
 })();

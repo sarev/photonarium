@@ -333,7 +333,7 @@ const Settings = {
             const response = await App.apiPost('/config/save', { values });
             this._close();
             App.showInfo(
-                response.message || 'Settings saved. Restart Photonarium for changes to take effect.'
+                response.message || 'Settings saved. Restart Photonarium for changes to take effect.',
             );
         } catch (err) {
             // Backend validation error — show the message

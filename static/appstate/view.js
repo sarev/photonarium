@@ -244,6 +244,6 @@ AppState.view = (function() {
          */
         isInfoPanelUserSet() {
             return _infoPanelUserSet;
-        }
+        },
     };
 })();

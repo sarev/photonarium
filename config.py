@@ -28,13 +28,12 @@ Usage:
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field, fields
-from pathlib import Path
-from typing import Any
-
 import logging
 import os
 import sys
+from dataclasses import dataclass, field, fields
+from pathlib import Path
+from typing import Any
 
 import yaml
 
@@ -45,6 +44,7 @@ logger = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 # OS-default config path
 # ---------------------------------------------------------------------------
+
 
 def get_default_config_path() -> Path:
     """Return the OS-appropriate default path for the configuration file.
@@ -77,236 +77,389 @@ _LEGACY_CONFIG_NAME = '.photonarium.yml'
 # produce blank lines for visual spacing.
 
 CONFIG_SCHEMA: list[tuple[str, list[tuple[str, list[str]]]]] = [
-    ('Data Directory', [
-        ('data_dir', [
-            '[!] Where Photonarium stores its database, thumbnails, and model files.',
-            'Set automatically by the installer. Use an absolute path for reliability.',
-            'Leave empty to use the current working directory.',
-        ]),
-    ]),
-
-    ('Server', [
-        ('server_host', [
-            '[!] Network interface to bind to.',
-            '  0.0.0.0   = listen on all interfaces (accessible from other devices on your network)',
-            '  127.0.0.1 = localhost only (only this machine can connect)',
-        ]),
-        ('server_port', [
-            '[!] Port number for the web server. Range: 1024-65535',
-        ]),
-    ]),
-
-    ('Image Processing', [
-        ('image_extensions', [
-            'File extensions recognised as images (lowercase, with leading dot)',
-        ]),
-        ('thumbnail_quality', [
-            'JPEG quality for generated thumbnails (1-100, higher = better quality, larger files)',
-        ]),
-        ('max_image_dimension', [
-            'Maximum image dimension (width or height) to process.',
-            'Images larger than this will be downsampled before embedding/hashing.',
-            'This prevents memory issues with huge panoramas or scanned images.',
-            'Set to 0 to disable (not recommended). Range: 0 or 1024-65536',
-        ]),
-    ]),
-
-    ('OpenCLIP Embedding Model', [
-        ('openclip_model', [
-            'The model used for semantic image search and similarity detection.',
-            'Changing these settings will require re-embedding all images.',
-            '',
-            'Model architecture. Common options:',
-            '  - ViT-B-32  (fast, good quality, ~400MB VRAM)',
-            '  - ViT-B-16  (slower, better quality, ~400MB VRAM)',
-            '  - ViT-L-14  (slow, high quality, ~900MB VRAM)',
-        ]),
-        ('openclip_pretrained', [
-            'Pretrained weights. Common options:',
-            '  - openai           (original CLIP weights)',
-            '  - laion2b_s34b_b79k (trained on LAION-2B, often better for photos)',
-            '  - laion400m_e32    (trained on LAION-400M)',
-        ]),
-        ('embedding_batch_size', [
-            'Batch size for embedding computation (1-64)',
-            'Higher values are faster but use more VRAM. Reduce if you get out-of-memory errors.',
-        ]),
-    ]),
-
-    ('Duplicate Detection Thresholds', [
-        ('perceptual_hash_threshold', [
-            'Perceptual hash hamming distance threshold for "near-identical" (level 1)',
-            'Range: 0-64, lower = stricter matching. Recommended: 4-8',
-        ]),
-        ('similarity_threshold_level2', [
-            'Cosine similarity threshold for "similar" images (level 2)',
-            'Range: 0.0-1.0, higher = stricter matching. Recommended: 0.93-0.97',
-        ]),
-        ('similarity_threshold_level3', [
-            'Cosine similarity threshold for "related" images (level 3)',
-            'Range: 0.0-1.0, higher = stricter matching. Recommended: 0.80-0.90',
-        ]),
-    ]),
-
-    ('Performance', [
-        ('indexing_threads', [
-            'Number of threads for parallel image indexing (1-16)',
-            'Higher values speed up initial scanning but use more CPU/disk I/O.',
-            'Recommended: 4-8 for HDD, 8-16 for SSD',
-        ]),
-        ('max_incremental_duplicates', [
-            'Maximum number of new/modified images to process incrementally for duplicates.',
-            'If more images need checking, falls back to full recomputation which is faster',
-            'for large batches. Range: 1-10000',
-        ]),
-        ('incremental_threshold_percent', [
-            'Percentage of total images that triggers full recomputation instead of incremental.',
-            'If dirty_count > (total_count * threshold), does full rebuild.',
-            'Range: 5-50, recommended: 15-25',
-        ]),
-    ]),
-
-    ('Thumbnail Loading (Frontend)', [
-        ('thumbnail_concurrent_requests', [
-            'Maximum concurrent thumbnail fetch requests from the browser.',
-            'Higher values load thumbnails faster but increase backend load.',
-            'Range: 1-12, recommended: 4-8',
-        ]),
-        ('thumbnail_extra_rows', [
-            'Extra rows above/below the viewport to prefetch thumbnails for.',
-            'Higher values reduce blank thumbnails when scrolling but increase memory usage.',
-            'Range: 1-20, recommended: 3-8',
-        ]),
-        ('thumbnail_timeout_ms', [
-            'Timeout for thumbnail fetch requests in milliseconds.',
-            'If a request takes longer than this, it\'s aborted and the slot freed.',
-            'Range: 1000-60000, recommended: 5000-15000',
-        ]),
-        ('thumbnail_scroll_throttle_ms', [
-            'Scroll event throttle in milliseconds.',
-            'How often the thumbnail queue is re-evaluated during scrolling.',
-            'Lower values = more responsive, higher values = less CPU usage.',
-            'Range: 50-1000, recommended: 150-300',
-        ]),
-        ('thumbnail_cache_size_mb', [
-            'RAM cache size for thumbnail bytes in megabytes.',
-            'Caches recently-accessed thumbnails in memory to avoid disk reads.',
-            'Set to 0 to disable caching. Range: 0-1000, recommended: 50-200',
-        ]),
-    ]),
-
-    ('Face Recognition', [
-        ('face_detection_enabled', [
-            'Enable face detection during image indexing.',
-            'When disabled, face-related UI buttons are greyed out.',
-        ]),
-        ('face_detection_min_confidence', [
-            'MTCNN confidence threshold for face detection.',
-            'Higher values = fewer false positives, may miss some faces.',
-            'Range: 0.0-1.0, recommended: 0.90-0.99',
-        ]),
-        ('face_detection_min_size', [
-            'Minimum face size in pixels (width/height of bounding box).',
-            'Faces smaller than this are ignored. Range: 20-200, recommended: 40-80',
-        ]),
-        ('face_recognition_threshold', [
-            'Cosine similarity threshold for auto-matching faces to known people.',
-            'Higher values = stricter matching (fewer false matches, more unknowns).',
-            'Range: 0.0-1.0, recommended: 0.65-0.90',
-        ]),
-        ('face_detection_batch_size', [
-            'Batch size for face detection (number of images processed together).',
-            'Higher values improve GPU utilization but use more VRAM.',
-            'Reduce if you get out-of-memory errors. Range: 1-64, recommended: 16-32',
-        ]),
-    ]),
-
-    ('Image Captioning (BLIP/BLIP-2)', [
-        ('caption_model', [
-            'BLIP model to use for caption generation. Options:',
-            '  - Salesforce/blip-image-captioning-base   (~1GB, fast)',
-            '  - Salesforce/blip-image-captioning-large  (~2GB, better quality)',
-            '  - Salesforce/blip2-opt-2.7b               (~5GB, BLIP-2, best quality)',
-            '  - Salesforce/blip2-flan-t5-xl             (~8GB, BLIP-2, most descriptive)',
-        ]),
-        ('caption_max_length', [
-            'Maximum length of generated captions in tokens.',
-            'Higher values allow longer, more detailed descriptions.',
-            'Range: 10-200, recommended: 30-75',
-        ]),
-        ('caption_min_length', [
-            'Minimum length of generated captions in tokens.',
-            'Higher values force more descriptive captions.',
-            'Range: 1-50, recommended: 5-20',
-        ]),
-        ('caption_num_beams', [
-            'Number of beams for beam search during generation.',
-            'Higher values produce better quality but are slower.',
-            'Set to 1 for greedy decoding (fastest, lower quality).',
-            'Range: 1-10, recommended: 3-5',
-        ]),
-        ('caption_british_english', [
-            'Convert American English spellings to British English in generated captions.',
-            'Handles common differences like color\u2192colour, center\u2192centre, gray\u2192grey, etc.',
-        ]),
-    ]),
-
-    ('NIMA Aesthetic Scoring', [
-        ('nima_enabled', [
-            'NIMA (Neural IMage Assessment) provides a second aesthetic quality signal',
-            'alongside the LAION aesthetic predictor. The two scores are blended for',
-            'the Quality sort in Gallery and best-image ranking in duplicate groups.',
-            '',
-            'Enable NIMA aesthetic scoring during image indexing.',
-            'When disabled, the NIMA thread sits idle and quality ranking falls back to',
-            'LAION-only. Existing NIMA scores are preserved.',
-        ]),
-        ('nima_batch_size', [
-            'Batch size for NIMA scoring (1-64).',
-            'Higher values are faster but use more VRAM (~500MB base for VGG16).',
-        ]),
-    ]),
-
-    ('Quality Scoring Weights', [
-        ('quality_weight_aesthetic', [
-            'These weights control how the composite quality score is computed in the',
-            'frontend. They are applied at sort time and do not affect stored data.',
-            '',
-            'Component weights (should sum to ~1.0):',
-            '  aesthetic - blended NIMA+LAION aesthetic score (percentile rank)',
-            '  sharpness - log Laplacian variance (percentile rank)',
-            '  pixels    - total pixel count (percentile rank)',
-            '  bpp       - bits per pixel (percentile rank)',
-        ]),
-        ('quality_weight_sharpness', []),
-        ('quality_weight_pixels', []),
-        ('quality_weight_bpp', []),
-        ('quality_alpha', [
-            'Blend ratio for NIMA vs LAION aesthetic scores.',
-            'A = alpha * NIMA_normalised + (1 - alpha) * LAION',
-            'Set to 0.0 to use LAION only, 1.0 for NIMA only.',
-            'Range: 0.0-1.0',
-        ]),
-    ]),
-
-    ('Trash Directory', [
-        ('trash_dir', [
-            'When images are deleted (from Gallery, Fullscreen, or duplicate pruning),',
-            'they are moved to this directory instead of being permanently removed.',
-            'Files keep their original names (with a counter suffix on collision).',
-            'Leave empty to use the default: <data-dir>/trash/',
-        ]),
-    ]),
+    (
+        'Data Directory',
+        [
+            (
+                'data_dir',
+                [
+                    '[!] Where Photonarium stores its database, thumbnails, and model files.',
+                    'Set automatically by the installer. Use an absolute path for reliability.',
+                    'Leave empty to use the current working directory.',
+                ],
+            ),
+        ],
+    ),
+    (
+        'Server',
+        [
+            (
+                'server_host',
+                [
+                    '[!] Network interface to bind to.',
+                    '  0.0.0.0   = listen on all interfaces (accessible from other devices on your network)',
+                    '  127.0.0.1 = localhost only (only this machine can connect)',
+                ],
+            ),
+            (
+                'server_port',
+                [
+                    '[!] Port number for the web server. Range: 1024-65535',
+                ],
+            ),
+        ],
+    ),
+    (
+        'Image Processing',
+        [
+            (
+                'image_extensions',
+                [
+                    'File extensions recognised as images (lowercase, with leading dot)',
+                ],
+            ),
+            (
+                'thumbnail_quality',
+                [
+                    'JPEG quality for generated thumbnails (1-100, higher = better quality, larger files)',
+                ],
+            ),
+            (
+                'max_image_dimension',
+                [
+                    'Maximum image dimension (width or height) to process.',
+                    'Images larger than this will be downsampled before embedding/hashing.',
+                    'This prevents memory issues with huge panoramas or scanned images.',
+                    'Set to 0 to disable (not recommended). Range: 0 or 1024-65536',
+                ],
+            ),
+        ],
+    ),
+    (
+        'OpenCLIP Embedding Model',
+        [
+            (
+                'openclip_model',
+                [
+                    'The model used for semantic image search and similarity detection.',
+                    'Changing these settings will require re-embedding all images.',
+                    '',
+                    'Model architecture. Common options:',
+                    '  - ViT-B-32  (fast, good quality, ~400MB VRAM)',
+                    '  - ViT-B-16  (slower, better quality, ~400MB VRAM)',
+                    '  - ViT-L-14  (slow, high quality, ~900MB VRAM)',
+                ],
+            ),
+            (
+                'openclip_pretrained',
+                [
+                    'Pretrained weights. Common options:',
+                    '  - openai           (original CLIP weights)',
+                    '  - laion2b_s34b_b79k (trained on LAION-2B, often better for photos)',
+                    '  - laion400m_e32    (trained on LAION-400M)',
+                ],
+            ),
+            (
+                'embedding_batch_size',
+                [
+                    'Batch size for embedding computation (1-64)',
+                    'Higher values are faster but use more VRAM. Reduce if you get out-of-memory errors.',
+                ],
+            ),
+        ],
+    ),
+    (
+        'Duplicate Detection Thresholds',
+        [
+            (
+                'perceptual_hash_threshold',
+                [
+                    'Perceptual hash hamming distance threshold for "near-identical" (level 1)',
+                    'Range: 0-64, lower = stricter matching. Recommended: 4-8',
+                ],
+            ),
+            (
+                'similarity_threshold_level2',
+                [
+                    'Cosine similarity threshold for "similar" images (level 2)',
+                    'Range: 0.0-1.0, higher = stricter matching. Recommended: 0.93-0.97',
+                ],
+            ),
+            (
+                'similarity_threshold_level3',
+                [
+                    'Cosine similarity threshold for "related" images (level 3)',
+                    'Range: 0.0-1.0, higher = stricter matching. Recommended: 0.80-0.90',
+                ],
+            ),
+        ],
+    ),
+    (
+        'Performance',
+        [
+            (
+                'indexing_threads',
+                [
+                    'Number of threads for parallel image indexing (1-16)',
+                    'Higher values speed up initial scanning but use more CPU/disk I/O.',
+                    'Recommended: 4-8 for HDD, 8-16 for SSD',
+                ],
+            ),
+            (
+                'max_incremental_duplicates',
+                [
+                    'Maximum number of new/modified images to process incrementally for duplicates.',
+                    'If more images need checking, falls back to full recomputation which is faster',
+                    'for large batches. Range: 1-10000',
+                ],
+            ),
+            (
+                'incremental_threshold_percent',
+                [
+                    'Percentage of total images that triggers full recomputation instead of incremental.',
+                    'If dirty_count > (total_count * threshold), does full rebuild.',
+                    'Range: 5-50, recommended: 15-25',
+                ],
+            ),
+        ],
+    ),
+    (
+        'Thumbnail Loading (Frontend)',
+        [
+            (
+                'thumbnail_concurrent_requests',
+                [
+                    'Maximum concurrent thumbnail fetch requests from the browser.',
+                    'Higher values load thumbnails faster but increase backend load.',
+                    'Range: 1-12, recommended: 4-8',
+                ],
+            ),
+            (
+                'thumbnail_extra_rows',
+                [
+                    'Extra rows above/below the viewport to prefetch thumbnails for.',
+                    'Higher values reduce blank thumbnails when scrolling but increase memory usage.',
+                    'Range: 1-20, recommended: 3-8',
+                ],
+            ),
+            (
+                'thumbnail_timeout_ms',
+                [
+                    'Timeout for thumbnail fetch requests in milliseconds.',
+                    "If a request takes longer than this, it's aborted and the slot freed.",
+                    'Range: 1000-60000, recommended: 5000-15000',
+                ],
+            ),
+            (
+                'thumbnail_scroll_throttle_ms',
+                [
+                    'Scroll event throttle in milliseconds.',
+                    'How often the thumbnail queue is re-evaluated during scrolling.',
+                    'Lower values = more responsive, higher values = less CPU usage.',
+                    'Range: 50-1000, recommended: 150-300',
+                ],
+            ),
+            (
+                'thumbnail_cache_size_mb',
+                [
+                    'RAM cache size for thumbnail bytes in megabytes.',
+                    'Caches recently-accessed thumbnails in memory to avoid disk reads.',
+                    'Set to 0 to disable caching. Range: 0-1000, recommended: 50-200',
+                ],
+            ),
+        ],
+    ),
+    (
+        'Face Recognition',
+        [
+            (
+                'face_detection_enabled',
+                [
+                    'Enable face detection during image indexing.',
+                    'When disabled, face-related UI buttons are greyed out.',
+                ],
+            ),
+            (
+                'face_detection_min_confidence',
+                [
+                    'MTCNN confidence threshold for face detection.',
+                    'Higher values = fewer false positives, may miss some faces.',
+                    'Range: 0.0-1.0, recommended: 0.90-0.99',
+                ],
+            ),
+            (
+                'face_detection_min_size',
+                [
+                    'Minimum face size in pixels (width/height of bounding box).',
+                    'Faces smaller than this are ignored. Range: 20-200, recommended: 40-80',
+                ],
+            ),
+            (
+                'face_recognition_threshold',
+                [
+                    'Cosine similarity threshold for auto-matching faces to known people.',
+                    'Higher values = stricter matching (fewer false matches, more unknowns).',
+                    'Range: 0.0-1.0, recommended: 0.65-0.90',
+                ],
+            ),
+            (
+                'face_detection_batch_size',
+                [
+                    'Batch size for face detection (number of images processed together).',
+                    'Higher values improve GPU utilization but use more VRAM.',
+                    'Reduce if you get out-of-memory errors. Range: 1-64, recommended: 16-32',
+                ],
+            ),
+        ],
+    ),
+    (
+        'Image Captioning (BLIP/BLIP-2)',
+        [
+            (
+                'caption_model',
+                [
+                    'BLIP model to use for caption generation. Options:',
+                    '  - Salesforce/blip-image-captioning-base   (~1GB, fast)',
+                    '  - Salesforce/blip-image-captioning-large  (~2GB, better quality)',
+                    '  - Salesforce/blip2-opt-2.7b               (~5GB, BLIP-2, best quality)',
+                    '  - Salesforce/blip2-flan-t5-xl             (~8GB, BLIP-2, most descriptive)',
+                ],
+            ),
+            (
+                'caption_max_length',
+                [
+                    'Maximum length of generated captions in tokens.',
+                    'Higher values allow longer, more detailed descriptions.',
+                    'Range: 10-200, recommended: 30-75',
+                ],
+            ),
+            (
+                'caption_min_length',
+                [
+                    'Minimum length of generated captions in tokens.',
+                    'Higher values force more descriptive captions.',
+                    'Range: 1-50, recommended: 5-20',
+                ],
+            ),
+            (
+                'caption_num_beams',
+                [
+                    'Number of beams for beam search during generation.',
+                    'Higher values produce better quality but are slower.',
+                    'Set to 1 for greedy decoding (fastest, lower quality).',
+                    'Range: 1-10, recommended: 3-5',
+                ],
+            ),
+            (
+                'caption_british_english',
+                [
+                    'Convert American English spellings to British English in generated captions.',
+                    'Handles common differences like color\u2192colour, center\u2192centre, gray\u2192grey, etc.',
+                ],
+            ),
+        ],
+    ),
+    (
+        'NIMA Aesthetic Scoring',
+        [
+            (
+                'nima_enabled',
+                [
+                    'NIMA (Neural IMage Assessment) provides a second aesthetic quality signal',
+                    'alongside the LAION aesthetic predictor. The two scores are blended for',
+                    'the Quality sort in Gallery and best-image ranking in duplicate groups.',
+                    '',
+                    'Enable NIMA aesthetic scoring during image indexing.',
+                    'When disabled, the NIMA thread sits idle and quality ranking falls back to',
+                    'LAION-only. Existing NIMA scores are preserved.',
+                ],
+            ),
+            (
+                'nima_batch_size',
+                [
+                    'Batch size for NIMA scoring (1-64).',
+                    'Higher values are faster but use more VRAM (~500MB base for VGG16).',
+                ],
+            ),
+        ],
+    ),
+    (
+        'Quality Scoring Weights',
+        [
+            (
+                'quality_weight_aesthetic',
+                [
+                    'These weights control how the composite quality score is computed in the',
+                    'frontend. They are applied at sort time and do not affect stored data.',
+                    '',
+                    'Component weights (should sum to ~1.0):',
+                    '  aesthetic - blended NIMA+LAION aesthetic score (percentile rank)',
+                    '  sharpness - log Laplacian variance (percentile rank)',
+                    '  pixels    - total pixel count (percentile rank)',
+                    '  bpp       - bits per pixel (percentile rank)',
+                ],
+            ),
+            ('quality_weight_sharpness', []),
+            ('quality_weight_pixels', []),
+            ('quality_weight_bpp', []),
+            (
+                'quality_alpha',
+                [
+                    'Blend ratio for NIMA vs LAION aesthetic scores.',
+                    'A = alpha * NIMA_normalised + (1 - alpha) * LAION',
+                    'Set to 0.0 to use LAION only, 1.0 for NIMA only.',
+                    'Range: 0.0-1.0',
+                ],
+            ),
+        ],
+    ),
+    (
+        'Trash Directory',
+        [
+            (
+                'trash_dir',
+                [
+                    'When images are deleted (from Gallery, Fullscreen, or duplicate pruning),',
+                    'they are moved to this directory instead of being permanently removed.',
+                    'Files keep their original names (with a counter suffix on collision).',
+                    'Leave empty to use the default: <data-dir>/trash/',
+                ],
+            ),
+        ],
+    ),
 ]
 
 # Ordered list of image extensions for the YAML file (matches the original
 # template ordering, with a comment before the RAW formats)
 _IMAGE_EXTENSIONS_ORDERED: list[str | tuple[str, str]] = [
-    '.jpg', '.jpeg', '.png', '.gif', '.bmp', '.tiff', '.tif', '.webp',
+    '.jpg',
+    '.jpeg',
+    '.png',
+    '.gif',
+    '.bmp',
+    '.tiff',
+    '.tif',
+    '.webp',
     ('# Camera RAW formats (require rawpy)', ''),
-    '.cr2', '.cr3', '.nef', '.nrw', '.arw', '.srf', '.dng', '.raf',
-    '.rw2', '.orf', '.pef', '.srw', '.x3f', '.3fr', '.iiq', '.rwl',
-    '.kdc', '.dcr', '.erf',
+    '.cr2',
+    '.cr3',
+    '.nef',
+    '.nrw',
+    '.arw',
+    '.srf',
+    '.dng',
+    '.raf',
+    '.rw2',
+    '.orf',
+    '.pef',
+    '.srw',
+    '.x3f',
+    '.3fr',
+    '.iiq',
+    '.rwl',
+    '.kdc',
+    '.dcr',
+    '.erf',
 ]
 
 
@@ -318,34 +471,34 @@ _IMAGE_EXTENSIONS_ORDERED: list[str | tuple[str, str]] = [
 # ``special_zero`` means 0 is accepted even when it's below ``min``.
 
 FIELD_CONSTRAINTS: dict[str, dict[str, int | float | bool]] = {
-    'server_port':                   {'min': 1024,  'max': 65535, 'step': 1},
-    'thumbnail_quality':             {'min': 1,     'max': 100,   'step': 1},
-    'max_image_dimension':           {'min': 1024,  'max': 65536, 'step': 1,    'special_zero': True},
-    'embedding_batch_size':          {'min': 1,     'max': 64,    'step': 1},
-    'perceptual_hash_threshold':     {'min': 0,     'max': 64,    'step': 1},
-    'similarity_threshold_level2':   {'min': 0.0,   'max': 1.0,   'step': 0.01},
-    'similarity_threshold_level3':   {'min': 0.0,   'max': 1.0,   'step': 0.01},
-    'indexing_threads':              {'min': 1,     'max': 16,    'step': 1},
-    'max_incremental_duplicates':    {'min': 1,     'max': 10000, 'step': 1},
-    'incremental_threshold_percent': {'min': 5,     'max': 50,    'step': 1},
-    'thumbnail_concurrent_requests': {'min': 1,     'max': 12,    'step': 1},
-    'thumbnail_extra_rows':          {'min': 1,     'max': 20,    'step': 1},
-    'thumbnail_timeout_ms':          {'min': 1000,  'max': 60000, 'step': 100},
-    'thumbnail_scroll_throttle_ms':  {'min': 50,    'max': 1000,  'step': 10},
-    'thumbnail_cache_size_mb':       {'min': 0,     'max': 1000,  'step': 1},
-    'face_detection_min_confidence': {'min': 0.0,   'max': 1.0,   'step': 0.01},
-    'face_detection_min_size':       {'min': 20,    'max': 200,   'step': 1},
-    'face_recognition_threshold':    {'min': 0.0,   'max': 1.0,   'step': 0.01},
-    'face_detection_batch_size':     {'min': 1,     'max': 64,    'step': 1},
-    'caption_max_length':            {'min': 10,    'max': 200,   'step': 1},
-    'caption_min_length':            {'min': 1,     'max': 50,    'step': 1},
-    'caption_num_beams':             {'min': 1,     'max': 10,    'step': 1},
-    'nima_batch_size':               {'min': 1,     'max': 64,    'step': 1},
-    'quality_weight_aesthetic':      {'min': 0.0,   'max': 1.0,   'step': 0.01},
-    'quality_weight_sharpness':      {'min': 0.0,   'max': 1.0,   'step': 0.01},
-    'quality_weight_pixels':         {'min': 0.0,   'max': 1.0,   'step': 0.01},
-    'quality_weight_bpp':            {'min': 0.0,   'max': 1.0,   'step': 0.01},
-    'quality_alpha':                 {'min': 0.0,   'max': 1.0,   'step': 0.01},
+    'server_port': {'min': 1024, 'max': 65535, 'step': 1},
+    'thumbnail_quality': {'min': 1, 'max': 100, 'step': 1},
+    'max_image_dimension': {'min': 1024, 'max': 65536, 'step': 1, 'special_zero': True},
+    'embedding_batch_size': {'min': 1, 'max': 64, 'step': 1},
+    'perceptual_hash_threshold': {'min': 0, 'max': 64, 'step': 1},
+    'similarity_threshold_level2': {'min': 0.0, 'max': 1.0, 'step': 0.01},
+    'similarity_threshold_level3': {'min': 0.0, 'max': 1.0, 'step': 0.01},
+    'indexing_threads': {'min': 1, 'max': 16, 'step': 1},
+    'max_incremental_duplicates': {'min': 1, 'max': 10000, 'step': 1},
+    'incremental_threshold_percent': {'min': 5, 'max': 50, 'step': 1},
+    'thumbnail_concurrent_requests': {'min': 1, 'max': 12, 'step': 1},
+    'thumbnail_extra_rows': {'min': 1, 'max': 20, 'step': 1},
+    'thumbnail_timeout_ms': {'min': 1000, 'max': 60000, 'step': 100},
+    'thumbnail_scroll_throttle_ms': {'min': 50, 'max': 1000, 'step': 10},
+    'thumbnail_cache_size_mb': {'min': 0, 'max': 1000, 'step': 1},
+    'face_detection_min_confidence': {'min': 0.0, 'max': 1.0, 'step': 0.01},
+    'face_detection_min_size': {'min': 20, 'max': 200, 'step': 1},
+    'face_recognition_threshold': {'min': 0.0, 'max': 1.0, 'step': 0.01},
+    'face_detection_batch_size': {'min': 1, 'max': 64, 'step': 1},
+    'caption_max_length': {'min': 10, 'max': 200, 'step': 1},
+    'caption_min_length': {'min': 1, 'max': 50, 'step': 1},
+    'caption_num_beams': {'min': 1, 'max': 10, 'step': 1},
+    'nima_batch_size': {'min': 1, 'max': 64, 'step': 1},
+    'quality_weight_aesthetic': {'min': 0.0, 'max': 1.0, 'step': 0.01},
+    'quality_weight_sharpness': {'min': 0.0, 'max': 1.0, 'step': 0.01},
+    'quality_weight_pixels': {'min': 0.0, 'max': 1.0, 'step': 0.01},
+    'quality_weight_bpp': {'min': 0.0, 'max': 1.0, 'step': 0.01},
+    'quality_alpha': {'min': 0.0, 'max': 1.0, 'step': 0.01},
 }
 
 
@@ -403,13 +556,38 @@ class Config:
     data_dir: str = ''
     server_host: str = '0.0.0.0'
     server_port: int = 5000
-    image_extensions: set[str] = field(default_factory=lambda: {
-        '.jpg', '.jpeg', '.png', '.gif', '.bmp', '.tiff', '.tif', '.webp',
-        # Camera RAW formats (require rawpy)
-        '.cr2', '.cr3', '.nef', '.nrw', '.arw', '.srf', '.dng', '.raf',
-        '.rw2', '.orf', '.pef', '.srw', '.x3f', '.3fr', '.iiq', '.rwl',
-        '.kdc', '.dcr', '.erf',
-    })
+    image_extensions: set[str] = field(
+        default_factory=lambda: {
+            '.jpg',
+            '.jpeg',
+            '.png',
+            '.gif',
+            '.bmp',
+            '.tiff',
+            '.tif',
+            '.webp',
+            # Camera RAW formats (require rawpy)
+            '.cr2',
+            '.cr3',
+            '.nef',
+            '.nrw',
+            '.arw',
+            '.srf',
+            '.dng',
+            '.raf',
+            '.rw2',
+            '.orf',
+            '.pef',
+            '.srw',
+            '.x3f',
+            '.3fr',
+            '.iiq',
+            '.rwl',
+            '.kdc',
+            '.dcr',
+            '.erf',
+        }
+    )
     thumbnail_quality: int = 85
     max_image_dimension: int = 16384
     openclip_model: str = 'ViT-B-32'
@@ -483,8 +661,7 @@ class Config:
         if not isinstance(self.image_extensions, (set, list, tuple)):
             raise ValueError('image_extensions must be a collection')
         self.image_extensions = {
-            ext.lower() if ext.startswith('.') else f'.{ext.lower()}'
-            for ext in self.image_extensions
+            ext.lower() if ext.startswith('.') else f'.{ext.lower()}' for ext in self.image_extensions
         }
 
         # --- Numeric range checks from FIELD_CONSTRAINTS ---
@@ -505,12 +682,15 @@ class Config:
             )
 
         # Quality weights should sum to ~1.0 (warning only, not an error)
-        weight_sum = (self.quality_weight_aesthetic + self.quality_weight_sharpness
-                      + self.quality_weight_pixels + self.quality_weight_bpp)
+        weight_sum = (
+            self.quality_weight_aesthetic
+            + self.quality_weight_sharpness
+            + self.quality_weight_pixels
+            + self.quality_weight_bpp
+        )
         if abs(weight_sum - 1.0) > 0.05:
             logger.warning(
-                f'Quality weights sum to {weight_sum:.3f} (expected ~1.0). '
-                'Rankings may behave unexpectedly.'
+                f'Quality weights sum to {weight_sum:.3f} (expected ~1.0). Rankings may behave unexpectedly.'
             )
 
 
@@ -532,6 +712,7 @@ _TEMPLATE_OVERRIDES: dict[str, Any] = {
 # save_config — write a Config to disk with full comments
 # ---------------------------------------------------------------------------
 
+
 def _format_yaml_value(value: Any, field_name: str) -> str:
     """Format a single Config field value as a YAML string.
 
@@ -552,9 +733,7 @@ def _format_yaml_value(value: Any, field_name: str) -> str:
 
     if isinstance(value, bool):
         return f'{field_name}: {str(value).lower()}'
-    elif isinstance(value, float):
-        return f'{field_name}: {value}'
-    elif isinstance(value, int):
+    elif isinstance(value, (float, int)):
         return f'{field_name}: {value}'
     elif isinstance(value, str):
         if value == '':
@@ -698,10 +877,12 @@ def get_config_schema(config: Config) -> dict[str, Any]:
 
             field_defs.append(entry)
 
-        sections.append({
-            'title': section_title,
-            'fields': field_defs,
-        })
+        sections.append(
+            {
+                'title': section_title,
+                'fields': field_defs,
+            }
+        )
 
     return {'sections': sections}
 
@@ -710,6 +891,7 @@ def get_config_schema(config: Config) -> dict[str, Any]:
 # load_config — load from YAML with auto-migration and config upgrade
 # ---------------------------------------------------------------------------
 
+
 def _parse_config_data(config_data: dict[str, Any]) -> Config:
     """Build a Config from a parsed YAML dict, coercing types as needed.
 
@@ -717,9 +899,7 @@ def _parse_config_data(config_data: dict[str, Any]) -> Config:
     back to the dataclass defaults.
     """
     # Map of field name -> type coercion function
-    _FIELD_TYPES: dict[str, type] = {
-        f.name: f.type for f in fields(Config)
-    }
+    _FIELD_TYPES: dict[str, type] = {f.name: f.type for f in fields(Config)}
 
     kwargs: dict[str, Any] = {}
 
@@ -738,7 +918,7 @@ def _parse_config_data(config_data: dict[str, Any]) -> Config:
             kwargs[field_name] = float(raw)
         elif field_type == 'bool':
             kwargs[field_name] = bool(raw)
-        elif field_type == "set[str]":
+        elif field_type == 'set[str]':
             kwargs[field_name] = set(raw) if raw else set()
         else:
             kwargs[field_name] = raw

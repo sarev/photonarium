@@ -29,10 +29,6 @@ Usage:
 
 from __future__ import annotations
 
-from collections import OrderedDict
-from pathlib import Path
-from PIL import Image, ImageFilter, ImageOps
-
 import logging
 import shutil
 import subprocess
@@ -40,9 +36,14 @@ import sys
 import tempfile
 import threading
 import time
+from collections import OrderedDict
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from pathlib import Path
 
-from rawimage import is_raw_format, open_image as raw_open_image
+from PIL import Image, ImageFilter, ImageOps
+
+from rawimage import is_raw_format
+from rawimage import open_image as raw_open_image
 
 # Configure module logger
 logger = logging.getLogger(__name__)
@@ -78,10 +79,7 @@ def _move_with_retry(src: Path, dst: Path, max_retries: int = 5, delay: float = 
             # Only retry on Windows file locking errors
             if sys.platform == 'win32' and e.winerror == 32:
                 if attempt < max_retries - 1:
-                    logger.warning(
-                        f'File locked, retry {attempt + 1}/{max_retries} '
-                        f'(waiting {delay:.1f}s): {src.name}'
-                    )
+                    logger.warning(f'File locked, retry {attempt + 1}/{max_retries} (waiting {delay:.1f}s): {src.name}')
                     time.sleep(delay)
                     delay *= 2  # Exponential backoff
                     continue
@@ -251,7 +249,7 @@ def rotate_image_file(
     is_jpeg = suffix in ('.jpg', '.jpeg')
 
     # Lossless JPEG rotation only supports 90, 180, 270
-    if is_jpeg and degrees in (90, 180, 270):
+    if is_jpeg and degrees in (90, 180, 270):  # noqa: SIM102
         if _rotate_jpeg_lossless(path, degrees):
             return True
         # Fall through to Pillow if jpegtran failed
@@ -301,19 +299,19 @@ def _reset_exif_orientation(path: Path) -> bool:
                 pos += 2
                 continue
 
-            seg_length = int.from_bytes(data[pos + 2:pos + 4], 'big')
+            seg_length = int.from_bytes(data[pos + 2 : pos + 4], 'big')
 
             if marker_type == 0xE1:  # APP1
                 app1_data_start = pos + 4  # After marker (2) and length (2)
 
                 # Verify this is an EXIF APP1 (not XMP or other APP1 usage)
-                if data[app1_data_start:app1_data_start + 6] != b'Exif\x00\x00':
+                if data[app1_data_start : app1_data_start + 6] != b'Exif\x00\x00':
                     pos += 2 + seg_length
                     continue
 
                 # Parse the TIFF header within the EXIF segment
                 tiff_start = app1_data_start + 6
-                byte_order = bytes(data[tiff_start:tiff_start + 2])
+                byte_order = bytes(data[tiff_start : tiff_start + 2])
                 if byte_order == b'MM':
                     endian = 'big'
                 elif byte_order == b'II':
@@ -322,34 +320,25 @@ def _reset_exif_orientation(path: Path) -> bool:
                     return True  # Unknown byte order, skip
 
                 # First IFD offset (relative to tiff_start)
-                ifd_offset = int.from_bytes(
-                    data[tiff_start + 4:tiff_start + 8], endian
-                )
+                ifd_offset = int.from_bytes(data[tiff_start + 4 : tiff_start + 8], endian)
                 ifd_pos = tiff_start + ifd_offset
 
                 # Read number of IFD0 entries
-                num_entries = int.from_bytes(
-                    data[ifd_pos:ifd_pos + 2], endian
-                )
+                num_entries = int.from_bytes(data[ifd_pos : ifd_pos + 2], endian)
 
                 # Scan IFD0 entries for the orientation tag
                 for i in range(num_entries):
                     entry_pos = ifd_pos + 2 + i * 12
-                    tag = int.from_bytes(
-                        data[entry_pos:entry_pos + 2], endian
-                    )
+                    tag = int.from_bytes(data[entry_pos : entry_pos + 2], endian)
                     if tag == ORIENTATION_TAG:
                         # Type is SHORT (3), count is 1, value is inline
                         # at entry_pos + 8 (2 bytes)
-                        val = int.from_bytes(
-                            data[entry_pos + 8:entry_pos + 10], endian
-                        )
+                        val = int.from_bytes(data[entry_pos + 8 : entry_pos + 10], endian)
                         if val == 1:
                             return True  # Already normal
 
                         # Overwrite with orientation = 1
-                        data[entry_pos + 8:entry_pos + 10] = \
-                            (1).to_bytes(2, endian)
+                        data[entry_pos + 8 : entry_pos + 10] = (1).to_bytes(2, endian)
 
                         # Write atomically via temp file
                         with tempfile.NamedTemporaryFile(
@@ -360,9 +349,7 @@ def _reset_exif_orientation(path: Path) -> bool:
                             tmp_path = Path(tmp.name)
                         tmp_path.write_bytes(data)
                         _move_with_retry(tmp_path, path)
-                        logger.debug(
-                            f'Reset EXIF orientation to normal: {path}'
-                        )
+                        logger.debug(f'Reset EXIF orientation to normal: {path}')
                         return True
 
                 return True  # Orientation tag not in IFD0
@@ -601,6 +588,7 @@ def clear_thumbnail_cache(
 # RAM CACHE FOR THUMBNAIL BYTES
 # =============================================================================
 
+
 class ThumbnailCache:
     """Thread-safe LRU cache for thumbnail bytes.
 
@@ -729,6 +717,7 @@ class ThumbnailCache:
 # BULK THUMBNAIL GENERATION
 # =============================================================================
 
+
 def _generate_thumbnails_for_image(
     img: dict,
     thumbnail_dir: Path,
@@ -756,9 +745,7 @@ def _generate_thumbnails_for_image(
     source_exists = None  # Lazy check
 
     for size in sizes:
-        cache_path = get_thumbnail_cache_path(
-            img['checksum'], size=size, thumbnail_dir=thumbnail_dir
-        )
+        cache_path = get_thumbnail_cache_path(img['checksum'], size=size, thumbnail_dir=thumbnail_dir)
 
         if cache_path.exists():
             skipped += 1
@@ -773,8 +760,7 @@ def _generate_thumbnails_for_image(
                 break
 
         if generate_thumbnail(
-            source_path, cache_path, size=size,
-            quality=quality, max_source_dimension=max_source_dimension
+            source_path, cache_path, size=size, quality=quality, max_source_dimension=max_source_dimension
         ):
             generated += 1
         else:
@@ -813,18 +799,14 @@ def generate_missing_thumbnails(
     skipped = 0
     errors = 0
 
-    logger.info(
-        f'Generating thumbnails for {total} images '
-        f'(sizes: {sizes}, workers: {max_workers})...'
-    )
+    logger.info(f'Generating thumbnails for {total} images (sizes: {sizes}, workers: {max_workers})...')
 
     interrupted = False
     executor = ThreadPoolExecutor(max_workers=max_workers)
     try:
         futures = {
             executor.submit(
-                _generate_thumbnails_for_image,
-                img, thumbnail_dir, quality, sizes, max_source_dimension
+                _generate_thumbnails_for_image, img, thumbnail_dir, quality, sizes, max_source_dimension
             ): img
             for img in images
         }
@@ -856,13 +838,9 @@ def generate_missing_thumbnails(
 
     if interrupted:
         logger.info(
-            f'Interrupted. Generated {generated}, skipped {skipped} existing, '
-            f'{errors} errors before interruption.'
+            f'Interrupted. Generated {generated}, skipped {skipped} existing, {errors} errors before interruption.'
         )
     else:
-        logger.info(
-            f'Done. Generated {generated}, skipped {skipped} existing, '
-            f'{errors} errors.'
-        )
+        logger.info(f'Done. Generated {generated}, skipped {skipped} existing, {errors} errors.')
 
     return {'generated': generated, 'skipped': skipped, 'errors': errors}

@@ -115,7 +115,7 @@ const AppState = (function() {
                         console.error('[AppState] Error subscriber error:', err);
                     }
                 }
-            }
+            },
         };
     }
 
@@ -154,7 +154,7 @@ const AppState = (function() {
             } catch (err) {
                 console.error('[AppState.storage] Write error:', err);
             }
-        }
+        },
     };
 
     // =========================================================================

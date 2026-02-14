@@ -1,0 +1,47 @@
+line-length = 120
+target-version = "py310"
+exclude = ["vulture_whitelist.py"]
+
+[lint]
+select = [
+    "E",     # pycodestyle errors
+    "F",     # pyflakes (undefined names, unused imports, redefined vars)
+    "W",     # pycodestyle warnings
+    "I",     # isort (import ordering)
+    "B",     # flake8-bugbear (mutable defaults, assert side-effects, etc.)
+    "SIM",   # flake8-simplify (open() without context manager, dead code patterns)
+    "UP",    # pyupgrade (modernise to Python 3.10+ syntax)
+    "S",     # bandit security (SQL injection, subprocess injection, hardcoded passwords)
+    "PLE",   # pylint errors (real bugs only, not style nits)
+    "RUF",   # ruff-specific (catch-all for Python anti-patterns)
+]
+ignore = [
+    "S101",    # assert — used legitimately in non-test code
+    "S311",    # random — not used for crypto in this project
+    "B904",    # raise-without-from — too strict for existing code
+    "UP035",   # deprecated-import — typing imports still valid in 3.10
+    "E402",    # module-import-not-at-top — intentional delayed imports (env vars, sys.path)
+    "S603",    # subprocess-without-shell — using list args is the safe pattern
+    "S607",    # start-process-with-partial-path — system tools (explorer, open, jpegtran)
+    "S104",    # hardcoded-bind-all-interfaces — intentional for LAN access
+    "S110",    # try-except-pass — intentional exception swallowing throughout codebase
+    "S310",    # suspicious-url-open — legitimate urllib.request usage
+    "SIM105",  # suppressible-exception — try/except/pass preferred over contextlib.suppress
+    "SIM108",  # if-else-block-instead-of-if-exp — ternaries less readable for complex logic
+    "RUF001",  # ambiguous-unicode-character-string — intentional unicode chars
+    "RUF002",  # ambiguous-unicode-character-docstring — intentional unicode chars
+    "RUF003",  # ambiguous-unicode-character-comment — intentional unicode chars
+    "RUF005",  # collection-literal-concatenation — [x] + list preferred for clarity
+]
+
+[lint.per-file-ignores]
+# SQL queries use string formatting for table/column names (not user input);
+# parameterised binding is used for all user-supplied values.
+"imagedb.py" = ["S608"]
+"faces.py" = ["S608"]
+"duplicates.py" = ["S608"]
+"config.py" = ["S608"]
+"app.py" = ["S608"]
+
+[format]
+quote-style = "single"

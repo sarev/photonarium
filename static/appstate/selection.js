@@ -45,7 +45,7 @@ AppState.selection = (function() {
         if (!_contexts.has(name)) {
             _contexts.set(name, {
                 selected: new Set(),
-                anchor: null
+                anchor: null,
             });
         }
         return _contexts.get(name);
@@ -232,6 +232,6 @@ AppState.selection = (function() {
                 ctx.selected.add(ids[i]);
             }
             broadcast({ type: 'changed', context });
-        }
+        },
     };
 })();

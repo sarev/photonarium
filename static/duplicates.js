@@ -146,7 +146,7 @@ const Duplicates = {
         semanticQuery: '',
         minGroupSize: 2,
         selectedGroups: [],
-        groupFilter: ''
+        groupFilter: '',
     },
 
     /**
@@ -217,7 +217,7 @@ const Duplicates = {
                 if (this._selection && this._selection.isSelected(id)) {
                     el.classList.add('selected');
                 }
-            }
+            },
         });
 
         // Create GridSelection instance
@@ -237,7 +237,7 @@ const Duplicates = {
                 if (this.state.currentLevel === 5 && this.state.selectedGroups.length > 0) {
                     this._onDeleteGroup();
                 }
-            }
+            },
         });
 
         // Bind events
@@ -339,7 +339,7 @@ const Duplicates = {
         // Add hover tooltip showing similarity level label
         App.addSliderHoverTooltip(this._els.slider, {
             suffix: '',
-            formatValue: (value) => this.SIMILARITY_LABELS[value] || ''
+            formatValue: (value) => this.SIMILARITY_LABELS[value] || '',
         });
 
         // Sort mode buttons
@@ -597,7 +597,7 @@ const Duplicates = {
         }
         this._els.semanticQuery.disabled = (this.state.sortMode !== 'semantic');
         this._els.semanticQuery.value = this.state.semanticQuery;
-    }
+    },
 };
 
 /* ==========================================================================
@@ -931,7 +931,7 @@ Duplicates._applySemanticSort = async function() {
     // Get the best image ID from each group for similarity comparison
     const groupImageIds = this.state.allGroups.map(g => ({
         group_hash: g.group_hash,
-        image_id: g.best_image?.id
+        image_id: g.best_image?.id,
     })).filter(g => g.image_id);
 
     if (groupImageIds.length === 0) return;
@@ -942,7 +942,7 @@ Duplicates._applySemanticSort = async function() {
         // Call backend to get similarity scores via AppState
         const scores = await AppState.duplicates.sortSemantic(
             query,
-            groupImageIds.map(g => g.image_id)
+            groupImageIds.map(g => g.image_id),
         );
 
         // Staleness check: user may have changed sort mode or query
@@ -952,7 +952,7 @@ Duplicates._applySemanticSort = async function() {
         if (scores && scores.length > 0) {
             // Create a map of image_id -> score
             const scoreMap = new Map(
-                scores.map(s => [s.image_id, s.score])
+                scores.map(s => [s.image_id, s.score]),
             );
 
             // Sort allGroups by score (descending)
@@ -1037,7 +1037,7 @@ Duplicates._onPruneGroups = function() {
     if (!AppState.status.isTrashEnabled()) {
         App.showError(
             'Cannot prune: trash directory is misconfigured. '
-            + 'Check that it does not overlap an indexed folder.'
+            + 'Check that it does not overlap an indexed folder.',
         );
         return;
     }
@@ -1071,14 +1071,14 @@ Duplicates._onPruneGroups = function() {
  * @private
  */
 Duplicates._showPruneDialog = function(level, targetGroups, hasSelection, totalImages, selectedHashes) {
-    const dialog     = document.getElementById('dialog-prune');
-    const scopeEl    = document.getElementById('dialog-prune-scope');
-    const summaryEl  = document.getElementById('dialog-prune-summary');
-    const okBtn      = document.getElementById('dialog-prune-ok');
-    const cancelBtn  = document.getElementById('dialog-prune-cancel');
+    const dialog = document.getElementById('dialog-prune');
+    const scopeEl = document.getElementById('dialog-prune-scope');
+    const summaryEl = document.getElementById('dialog-prune-summary');
+    const okBtn = document.getElementById('dialog-prune-ok');
+    const cancelBtn = document.getElementById('dialog-prune-cancel');
     const countInput = document.getElementById('dialog-prune-count');
-    const pctInput   = document.getElementById('dialog-prune-percent');
-    const radios     = dialog.querySelectorAll('input[name="prune-mode"]');
+    const pctInput = document.getElementById('dialog-prune-percent');
+    const radios = dialog.querySelectorAll('input[name="prune-mode"]');
 
     // --- Populate scope description ---
     const groupCount = targetGroups.length;
@@ -1184,7 +1184,7 @@ Duplicates._showPruneDialog = function(level, targetGroups, hasSelection, totalI
         try {
             const result = await AppState.duplicates.pruneGroups(level, options);
             App.showInfo(
-                `Pruned ${result.groupCount} groups: ${result.trashedCount} images moved to trash.`
+                `Pruned ${result.groupCount} groups: ${result.trashedCount} images moved to trash.`,
             );
         } catch (err) {
             App.showError('Failed to prune groups: ' + (err.message || err));
@@ -1236,7 +1236,7 @@ Duplicates._onDeleteGroup = async function() {
     const confirmed = await App.confirm(
         'Delete Group',
         `Are you sure you want to delete ${plural}? The images will not be affected.`,
-        { danger: true, okText: 'Delete' }
+        { danger: true, okText: 'Delete' },
     );
 
     if (!confirmed) return;

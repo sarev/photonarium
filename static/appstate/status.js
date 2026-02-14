@@ -145,7 +145,7 @@ AppState.status = (function() {
                 indexing: _status?.indexing_queue || 0,
                 embedding: _status?.embedding_queue || 0,
                 face: _status?.face_queue || 0,
-                nima: _status?.nima_queue || 0
+                nima: _status?.nima_queue || 0,
             };
         },
 
@@ -181,6 +181,6 @@ AppState.status = (function() {
          */
         isPolling() {
             return _pollTimer !== null;
-        }
+        },
     };
 })();

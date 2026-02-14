@@ -40,13 +40,14 @@ logger = logging.getLogger(__name__)
 
 # Standard ImageNet preprocessing: resize shortest edge to 256, centre-crop
 # 224, ImageNet normalise.  Reusable for single-image scoring if needed.
-NIMA_TRANSFORM = transforms.Compose([
-    transforms.Resize(256),
-    transforms.CenterCrop(224),
-    transforms.ToTensor(),
-    transforms.Normalize(mean=[0.485, 0.456, 0.406],
-                         std=[0.229, 0.224, 0.225]),
-])
+NIMA_TRANSFORM = transforms.Compose(
+    [
+        transforms.Resize(256),
+        transforms.CenterCrop(224),
+        transforms.ToTensor(),
+        transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),
+    ]
+)
 
 
 class NIMA(nn.Module):
@@ -147,18 +148,12 @@ def _remap_nima_state_dict(state_dict: dict) -> dict:
         # Only remap InvertedResidual blocks 2–17
         # Key pattern: base_model.0.{block}.conv.{flat_idx}.{suffix}
         parts = key.split('.')
-        if (len(parts) >= 6
-                and parts[0] == 'base_model' and parts[3] == 'conv'
-                and parts[2].isdigit()):
+        if len(parts) >= 6 and parts[0] == 'base_model' and parts[3] == 'conv' and parts[2].isdigit():
             block_idx = int(parts[2])
             if 2 <= block_idx <= 17:
                 flat_idx = parts[4]
                 if flat_idx in _INDEX_MAP:
-                    new_key = (
-                        '.'.join(parts[:4]) + '.'
-                        + _INDEX_MAP[flat_idx] + '.'
-                        + '.'.join(parts[5:])
-                    )
+                    new_key = '.'.join(parts[:4]) + '.' + _INDEX_MAP[flat_idx] + '.' + '.'.join(parts[5:])
                     new_state_dict[new_key] = value
                     continue
         new_state_dict[key] = value

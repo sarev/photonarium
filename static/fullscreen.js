@@ -74,7 +74,7 @@ const Fullscreen = {
         zoom: 1,
         panX: 0,
         panY: 0,
-        isPanning: false
+        isPanning: false,
     },
 
     /**
@@ -131,7 +131,7 @@ const Fullscreen = {
             rotateLeftBtn: App.$('fullscreen-rotate-left'),
             rotateRightBtn: App.$('fullscreen-rotate-right'),
             prevBtn: App.$('fullscreen-prev'),
-            nextBtn: App.$('fullscreen-next')
+            nextBtn: App.$('fullscreen-next'),
         };
 
         // Bind button clicks (permanent, not per-session)
@@ -389,7 +389,7 @@ const Fullscreen = {
             touchstart: (e) => this._handleTouchStart(e),
             touchmove: (e) => this._handleTouchMove(e),
             touchend: (e) => this._handleTouchEnd(e),
-            resize: () => { this._cachedContainerRect = null; }
+            resize: () => { this._cachedContainerRect = null; },
         };
 
         document.addEventListener('keydown', this._handlers.keydown);
@@ -729,7 +729,7 @@ const Fullscreen = {
         this.state.isPanning = true;
         this._panStart = {
             x: e.clientX - this.state.panX,
-            y: e.clientY - this.state.panY
+            y: e.clientY - this.state.panY,
         };
 
         // Change cursor to grabbing
@@ -866,7 +866,7 @@ const Fullscreen = {
             this.state.isPanning = true;
             this._panStart = {
                 x: e.touches[0].clientX - this.state.panX,
-                y: e.touches[0].clientY - this.state.panY
+                y: e.touches[0].clientY - this.state.panY,
             };
             return;
         }
@@ -874,7 +874,7 @@ const Fullscreen = {
         this._touchStart = {
             x: e.touches[0].clientX,
             y: e.touches[0].clientY,
-            time: Date.now()
+            time: Date.now(),
         };
         this._isSwiping = false;
     },
@@ -910,9 +910,8 @@ const Fullscreen = {
                 this._isSwiping = true;
                 this._swipeDirection = 'horizontal';
                 this._hideFaceOverlay();
-            }
-            // Upward vertical swipe
-            else if (dy < -10) {
+            } else if (dy < -10) {
+                // Upward vertical swipe
                 this._isSwiping = true;
                 this._swipeDirection = 'vertical';
                 this._hideFaceOverlay();
@@ -1313,7 +1312,7 @@ const Fullscreen = {
         if (!AppState.status.isTrashEnabled()) {
             App.showError(
                 'Cannot delete: trash directory is misconfigured. '
-                + 'Check that it does not overlap an indexed folder.'
+                + 'Check that it does not overlap an indexed folder.',
             );
             return;
         }
@@ -1351,7 +1350,7 @@ const Fullscreen = {
             // Restore by reloading the display list
             this.state.imageList = AppState.images.getDisplayList();
         }
-    }
+    },
 };
 
 // Initialize module when DOM is ready

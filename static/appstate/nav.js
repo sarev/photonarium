@@ -212,6 +212,6 @@ AppState.nav = (function() {
          */
         clearScrollPositions() {
             _scrollPositions = {};
-        }
+        },
     };
 })();

@@ -22,7 +22,6 @@
  * API Communication:
  *   - Provides wrapper functions for all Flask backend API calls
  *   - Handles request/response serialization and error handling
- *   - Implements a mock mode for frontend development without the backend
  *   - Manages loading states during async operations
  *
  * Toolbar Management:
@@ -122,7 +121,7 @@ const App = {
         concurrentRequests: 6,
         extraRows: 5,
         timeoutMs: 10000,
-        scrollThrottleMs: 250
+        scrollThrottleMs: 250,
     },
 
     /**
@@ -597,7 +596,7 @@ const App = {
         if (pushHistory && previousScreen) {
             this._navigationHistory.push({
                 screen: previousScreen,
-                data: null
+                data: null,
             });
         }
 
@@ -631,7 +630,7 @@ const App = {
             const previous = this._navigationHistory.pop();
             this.navigateTo(previous.screen, {
                 data: previous.data,
-                pushHistory: false
+                pushHistory: false,
             });
         } else {
             // Default to gallery if no history
@@ -717,7 +716,7 @@ const App = {
             'database': 'btn-database',
             'duplicates': 'btn-duplicates',
             'search': 'btn-filter',
-            'faces': 'btn-faces'
+            'faces': 'btn-faces',
         };
 
         for (const [screen, btnId] of Object.entries(screenButtons)) {
@@ -735,7 +734,7 @@ const App = {
                 database: 'Database',
                 search: 'Search',
                 duplicates: 'Groups',
-                faces: 'Faces'
+                faces: 'Faces',
             };
             mobileTitle.textContent = screenNames[activeScreen] || '';
         }
@@ -877,7 +876,7 @@ const App = {
 
         const response = await fetch(url, {
             headers,
-            ...options
+            ...options,
         });
 
         if (!response.ok) {
@@ -910,7 +909,7 @@ const App = {
     async apiPost(endpoint, data) {
         return this.api(endpoint, {
             method: 'POST',
-            body: JSON.stringify(data)
+            body: JSON.stringify(data),
         });
     },
 
@@ -932,7 +931,7 @@ const App = {
     async apiPatch(endpoint, data) {
         return this.api(endpoint, {
             method: 'PATCH',
-            body: JSON.stringify(data)
+            body: JSON.stringify(data),
         });
     },
 
@@ -963,7 +962,7 @@ const App = {
                 concurrentRequests: data.thumbnail_concurrent_requests,
                 extraRows: data.thumbnail_extra_rows,
                 timeoutMs: data.thumbnail_timeout_ms,
-                scrollThrottleMs: data.thumbnail_scroll_throttle_ms
+                scrollThrottleMs: data.thumbnail_scroll_throttle_ms,
             };
             // Quality scoring weights (used by AppState.images for Quality sort)
             this._qualityConfig = {
@@ -1206,7 +1205,7 @@ const App = {
             // Note: Backend emits images_modified event for gallery thumbnail updates
             const result = await this.apiPost('/images/rotate', {
                 image_ids: rotatableIds,
-                degrees: degrees
+                degrees: degrees,
             });
 
             // Report any failures
@@ -1563,7 +1562,7 @@ const App = {
             if (behind) {
                 behind.dispatchEvent(new MouseEvent('click', {
                     bubbles: true, cancelable: true, view: window,
-                    clientX: e.clientX, clientY: e.clientY
+                    clientX: e.clientX, clientY: e.clientY,
                 }));
             }
         });
@@ -2005,8 +2004,8 @@ const App = {
                     '💛': 'Yellow heart',
                     '💚': 'Green heart',
                     '💙': 'Blue heart',
-                    '💜': 'Purple heart'
-                }
+                    '💜': 'Purple heart',
+                },
             },
             {
                 title: 'Reactions',
@@ -2017,8 +2016,8 @@ const App = {
                     '🔥': 'Fire / hot',
                     '✅': 'Check mark / success',
                     '❌': 'Cross mark / failure',
-                    '❓': 'Question mark / unknown'
-                }
+                    '❓': 'Question mark / unknown',
+                },
             },
             {
                 title: 'Creative',
@@ -2027,8 +2026,8 @@ const App = {
                     '🎨': 'Artist palette / art',
                     '🏆': 'Trophy / winner',
                     '💎': 'Gem / diamond',
-                    '🎉': 'Party popper / celebration'
-                }
+                    '🎉': 'Party popper / celebration',
+                },
             },
             {
                 title: 'Faces',
@@ -2037,8 +2036,8 @@ const App = {
                     '😍': 'Smiling face with heart-eyes',
                     '🤩': 'Star-struck',
                     '😎': 'Smiling face with sunglasses',
-                    '👶': 'Baby'
-                }
+                    '👶': 'Baby',
+                },
             },
             {
                 title: 'Nature',
@@ -2057,8 +2056,8 @@ const App = {
                     '❄️': 'Snowflake',
                     '🌈': 'Rainbow',
                     '🌙': 'Crescent moon',
-                    '⭐': 'Star'
-                }
+                    '⭐': 'Star',
+                },
             },
             {
                 title: 'Sports',
@@ -2089,9 +2088,9 @@ const App = {
                     '🏓': 'Table tennis',
                     '🎾': 'Tennis',
                     '🏐': 'Volleyball',
-                    '🏋️': 'Weightlifting'
-                }
-            }
+                    '🏋️': 'Weightlifting',
+                },
+            },
         ];
 
         grid.innerHTML = '';
@@ -2221,7 +2220,7 @@ const App = {
             month: 'short',
             day: 'numeric',
             hour: '2-digit',
-            minute: '2-digit'
+            minute: '2-digit',
         });
     },
 
@@ -2483,7 +2482,7 @@ const App = {
         if (app) {
             app.classList.add('ready');
         }
-    }
+    },
 };
 
 /* ==========================================================================

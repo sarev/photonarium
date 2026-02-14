@@ -204,8 +204,7 @@ exposes the global `App` object.
   attribute, toolbar group visibility, navigation history for back-button,
   lifecycle hooks (`onEnter`, `onLeave`).
 - **API communication** — Wrapper functions for all backend API calls,
-  request/response serialisation, error handling, mock mode for frontend
-  development without the backend.
+  request/response serialisation, error handling.
 - **Toolbar management** — Event listeners for common buttons, button state
   updates, per-screen toolbar visibility.
 - **Dialog system** — Modal dialogs, confirmation dialogs with Promise-based
@@ -435,6 +434,91 @@ Business logic and core application state in the frontend is handled by `static/
 | `images.js` | images | Backend | Image metadata cache with delta sync (epoch-based), display list (lazily recomputed from images + sort + filter) |
 | `loading.js` | loading | Memory | Loading overlay with ownership tracking (only the current owner can hide it) |
 | `events.js` | events | N/A | Cursor-based polling of `/api/events` every 2s with stale detection. Dispatches backend events (`faces_reassessed`, `folder_added/removed`, `processing_complete`, `image_ingested`, `nima_complete`, `images_modified`, `error`) and multi-client mutation events (`faces_changed`, `people_changed`, `images_changed`, `groups_changed`) to relevant domains via incremental cache updates |
+
+---
+
+## Code Quality
+
+Automated linting, formatting, and static analysis for both Python and JavaScript.
+
+### Tools
+
+| Language | Tool | Config | Purpose |
+|----------|------|--------|---------|
+| Python | [ruff](https://docs.astral.sh/ruff/) | `ruff.toml` | Linting + formatting |
+| JS | [ESLint 9](https://eslint.org/) + [@stylistic](https://eslint.style/) | `eslint.config.mjs` | Linting + formatting |
+| JS | [TypeScript](https://www.typescriptlang.org/) `checkJs` | `jsconfig.json` | Type inference on plain JS via JSDoc (IDE support) |
+
+### Quick Reference
+
+```bash
+# Python — lint and format
+ruff check .              # Check for errors
+ruff check --fix .        # Auto-fix safe issues
+ruff format .             # Format all Python files
+ruff format --check .     # Verify formatting (no changes)
+
+# JavaScript — lint and format
+npx eslint static/        # Check for errors
+npx eslint --fix static/  # Auto-fix safe issues
+
+# TypeScript — type checking (informational, not enforced)
+npx tsc --project jsconfig.json --noEmit
+```
+
+### Python Rules (ruff)
+
+The linter runs a curated set of rules beyond basic style:
+
+| Rule set | What it catches |
+|----------|-----------------|
+| `E/W` | pycodestyle errors and warnings |
+| `F` | Pyflakes: undefined names, unused imports, redefined variables |
+| `I` | isort: import ordering |
+| `B` | flake8-bugbear: mutable defaults, unused loop vars, closures over loop vars |
+| `SIM` | flake8-simplify: dead code patterns, context managers |
+| `UP` | pyupgrade: modernise to Python 3.10+ syntax |
+| `S` | bandit: SQL injection, subprocess injection, hardcoded secrets |
+| `PLE` | pylint errors: real bugs only |
+| `RUF` | ruff-specific: catch-all for Python anti-patterns |
+
+Per-file ignores (in `ruff.toml`) suppress S608 (hardcoded SQL) in database modules
+where string-formatted SQL is used for schema names with parameterised value binding.
+
+### JavaScript Rules (ESLint)
+
+- **Error detection**: `no-undef`, `no-dupe-keys`, `no-unreachable`, `valid-typeof`, etc.
+- **Unused variables**: Warned (not errored), with `args: 'none'` and `_` prefix exemption.
+- **Formatting** via `@stylistic`: 4-space indent, single quotes, semicolons, trailing commas
+  in multiline, consistent spacing.
+
+### Automation
+
+Two hooks enforce quality automatically:
+
+1. **Claude Code hook** (`.claude/hooks/lint.py`): Runs after every Edit/Write tool use.
+   Checks the changed file with ruff (`.py`) or ESLint (`.js`). Errors are shown
+   immediately so the AI can fix them.
+
+2. **Git pre-commit hook** (`.git/hooks/pre-commit`): Blocks commits if staged files have
+   lint or formatting errors. Prints fix commands on failure.
+
+### Suppressing Rules
+
+```python
+# Python: suppress a specific rule on one line
+x = eval(expr)  # noqa: S307
+
+# Python: suppress in ruff.toml for an entire file
+[lint.per-file-ignores]
+"tests/*.py" = ["S101"]
+```
+
+```javascript
+// JavaScript: suppress a specific rule on the next line
+// eslint-disable-next-line no-undef
+const x = legacyGlobal;
+```
 
 ---
 

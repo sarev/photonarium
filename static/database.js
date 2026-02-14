@@ -350,7 +350,7 @@ const Database = {
         try {
             await Promise.all([
                 AppState.folders.load(),
-                AppState.folders.loadStats()
+                AppState.folders.loadStats(),
             ]);
             this._renderFolders(AppState.folders.getAll());
             // Stats will be updated via subscription
@@ -736,7 +736,7 @@ const Database = {
 
         // Format ETA
         this._els.nimaEta.textContent = ' (' + this._formatEta(etaSeconds) + ')';
-    }
+    },
 };
 
 App.registerModule('database', Database);

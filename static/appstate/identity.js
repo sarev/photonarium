@@ -314,7 +314,7 @@ AppState.faces = (function() {
                 return faces.find(f => f.image_id !== excludingImageId) || null;
             }
             return faces[0] || null;
-        }
+        },
     };
 
     // =========================================================================
@@ -335,7 +335,7 @@ AppState.faces = (function() {
                 await App.apiPost('/people', {
                     id: personId,
                     name: personName,
-                    preferred_face_id: preferredFaceId
+                    preferred_face_id: preferredFaceId,
                 });
             } catch (err) {
                 // 409 CONFLICT means person already exists (race condition with another identify)
@@ -370,13 +370,13 @@ AppState.faces = (function() {
         // Assign faces
         await App.apiPost('/faces/assign', {
             face_ids: faceIds,
-            person_id: actualPersonId
+            person_id: actualPersonId,
         });
 
         // Lock faces
         await App.apiPatch('/faces', {
             face_ids: faceIds,
-            locked: true
+            locked: true,
         });
     }
 
@@ -623,7 +623,7 @@ AppState.faces = (function() {
                     faces.map(f => ({
                         id: f.id.slice(0, 8),
                         mt: f.manually_tagged,
-                        type: typeof f.manually_tagged
+                        type: typeof f.manually_tagged,
                     })));
             }
 
@@ -783,7 +783,7 @@ AppState.faces = (function() {
             const backup = {
                 faces: new Map(),
                 people: new Map(),
-                createdPersonId: null
+                createdPersonId: null,
             };
 
             for (const faceId of faceIds) {
@@ -792,7 +792,7 @@ AppState.faces = (function() {
                     backup.faces.set(faceId, {
                         person_id: face.person_id,
                         person_name: face.person_name,
-                        manually_tagged: face.manually_tagged
+                        manually_tagged: face.manually_tagged,
                     });
                 }
             }
@@ -810,7 +810,7 @@ AppState.faces = (function() {
                         name: trimmedName,
                         face_count: faceIds.length,
                         preferred_face_id: null,
-                        threshold: null
+                        threshold: null,
                     };
                     AppState.people._internal.add(person);
                     createdPerson = true;
@@ -824,7 +824,7 @@ AppState.faces = (function() {
 
                 // Assign faces (locked)
                 const affectedPersonIds = _internal.assignToPersonBatch(
-                    faceIds, personId, { lock: true }
+                    faceIds, personId, { lock: true },
                 );
 
                 // Backup affected persons
@@ -854,7 +854,7 @@ AppState.faces = (function() {
                 try {
                     await _persistIdentify(
                         faceIds, finalPersonId, createdPerson,
-                        trimmedName, finalPreferredId
+                        trimmedName, finalPreferredId,
                     );
                     return { personId: finalPersonId };
 
@@ -911,7 +911,7 @@ AppState.faces = (function() {
 
             transaction(() => {
                 const affectedPersonIds = _internal.assignToPersonBatch(
-                    faceIds, personId, { lock: false }
+                    faceIds, personId, { lock: false },
                 );
                 AppState.people._internal.reconcilePerson(personId);
                 AppState.people._internal.reconcileAll(affectedPersonIds);
@@ -983,7 +983,7 @@ AppState.faces = (function() {
                     backup.set(faceId, {
                         person_id: face.person_id,
                         person_name: face.person_name,
-                        manually_tagged: face.manually_tagged
+                        manually_tagged: face.manually_tagged,
                     });
                 }
             }
@@ -1047,7 +1047,7 @@ AppState.faces = (function() {
                         suppressed: face.suppressed,
                         person_id: face.person_id,
                         person_name: face.person_name,
-                        manually_tagged: face.manually_tagged
+                        manually_tagged: face.manually_tagged,
                     });
                 }
             }
@@ -1329,42 +1329,6 @@ AppState.faces = (function() {
             broadcast({ type: 'changed' });
         },
 
-        // =====================================================================
-        // TEST HOOKS (only for test harness)
-        // =====================================================================
-
-        /**
-         * Test utilities for test harness.
-         * @private
-         */
-        _test: {
-            /**
-             * Reset cache to empty state.
-             */
-            reset() {
-                _cache = new Map();
-                invalidateDerived();
-            },
-
-            /**
-             * Add a face directly to cache.
-             * @param {Object} face - Face object
-             */
-            addToCache(face) {
-                if (!_cache) _cache = new Map();
-                _cache.set(face.id, face);
-                invalidateDerived();
-            },
-
-            /**
-             * Get raw cache for inspection.
-             * @returns {Map}
-             */
-            getCache() {
-                return _cache;
-            }
-        },
-
         /**
          * Get face by ID (alias for getById).
          * @param {string} id - Face ID
@@ -1372,7 +1336,7 @@ AppState.faces = (function() {
          */
         get(id) {
             return _cache?.get(id) || null;
-        }
+        },
     };
 })();
 
@@ -1601,13 +1565,13 @@ AppState.people = (function() {
             // Check if preferred face was removed (safe even with partial cache)
             if (linkedFaces.length > 0) {
                 const preferredStillExists = linkedFaces.some(
-                    f => f.id === person.preferred_face_id
+                    f => f.id === person.preferred_face_id,
                 );
 
                 if (!preferredStillExists) {
                     // Pick newest from what we have
                     const newest = linkedFaces.reduce((a, b) =>
-                        (a.image_timestamp || 0) > (b.image_timestamp || 0) ? a : b
+                        (a.image_timestamp || 0) > (b.image_timestamp || 0) ? a : b,
                     );
                     this.setPreferred(personId, newest.id);
                 }
@@ -1622,7 +1586,7 @@ AppState.people = (function() {
             for (const personId of personIds) {
                 this.reconcilePerson(personId);
             }
-        }
+        },
     };
 
     // =========================================================================
@@ -1777,7 +1741,7 @@ AppState.people = (function() {
                 return Array.from(_cache.values())
                     .sort((a, b) =>
                         (b.face_count || 0) - (a.face_count || 0) ||
-                        a.name.localeCompare(b.name)
+                        a.name.localeCompare(b.name),
                     );
             }
 
@@ -1953,7 +1917,7 @@ AppState.people = (function() {
             const backup = {
                 fromPerson: { ...fromPerson },
                 toPerson: { ...toPerson },
-                facePersonIds: new Map()
+                facePersonIds: new Map(),
             };
             for (const faceId of faceIds) {
                 backup.facePersonIds.set(faceId, fromId);
@@ -1976,7 +1940,7 @@ AppState.people = (function() {
                         _internal.add(backup.fromPerson);
                         for (const faceId of faceIds) {
                             AppState.faces._internal.linkToPerson(
-                                faceId, fromId, backup.fromPerson.name
+                                faceId, fromId, backup.fromPerson.name,
                             );
                         }
                         Object.assign(toPerson, backup.toPerson);
@@ -2008,7 +1972,7 @@ AppState.people = (function() {
             // Backup
             const backup = {
                 person: { ...person },
-                faces: new Map()
+                faces: new Map(),
             };
             for (const faceId of faceIds) {
                 const face = AppState.faces._internal.get(faceId);
@@ -2016,7 +1980,7 @@ AppState.people = (function() {
                     backup.faces.set(faceId, {
                         person_id: face.person_id,
                         person_name: face.person_name,
-                        manually_tagged: face.manually_tagged
+                        manually_tagged: face.manually_tagged,
                     });
                 }
             }
@@ -2038,7 +2002,7 @@ AppState.people = (function() {
                         _internal.add(backup.person);
                         for (const [fid, data] of backup.faces) {
                             AppState.faces._internal.linkToPerson(
-                                fid, data.person_id, data.person_name
+                                fid, data.person_id, data.person_name,
                             );
                             AppState.faces._internal.setLocked(fid, data.manually_tagged);
                         }
@@ -2071,7 +2035,7 @@ AppState.people = (function() {
 
             const backup = {
                 preferred_face_id: person.preferred_face_id,
-                face_locked: face?.manually_tagged
+                face_locked: face?.manually_tagged,
             };
 
             transaction(() => {
@@ -2130,7 +2094,7 @@ AppState.people = (function() {
                         AppState.faces.applyThresholdChanges(
                             personId,
                             response.data.assigned,
-                            response.data.unassigned
+                            response.data.unassigned,
                         );
                     }
                     return response;
@@ -2161,7 +2125,7 @@ AppState.people = (function() {
                 name,
                 face_count: 0,
                 preferred_face_id: null,
-                threshold: null
+                threshold: null,
             };
 
             console.log('[AppState.people.create]', personId, name);
@@ -2227,43 +2191,6 @@ AppState.people = (function() {
             });
         },
 
-        // =====================================================================
-        // TEST HOOKS (only for test harness)
-        // =====================================================================
-
-        /**
-         * Test utilities for test harness.
-         * @private
-         */
-        _test: {
-            /**
-             * Reset cache to empty state.
-             */
-            reset() {
-                _cache = new Map();
-                _cacheTime = Date.now();
-                _thumbnailBust.clear();
-            },
-
-            /**
-             * Add a person directly to cache.
-             * @param {Object} person - Person object
-             */
-            addToCache(person) {
-                if (!_cache) _cache = new Map();
-                _cache.set(person.id, person);
-                _cacheTime = Date.now();
-            },
-
-            /**
-             * Get raw cache for inspection.
-             * @returns {Map}
-             */
-            getCache() {
-                return _cache;
-            }
-        },
-
         /**
          * Get person by ID (alias for getById).
          * @param {string} id - Person ID
@@ -2271,6 +2198,6 @@ AppState.people = (function() {
          */
         get(id) {
             return _cache?.get(id) || null;
-        }
+        },
     };
 })();

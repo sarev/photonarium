@@ -56,6 +56,7 @@ def download_openclip_model(model: str, pretrained: str) -> bool:
 
     try:
         import open_clip
+
         # This will download the model if not cached
         model_obj, _, _ = open_clip.create_model_and_transforms(
             model,
@@ -79,13 +80,15 @@ def download_caption_model(model_name: str) -> bool:
         is_blip2 = 'blip2' in model_name.lower() or 'blip-2' in model_name.lower()
 
         if is_blip2:
-            from transformers import Blip2Processor, Blip2ForConditionalGeneration
+            from transformers import Blip2ForConditionalGeneration, Blip2Processor
+
             print('Loading BLIP-2 processor...')
             Blip2Processor.from_pretrained(model_name)
             print('Loading BLIP-2 model (this may take a while)...')
             Blip2ForConditionalGeneration.from_pretrained(model_name)
         else:
-            from transformers import BlipProcessor, BlipForConditionalGeneration
+            from transformers import BlipForConditionalGeneration, BlipProcessor
+
             print('Loading BLIP processor...')
             BlipProcessor.from_pretrained(model_name)
             print('Loading BLIP model (this may take a while)...')
@@ -196,19 +199,22 @@ def download_nima_model(data_dir: str = '.') -> bool:
 
 def main():
     import argparse
+
     parser = argparse.ArgumentParser(description='Download required ML models for Photonarium.')
     parser.add_argument(
-        '-d', '--data-dir',
+        '-d',
+        '--data-dir',
         type=str,
         default=None,
-        help='Directory for user data (forwarded to app.py so paths resolve correctly)'
+        help='Directory for user data (forwarded to app.py so paths resolve correctly)',
     )
     parser.add_argument(
-        '-c', '--config',
+        '-c',
+        '--config',
         type=str,
         default=None,
         dest='config_path',
-        help='Path to configuration file (forwarded to app.py)'
+        help='Path to configuration file (forwarded to app.py)',
     )
     args = parser.parse_args()
 
