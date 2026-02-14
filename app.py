@@ -30,6 +30,18 @@ Example:
     OS-appropriate config location — see config.py for details).
 """
 
+# Force UTF-8 for console I/O on Windows.  Without this, Python defaults to
+# the console code page (often cp1252 on Western systems) and any log message
+# or print() containing a non-ASCII path — e.g. Japanese, Chinese, Cyrillic
+# folder names — raises UnicodeEncodeError or prints garbled text.  Must run
+# before logging.basicConfig() so the StreamHandler inherits UTF-8.
+import sys
+
+if sys.stdout and hasattr(sys.stdout, 'reconfigure'):
+    sys.stdout.reconfigure(encoding='utf-8')
+if sys.stderr and hasattr(sys.stderr, 'reconfigure'):
+    sys.stderr.reconfigure(encoding='utf-8')
+
 # Disable tokenizers parallelism before any imports.
 # Prevents Ctrl+C issues on Windows caused by Rust threads.
 import os

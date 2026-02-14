@@ -183,7 +183,7 @@ def _open_raw_as_pil(path: Path) -> Image.Image:
 def open_image_as_numpy(path: Path | str) -> np.ndarray | None:
     """Open an image file and return a BGR numpy array for OpenCV processing.
 
-    For standard formats this uses ``cv2.imread()`` (which returns BGR).
+    For standard formats this uses OpenCV ``imdecode`` (which returns BGR).
     For RAW formats this uses rawpy and converts RGB → BGR.
 
     Args:
@@ -202,8 +202,11 @@ def open_image_as_numpy(path: Path | str) -> np.ndarray | None:
             logger.warning(f'Failed to read RAW image as numpy: {path}: {e}')
             return None
 
-    # Standard format — cv2.imread returns BGR natively
-    img = cv2.imread(str(path))
+    # Standard format — use imdecode(fromfile()) instead of imread() because
+    # cv2.imread() on Windows cannot handle Unicode paths (the C++ layer
+    # truncates/garbles non-ASCII characters like Japanese or Chinese).
+    buf = np.fromfile(str(path), dtype=np.uint8)
+    img = cv2.imdecode(buf, cv2.IMREAD_COLOR)
     if img is None:
         logger.warning(f'OpenCV failed to read image: {path}')
     return img
