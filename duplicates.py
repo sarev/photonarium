@@ -110,37 +110,6 @@ def _compute_unique_dir_names(dir_paths: list[str]) -> dict[str, str]:
     return names
 
 
-def compute_cosine_similarity(embedding1: np.ndarray, embedding2: np.ndarray) -> float:
-    """Compute cosine similarity between two embeddings.
-
-    Both embeddings should already be normalised.
-
-    Args:
-        embedding1: First embedding vector.
-        embedding2: Second embedding vector.
-
-    Returns:
-        Cosine similarity in range [-1, 1].
-    """
-    return float(np.dot(embedding1, embedding2))
-
-
-def hamming_distance(hash1: str, hash2: str) -> int:
-    """Compute Hamming distance between two perceptual hash hex strings.
-
-    Args:
-        hash1: First hash as hex string.
-        hash2: Second hash as hex string.
-
-    Returns:
-        Number of differing bits between the hashes.
-    """
-    int1 = int(hash1, 16)
-    int2 = int(hash2, 16)
-    xor = int1 ^ int2
-    return bin(xor).count('1')
-
-
 def rows_to_dicts(rows: list) -> list[dict[str, Any]]:
     """Convert sqlite3.Row objects to plain dictionaries."""
     return [dict(row) for row in rows]
@@ -156,7 +125,6 @@ class UnionFind:
 
     This data structure efficiently manages groups/clusters and supports:
     - Near O(1) amortized time for union and find operations
-    - Initialization from existing groups
     - Extraction of final groups
 
     Can operate in two modes:
@@ -245,21 +213,6 @@ class UnionFind:
 
         return True
 
-    def find_id(self, id_: str) -> str:
-        """Find the root ID for an element (ID mode).
-
-        Args:
-            id_: Element ID.
-
-        Returns:
-            Root ID of the set containing this element.
-        """
-        if self._id_to_idx is None:
-            raise ValueError('UnionFind not initialized with IDs')
-        idx = self._id_to_idx[id_]
-        root_idx = self.find(idx)
-        return self._ids[root_idx]
-
     def union_ids(self, id1: str, id2: str) -> bool:
         """Union the sets containing two IDs (ID mode).
 
@@ -273,18 +226,6 @@ class UnionFind:
         if self._id_to_idx is None:
             raise ValueError('UnionFind not initialized with IDs')
         return self.union(self._id_to_idx[id1], self._id_to_idx[id2])
-
-    def connected(self, x: int, y: int) -> bool:
-        """Check if two elements are in the same set.
-
-        Args:
-            x: First element index.
-            y: Second element index.
-
-        Returns:
-            True if in the same set.
-        """
-        return self.find(x) == self.find(y)
 
     def extract_groups(self) -> dict[int, list[int]]:
         """Extract all groups as a dictionary (index mode).
@@ -319,38 +260,6 @@ class UnionFind:
                 groups[root_id] = []
             groups[root_id].append(self._ids[i])
         return groups
-
-    def extract_groups_filtered(self, min_size: int = 2) -> dict[int, list[int]]:
-        """Extract groups with at least min_size members (index mode).
-
-        Args:
-            min_size: Minimum group size to include.
-
-        Returns:
-            Dict mapping root index to list of member indices.
-        """
-        all_groups = self.extract_groups()
-        return {root: members for root, members in all_groups.items() if len(members) >= min_size}
-
-    def load_existing_groups(self, groups: list[set[str]]) -> None:
-        """Initialize from existing groups (ID mode).
-
-        Unions all members of each group together.
-
-        Args:
-            groups: List of sets, each containing IDs in the same group.
-        """
-        if self._id_to_idx is None:
-            raise ValueError('UnionFind not initialized with IDs')
-
-        for group in groups:
-            group_list = list(group)
-            if len(group_list) < 2:
-                continue
-            first = group_list[0]
-            for other in group_list[1:]:
-                if first in self._id_to_idx and other in self._id_to_idx:
-                    self.union_ids(first, other)
 
     @property
     def size(self) -> int:
@@ -917,77 +826,6 @@ def _compute_duplicates_level1(conn: sqlite3.Connection, threshold: int = 4) -> 
     return group_count
 
 
-def _compute_duplicates_level1_incremental(
-    conn: sqlite3.Connection,
-    dirty_ids: list[str],
-    threshold: int = 5,
-) -> int:
-    """Incrementally update level 1 duplicates for dirty images."""
-    if not dirty_ids:
-        return 0
-
-    logger.info(f'Incremental level 1: checking {len(dirty_ids)} images')
-
-    image_to_group = _get_image_to_group_mapping(conn, level=1)
-
-    # Get all images with perceptual hashes for comparison
-    cursor = conn.execute('SELECT id, perceptual_hash FROM images WHERE deleted = 0 AND perceptual_hash IS NOT NULL')
-    all_images = {row['id']: row['perceptual_hash'] for row in cursor.fetchall()}
-
-    dirty_hashes = {img_id: all_images.get(img_id) for img_id in dirty_ids if img_id in all_images}
-
-    new_groups = 0
-
-    for dirty_id, dirty_hash in dirty_hashes.items():
-        if dirty_hash is None:
-            continue
-
-        dirty_hash_int = int(dirty_hash, 16) if isinstance(dirty_hash, str) else dirty_hash
-
-        # Find matches within Hamming distance threshold
-        matches = []
-        for other_id, other_hash in all_images.items():
-            if other_id == dirty_id:
-                continue
-            other_hash_int = int(other_hash, 16) if isinstance(other_hash, str) else other_hash
-            distance = bin(dirty_hash_int ^ other_hash_int).count('1')
-            if distance <= threshold:
-                matches.append(other_id)
-
-        if not matches:
-            continue
-
-        # Check if any match is already in a group
-        existing_groups = set()
-        for match_id in matches:
-            if match_id in image_to_group:
-                existing_groups.add(image_to_group[match_id])
-
-        if existing_groups:
-            target_group = next(iter(existing_groups))
-            if dirty_id not in image_to_group:
-                _add_image_to_group(conn, level=1, group_hash=target_group, image_id=dirty_id)
-                image_to_group[dirty_id] = target_group
-
-            for other_group in existing_groups:
-                if other_group != target_group:
-                    _merge_groups(conn, level=1, group_hash_keep=target_group, group_hash_merge=other_group)
-                    for img_id, grp in list(image_to_group.items()):
-                        if grp == other_group:
-                            image_to_group[img_id] = target_group
-        else:
-            group_hash = f'phash_{dirty_id}'
-            all_members = [dirty_id] + matches
-            _insert_duplicate_group(conn, level=1, group_hash=group_hash, image_ids=all_members)
-            for member in all_members:
-                image_to_group[member] = group_hash
-            new_groups += 1
-
-    conn.commit()
-    logger.info(f'Incremental level 1: created {new_groups} new groups')
-    return new_groups
-
-
 # =============================================================================
 # LEVELS 2 & 3: EMBEDDING-BASED DUPLICATES
 # =============================================================================
@@ -1391,119 +1229,6 @@ def _compute_duplicates_embedding_incremental(
 # =============================================================================
 
 
-def _get_duplicate_groups(conn: sqlite3.Connection, level: int) -> list[dict[str, Any]]:
-    """Get duplicate groups at a specific level with full image data."""
-    cursor = conn.execute(
-        """
-        SELECT DISTINCT group_hash
-        FROM duplicate_groups
-        WHERE level = ?
-    """,
-        (level,),
-    )
-    group_hashes = [row['group_hash'] for row in cursor.fetchall()]
-
-    groups = []
-    for group_hash in group_hashes:
-        cursor = conn.execute(
-            """
-            SELECT i.id, i.path, i.basename, i.size, i.width, i.height,
-                   i.timestamp, i.timestamp_confidence, i.checksum,
-                   i.perceptual_hash, i.laplacian_var, i.lossless,
-                   i.description, i.rating
-            FROM images i
-            JOIN duplicate_groups dg ON i.id = dg.image_id
-            WHERE dg.level = ? AND dg.group_hash = ? AND i.deleted = 0
-            ORDER BY i.size DESC, i.path ASC
-        """,
-            (level, group_hash),
-        )
-
-        images = rows_to_dicts(cursor.fetchall())
-
-        if len(images) > 1:
-            groups.append(
-                {
-                    'group_hash': group_hash,
-                    'images': images,
-                }
-            )
-
-    return groups
-
-
-def _get_duplicate_groups_lightweight(conn: sqlite3.Connection, level: int) -> list[dict[str, Any]]:
-    """Get duplicate groups with minimal data for efficient grid display.
-
-    The "best" image is selected by: highest LAION aesthetic score, then
-    best focus (Laplacian variance), with deterministic ID tiebreak.
-    NULL aesthetic scores sort last (SQLite NULL < any value with DESC).
-    """
-    cursor = conn.execute(
-        """
-        WITH ranked AS (
-            SELECT
-                dg.group_hash,
-                i.id,
-                i.basename,
-                ROW_NUMBER() OVER (
-                    PARTITION BY dg.group_hash
-                    ORDER BY
-                        i.aesthetic_laion DESC,
-                        i.laplacian_var DESC,
-                        i.id ASC
-                ) as rank
-            FROM duplicate_groups dg
-            JOIN images i ON i.id = dg.image_id
-            WHERE dg.level = ? AND i.deleted = 0
-        ),
-        group_counts AS (
-            SELECT group_hash, COUNT(*) as cnt
-            FROM ranked
-            GROUP BY group_hash
-            HAVING cnt > 1
-        )
-        SELECT
-            r.group_hash,
-            gc.cnt as count,
-            r.id as best_id,
-            r.basename as best_basename
-        FROM ranked r
-        JOIN group_counts gc ON r.group_hash = gc.group_hash
-        WHERE r.rank = 1
-        ORDER BY gc.cnt DESC
-    """,
-        (level,),
-    )
-
-    groups = []
-    for row in cursor.fetchall():
-        id_cursor = conn.execute(
-            """
-            SELECT i.id
-            FROM images i
-            JOIN duplicate_groups dg ON i.id = dg.image_id
-            WHERE dg.level = ? AND dg.group_hash = ? AND i.deleted = 0
-        """,
-            (level, row['group_hash']),
-        )
-        image_ids = [r['id'] for r in id_cursor.fetchall()]
-
-        groups.append(
-            {
-                'group_hash': row['group_hash'],
-                'count': row['count'],
-                'image_ids': image_ids,
-                'best_image': {
-                    'id': row['best_id'],
-                    'basename': row['best_basename'],
-                },
-            }
-        )
-
-    return groups
-
-
 def _get_duplicate_epoch(conn: sqlite3.Connection) -> str:
     """Get the current epoch timestamp for duplicate groups."""
     epoch = _get_metadata(conn, 'duplicate_epoch')
@@ -1896,60 +1621,6 @@ class DuplicateManager:
 
         return affected_count
 
-    def get_group_for_image(self, level: int, image_id: str) -> str | None:
-        """Get the group hash for an image at a specific level.
-
-        Args:
-            level: Duplicate level (0-3).
-            image_id: ID of the image.
-
-        Returns:
-            Group hash if the image is in a group, None otherwise.
-        """
-        self._ensure_cache_loaded()
-        with self._cache_lock:
-            return self._image_to_group[level].get(image_id)
-
-    def get_images_in_group(self, level: int, group_hash: str) -> set[str]:
-        """Get all image IDs in a group.
-
-        Args:
-            level: Duplicate level (0-3).
-            group_hash: The group identifier.
-
-        Returns:
-            Set of image IDs in the group (empty set if group not found).
-        """
-        self._ensure_cache_loaded()
-        with self._cache_lock:
-            return self._group_cache[level].get(group_hash, set()).copy()
-
-    def get_group_count(self, level: int) -> int:
-        """Get the number of groups at a level from cache.
-
-        Args:
-            level: Duplicate level (0-3).
-
-        Returns:
-            Number of duplicate groups at this level.
-        """
-        self._ensure_cache_loaded()
-        with self._cache_lock:
-            return len(self._group_cache[level])
-
-    def get_all_group_hashes(self, level: int) -> list[str]:
-        """Get all group hashes at a level.
-
-        Args:
-            level: Duplicate level (0-3).
-
-        Returns:
-            List of group hashes.
-        """
-        self._ensure_cache_loaded()
-        with self._cache_lock:
-            return list(self._group_cache[level].keys())
-
     # =========================================================================
     # Status
     # =========================================================================
@@ -1980,14 +1651,6 @@ class DuplicateManager:
     # =========================================================================
     # Group Retrieval
     # =========================================================================
-
-    def get_groups(self, level: int) -> list[dict[str, Any]]:
-        """Get duplicate groups at a specific level with full image data."""
-        conn = self._get_db()
-        try:
-            return _get_duplicate_groups(conn, level)
-        finally:
-            conn.close()
 
     def get_group_images_ranked(
         self,

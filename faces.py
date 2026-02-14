@@ -700,52 +700,6 @@ class FaceDetector:
 
         return results
 
-    def detect_faces_batch(
-        self,
-        image_paths: list[Path | str],
-        max_dimension: int = 4096,
-        num_workers: int = 4,
-        stop_event: threading.Event | None = None,
-    ) -> dict[Path, list[DetectedFace]]:
-        """Detect faces in multiple images using GPU batch processing.
-
-        Convenience wrapper that calls preload_images_batch() then
-        detect_faces_from_preloaded(). For better throughput with large
-        queues, use those methods directly with prefetching.
-
-        Args:
-            image_paths: List of paths to image files.
-            max_dimension: Maximum image dimension for processing.
-            num_workers: Number of parallel workers for image loading.
-            stop_event: Optional threading.Event to signal early termination.
-
-        Returns:
-            Dict mapping each image path to its list of DetectedFace objects.
-        """
-        loaded_images = self.preload_images_batch(
-            image_paths,
-            max_dimension=max_dimension,
-            num_workers=num_workers,
-        )
-        return self.detect_faces_from_preloaded(loaded_images, stop_event=stop_event)
-
-    def compute_similarity(
-        self,
-        embedding1: np.ndarray,
-        embedding2: np.ndarray,
-    ) -> float:
-        """Compute cosine similarity between two face embeddings.
-
-        Args:
-            embedding1: First 512D face embedding.
-            embedding2: Second 512D face embedding.
-
-        Returns:
-            Cosine similarity score (0-1).
-        """
-        # Embeddings should already be L2-normalized
-        return float(np.dot(embedding1, embedding2))
-
 
 # =============================================================================
 # FACE THUMBNAIL GENERATION
@@ -1908,24 +1862,6 @@ def delete_face(
     return cursor.rowcount > 0
 
 
-def delete_faces_for_image(
-    conn: sqlite3.Connection,
-    image_id: str,
-) -> int:
-    """Delete all faces for an image.
-
-    Args:
-        conn: Database connection.
-        image_id: Image's UUID.
-
-    Returns:
-        Number of faces deleted.
-    """
-    cursor = conn.execute("""DELETE FROM faces WHERE image_id = ?""", (image_id,))
-    conn.commit()
-    return cursor.rowcount
-
-
 def rotate_faces_for_image(
     conn: sqlite3.Connection,
     image_id: str,
@@ -2092,48 +2028,6 @@ def find_best_match(
     return best_match
 
 
-def auto_recognize_face(
-    conn: sqlite3.Connection,
-    face_id: str,
-    threshold: float = 0.65,
-) -> str | None:
-    """Attempt to auto-recognize a face.
-
-    Compares the face embedding against all known faces and assigns
-    the person_id if a match is found above the threshold.
-
-    Args:
-        conn: Database connection.
-        face_id: Face's UUID.
-        threshold: Minimum cosine similarity for auto-match.
-
-    Returns:
-        Matched person_id, or None if no match found.
-    """
-    # Get the face embedding
-    face = get_face(conn, face_id)
-    if face is None or face.get('embedding') is None:
-        return None
-
-    # Skip if already assigned
-    if face.get('person_id'):
-        return face['person_id']
-
-    # Get all known face embeddings
-    known_embeddings = get_all_known_face_embeddings(conn)
-
-    # Find best match
-    match = find_best_match(face['embedding'], known_embeddings, threshold)
-
-    if match:
-        _matched_face_id, person_id, similarity = match
-        logger.debug(f'Auto-matched face {face_id} to person {person_id} (similarity: {similarity:.3f})')
-        update_face_person(conn, face_id, person_id)
-        return person_id
-
-    return None
-
-
 # =============================================================================
 # IMAGE QUERIES WITH PEOPLE FILTER
 # =============================================================================
@@ -2169,34 +2063,6 @@ def get_images_with_people(
     query = ' INTERSECT '.join(queries)
     cursor = conn.execute(query, params)
     return [row['image_id'] for row in cursor.fetchall()]
-
-
-def get_people_names_for_image(
-    conn: sqlite3.Connection,
-    image_id: str,
-) -> list[str]:
-    """Get sorted list of people names for an image.
-
-    Used for "sort by people" functionality.
-
-    Args:
-        conn: Database connection.
-        image_id: Image's UUID.
-
-    Returns:
-        List of person names, sorted alphabetically (case-insensitive).
-    """
-    cursor = conn.execute(
-        """
-        SELECT DISTINCT p.name
-        FROM faces f
-        JOIN people p ON f.person_id = p.id
-        WHERE f.image_id = ? AND f.suppressed = 0
-        ORDER BY p.name COLLATE NOCASE
-    """,
-        (image_id,),
-    )
-    return [row['name'] for row in cursor.fetchall()]
 
 
 def get_people_names_bulk(
@@ -2265,50 +2131,6 @@ def get_cached_known_embeddings(
         if _embedding_cache['known'] is None:
             _embedding_cache['known'] = get_all_known_face_embeddings(conn)
         return _embedding_cache['known']
-
-
-def get_all_unknown_face_embeddings(
-    conn: sqlite3.Connection,
-) -> list[tuple[str, np.ndarray]]:
-    """Get all face embeddings for unknown (unidentified) faces.
-
-    Returns embeddings for faces that have NOT been identified (no person_id)
-    and are not suppressed.
-
-    Args:
-        conn: Database connection.
-
-    Returns:
-        List of (face_id, embedding) tuples.
-    """
-    cursor = conn.execute(
-        """SELECT id, embedding
-           FROM faces
-           WHERE person_id IS NULL AND suppressed = 0 AND embedding IS NOT NULL"""
-    )
-
-    results = []
-    for row in cursor.fetchall():
-        embedding = np.frombuffer(row['embedding'], dtype=np.float32)
-        results.append((row['id'], embedding))
-    return results
-
-
-def get_cached_unknown_embeddings(
-    conn: sqlite3.Connection,
-) -> list[tuple[str, np.ndarray]]:
-    """Get unknown face embeddings with RAM caching.
-
-    Args:
-        conn: Database connection.
-
-    Returns:
-        List of (face_id, embedding) tuples.
-    """
-    with _embedding_cache['lock']:
-        if _embedding_cache['unknown'] is None:
-            _embedding_cache['unknown'] = get_all_unknown_face_embeddings(conn)
-        return _embedding_cache['unknown']
 
 
 def batch_identify_faces(
@@ -2693,204 +2515,6 @@ def _compute_unknown_face_groups_impl(
     return n_groups
 
 
-def compute_unknown_face_groups_async(
-    db: ImageDatabase,
-    threshold: float = 0.65,
-    callback: callable | None = None,
-) -> None:
-    """Compute unknown face groups in a background thread.
-
-    Uses fine-grained locking to avoid blocking other database operations
-    during the CPU-intensive similarity computation phase.
-
-    The operation is split into three phases:
-    1. READ (with lock): Fetch embeddings from database
-    2. COMPUTE (no lock): Matrix multiplication and UnionFind clustering
-    3. WRITE (with lock): Update faces with group IDs
-
-    Args:
-        db: ImageDatabase instance (provides conn and _db_lock).
-        threshold: Minimum cosine similarity for grouping.
-        callback: Optional callback(n_groups) when done.
-    """
-    global _grouping_thread, _grouping_status
-
-    def _worker():
-        global _grouping_thread, _grouping_status
-        try:
-            with _grouping_lock:
-                _grouping_status = {'status': 'computing', 'progress': 0}
-
-            # ================================================================
-            # PHASE 1: READ (with lock) - fetch embeddings
-            # ================================================================
-            with db._db_lock:
-                logger.debug('Async face grouping: READ phase started')
-                cursor = db.conn.execute("""
-                    SELECT f.id, f.embedding
-                    FROM faces f
-                    WHERE f.person_id IS NULL AND f.suppressed = 0
-                    ORDER BY f.id
-                """)
-
-                face_ids = []
-                embeddings = []
-                for row in cursor:
-                    face_ids.append(row[0])
-                    embedding = np.frombuffer(row[1], dtype=np.float32)
-                    embeddings.append(embedding)
-
-                logger.debug(f'Async face grouping: READ phase done - {len(face_ids)} faces')
-
-            # Early exit if nothing to group
-            if not face_ids:
-                logger.info('No unknown faces to group')
-                with _grouping_lock:
-                    _grouping_status = {'status': 'done', 'n_groups': 0}
-                if callback:
-                    callback(0)
-                return
-
-            n_faces = len(face_ids)
-            logger.info(f'Computing groups for {n_faces} unknown faces')
-
-            # ================================================================
-            # PHASE 2: COMPUTE (no lock) - similarity matrix and clustering
-            # ================================================================
-            logger.debug('Async face grouping: COMPUTE phase started (lock released)')
-            _compute_start = time.time()  # [PERF-LOG]
-
-            # Stack embeddings into a matrix (already L2-normalized)
-            embedding_matrix = np.vstack(embeddings)
-
-            # Use UnionFind in ID mode
-            uf = UnionFind(ids=face_ids)
-
-            # Chunked similarity computation.
-            # Use vectorized np.where to find above-threshold pairs instead of
-            # a pure-Python nested loop.  At 500K faces, the old nested loop
-            # would do ~125 billion Python iterations holding the GIL.  The
-            # numpy approach releases the GIL during the bulk comparison.
-            chunk_size = 1000
-            n_chunks = (n_faces + chunk_size - 1) // chunk_size
-            total_pairs = 0  # [PERF-LOG] total above-threshold pairs found
-            logger.info(f'Computing pairwise similarities in {n_chunks} chunks...')
-
-            for chunk_idx, i in enumerate(range(0, n_faces, chunk_size)):
-                chunk_end = min(i + chunk_size, n_faces)
-                chunk = embedding_matrix[i:chunk_end]
-
-                # Progress logging every few chunks
-                if chunk_idx % 5 == 0 or chunk_idx == n_chunks - 1:
-                    logger.info(f'  Processing chunk {chunk_idx + 1}/{n_chunks}...')
-
-                # Compute similarities: chunk @ all.T
-                similarities = chunk @ embedding_matrix.T
-
-                # Find all above-threshold pairs via numpy (GIL-releasing),
-                # then filter to upper triangle (j > global_idx) to avoid
-                # duplicate pairs.  This replaces the O(chunk × n_faces)
-                # pure-Python nested loop with a single np.where call.
-                local_rows, cols = np.where(similarities >= threshold)
-                chunk_pairs = 0  # [PERF-LOG]
-                for local_idx, j in zip(local_rows, cols, strict=True):
-                    global_idx = i + int(local_idx)
-                    if j > global_idx:
-                        uf.union_ids(face_ids[global_idx], face_ids[int(j)])
-                        chunk_pairs += 1  # [PERF-LOG]
-                total_pairs += chunk_pairs  # [PERF-LOG]
-
-                # [PERF-LOG] Log pair counts to aid V&V
-                if chunk_idx % 5 == 0 or chunk_idx == n_chunks - 1:
-                    logger.info(f'    Chunk {chunk_idx + 1}: {chunk_pairs} pairs from {len(local_rows)} raw matches')
-
-            # [PERF-LOG] Summary
-            logger.info(f'Chunked similarity done: {total_pairs} above-threshold pairs found across {n_chunks} chunks')
-
-            # Extract groups
-            logger.info('Extracting groups from UnionFind structure...')
-            groups = uf.extract_groups_by_id()
-            logger.info(f'Found {len(groups)} distinct clusters')
-
-            # [PERF-LOG] Total COMPUTE phase time
-            _compute_elapsed = time.time() - _compute_start
-            logger.info(
-                f'[PERF] COMPUTE phase: {_compute_elapsed:.2f}s '
-                f'({n_faces} faces, {n_chunks} chunks, {total_pairs} pairs)'
-            )
-
-            logger.debug('Async face grouping: COMPUTE phase done')
-
-            # ================================================================
-            # PHASE 3: WRITE (with lock) - update database with group IDs
-            # ================================================================
-            # NOTE: Between READ and WRITE phases, some faces may have been
-            # identified or suppressed. We use WHERE clauses to only affect
-            # faces that are still unknown and not suppressed.
-            with db._db_lock:
-                logger.debug('Async face grouping: WRITE phase started')
-
-                # Clear all existing group IDs for unknown, non-suppressed faces
-                # (set updated_at per concurrency contract)
-                db.conn.execute(
-                    "UPDATE faces SET unknown_group_id = NULL, updated_at = datetime('now') "
-                    'WHERE person_id IS NULL AND suppressed = 0 AND unknown_group_id IS NOT NULL'
-                )
-
-                # Assign new group IDs (batch to avoid SQLite variable limit)
-                # Only update faces that are still unknown and not suppressed
-                BATCH_SIZE = 500
-                n_groups = 0
-                for _root_id, members in groups.items():
-                    if len(members) > 1:
-                        group_id = str(uuid.uuid4())[:8]
-                        n_groups += 1
-
-                        for i in range(0, len(members), BATCH_SIZE):
-                            batch = members[i : i + BATCH_SIZE]
-                            placeholders = ','.join('?' * len(batch))
-                            db.conn.execute(
-                                f'UPDATE faces SET unknown_group_id = ? '
-                                f'WHERE id IN ({placeholders}) '
-                                f'AND person_id IS NULL AND suppressed = 0',
-                                [group_id] + batch,
-                            )
-
-                db.conn.commit()
-                logger.debug('Async face grouping: WRITE phase done')
-
-            logger.info(f'Created {n_groups} unknown face groups')
-
-            # Store result
-            with _grouping_lock:
-                _grouping_status = {
-                    'status': 'done',
-                    'n_groups': n_groups,
-                }
-
-            logger.info(f'Async face grouping complete: {n_groups} groups')
-
-            if callback:
-                callback(n_groups)
-        except Exception as e:
-            logger.error(f'Async face grouping failed: {e}')
-            with _grouping_lock:
-                _grouping_status = {'status': 'error', 'error': str(e)}
-        finally:
-            with _grouping_lock:
-                _grouping_thread = None
-
-    with _grouping_lock:
-        # Only start if not already running
-        if _grouping_thread is None or not _grouping_thread.is_alive():
-            _grouping_status = {'status': 'starting'}
-            _grouping_thread = threading.Thread(target=_worker, daemon=True)
-            _grouping_thread.start()
-            logger.info('Started async face grouping')
-        else:
-            logger.debug('Face grouping already in progress, skipping')
-
-
 def get_group_computation_status() -> dict:
     """Get status of async face grouping.
 
@@ -2901,64 +2525,6 @@ def get_group_computation_status() -> dict:
         if _grouping_status is None:
             return {'status': 'idle'}
         return _grouping_status.copy()
-
-
-def get_unknown_faces_grouped(conn: sqlite3.Connection) -> list[dict]:
-    """Get unknown faces sorted by group size and timestamp.
-
-    Returns faces with group information, sorted so that larger groups
-    appear first, and within groups, faces are sorted by image timestamp.
-
-    Args:
-        conn: Database connection.
-
-    Returns:
-        List of face dicts with group_size field.
-    """
-    cursor = conn.execute("""
-        SELECT
-            f.id,
-            f.image_id,
-            f.box_x,
-            f.box_y,
-            f.box_w,
-            f.box_h,
-            f.confidence,
-            f.unknown_group_id,
-            f.created_at,
-            i.timestamp as image_timestamp,
-            i.basename,
-            COUNT(*) OVER (PARTITION BY f.unknown_group_id) as group_size
-        FROM faces f
-        JOIN images i ON f.image_id = i.id
-        WHERE f.person_id IS NULL
-          AND f.suppressed = 0
-        ORDER BY
-            CASE WHEN f.unknown_group_id IS NULL THEN 0 ELSE group_size END DESC,
-            f.unknown_group_id,
-            i.timestamp
-    """)
-
-    faces = []
-    for row in cursor:
-        faces.append(
-            {
-                'id': row['id'],
-                'image_id': row['image_id'],
-                'box_x': row['box_x'],
-                'box_y': row['box_y'],
-                'box_w': row['box_w'],
-                'box_h': row['box_h'],
-                'confidence': row['confidence'],
-                'unknown_group_id': row['unknown_group_id'],
-                'created_at': row['created_at'],
-                'image_timestamp': row['image_timestamp'],
-                'basename': row['basename'],
-                'group_size': row['group_size'] if row['unknown_group_id'] else 1,
-            }
-        )
-
-    return faces
 
 
 def search_unknown_faces_semantic(
@@ -3032,12 +2598,6 @@ def search_unknown_faces_semantic(
     # Sort by similarity descending
     faces.sort(key=lambda f: f['similarity'], reverse=True)
     return faces
-
-
-def is_reassessment_in_progress() -> bool:
-    """Check if async reassessment is currently running."""
-    with _reassess_lock:
-        return _reassess_thread is not None and _reassess_thread.is_alive()
 
 
 def get_reassessment_status() -> dict:

@@ -80,6 +80,7 @@ forward  # nn.Module.forward() called by PyTorch's __call__
 # --- SQLite / PIL attribute assignments (side-effect setters) ---
 row_factory  # sqlite3.Connection.row_factory — changes query result type
 LOAD_TRUNCATED_IMAGES  # PIL.ImageFile — allows loading partial images
+conv  # PyTorch InvertedResidual.conv — used by forward() in library code
 
 # --- Signal handler variable (inspected by signal module) ---
 frame  # signal handler second argument

@@ -231,7 +231,6 @@ from rawimage import (
     open_image_as_numpy as raw_open_image_as_numpy,
 )
 from thumbnails import (
-    DEFAULT_THUMBNAIL_DIR,
     delete_thumbnails_for_checksum,
     generate_thumbnail,
     get_thumbnail_cache_path,
@@ -1532,27 +1531,6 @@ def delete_image(
     return True
 
 
-def restore_image(conn: sqlite3.Connection, image_id: str) -> bool:
-    """Restore a soft-deleted image.
-
-    Args:
-        conn: Database connection.
-        image_id: UUID of the image to restore.
-
-    Returns:
-        True if image was restored, False if not found or not deleted.
-    """
-    now = datetime.now().isoformat()
-
-    cursor = conn.execute('UPDATE images SET deleted = 0, updated_at = ? WHERE id = ? AND deleted = 1', (now, image_id))
-    conn.commit()
-
-    if cursor.rowcount > 0:
-        logger.info(f'Restored image: {image_id}')
-        return True
-    return False
-
-
 def get_images_without_embedding(conn: sqlite3.Connection) -> list[dict[str, Any]]:
     """Get all non-deleted images that don't have an embedding.
 
@@ -1570,54 +1548,6 @@ def get_images_without_embedding(conn: sqlite3.Connection) -> list[dict[str, Any
         WHERE deleted = 0 AND embedding IS NULL
         ORDER BY created_at ASC
     """)
-
-    return rows_to_dicts(cursor.fetchall())
-
-
-def get_images_in_folder(
-    conn: sqlite3.Connection,
-    folder: Path | str,
-    include_deleted: bool = False,
-) -> list[dict[str, Any]]:
-    """Get all images within a folder.
-
-    Args:
-        conn: Database connection.
-        folder: Folder path.
-        include_deleted: If True, include soft-deleted images.
-
-    Returns:
-        List of image dictionaries within the folder.
-    """
-    folder_str = str(canonicalise_path(folder))
-
-    # Use range query instead of LIKE for index efficiency
-    folder_upper = folder_path_upper_bound(folder_str)
-
-    if include_deleted:
-        cursor = conn.execute(
-            """
-            SELECT id, path, basename, size, width, height, timestamp,
-                   timestamp_confidence, checksum, perceptual_hash, laplacian_var,
-                   lossless, description, rating, deleted, created_at, updated_at
-            FROM images
-            WHERE path >= ? AND path < ?
-            ORDER BY path ASC
-        """,
-            (folder_str, folder_upper),
-        )
-    else:
-        cursor = conn.execute(
-            """
-            SELECT id, path, basename, size, width, height, timestamp,
-                   timestamp_confidence, checksum, perceptual_hash, laplacian_var,
-                   lossless, description, rating, deleted, created_at, updated_at
-            FROM images
-            WHERE path >= ? AND path < ? AND deleted = 0
-            ORDER BY path ASC
-        """,
-            (folder_str, folder_upper),
-        )
 
     return rows_to_dicts(cursor.fetchall())
 
@@ -2243,26 +2173,6 @@ class IngestionThread(threading.Thread):
             if self._nima_queue is not None:
                 self._nima_queue.put(image_id)
             logger.debug(f'Ingested new image: {path}')
-
-
-def queue_images_for_ingestion(
-    ingestion_queue: queue.Queue[Path],
-    paths: list[Path] | Iterator[Path],
-) -> int:
-    """Add multiple image paths to the ingestion queue.
-
-    Args:
-        ingestion_queue: The ingestion queue.
-        paths: Iterable of paths to add.
-
-    Returns:
-        Number of paths added to the queue.
-    """
-    count = 0
-    for path in paths:
-        ingestion_queue.put(path)
-        count += 1
-    return count
 
 
 # =============================================================================
@@ -3774,103 +3684,6 @@ def get_images_by_similarity(
 # Only database-dependent functions remain here.
 
 
-def get_or_create_thumbnail(
-    conn: sqlite3.Connection,
-    image_id: str,
-    size: int = 200,
-    thumbnail_dir: Path | str = DEFAULT_THUMBNAIL_DIR,
-    quality: int = 85,
-    max_source_dimension: int = 0,
-) -> Path | None:
-    """Get a thumbnail for an image, generating if necessary.
-
-    Only two canonical sizes are supported: 200px and 400px. Any other
-    size is snapped to the nearest canonical size. Thumbnails are
-    pre-generated during indexing, so this should rarely need to
-    generate on-demand.
-
-    Args:
-        conn: Database connection.
-        image_id: UUID of the image.
-        size: Requested size (snapped to 200 or 400).
-        thumbnail_dir: Root thumbnail cache directory.
-        quality: JPEG quality for generated thumbnails.
-        max_source_dimension: Max dimension for draft mode (0 to disable).
-
-    Returns:
-        Path to the thumbnail file, or None if image not found or
-        thumbnail cannot be generated.
-    """
-    # Snap to canonical size (200 or 400)
-    size = 400 if size > 300 else 200
-
-    # Get image info
-    image = get_image(conn, image_id)
-    if image is None:
-        logger.warning(f'Image not found for thumbnail: {image_id}')
-        return None
-
-    checksum = image.get('checksum')
-    if not checksum:
-        logger.warning(f'Image has no checksum for thumbnail: {image_id}')
-        return None
-
-    # Get cache path
-    cache_path = get_thumbnail_cache_path(checksum, size, thumbnail_dir)
-
-    # Check if cached thumbnail exists
-    if cache_path.exists():
-        return cache_path
-
-    # Generate thumbnail
-    source_path = Path(image['path'])
-    if not source_path.exists():
-        logger.warning(f'Source image not found for thumbnail: {source_path}')
-        return None
-
-    if generate_thumbnail(source_path, cache_path, size, quality, max_source_dimension):
-        return cache_path
-
-    return None
-
-
-def cleanup_orphaned_thumbnails(
-    conn: sqlite3.Connection,
-    thumbnail_dir: Path | str = DEFAULT_THUMBNAIL_DIR,
-) -> int:
-    """Remove thumbnails for images no longer in the database.
-
-    Args:
-        conn: Database connection.
-        thumbnail_dir: Root thumbnail cache directory.
-
-    Returns:
-        Number of orphaned thumbnails deleted.
-    """
-    thumbnail_dir = Path(thumbnail_dir)
-
-    if not thumbnail_dir.exists():
-        return 0
-
-    # Get all valid checksums
-    cursor = conn.execute('SELECT DISTINCT checksum FROM images WHERE checksum IS NOT NULL')
-    valid_checksums = {row['checksum'] for row in cursor.fetchall()}
-
-    count = 0
-    for thumb_file in thumbnail_dir.rglob('*.jpg'):
-        # Extract checksum from filename
-        checksum = thumb_file.stem
-        if checksum not in valid_checksums:
-            try:
-                thumb_file.unlink()
-                count += 1
-            except OSError:
-                pass
-
-    logger.info(f'Removed {count} orphaned thumbnails')
-    return count
-
-
 # =============================================================================
 # EVENT QUEUE AND SSE
 # =============================================================================
@@ -3878,10 +3691,7 @@ def cleanup_orphaned_thumbnails(
 # Event types
 EVENT_FOLDER_ADDED = 'folder_added'
 EVENT_FOLDER_REMOVED = 'folder_removed'
-EVENT_IMAGE_INGESTED = 'image_ingested'
 EVENT_PROCESSING_COMPLETE = 'processing_complete'
-EVENT_ERROR = 'error'
-EVENT_FACES_REASSESSED = 'faces_reassessed'
 EVENT_IMAGES_MODIFIED = 'images_modified'
 EVENT_NIMA_COMPLETE = 'nima_complete'
 
@@ -4020,21 +3830,6 @@ def emit_folder_removed(event_queue: EventQueue, folder_path: str) -> None:
     event_queue.emit(EVENT_FOLDER_REMOVED, {'folder': folder_path})
 
 
-def emit_image_ingested(
-    event_queue: EventQueue,
-    image_id: str,
-    path: str,
-) -> None:
-    """Emit an image_ingested event.
-
-    Args:
-        event_queue: EventQueue instance.
-        image_id: UUID of the ingested image.
-        path: Path of the ingested image.
-    """
-    event_queue.emit(EVENT_IMAGE_INGESTED, {'id': image_id, 'path': path})
-
-
 def emit_processing_complete(event_queue: EventQueue) -> None:
     """Emit a processing_complete event.
 
@@ -4042,37 +3837,6 @@ def emit_processing_complete(event_queue: EventQueue) -> None:
         event_queue: EventQueue instance.
     """
     event_queue.emit(EVENT_PROCESSING_COMPLETE, {})
-
-
-def emit_error(event_queue: EventQueue, message: str) -> None:
-    """Emit an error event.
-
-    Args:
-        event_queue: EventQueue instance.
-        message: Error message.
-    """
-    event_queue.emit(EVENT_ERROR, {'message': message})
-
-
-def emit_faces_reassessed(
-    event_queue: EventQueue,
-    matched_count: int,
-    person_id: str | None = None,
-) -> None:
-    """Emit a faces_reassessed event when async face reassessment completes.
-
-    Args:
-        event_queue: EventQueue instance.
-        matched_count: Number of faces that were auto-matched.
-        person_id: If reassessment was for a specific person, their ID.
-    """
-    event_queue.emit(
-        EVENT_FACES_REASSESSED,
-        {
-            'matched_count': matched_count,
-            'person_id': person_id,
-        },
-    )
 
 
 # =============================================================================
@@ -5067,50 +4831,6 @@ class ImageDatabase:
         """Check if the database has been closed."""
         return self._closed
 
-    def _check_open(self) -> None:
-        """Raise an error if the database is closed.
-
-        Raises:
-            RuntimeError: If the database has been closed.
-        """
-        if self._closed:
-            raise RuntimeError('Database has been closed')
-
-    # =========================================================================
-    # Thread-Safe Database Operations
-    # =========================================================================
-
-    def _execute_write(self, sql: str, params: tuple = ()) -> sqlite3.Cursor:
-        """Execute a write operation with locking.
-
-        Args:
-            sql: SQL statement to execute.
-            params: Parameters for the SQL statement.
-
-        Returns:
-            Cursor from the execution.
-        """
-        self._check_open()
-        with self._db_lock:
-            cursor = self.conn.execute(sql, params)
-            self.conn.commit()
-            return cursor
-
-    def _execute_read(self, sql: str, params: tuple = ()) -> sqlite3.Cursor:
-        """Execute a read operation.
-
-        Note: SQLite WAL mode allows concurrent reads without locking.
-
-        Args:
-            sql: SQL statement to execute.
-            params: Parameters for the SQL statement.
-
-        Returns:
-            Cursor from the execution.
-        """
-        self._check_open()
-        return self.conn.execute(sql, params)
-
     # =========================================================================
     # Public API - Folders
     # =========================================================================
@@ -5957,24 +5677,9 @@ class ImageDatabase:
                 success = False
         return success
 
-    def get_thumbnail_path(self, image_id: str, size: int = 200) -> Path | None:
-        """Get or create a thumbnail for an image."""
-        return get_or_create_thumbnail(
-            self.conn,
-            image_id,
-            size,
-            self.thumbnail_dir,
-            self.config.thumbnail_quality,
-            self.config.max_image_dimension,
-        )
-
     # =========================================================================
     # Public API - Duplicates
     # =========================================================================
-
-    def get_duplicate_groups(self, level: int) -> list[dict[str, Any]]:
-        """Get duplicate groups at a specific level."""
-        return self._duplicate_manager.get_groups(level)
 
     def get_duplicate_groups_lightweight(self, level: int) -> list[dict[str, Any]]:
         """Get duplicate groups with minimal data for efficient display."""
@@ -6287,15 +5992,6 @@ class ImageDatabase:
         with self._db_lock:
             return get_faces_for_image(self.conn, image_id, include_suppressed)
 
-    def queue_image_for_face_detection(self, image_id: str) -> None:
-        """Queue an image for face detection.
-
-        Args:
-            image_id: Image's UUID.
-        """
-        if self.config.face_detection_enabled:
-            self._face_queue.put(image_id)
-
 
 # =============================================================================
 # GRACEFUL SHUTDOWN AND SIGNAL HANDLING
@@ -6349,82 +6045,3 @@ def register_signal_handlers(db: ImageDatabase) -> None:
     atexit.register(_atexit_handler)
 
     logger.debug('Signal handlers registered for graceful shutdown')
-
-
-def unregister_signal_handlers() -> None:
-    """Unregister signal handlers and atexit handler."""
-    global _active_database
-    _active_database = None
-
-    # Restore default signal handlers
-    signal.signal(signal.SIGINT, signal.SIG_DFL)
-    signal.signal(signal.SIGTERM, signal.SIG_DFL)
-
-    # Note: atexit handlers cannot be unregistered individually,
-    # but our handler checks if database is already closed
-
-    logger.debug('Signal handlers unregistered')
-
-
-class GracefulShutdown:
-    """Context manager for graceful shutdown handling.
-
-    Automatically registers signal handlers on entry and ensures
-    clean shutdown on exit or signal.
-
-    Example::
-
-        with GracefulShutdown(ImageDatabase()) as db:
-            # Use db...
-            pass  # Automatically closes on exit or Ctrl+C
-    """
-
-    def __init__(self, db: ImageDatabase):
-        """Initialise with an ImageDatabase instance.
-
-        Args:
-            db: ImageDatabase instance to manage.
-        """
-        self.db = db
-
-    def __enter__(self) -> ImageDatabase:
-        """Register signal handlers and return the database."""
-        register_signal_handlers(self.db)
-        return self.db
-
-    def __exit__(self, exc_type, exc_val, exc_tb) -> None:
-        """Unregister handlers and close the database."""
-        unregister_signal_handlers()
-        self.db.close()
-
-
-def wait_for_completion(
-    db: ImageDatabase,
-    poll_interval: float = 1.0,
-    timeout: float | None = None,
-) -> bool:
-    """Wait for all processing to complete.
-
-    Blocks until both ingestion and embedding queues are empty.
-
-    Args:
-        db: ImageDatabase instance.
-        poll_interval: Seconds between status checks.
-        timeout: Maximum time to wait, or None for no limit.
-
-    Returns:
-        True if processing completed, False if timeout reached.
-    """
-    start_time = time.time()
-
-    while True:
-        status = db.get_processing_status()
-        if status['status'] == 'up_to_date':
-            return True
-
-        if timeout is not None:
-            elapsed = time.time() - start_time
-            if elapsed >= timeout:
-                return False
-
-        time.sleep(poll_interval)

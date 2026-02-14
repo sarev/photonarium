@@ -540,50 +540,6 @@ def delete_thumbnails_for_checksum(
     return count
 
 
-def clear_thumbnail_cache(
-    thumbnail_dir: Path | str = DEFAULT_THUMBNAIL_DIR,
-    size: int | None = None,
-) -> int:
-    """Clear cached thumbnails.
-
-    Args:
-        thumbnail_dir: Root thumbnail cache directory.
-        size: If specified, only clear thumbnails of this size.
-            If None, clear all thumbnails.
-
-    Returns:
-        Number of thumbnails deleted.
-    """
-    thumbnail_dir = Path(thumbnail_dir)
-
-    if not thumbnail_dir.exists():
-        return 0
-
-    count = 0
-
-    if size is not None:
-        # Clear specific size
-        size_dir = thumbnail_dir / str(size)
-        if size_dir.exists():
-            for thumb_file in size_dir.rglob('*.jpg'):
-                try:
-                    thumb_file.unlink()
-                    count += 1
-                except OSError:
-                    pass
-    else:
-        # Clear all sizes
-        for thumb_file in thumbnail_dir.rglob('*.jpg'):
-            try:
-                thumb_file.unlink()
-                count += 1
-            except OSError:
-                pass
-
-    logger.info(f'Cleared {count} cached thumbnails')
-    return count
-
-
 # =============================================================================
 # RAM CACHE FOR THUMBNAIL BYTES
 # =============================================================================
