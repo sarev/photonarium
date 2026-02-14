@@ -1,5 +1,32 @@
 # Release Notes
 
+## v1.0.5-beta.5
+
+### Unicode Path Support
+
+Photonarium now correctly handles image folders with non-ASCII names — Japanese, Chinese, Korean, Cyrillic, Arabic, accented European characters, emoji, etc. Previously, images inside folders like `Google フォト` would fail to index because OpenCV's C++ file I/O layer garbles Unicode paths on Windows.
+
+- **OpenCV fix:** Image loading for Laplacian sharpness calculation now reads files through Python's Unicode-aware I/O layer instead of passing paths directly to OpenCV's C++ `imread()`, which silently corrupts non-ASCII characters.
+- **Console encoding fix:** Python on Windows defaults console output to the system code page (often cp1252 on Western systems). Any log message containing a non-ASCII path would either print garbled text or crash with `UnicodeEncodeError`. The application now forces UTF-8 on stdout/stderr at startup.
+
+### Code Quality
+
+A linting, formatting, and static analysis toolchain has been added to catch bugs earlier and maintain consistent style:
+
+- **Python:** [ruff](https://docs.astral.sh/ruff/) for linting (pyflakes, pycodestyle, bugbear, bandit security rules, and more) and formatting. [vulture](https://github.com/jendrikseipp/vulture) for cross-file dead code detection (on-demand).
+- **JavaScript:** [ESLint 9](https://eslint.org/) with [@stylistic](https://eslint.style/) for linting and formatting. [TypeScript checkJs](https://www.typescriptlang.org/tsconfig/#checkJs) for IDE type inference on plain JS.
+- **Git pre-commit hook:** Blocks commits with lint or formatting errors in staged files.
+
+The initial pass caught three real bugs and removed ~2,700 lines of confirmed dead code:
+
+- **Broken Delete key on Faces screen:** The keyboard handler referenced a function that had been renamed, so pressing Delete on unknown faces did nothing.
+- **Duplicate method in Search:** Two `_fuzzyMatch` methods in the same object literal — the first was silently overwritten by the second.
+- **Caption closure bug:** A loop variable captured by reference in image captioning could theoretically produce wrong substitutions.
+
+### Bug Fixes
+
+- **Tutorial screenshots:** The tutorial viewport has been widened to prevent the info panel from auto-collapsing, which was causing several tutorial steps to fail.
+
 ## v1.0.4-beta.4
 
 ### Installation Flexibility
