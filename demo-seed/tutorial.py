@@ -61,7 +61,7 @@ SERVER_STARTUP_TIMEOUT = 30  # seconds
 # Viewport and timing
 # ---------------------------------------------------------------------------
 
-VIEWPORT = {'width': 1280, 'height': 800}
+VIEWPORT = {'width': 1500, 'height': 900}
 SETTLE_MS = 400  # ms to wait after actions for animations
 
 # Debug: constrain which sections to run (None = run all).
