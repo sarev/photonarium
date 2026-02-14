@@ -1,5 +1,25 @@
 # Release Notes
 
+## v1.0.4-beta.4
+
+### Installation Flexibility
+
+The installer is now more accommodating of real-world setups — different Python versions, different NVIDIA drivers, and machines with no GPU at all.
+
+- **Python 3.10+:** The minimum Python version has been lowered from 3.11 to 3.10. Ubuntu 22.04 LTS ships Python 3.10, and Python 3.13 (the latest release) is also fully supported. All combinations have been tested with a compatibility matrix covering Python 3.10, 3.11, and 3.13.
+- **CUDA auto-detection:** The installer now runs `nvidia-smi` to detect your GPU's CUDA version and installs the matching PyTorch build automatically — CUDA 11.x gets `cu118`, CUDA 12.x+ gets `cu124`, and machines with no NVIDIA GPU get the CPU-only build. Previously it always tried `cu124` and fell back to CPU if that failed, missing users with CUDA 11.x entirely.
+- **macOS MPS:** Documentation now recognises Apple MPS acceleration alongside NVIDIA CUDA. macOS installs use the default PyPI torch build, which includes MPS support on Apple Silicon.
+- **Cleaner install output:** The `facenet-pytorch` package (which declares overly strict version bounds on torch, numpy, and Pillow) is now installed last with its pip warnings suppressed. Previously it produced four alarming-looking ERROR lines mid-install that were harmless but confusing.
+- **Transformers unpinned:** The `transformers==4.44.*` version pin has been removed. It was originally added as a precaution against BLIP-2 API changes, but testing confirmed that current transformers (5.x) works fine with both BLIP and BLIP-2. More importantly, the pin actively broke Python 3.13 installs because the old `tokenizers` version it pulled in has no Python 3.13 wheel.
+
+### Tutorial
+
+- **Touch swipe navigation:** The interactive tutorial now supports swipe gestures — swipe left to advance, right to go back, up to return to the menu. Swiping right on the first slide returns to the menu.
+- **Mobile-friendly help text:** On touch devices, the tutorial shows swipe instructions instead of keyboard shortcuts.
+- **Improved readability:** The tutorial menu now has better contrast, a brand gradient on the heading, and a darker overlay background.
+- **Updated screenshots:** Tutorial screenshots have been refreshed to reflect the current UI.
+- **Mobile showcase:** The website now includes a section showing Photonarium on mobile devices.
+
 ## v1.0.3-beta.3
 
 ### Multi-Client Support
