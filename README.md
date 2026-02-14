@@ -60,7 +60,7 @@ The UI adjusts for smaller screens and touch input — the toolbar collapses to 
 
 Photonarium has **no user accounts, no login, and no access control**. Anyone who can reach the server's address can view and modify your library. This is fine for personal use and trusted home networks, but you should not expose it to the public internet.
 
-There is also no multi-user coordination: if two people make changes at the same time (renaming faces, editing ratings, deleting images), their changes may conflict silently. For now, treat it as a single-user tool. Multi-user awareness is something we'd like to address in a future version.
+Multiple browser tabs or devices on the same network can use Photonarium at the same time. Changes made on one client, naming a face, rating an image, creating a group, trashing a photo, are automatically pushed to every other open client within a couple of seconds. If a client falls too far behind (e.g. a laptop lid was closed for a while), it detects the gap and silently reloads to catch up. If your browser loses the connection with the Photonatium backend for any reason, your changes are blocked with a warning message until the connection is restored.
 
 ## Getting around
 

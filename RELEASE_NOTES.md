@@ -1,6 +1,16 @@
 # Release Notes
 
-## v1.0.0-beta.3
+## v1.0.3-beta.3
+
+### Multi-Client Support
+
+Multiple browser tabs or devices on the same network can now use Photonarium at the same time. Changes made on one client — naming a face, rating an image, creating a group, trashing a photo — are automatically pushed to every other open client within a couple of seconds.
+
+- **Cursor-based event polling:** Each client tracks its own position in the event stream, so events are never lost when multiple clients are polling.
+- **Mutation broadcasting:** User-initiated changes (face assignments, people edits, image ratings, group modifications) emit events that other clients pick up and apply incrementally — no full reload needed.
+- **Stale client recovery:** If a client falls too far behind (e.g. a laptop lid was closed), it detects the gap and silently reloads all data to catch up.
+- **Offline detection:** If the backend becomes unreachable, mutations are blocked with a warning message until the connection is restored, preventing changes from being silently lost.
+- **Concurrency fix:** Custom group operations are now properly serialized, preventing data corruption when two clients modify groups at the same time.
 
 ### Mobile & Responsive
 
@@ -9,7 +19,16 @@
 - **Dynamic viewport height:** The app and mobile info panel now use `dvh` units (with `vh` fallback) so they correctly resize when the mobile browser address bar appears or disappears — fixing the "info panel stuck at half height after rotation" bug.
 - **Wider mobile scrollbars:** Scrollbar touch targets are wider (16px) on mobile for easier dragging. Firefox scrollbar styling is now also supported via the standard `scrollbar-width`/`scrollbar-color` properties.
 
-## v1.0.0-beta.2
+### NAS / Network Folder Performance
+
+Adding a folder on a NAS or network share (SMB) no longer freezes the UI. The folder is registered immediately and the filesystem scan runs in the background, so you can keep using Photonarium while a large network folder is being indexed.
+
+### Bug Fixes
+
+- **Blank Faces screen:** Fixed a bug where navigating away from the Faces screen while it was still loading would leave it permanently blank on return, with no error shown.
+- **Windows installer:** The installer now correctly tells Command Prompt users to run `activate.bat` instead of the bash-only `activate` script.
+
+## v1.0.2-beta.2
 
 ### LAN Access
 

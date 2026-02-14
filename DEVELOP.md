@@ -57,8 +57,11 @@ background processing in threads.
 - **Thumbnails** — Generated on demand and cached on disk keyed by image
   checksum. Most thumbnail logic lives in `thumbnails.py`; only
   database-dependent stubs remain here.
-- **Events** — A small event queue (`EventQueue`) lets background work emit
-  events ("image ingested", "processing complete") that the frontend polls.
+- **Events** — A cursor-based event queue (`EventQueue`) supports multi-client
+  polling. Backend processes and mutation routes emit events; each client polls
+  with a `?since=T` cursor so events are never drained on read. If a client
+  falls behind the 200-event ring buffer it receives a `stale` flag and
+  performs a full state reload.
 
 **Sections:**
 
@@ -72,7 +75,7 @@ background processing in threads.
    via single `executemany` + commit per batch)
 7. Semantic search
 8. Thumbnail generation stubs
-9. Event queue and SSE
+9. Event queue (cursor-based, multi-client)
 10. `ImageDatabase` public API wrapper
 11. Graceful shutdown helpers
 
@@ -431,7 +434,7 @@ Business logic and core application state in the frontend is handled by `static/
 | `identity.js` | faces, people | Backend | Face cache (full or partial), person identities, identification, assignment, merge, dissolve, revalidation |
 | `images.js` | images | Backend | Image metadata cache with delta sync (epoch-based), display list (lazily recomputed from images + sort + filter) |
 | `loading.js` | loading | Memory | Loading overlay with ownership tracking (only the current owner can hide it) |
-| `events.js` | events | N/A | Polls `/api/events` every 2s, dispatches `faces_reassessed`, `folder_added`, `folder_removed`, `processing_complete`, `image_ingested`, `error` to relevant domains |
+| `events.js` | events | N/A | Cursor-based polling of `/api/events` every 2s with stale detection. Dispatches backend events (`faces_reassessed`, `folder_added/removed`, `processing_complete`, `image_ingested`, `nima_complete`, `images_modified`, `error`) and multi-client mutation events (`faces_changed`, `people_changed`, `images_changed`, `groups_changed`) to relevant domains via incremental cache updates |
 
 ---
 
