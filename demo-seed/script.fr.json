@@ -1,0 +1,358 @@
+{
+  "sections": [
+    {
+      "key": "getting-started",
+      "title": "Bien démarrer : ajouter vos premières photos"
+    },
+    {
+      "key": "gallery",
+      "title": "Parcourir vos photos"
+    },
+    {
+      "key": "fullscreen",
+      "title": "Visionneuse plein écran : voir les photos de près"
+    },
+    {
+      "key": "search",
+      "title": "Recherche : trouver des photos précises"
+    },
+    {
+      "key": "groups",
+      "title": "Groupes : trouver les doublons"
+    },
+    {
+      "key": "custom-groups",
+      "title": "Groupes personnalisés : organiser vos photos"
+    },
+    {
+      "key": "faces",
+      "title": "Visages : nommer les personnes"
+    },
+    {
+      "key": "fullscreen-tagging",
+      "title": "Étiquetage des visages en plein écran"
+    },
+    {
+      "key": "gallery-extras",
+      "title": "Options supplémentaires de la Galerie"
+    },
+    {
+      "key": "anywhere",
+      "title": "Utilisez-le partout dans votre maison"
+    }
+  ],
+  "steps": {
+    "first-launch": {
+      "title": "Premier lancement",
+      "caption": "Lorsque vous ouvrez Photonarium pour la première fois, vous voyez l’écran Base de données avec le thème clair par défaut. Il n’y a encore aucun dossier ni aucune photo : c’est ici que vous indiquez à Photonarium où se trouvent vos photos. Le bouton Edit Settings ouvre un éditeur de paramètres intégré où vous pouvez ajuster des réglages avancés comme le choix du modèle, les seuils de détection des visages et la qualité des vignettes."
+    },
+    "dark-theme": {
+      "title": "Passer au thème sombre",
+      "caption": "Cliquez sur l’icône soleil/lune en haut à droite pour passer au thème sombre. La plupart des captures d’écran de ce tutoriel utilisent le thème sombre."
+    },
+    "adding-images": {
+      "title": "Ajouter des images",
+      "caption": "Cliquez sur Add Folder pour ouvrir le sélecteur de dossiers de votre système. Accédez au dossier qui contient vos photos et sélectionnez-le. Remarque : sur certains systèmes, le sélecteur de dossiers peut s’ouvrir « derrière » la fenêtre du navigateur. Vérifiez la barre des tâches si rien ne semble se passer."
+    },
+    "indexing": {
+      "title": "Indexation",
+      "caption": "Une fois le dossier sélectionné, Photonarium commence à l’analyser à la recherche d’images. L’état passe à Updating et indique combien de fichiers restent à indexer."
+    },
+    "processing": {
+      "title": "Traitement",
+      "caption": "Après l’indexation, Photonarium génère des vignettes et calcule des vecteurs d’embedding pour la recherche sémantique. Cela s’exécute en arrière-plan : vous pouvez commencer à parcourir dès que les premières vignettes apparaissent."
+    },
+    "the-gallery": {
+      "title": "La Galerie",
+      "caption": "Toutes vos photos apparaissent ici sous forme de grille de vignettes. Faites défiler pour parcourir, ou utilisez la barre d’outils pour trier, rechercher et gérer votre collection."
+    },
+    "gallery-toolbar": {
+      "title": "Barre d’outils",
+      "caption": "La barre d’outils se trouve en haut de l’écran. Lorsque vous avez une connexion internet, les boutons affichent des icônes soignées (chargées une seule fois depuis Google Fonts). Hors ligne, ils affichent à la place des symboles plus simples. Les deux fonctionnent de la même manière.<table><tr><th>Hors ligne</th><th>En ligne</th><th>Description</th></tr><tr><td class=\"icon-cell\">−</td><td class=\"icon-cell\"><span class=\"material-symbols-outlined\">remove</span></td><td>Vignettes plus petites</td></tr><tr><td class=\"icon-cell\">✚</td><td class=\"icon-cell\"><span class=\"material-symbols-outlined\">add</span></td><td>Vignettes plus grandes</td></tr><tr><td class=\"icon-cell\">⛶</td><td class=\"icon-cell\"><span class=\"material-symbols-outlined\">fullscreen</span></td><td>Afficher la photo sélectionnée en plein écran</td></tr><tr><td class=\"icon-cell\">📂</td><td class=\"icon-cell\"><span class=\"material-symbols-outlined\">folder_open</span></td><td>Afficher le fichier sur le disque</td></tr><tr><td class=\"icon-cell\">⟲</td><td class=\"icon-cell\"><span class=\"material-symbols-outlined\">rotate_left</span></td><td>Pivoter à gauche</td></tr><tr><td class=\"icon-cell\">⟳</td><td class=\"icon-cell\"><span class=\"material-symbols-outlined\">rotate_right</span></td><td>Pivoter à droite</td></tr><tr><td class=\"icon-cell\">🏷️</td><td class=\"icon-cell\"><span class=\"material-symbols-outlined\">person_add</span></td><td>Activer/désactiver le mode d’étiquetage des visages</td></tr><tr><td class=\"icon-cell\">🏞️</td><td class=\"icon-cell\"><span class=\"material-symbols-outlined\">photo_library</span></td><td>Retour à la Galerie</td></tr><tr><td class=\"icon-cell\">🖥️</td><td class=\"icon-cell\"><span class=\"material-symbols-outlined\">database</span></td><td>Gérer les dossiers</td></tr><tr><td class=\"icon-cell\">⧉</td><td class=\"icon-cell\"><span class=\"material-symbols-outlined\">copy_all</span></td><td>Trouver les doublons</td></tr><tr><td class=\"icon-cell\">👤</td><td class=\"icon-cell\"><span class=\"material-symbols-outlined\">face</span></td><td>Parcourir les visages</td></tr><tr><td class=\"icon-cell\">🔍</td><td class=\"icon-cell\"><span class=\"material-symbols-outlined\">search</span></td><td>Rechercher / filtrer</td></tr><tr><td class=\"icon-cell\">✕</td><td class=\"icon-cell\"><span class=\"material-symbols-outlined\">search_off</span></td><td>Effacer le filtre</td></tr><tr><td class=\"icon-cell\">📅</td><td class=\"icon-cell\"><span class=\"material-symbols-outlined\">calendar_month</span></td><td>Trier par date</td></tr><tr><td class=\"icon-cell\">★</td><td class=\"icon-cell\"><span class=\"material-symbols-outlined\">star</span></td><td>Trier par note</td></tr><tr><td class=\"icon-cell\">👥</td><td class=\"icon-cell\"><span class=\"material-symbols-outlined\">group</span></td><td>Trier par personnes</td></tr><tr><td class=\"icon-cell\">🔗</td><td class=\"icon-cell\"><span class=\"material-symbols-outlined\">image_search</span></td><td>Trier par similarité de contenu</td></tr><tr><td class=\"icon-cell\">✦</td><td class=\"icon-cell\"><span class=\"material-symbols-outlined\">stars</span></td><td>Trier par qualité</td></tr><tr><td class=\"icon-cell\">↓</td><td class=\"icon-cell\"><span class=\"material-symbols-outlined\">arrow_downward</span></td><td>Inverser le sens du tri</td></tr><tr><td class=\"icon-cell\">▣</td><td class=\"icon-cell\"><span class=\"material-symbols-outlined\">select_all</span></td><td>Tout sélectionner</td></tr><tr><td class=\"icon-cell\">▢</td><td class=\"icon-cell\"><span class=\"material-symbols-outlined\">deselect</span></td><td>Effacer la sélection</td></tr><tr><td class=\"icon-cell\">🌙</td><td class=\"icon-cell\"><span class=\"material-symbols-outlined\">dark_mode</span></td><td>Basculer thème clair/sombre</td></tr></table>"
+    },
+    "selecting-a-photo": {
+      "title": "Sélectionner une photo",
+      "caption": "Cliquez sur n’importe quelle vignette pour la sélectionner. Une bordure apparaît autour de la photo sélectionnée, et le panneau d’informations à droite affiche ses détails."
+    },
+    "the-info-panel": {
+      "title": "Le panneau d’informations",
+      "caption": "Le panneau d’informations se trouve à droite de la grille de vignettes. Il affiche le nom de fichier, les dimensions, la date et la taille du fichier. Vous pouvez aussi ajouter une description et une note pour vous aider à retrouver cette photo plus tard. Utilisez le bouton sur son bord pour le réduire ou l’agrandir : pratique lorsque vous voulez plus de place pour les vignettes."
+    },
+    "adding-a-description": {
+      "title": "Ajouter une description",
+      "caption": "Saisissez une description et appuyez sur Entrée pour l’enregistrer. Les descriptions sont recherchables : quelques mots maintenant font gagner du temps plus tard."
+    },
+    "auto-captioning": {
+      "title": "Légendage automatique",
+      "caption": "Si vous n’avez pas envie de taper, cliquez sur le bouton étincelle pour générer une légende automatique. Vous pouvez la modifier ensuite si vous le souhaitez."
+    },
+    "emojis": {
+      "title": "Émojis",
+      "caption": "Cliquez sur le bouton émoji à côté du champ de note pour ouvrir le sélecteur. Choisissez n’importe quel émoji pour noter votre photo : étoiles, cœurs, tout ce qui peut vous aider à retrouver cette image plus tard."
+    },
+    "ratings": {
+      "title": "Notes",
+      "caption": "Vous pouvez mettre n’importe quel texte. Les émojis fonctionnent bien : essayez des étoiles pour les favoris ou des cœurs pour celles que vous adorez."
+    },
+    "multiple-selection": {
+      "title": "Sélection multiple",
+      "caption": "Maintenez Maj et cliquez pour sélectionner une plage. Vous pouvez aussi Ctrl+clic pour choisir des photos individuellement, ou dessiner un rectangle de sélection autour d’un groupe."
+    },
+    "sort-direction-flip": {
+      "title": "Sens du tri",
+      "caption": "Par défaut, les photos sont triées par date. Cliquez sur le bouton flèche pour inverser l’ordre de tri actuel."
+    },
+    "sort-direction-restore": {
+      "title": "Sens du tri",
+      "caption": "Cliquez à nouveau pour revenir à l’ordre de tri initial. Utilisez le sens qui convient le mieux à ce que vous cherchez."
+    },
+    "similarity-select": {
+      "title": "Similarité",
+      "caption": "Sélectionnez une seule photo comme base du tri par similarité. Puis cliquez pour trier par similarité. La grille est réorganisée afin que les photos qui ressemblent le plus à l’image sélectionnée apparaissent en premier."
+    },
+    "similarity-result": {
+      "title": "Similarité",
+      "caption": "Voici un exemple de la Galerie triée par similarité d’image."
+    },
+    "fullscreen-opening": {
+      "title": "Ouverture",
+      "caption": "Double-cliquez sur une vignette pour l’afficher en plein écran."
+    },
+    "fullscreen-controls": {
+      "title": "Commandes",
+      "caption": "La barre d’outils plein écran apparaît en haut. Cliquez sur les bords de l’écran (ou utilisez les touches fléchées) pour passer d’une photo à l’autre.<table><tr><th>Hors ligne</th><th>En ligne</th><th>Description</th></tr><tr><td class=\"icon-cell\">👤</td><td class=\"icon-cell\"><span class=\"material-symbols-outlined\">person_search</span></td><td>Activer/désactiver l’étiquetage des visages</td></tr><tr><td class=\"icon-cell\">🚫</td><td class=\"icon-cell\"><span class=\"material-symbols-outlined\">person_off</span></td><td>Ignorer tous les visages inconnus</td></tr><tr><td class=\"icon-cell\">⟲</td><td class=\"icon-cell\"><span class=\"material-symbols-outlined\">rotate_left</span></td><td>Pivoter à gauche</td></tr><tr><td class=\"icon-cell\">⟳</td><td class=\"icon-cell\"><span class=\"material-symbols-outlined\">rotate_right</span></td><td>Pivoter à droite</td></tr><tr><td class=\"icon-cell\">✕</td><td class=\"icon-cell\"><span class=\"material-symbols-outlined\">close</span></td><td>Fermer (ou appuyer sur Échap)</td></tr><tr><td class=\"icon-cell\">❮</td><td class=\"icon-cell\"><span class=\"material-symbols-outlined\">chevron_left</span></td><td>Photo précédente (ou flèche gauche)</td></tr><tr><td class=\"icon-cell\">❯</td><td class=\"icon-cell\"><span class=\"material-symbols-outlined\">chevron_right</span></td><td>Photo suivante (ou flèche droite)</td></tr></table>"
+    },
+    "navigating": {
+      "title": "Navigation",
+      "caption": "Utilisez les touches fléchées gauche et droite pour parcourir vos photos. Vous pouvez aussi cliquer sur les icônes flèche aux bords de l’écran."
+    },
+    "zooming-and-panning": {
+      "title": "Zoom et déplacement",
+      "caption": "Utilisez la molette pour zoomer et dézoomer, puis cliquez-glissez pour vous déplacer. Double-cliquez pour basculer entre la vue zoomée et la vue normale."
+    },
+    "fullscreen-closing": {
+      "title": "Fermeture",
+      "caption": "Appuyez sur l’icône de fermeture ou sur la touche Échap pour revenir à la Galerie."
+    },
+    "search-opening": {
+      "title": "Ouverture",
+      "caption": "Cliquez sur le bouton Search dans la barre d’outils pour construire un filtre pour vos photos."
+    },
+    "search-by-description": {
+      "title": "Recherche par description",
+      "caption": "Saisissez ce que vous cherchez. C’est une recherche intelligente : elle comprend le sens, pas seulement les mots-clés. Le curseur de similarité contrôle la rigueur du rapprochement : faites-le glisser vers la droite pour des résultats très proches de la requête, ou vers la gauche pour des correspondances plus souples."
+    },
+    "search-results": {
+      "title": "Résultats de recherche",
+      "caption": "En appuyant sur Apply, les résultats s’affichent dans la Galerie, triés selon la force de correspondance avec votre recherche. La barre d’outils indique qu’un filtre est actif."
+    },
+    "negative-terms": {
+      "title": "Termes négatifs",
+      "caption": "Mettez un signe moins devant un mot pour l’exclure. Ici, nous cherchons des arbres et des plantes, sans personnes."
+    },
+    "negative-results": {
+      "title": "Résultats",
+      "caption": "La Galerie affiche maintenant en priorité des photos de nature en excluant les personnes. Les termes négatifs sont un moyen puissant de restreindre votre recherche."
+    },
+    "date-ranges": {
+      "title": "Plages de dates",
+      "caption": "Limitez vos résultats à une plage de dates. Laissez l’une des deux dates vide pour une plage ouverte."
+    },
+    "combined-filters": {
+      "title": "Filtres combinés",
+      "caption": "Les filtres se cumulent : ici, une recherche par description et une plage de dates fonctionnent ensemble. Cliquez sur Apply pour ne voir que les photos qui correspondent à tout."
+    },
+    "clearing-the-filter": {
+      "title": "Effacer le filtre",
+      "caption": "Cliquez sur le bouton Clear Filter de la barre d’outils pour supprimer tous les filtres et revoir toute votre photothèque."
+    },
+    "groups-opening": {
+      "title": "Ouverture",
+      "caption": "Cliquez sur Groups dans la barre d’outils. Le curseur permet de choisir le type de regroupement à afficher : des doublons exacts à droite, puis des niveaux de similarité de plus en plus souples, jusqu’aux groupes par dossier et à vos propres albums personnalisés à gauche. Chaque pile est un groupe de photos, et le nombre indique combien il y en a dans chaque pile."
+    },
+    "groups-toolbar": {
+      "title": "Barre d’outils",
+      "caption": "L’écran Groups a sa propre barre d’outils. Le curseur sélectionne le niveau de rigueur, et Min size filtre les petits groupes.<table><tr><th>Hors ligne</th><th>En ligne</th><th>Description</th></tr><tr><td class=\"icon-cell\">−</td><td class=\"icon-cell\"><span class=\"material-symbols-outlined\">remove</span></td><td>Vignettes plus petites</td></tr><tr><td class=\"icon-cell\">✚</td><td class=\"icon-cell\"><span class=\"material-symbols-outlined\">add</span></td><td>Vignettes plus grandes</td></tr><tr><td colspan=\"2\" style=\"text-align:left\">Curseur</td><td>Identique → Presque identique → Similaire → Apparenté → Dossiers → Personnalisé</td></tr><tr><td colspan=\"2\" style=\"text-align:left\">Min size</td><td>Masquer les groupes plus petits que cette valeur (niveaux auto uniquement)</td></tr><tr><td class=\"icon-cell\">🗑️</td><td class=\"icon-cell\"><span class=\"material-symbols-outlined\">delete_sweep</span></td><td>Élaguer les groupes (niveaux auto uniquement)</td></tr><tr><td class=\"icon-cell\">⇅</td><td class=\"icon-cell\"><span class=\"material-symbols-outlined\">sort</span></td><td>Trier par taille de groupe</td></tr><tr><td class=\"icon-cell\">AZ</td><td class=\"icon-cell\"><span class=\"material-symbols-outlined\">sort_by_alpha</span></td><td>Trier par ordre alphabétique (groupes nommés uniquement)</td></tr><tr><td class=\"icon-cell\">👥</td><td class=\"icon-cell\"><span class=\"material-symbols-outlined\">group</span></td><td>Trier par personnes</td></tr><tr><td class=\"icon-cell\">🔗</td><td class=\"icon-cell\"><span class=\"material-symbols-outlined\">image_search</span></td><td>Trier par similarité sémantique</td></tr></table>"
+    },
+    "strictness": {
+      "title": "Rigueur",
+      "caption": "Déplacez le curseur pour changer la rigueur de correspondance. Identical trouve des copies exactes, tandis que Related élargit la recherche aux photos au contenu apparenté. Au-delà, Directories regroupe les photos par dossier sur le disque, et Custom sert à vos albums créés manuellement."
+    },
+    "directories": {
+      "title": "Dossiers",
+      "caption": "Déplacez le curseur d’un cran depuis la gauche pour voir Directories. Ces groupes reflètent votre structure de dossiers : chacun contient les photos d’un seul dossier. Les noms des groupes affichent le chemin unique le plus court nécessaire pour distinguer les dossiers."
+    },
+    "opening-a-group": {
+      "title": "Ouvrir un groupe",
+      "caption": "Double-cliquez sur une pile pour ouvrir ce groupe dans la Galerie, afin de comparer les photos côte à côte. Elles sont automatiquement triées par qualité, avec la meilleure présélectionnée. Sélectionnez celles que vous ne voulez pas et appuyez sur Delete, ou passez simplement au groupe suivant."
+    },
+    "pruning-button": {
+      "title": "Élaguer les doublons",
+      "caption": "Une fois les doublons trouvés, vous pouvez les nettoyer en lot. Le bouton d’élagage (surligné) vous permet de conserver automatiquement les meilleures images et de déplacer le reste hors de vue."
+    },
+    "pruning-dialog": {
+      "title": "La boîte de dialogue d’élagage",
+      "caption": "La boîte de dialogue d’élagage vous permet de contrôler combien d’images conserver dans chaque groupe : uniquement la meilleure, un nombre fixe, ou un pourcentage. Un récapitulatif indique exactement combien d’images seront concernées. Ne vous inquiétez pas : rien n’est supprimé définitivement. Les images élaguées sont déplacées vers un dossier « trash », vous pouvez donc toujours les récupérer."
+    },
+    "moving-between-groups": {
+      "title": "Passer d’un groupe à l’autre",
+      "caption": "Utilisez les boutons flèche de la barre d’outils (ou Alt+Gauche / Alt+Droite) pour passer au groupe suivant ou précédent sans revenir à l’écran Groups."
+    },
+    "custom-level": {
+      "title": "Niveau Custom",
+      "caption": "Déplacez le curseur complètement à gauche pour atteindre le niveau Custom. Contrairement aux niveaux automatiques, les groupes Custom sont des albums que vous créez et nommez vous-même. La même photo peut appartenir à plusieurs groupes."
+    },
+    "creating-a-group": {
+      "title": "Créer un groupe",
+      "caption": "Cliquez sur le bouton New Group dans la barre d’outils et saisissez un nom. Le groupe commence vide : vous allez ensuite y ajouter des photos."
+    },
+    "adding-photos-from-gallery": {
+      "title": "Ajouter des photos depuis la Galerie",
+      "caption": "De retour dans la Galerie, survolez une vignette pour faire apparaître un petit badge violet. Cliquez dessus pour ouvrir le Group Picker, où vous pouvez ajouter la photo à des groupes existants ou en créer de nouveaux. Si plusieurs photos sont sélectionnées, elles seront toutes ajoutées en une fois."
+    },
+    "the-group-picker": {
+      "title": "Le Group Picker",
+      "caption": "Cliquer sur le badge ouvre le Group Picker. Le panneau de gauche liste les groupes disponibles ; cliquez sur l’un d’eux pour ajouter la photo (le panneau de droite montre les appartenances actuelles). Les photos peuvent appartenir à plusieurs groupes à la fois : sélectionnez-en autant que vous voulez. Cliquez sur Done pour enregistrer ou sur Cancel pour annuler."
+    },
+    "managing-groups": {
+      "title": "Gérer les groupes",
+      "caption": "Au niveau Custom, vous pouvez renommer ou supprimer des groupes à l’aide des boutons de la barre d’outils. Lorsque vous affichez un groupe personnalisé dans la Galerie, sélectionnez des photos et appuyez sur Retour arrière (Backspace) pour les retirer du groupe sans supprimer les photos elles-mêmes."
+    },
+    "faces-opening": {
+      "title": "Ouverture",
+      "caption": "Cliquez sur le bouton Faces dans la barre d’outils. Cet écran sert à nommer les personnes que Photonarium a trouvées dans vos photos."
+    },
+    "faces-toolbar": {
+      "title": "Barre d’outils",
+      "caption": "La barre d’outils Faces a ses propres commandes.<table><tr><th>Hors ligne</th><th>En ligne</th><th>Description</th></tr><tr><td class=\"icon-cell\">─</td><td class=\"icon-cell\"><span class=\"material-symbols-outlined\">remove</span></td><td>Vignettes de visage plus petites</td></tr><tr><td class=\"icon-cell\">✚</td><td class=\"icon-cell\"><span class=\"material-symbols-outlined\">add</span></td><td>Vignettes de visage plus grandes</td></tr><tr><td class=\"icon-cell\">❔</td><td class=\"icon-cell\"><span class=\"material-symbols-outlined\">help</span></td><td>Afficher uniquement les visages inconnus</td></tr><tr><td class=\"icon-cell\">⊕</td><td class=\"icon-cell\"><span class=\"material-symbols-outlined\">center_focus_strong</span></td><td>Se concentrer sur une personne</td></tr><tr><td class=\"icon-cell\">🔓</td><td class=\"icon-cell\"><span class=\"material-symbols-outlined\">lock_open</span></td><td>Afficher uniquement les visages non verrouillés (dans la vue personne)</td></tr><tr><td class=\"icon-cell\">↓</td><td class=\"icon-cell\"><span class=\"material-symbols-outlined\">arrow_downward</span></td><td>Inverser le sens du tri</td></tr></table>"
+    },
+    "unknown-faces": {
+      "title": "Visages inconnus",
+      "caption": "Quand vous arrivez ici pour la première fois, vous voyez les visages détectés par Photonarium. Aucun n’a encore de nom : c’est à vous de jouer. Chaque visage a un champ de nom en dessous."
+    },
+    "typing": {
+      "title": "Saisie",
+      "caption": "Cliquez sur un visage et saisissez un nom dans le champ en dessous."
+    },
+    "naming": {
+      "title": "Nommer",
+      "caption": "Appuyez sur Entrée pour enregistrer. Cela crée votre première personne. Une section Known People apparaît en haut de l’écran."
+    },
+    "autocomplete": {
+      "title": "Autocomplétion",
+      "caption": "À mesure que vous nommez des visages, des suggestions apparaissent pendant la saisie. Choisissez une suggestion pour attribuer ce visage à une personne existante."
+    },
+    "failed-face-detections": {
+      "title": "Détections de visage erronées",
+      "caption": "Parfois Photonarium détecte quelque chose qui n’est pas vraiment un visage. Si vous en repérez un, vous pouvez cliquer dessus pour le sélectionner."
+    },
+    "selecting-multiple": {
+      "title": "Sélection multiple",
+      "caption": "Cliquez avec le bouton droit pour ajouter d’autres éléments à la sélection sans perdre ce que vous avez déjà choisi. Ici, nous avons sélectionné huit fausses détections."
+    },
+    "removing": {
+      "title": "Suppression",
+      "caption": "Survolez n’importe quelle carte sélectionnée et cliquez sur le X rouge. Comme plusieurs cartes sont sélectionnées, Photonarium propose de toutes les supprimer d’un coup."
+    },
+    "the-ignore-control": {
+      "title": "Le contrôle Ignorer",
+      "caption": "Pour les visages de personnes que vous ne souhaitez pas nommer, sélectionnez-les et cliquez sur le bouton moins gris. Cela les met de côté sans supprimer la détection."
+    },
+    "ignoring": {
+      "title": "Ignorer",
+      "caption": "Cliquez sur le moins gris pour ignorer les visages sélectionnés. Vous pouvez toujours les renommer plus tard si nécessaire."
+    },
+    "ignored-group": {
+      "title": "Groupe Ignored",
+      "caption": "Les visages ignorés appartiennent maintenant à une personne spéciale dans la section Known People. Ils sont mis de côté mais pas supprimés, vous pouvez donc toujours les retrouver."
+    },
+    "quick-match": {
+      "title": "Quick Match",
+      "caption": "Cliquez sur le bouton étincelle au-dessus d’un visage pour voir qui cela pourrait être. Photonarium affiche les correspondances les plus proches parmi vos personnes nommées. Avec plus de personnes nommées, cela devient un moyen rapide d’identifier des visages : il suffit de cliquer sur une correspondance pour l’attribuer."
+    },
+    "naming-another-face": {
+      "title": "Nommer un autre visage",
+      "caption": "Ici, nous n’avons pas trouvé de quick match, alors nommons ce visage nous-mêmes."
+    },
+    "more-people": {
+      "title": "Plus de personnes",
+      "caption": "Appuyez sur Entrée pour enregistrer. Nous avons maintenant deux personnes nommées dans notre collection, plus un groupe pour tous les visages « ignored »."
+    },
+    "drag-and-drop": {
+      "title": "Glisser-déposer",
+      "caption": "Vous pouvez aussi glisser des visages directement sur une personne dans la section Known People pour leur attribuer un nom, y compris dans le groupe Ignore. Cela fonctionne aussi avec plusieurs visages sélectionnés."
+    },
+    "view-all": {
+      "title": "Tout afficher",
+      "caption": "Double-cliquez sur une personne pour voir, au même endroit, tous les visages qui lui sont attribués. Ici, vous pouvez sélectionner une photo préférée (définir son avatar), verrouiller les identifications correctes, ou supprimer les visages portant le mauvais nom."
+    },
+    "preferred-face": {
+      "title": "Visage préféré",
+      "caption": "Cliquez sur l’étoile de votre image préférée de cette personne. Elle devient son avatar dans tout Photonarium."
+    },
+    "locking-and-unlocking": {
+      "title": "Verrouiller et déverrouiller les visages",
+      "caption": "Les visages verrouillés (cadenas vert) sont ceux que vous avez confirmés. Photonarium s’en sert comme exemples fiables lorsqu’il essaie de reconnaître cette personne sur d’autres photos. Vous ne pouvez pas déverrouiller le visage préféré. Les visages non verrouillés peuvent être réattribués automatiquement à tout moment si une meilleure correspondance est trouvée."
+    },
+    "faces-exiting": {
+      "title": "Quitter",
+      "caption": "Cliquez sur le bouton ⊕ / <span class=\"material-symbols-outlined\">center_focus_strong</span> (Se concentrer sur une personne) dans la barre d’outils, ou appuyez sur Échap, pour revenir à l’écran Faces principal."
+    },
+    "tagging-opening": {
+      "title": "Ouverture",
+      "caption": "Trouvons des photos de quelqu’un que nous avons nommé. Cliquez sur Search dans la barre d’outils."
+    },
+    "people-picker": {
+      "title": "Sélecteur de personnes",
+      "caption": "Dans la section People, cliquez sur Select people pour choisir les personnes à filtrer. Astuce : si vous tapez le nom d’une personne connue dans le champ de description (par ex. « Bob à la plage »), Photonarium l’ajoute automatiquement sous forme de pastille de personne. Pour des recherches rapides, vous n’aurez peut-être pas besoin du sélecteur du tout."
+    },
+    "people-picker-select": {
+      "title": "Sélecteur de personnes",
+      "caption": "Sélectionnez des personnes en cliquant dessus, ou faites-les glisser entre les listes. Vous pouvez en choisir autant que vous voulez."
+    },
+    "applying-people-filter": {
+      "title": "Appliquer le filtre personnes",
+      "caption": "Cliquez sur Done, puis sur Apply pour voir les résultats. La Galerie n’affiche maintenant que les photos qui contiennent Alice."
+    },
+    "tagging-fullscreen": {
+      "title": "Plein écran",
+      "caption": "Double-cliquez sur une photo pour l’ouvrir en plein écran. Nous savons que celle-ci contient Alice grâce à notre filtre."
+    },
+    "enabling-face-tagging": {
+      "title": "Activer le mode d’étiquetage des visages",
+      "caption": "Cliquez sur l’icône visage (en haut à gauche) pour activer l’étiquetage des visages. Des cadres colorés apparaissent autour des visages détectés. Le vert signifie que le visage est nommé, le rouge qu’il est inconnu, le gris qu’il est ignoré, et l’orange apparaît lorsque vous saisissez activement un nom. Survolez un visage pour voir le nom."
+    },
+    "tagging-naming": {
+      "title": "Nommer",
+      "caption": "Cliquez sur un visage pour saisir ou modifier son nom directement sur la photo. Des suggestions d’autocomplétion apparaissent pendant la saisie, et vous pouvez utiliser le bouton étincelle pour accéder au Quick Match d’un visage, même s’il est déjà nommé ou ignoré."
+    },
+    "tagging-ignoring": {
+      "title": "Ignorer",
+      "caption": "Survolez un visage pour voir les mêmes commandes que sur l’écran Faces. Cliquez sur le moins gris pour ignorer, ou sur le X rouge pour supprimer une fausse détection. Un X vert retirera le nom du visage."
+    },
+    "sorting-by-people": {
+      "title": "Trier par personnes",
+      "caption": "Cela regroupe vos photos selon les personnes qui y figurent. Les photos de la même personne apparaissent ensemble."
+    },
+    "switching-themes": {
+      "title": "Changer de thème",
+      "caption": "Cliquez sur l’icône lune/soleil pour basculer entre les thèmes clair et sombre."
+    },
+    "larger-thumbnails": {
+      "title": "Vignettes plus grandes",
+      "caption": "Cliquez sur le bouton Larger thumbnails pour agrandir la grille. Chaque photo affiche davantage de détails."
+    },
+    "smaller-thumbnails": {
+      "title": "Vignettes plus petites",
+      "caption": "Cliquez sur le bouton Smaller thumbnails pour les réduire. Vous pouvez ainsi voir plus de photos à la fois."
+    },
+    "mobile-landscape": {
+      "title": "Mobile : paysage",
+      "caption": "Photonarium fonctionne aussi sur les téléphones et tablettes. En mode paysage, la mise en page s’adapte pour afficher une grille de vignettes et un panneau d’informations côte à côte, avec une barre d’outils compacte qui se replie dans un menu hamburger."
+    },
+    "mobile-portrait": {
+      "title": "Mobile : portrait",
+      "caption": "En mode portrait, le panneau d’informations se place sous la grille et les barres de défilement s’élargissent pour le tactile. C’est idéal pour parcourir depuis le canapé ou consulter votre bibliothèque depuis une autre pièce. Plusieurs appareils peuvent utiliser Photonarium en même temps : les changements effectués sur l’un (nommer un visage, noter une photo, créer un groupe) apparaissent sur tous les autres appareils en quelques secondes, pour que tout reste synchronisé."
+    }
+  }
+}

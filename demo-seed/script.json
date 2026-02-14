@@ -304,7 +304,7 @@
         },
         "people-picker": {
             "title": "People picker",
-            "caption": "In the People section, click Select people to choose who you want to filter by."
+            "caption": "In the People section, click Select people to choose who you want to filter by. Tip: if you type a known person\u2019s name in the description field (e.g. \u201cBob at the beach\u201d), Photonarium automatically adds them as a people chip \u2014 so for quick searches you may not need the picker at all."
         },
         "people-picker-select": {
             "title": "People picker",

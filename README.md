@@ -293,6 +293,10 @@ Hyphens within words are preserved: `double-blind` searches for the phrase "doub
 
 Only available when face detection is enabled and you have named people.
 
+If you mention a known person's name in the description field (e.g. "bob at the beach"), Photonarium automatically recognises it and adds a people filter chip as you type. Multi-word names like "Mary Jane" are matched in preference to shorter overlapping names. When you apply the filter, recognised names are stripped from the search text so the AI focuses on the descriptive content.
+
+You can also add people manually using the picker:
+
 #### People picker dialog
 
 - Type part of a person’s name to narrow the list.

@@ -1,0 +1,358 @@
+{
+  "sections": [
+    {
+      "key": "getting-started",
+      "title": "Primeros pasos: añadir tus primeras fotos"
+    },
+    {
+      "key": "gallery",
+      "title": "Explorar tus fotos"
+    },
+    {
+      "key": "fullscreen",
+      "title": "Visor a pantalla completa: ver las fotos de cerca"
+    },
+    {
+      "key": "search",
+      "title": "Búsqueda: encontrar fotos concretas"
+    },
+    {
+      "key": "groups",
+      "title": "Grupos: encontrar duplicados"
+    },
+    {
+      "key": "custom-groups",
+      "title": "Grupos personalizados: organizar tus fotos"
+    },
+    {
+      "key": "faces",
+      "title": "Caras: poner nombre a las personas"
+    },
+    {
+      "key": "fullscreen-tagging",
+      "title": "Etiquetado de caras a pantalla completa"
+    },
+    {
+      "key": "gallery-extras",
+      "title": "Extras de la galería"
+    },
+    {
+      "key": "anywhere",
+      "title": "Úsalo en cualquier lugar de tu casa"
+    }
+  ],
+  "steps": {
+    "first-launch": {
+      "title": "Primer inicio",
+      "caption": "Cuando abres Photonarium por primera vez, ves la pantalla Database con el tema claro predeterminado. Todavía no hay carpetas ni fotos: aquí es donde le indicas a Photonarium dónde están tus fotos. El botón Edit Settings abre un editor de ajustes integrado donde puedes modificar opciones avanzadas como la selección del modelo, los umbrales de detección de caras y la calidad de las miniaturas."
+    },
+    "dark-theme": {
+      "title": "Cambiar al tema oscuro",
+      "caption": "Haz clic en el icono de sol/luna en la esquina superior derecha para cambiar al tema oscuro. La mayoría de las capturas de este tutorial usan el tema oscuro."
+    },
+    "adding-images": {
+      "title": "Añadir imágenes",
+      "caption": "Haz clic en Add Folder para abrir el selector de carpetas de tu sistema. Navega hasta la carpeta que contiene tus fotos y selecciónala. Nota: en algunos sistemas el selector puede abrirse detrás de la ventana del navegador. Comprueba la barra de tareas si no parece ocurrir nada."
+    },
+    "indexing": {
+      "title": "Indexación",
+      "caption": "Una vez que has seleccionado una carpeta, Photonarium empieza a escanearla en busca de imágenes. El estado cambia a Updating y muestra cuántos archivos quedan por indexar."
+    },
+    "processing": {
+      "title": "Procesamiento",
+      "caption": "Después de indexar, Photonarium genera miniaturas y calcula embeddings para la búsqueda semántica. Esto se ejecuta en segundo plano. Puedes empezar a explorar en cuanto aparezcan las primeras miniaturas."
+    },
+    "the-gallery": {
+      "title": "La galería",
+      "caption": "Todas tus fotos aparecen aquí como una cuadrícula de miniaturas. Desplázate para explorar, o usa la barra de herramientas para ordenar, buscar y gestionar tu colección."
+    },
+    "gallery-toolbar": {
+      "title": "Barra de herramientas",
+      "caption": "La barra de herramientas recorre la parte superior de la pantalla. Cuando tienes conexión a internet, los botones muestran iconos más pulidos (cargados una sola vez desde Google Fonts). Sin conexión, muestran símbolos más simples. Ambos funcionan igual.<table><tr><th>Sin conexión</th><th>En línea</th><th>Descripción</th></tr><tr><td class=\"icon-cell\">−</td><td class=\"icon-cell\"><span class=\"material-symbols-outlined\">remove</span></td><td>Miniaturas más pequeñas</td></tr><tr><td class=\"icon-cell\">✚</td><td class=\"icon-cell\"><span class=\"material-symbols-outlined\">add</span></td><td>Miniaturas más grandes</td></tr><tr><td class=\"icon-cell\">⛶</td><td class=\"icon-cell\"><span class=\"material-symbols-outlined\">fullscreen</span></td><td>Ver la foto seleccionada a pantalla completa</td></tr><tr><td class=\"icon-cell\">📂</td><td class=\"icon-cell\"><span class=\"material-symbols-outlined\">folder_open</span></td><td>Mostrar el archivo en el disco</td></tr><tr><td class=\"icon-cell\">⟲</td><td class=\"icon-cell\"><span class=\"material-symbols-outlined\">rotate_left</span></td><td>Girar a la izquierda</td></tr><tr><td class=\"icon-cell\">⟳</td><td class=\"icon-cell\"><span class=\"material-symbols-outlined\">rotate_right</span></td><td>Girar a la derecha</td></tr><tr><td class=\"icon-cell\">🏷️</td><td class=\"icon-cell\"><span class=\"material-symbols-outlined\">person_add</span></td><td>Activar/desactivar modo de etiquetado de caras</td></tr><tr><td class=\"icon-cell\">🏞️</td><td class=\"icon-cell\"><span class=\"material-symbols-outlined\">photo_library</span></td><td>Volver a la galería</td></tr><tr><td class=\"icon-cell\">🖥️</td><td class=\"icon-cell\"><span class=\"material-symbols-outlined\">database</span></td><td>Gestionar carpetas</td></tr><tr><td class=\"icon-cell\">⧉</td><td class=\"icon-cell\"><span class=\"material-symbols-outlined\">copy_all</span></td><td>Buscar duplicados</td></tr><tr><td class=\"icon-cell\">👤</td><td class=\"icon-cell\"><span class=\"material-symbols-outlined\">face</span></td><td>Explorar caras</td></tr><tr><td class=\"icon-cell\">🔍</td><td class=\"icon-cell\"><span class=\"material-symbols-outlined\">search</span></td><td>Buscar / filtrar</td></tr><tr><td class=\"icon-cell\">✕</td><td class=\"icon-cell\"><span class=\"material-symbols-outlined\">search_off</span></td><td>Quitar filtro</td></tr><tr><td class=\"icon-cell\">📅</td><td class=\"icon-cell\"><span class=\"material-symbols-outlined\">calendar_month</span></td><td>Ordenar por fecha</td></tr><tr><td class=\"icon-cell\">★</td><td class=\"icon-cell\"><span class=\"material-symbols-outlined\">star</span></td><td>Ordenar por valoración</td></tr><tr><td class=\"icon-cell\">👥</td><td class=\"icon-cell\"><span class=\"material-symbols-outlined\">group</span></td><td>Ordenar por personas</td></tr><tr><td class=\"icon-cell\">🔗</td><td class=\"icon-cell\"><span class=\"material-symbols-outlined\">image_search</span></td><td>Ordenar por similitud de contenido</td></tr><tr><td class=\"icon-cell\">✦</td><td class=\"icon-cell\"><span class=\"material-symbols-outlined\">stars</span></td><td>Ordenar por calidad</td></tr><tr><td class=\"icon-cell\">↓</td><td class=\"icon-cell\"><span class=\"material-symbols-outlined\">arrow_downward</span></td><td>Invertir el orden</td></tr><tr><td class=\"icon-cell\">▣</td><td class=\"icon-cell\"><span class=\"material-symbols-outlined\">select_all</span></td><td>Seleccionar todo</td></tr><tr><td class=\"icon-cell\">▢</td><td class=\"icon-cell\"><span class=\"material-symbols-outlined\">deselect</span></td><td>Borrar selección</td></tr><tr><td class=\"icon-cell\">🌙</td><td class=\"icon-cell\"><span class=\"material-symbols-outlined\">dark_mode</span></td><td>Cambiar tema claro/oscuro</td></tr></table>"
+    },
+    "selecting-a-photo": {
+      "title": "Seleccionar una foto",
+      "caption": "Haz clic en cualquier miniatura para seleccionarla. Aparece un borde alrededor de la foto seleccionada y el panel de información de la derecha muestra sus detalles."
+    },
+    "the-info-panel": {
+      "title": "El panel de información",
+      "caption": "El panel de información está a la derecha de la cuadrícula de miniaturas. Muestra el nombre del archivo, las dimensiones, la fecha y el tamaño del archivo. También puedes añadir una descripción y una valoración para ayudarte a encontrar esta foto más tarde. Usa el conmutador de su borde para contraerlo o expandirlo. Resulta útil cuando quieres más espacio para las miniaturas."
+    },
+    "adding-a-description": {
+      "title": "Añadir una descripción",
+      "caption": "Escribe una descripción y pulsa Enter para guardarla. Las descripciones se pueden buscar, así que unas pocas palabras ahora ahorran tiempo después."
+    },
+    "auto-captioning": {
+      "title": "Subtítulos automáticos",
+      "caption": "Si no te apetece escribir, haz clic en el botón de destellos para generar un pie de foto automático. Puedes editarlo después si quieres."
+    },
+    "emojis": {
+      "title": "Emojis",
+      "caption": "Haz clic en el botón de emoji junto al campo de valoración para abrir el selector. Elige cualquier emoji para valorar tu foto: estrellas, corazones, lo que te ayude a encontrar esa imagen más tarde."
+    },
+    "ratings": {
+      "title": "Valoraciones",
+      "caption": "Pueden ser cualquier texto que quieras. Los emoji funcionan bien. Prueba estrellas para las favoritas o corazones para las que te encantan."
+    },
+    "multiple-selection": {
+      "title": "Selección múltiple",
+      "caption": "Mantén Shift y haz clic para seleccionar un rango. También puedes hacer Ctrl+clic para elegir fotos individuales, o arrastrar un recuadro alrededor de un grupo."
+    },
+    "sort-direction-flip": {
+      "title": "Dirección de ordenación",
+      "caption": "De forma predeterminada, las fotos se ordenan por fecha. Haz clic en el botón de flecha para invertir el orden actual."
+    },
+    "sort-direction-restore": {
+      "title": "Dirección de ordenación",
+      "caption": "Haz clic de nuevo para volver al orden original. Usa la dirección que mejor se adapte a lo que buscas."
+    },
+    "similarity-select": {
+      "title": "Similitud",
+      "caption": "Selecciona una sola foto para usarla como base de la ordenación por similitud. Luego haz clic para ordenar por similitud. La cuadrícula se reorganiza para que las fotos que más se parecen a la imagen seleccionada aparezcan primero."
+    },
+    "similarity-result": {
+      "title": "Similitud",
+      "caption": "Aquí tienes un ejemplo de la galería ordenada por similitud de imagen."
+    },
+    "fullscreen-opening": {
+      "title": "Abrir",
+      "caption": "Haz doble clic en cualquier miniatura para verla a pantalla completa."
+    },
+    "fullscreen-controls": {
+      "title": "Controles",
+      "caption": "La barra de herramientas a pantalla completa aparece arriba. Haz clic en los bordes de la pantalla (o usa las teclas de flecha) para moverte entre fotos.<table><tr><th>Sin conexión</th><th>En línea</th><th>Descripción</th></tr><tr><td class=\"icon-cell\">👤</td><td class=\"icon-cell\"><span class=\"material-symbols-outlined\">person_search</span></td><td>Activar/desactivar etiquetado de caras</td></tr><tr><td class=\"icon-cell\">🚫</td><td class=\"icon-cell\"><span class=\"material-symbols-outlined\">person_off</span></td><td>Ignorar todas las caras desconocidas</td></tr><tr><td class=\"icon-cell\">⟲</td><td class=\"icon-cell\"><span class=\"material-symbols-outlined\">rotate_left</span></td><td>Girar a la izquierda</td></tr><tr><td class=\"icon-cell\">⟳</td><td class=\"icon-cell\"><span class=\"material-symbols-outlined\">rotate_right</span></td><td>Girar a la derecha</td></tr><tr><td class=\"icon-cell\">✕</td><td class=\"icon-cell\"><span class=\"material-symbols-outlined\">close</span></td><td>Cerrar (o pulsa Escape)</td></tr><tr><td class=\"icon-cell\">❮</td><td class=\"icon-cell\"><span class=\"material-symbols-outlined\">chevron_left</span></td><td>Foto anterior (o tecla de flecha izquierda)</td></tr><tr><td class=\"icon-cell\">❯</td><td class=\"icon-cell\"><span class=\"material-symbols-outlined\">chevron_right</span></td><td>Foto siguiente (o tecla de flecha derecha)</td></tr></table>"
+    },
+    "navigating": {
+      "title": "Navegación",
+      "caption": "Usa las teclas de flecha izquierda y derecha para recorrer tus fotos. También puedes hacer clic en los iconos de flecha en los bordes de la pantalla."
+    },
+    "zooming-and-panning": {
+      "title": "Zoom y desplazamiento",
+      "caption": "Usa la rueda del ratón para acercar y alejar, y luego haz clic y arrastra para moverte. Haz doble clic para alternar entre la vista ampliada y la normal."
+    },
+    "fullscreen-closing": {
+      "title": "Cerrar",
+      "caption": "Pulsa el icono de cerrar o la tecla Escape para volver a la galería."
+    },
+    "search-opening": {
+      "title": "Abrir",
+      "caption": "Haz clic en el botón Search de la barra de herramientas para crear un filtro para tus fotos."
+    },
+    "search-by-description": {
+      "title": "Buscar por descripción",
+      "caption": "Escribe lo que estás buscando. Es una búsqueda inteligente: entiende el significado, no solo palabras clave. El deslizador de similitud controla lo estricta que es la coincidencia: desliza a la derecha para resultados que encajen de cerca con tu consulta, o a la izquierda para coincidencias más laxas."
+    },
+    "search-results": {
+      "title": "Resultados de búsqueda",
+      "caption": "Al pulsar Apply se muestran los resultados en la galería, ordenados por lo bien que coinciden con tu búsqueda. La barra de herramientas muestra que hay un filtro activo."
+    },
+    "negative-terms": {
+      "title": "Términos negativos",
+      "caption": "Pon un signo menos delante de una palabra para excluirla. Aquí buscamos árboles y plantas, sin personas."
+    },
+    "negative-results": {
+      "title": "Resultados",
+      "caption": "La galería ahora muestra preferentemente fotos de naturaleza excluyendo a las personas. Los términos negativos son una forma potente de acotar la búsqueda."
+    },
+    "date-ranges": {
+      "title": "Rangos de fechas",
+      "caption": "Restringe tus resultados a un rango de fechas. Deja cualquiera de las fechas en blanco para un rango abierto."
+    },
+    "combined-filters": {
+      "title": "Filtros combinados",
+      "caption": "Los filtros se acumulan. Aquí tenemos una búsqueda por descripción y un rango de fechas funcionando a la vez. Haz clic en Apply para ver solo las fotos que cumplen todo."
+    },
+    "clearing-the-filter": {
+      "title": "Quitar el filtro",
+      "caption": "Haz clic en el botón Clear Filter de la barra de herramientas para eliminar todos los filtros y volver a ver toda tu biblioteca de imágenes."
+    },
+    "groups-opening": {
+      "title": "Abrir",
+      "caption": "Haz clic en Groups en la barra de herramientas. El deslizador selecciona qué tipo de agrupación ver: desde duplicados exactos a la derecha, pasando por niveles de similitud cada vez más laxos, hasta grupos por directorios y tus propios álbumes personalizados a la izquierda. Cada pila es un grupo de fotos, y el contador muestra cuántas hay en cada uno."
+    },
+    "groups-toolbar": {
+      "title": "Barra de herramientas",
+      "caption": "La pantalla Groups tiene su propia barra de herramientas. El deslizador selecciona el nivel de estrictitud, y Min size filtra los grupos pequeños.<table><tr><th>Sin conexión</th><th>En línea</th><th>Descripción</th></tr><tr><td class=\"icon-cell\">−</td><td class=\"icon-cell\"><span class=\"material-symbols-outlined\">remove</span></td><td>Miniaturas más pequeñas</td></tr><tr><td class=\"icon-cell\">✚</td><td class=\"icon-cell\"><span class=\"material-symbols-outlined\">add</span></td><td>Miniaturas más grandes</td></tr><tr><td colspan=\"2\" style=\"text-align:left\">Slider</td><td>Idénticas → Casi idénticas → Similares → Relacionadas → Directorios → Personalizado</td></tr><tr><td colspan=\"2\" style=\"text-align:left\">Min size</td><td>Ocultar grupos más pequeños que esto (solo niveles automáticos)</td></tr><tr><td class=\"icon-cell\">🗑️</td><td class=\"icon-cell\"><span class=\"material-symbols-outlined\">delete_sweep</span></td><td>Purgar grupos (solo niveles automáticos)</td></tr><tr><td class=\"icon-cell\">⇅</td><td class=\"icon-cell\"><span class=\"material-symbols-outlined\">sort</span></td><td>Ordenar por tamaño del grupo</td></tr><tr><td class=\"icon-cell\">AZ</td><td class=\"icon-cell\"><span class=\"material-symbols-outlined\">sort_by_alpha</span></td><td>Ordenar alfabéticamente (solo grupos con nombre)</td></tr><tr><td class=\"icon-cell\">👥</td><td class=\"icon-cell\"><span class=\"material-symbols-outlined\">group</span></td><td>Ordenar por personas</td></tr><tr><td class=\"icon-cell\">🔗</td><td class=\"icon-cell\"><span class=\"material-symbols-outlined\">image_search</span></td><td>Ordenar por similitud semántica</td></tr></table>"
+    },
+    "strictness": {
+      "title": "Estrictitud",
+      "caption": "Mueve el deslizador para cambiar lo estricta que es la coincidencia. Identical encuentra copias exactas, mientras que Related busca de forma más amplia fotos con contenido relacionado. Más allá de eso, Directories agrupa las fotos por su carpeta en el disco, y Custom es para tus álbumes creados a mano."
+    },
+    "directories": {
+      "title": "Directorios",
+      "caption": "Mueve el deslizador una posición desde la izquierda para ver Directories. Estos grupos reflejan tu estructura de carpetas. Cada uno contiene las fotos de una sola carpeta. Los nombres de los grupos muestran la ruta única más corta necesaria para distinguir las carpetas."
+    },
+    "opening-a-group": {
+      "title": "Abrir un grupo",
+      "caption": "Haz doble clic en una pila para abrir ese grupo en la galería, donde puedes comparar las fotos lado a lado. Se ordenan automáticamente por calidad, con la mejor preseleccionada. Selecciona las que no quieras y pulsa Delete, o simplemente pasa al siguiente grupo."
+    },
+    "pruning-button": {
+      "title": "Purgar duplicados",
+      "caption": "Cuando encuentres duplicados, puedes limpiarlos en bloque. El botón de poda (resaltado) te permite conservar automáticamente las mejores imágenes y apartar el resto."
+    },
+    "pruning-dialog": {
+      "title": "El diálogo de poda",
+      "caption": "El diálogo de poda te da control sobre cuántas imágenes conservar en cada grupo: solo la mejor, un número fijo o un porcentaje. Un resumen muestra exactamente cuántas imágenes se verán afectadas. No te preocupes, no se elimina nada de forma permanente. Las imágenes podadas se mueven a una carpeta 'trash', así que siempre puedes recuperarlas."
+    },
+    "moving-between-groups": {
+      "title": "Moverse entre grupos",
+      "caption": "Usa los botones de flecha de la barra de herramientas (o Alt+Left / Alt+Right) para ir al siguiente o al anterior grupo sin volver a la pantalla Groups."
+    },
+    "custom-level": {
+      "title": "Nivel Custom",
+      "caption": "Mueve el deslizador completamente a la izquierda para llegar al nivel Custom. A diferencia de los niveles automáticos, los grupos Custom son álbumes que tú creas y nombras. La misma foto puede pertenecer a varios grupos."
+    },
+    "creating-a-group": {
+      "title": "Crear un grupo",
+      "caption": "Haz clic en el botón New Group de la barra de herramientas y escribe un nombre. El grupo empieza vacío. Después añadirás fotos."
+    },
+    "adding-photos-from-gallery": {
+      "title": "Añadir fotos desde la galería",
+      "caption": "De vuelta en la galería, pasa el ratón por encima de cualquier miniatura para mostrar una pequeña insignia morada. Haz clic en ella para abrir el Group Picker, donde puedes añadir la foto a grupos existentes o crear nuevos. Si tienes varias fotos seleccionadas, se añadirán todas a la vez."
+    },
+    "the-group-picker": {
+      "title": "El Group Picker",
+      "caption": "Al hacer clic en la insignia se abre el Group Picker. El panel izquierdo enumera los grupos disponibles. Haz clic en uno para añadir la foto (el panel derecho muestra las pertenencias actuales). Las fotos pueden pertenecer a varios grupos a la vez. Selecciona tantos como quieras. Haz clic en Done para guardar o en Cancel para descartar."
+    },
+    "managing-groups": {
+      "title": "Gestionar grupos",
+      "caption": "En el nivel Custom puedes renombrar o eliminar grupos usando los botones de la barra de herramientas. Cuando estés viendo un grupo custom en la galería, selecciona fotos y pulsa Backspace para quitarlas del grupo sin borrar las fotos."
+    },
+    "faces-opening": {
+      "title": "Abrir",
+      "caption": "Haz clic en el botón Faces de la barra de herramientas. En esta pantalla es donde pones nombre a las personas que Photonarium ha encontrado en tus fotos."
+    },
+    "faces-toolbar": {
+      "title": "Barra de herramientas",
+      "caption": "La barra de herramientas de Faces tiene sus propios controles.<table><tr><th>Sin conexión</th><th>En línea</th><th>Descripción</th></tr><tr><td class=\"icon-cell\">─</td><td class=\"icon-cell\"><span class=\"material-symbols-outlined\">remove</span></td><td>Miniaturas de caras más pequeñas</td></tr><tr><td class=\"icon-cell\">✚</td><td class=\"icon-cell\"><span class=\"material-symbols-outlined\">add</span></td><td>Miniaturas de caras más grandes</td></tr><tr><td class=\"icon-cell\">❔</td><td class=\"icon-cell\"><span class=\"material-symbols-outlined\">help</span></td><td>Mostrar solo caras desconocidas</td></tr><tr><td class=\"icon-cell\">⊕</td><td class=\"icon-cell\"><span class=\"material-symbols-outlined\">center_focus_strong</span></td><td>Enfocarse en una persona</td></tr><tr><td class=\"icon-cell\">🔓</td><td class=\"icon-cell\"><span class=\"material-symbols-outlined\">lock_open</span></td><td>Mostrar solo caras desbloqueadas (en la vista de persona)</td></tr><tr><td class=\"icon-cell\">↓</td><td class=\"icon-cell\"><span class=\"material-symbols-outlined\">arrow_downward</span></td><td>Invertir el orden</td></tr></table>"
+    },
+    "unknown-faces": {
+      "title": "Caras desconocidas",
+      "caption": "Cuando llegas aquí por primera vez, ves las caras que Photonarium ha detectado. Todavía no tienen nombres. Esa es tu tarea. Cada cara tiene un campo de nombre debajo."
+    },
+    "typing": {
+      "title": "Escribir",
+      "caption": "Haz clic en una cara y escribe un nombre en el campo de debajo."
+    },
+    "naming": {
+      "title": "Poner nombre",
+      "caption": "Pulsa Enter para guardar. Esto crea tu primera persona. Aparece una sección Known People en la parte superior de la pantalla."
+    },
+    "autocomplete": {
+      "title": "Autocompletar",
+      "caption": "A medida que nombras más caras, aparecen sugerencias mientras escribes. Elige una sugerencia para asignar esta cara a una persona existente."
+    },
+    "failed-face-detections": {
+      "title": "Detecciones de caras fallidas",
+      "caption": "A veces Photonarium detecta algo que en realidad no es una cara. Si ves una, puedes hacer clic para seleccionarla."
+    },
+    "selecting-multiple": {
+      "title": "Seleccionar varias",
+      "caption": "Haz clic con el botón derecho para añadir más elementos a tu selección sin perder lo que ya has elegido. Aquí hemos seleccionado ocho falsas detecciones."
+    },
+    "removing": {
+      "title": "Eliminar",
+      "caption": "Pasa el ratón por encima de cualquier tarjeta seleccionada y haz clic en la X roja. Como hay varias tarjetas seleccionadas, Photonarium ofrece eliminarlas todas a la vez."
+    },
+    "the-ignore-control": {
+      "title": "El control de ignorar",
+      "caption": "Para caras de personas a las que no quieres poner nombre, selecciónalas y haz clic en el botón gris con el signo menos. Esto las aparta sin borrar la detección."
+    },
+    "ignoring": {
+      "title": "Ignorar",
+      "caption": "Haz clic en el signo menos gris para ignorar las caras seleccionadas. Siempre puedes renombrarlas más tarde si es necesario."
+    },
+    "ignored-group": {
+      "title": "Grupo de ignoradas",
+      "caption": "Las caras ignoradas ahora pertenecen a una persona especial en la sección Known People. Están apartadas pero no eliminadas, así que siempre puedes encontrarlas de nuevo."
+    },
+    "quick-match": {
+      "title": "Quick Match",
+      "caption": "Haz clic en el botón de destellos sobre una cara para ver quién podría ser. Photonarium muestra las coincidencias más cercanas entre las personas que has nombrado. Con más personas nombradas, esto se convierte en una forma rápida de identificar caras. Solo tienes que hacer clic en una coincidencia para asignarla."
+    },
+    "naming-another-face": {
+      "title": "Nombrar otra cara",
+      "caption": "En este caso, no encontramos un Quick Match, así que vamos a nombrar esta cara nosotros mismos."
+    },
+    "more-people": {
+      "title": "Más personas",
+      "caption": "Pulsa Enter para guardar. Ahora tenemos dos personas con nombre en nuestra colección, además de un grupo para todas las caras 'ignored'."
+    },
+    "drag-and-drop": {
+      "title": "Arrastrar y soltar",
+      "caption": "También puedes arrastrar caras directamente sobre una persona en la sección Known People para asignarles un nombre, incluso al grupo Ignore. Esto también funciona con varias caras seleccionadas."
+    },
+    "view-all": {
+      "title": "Ver todo",
+      "caption": "Haz doble clic en una persona para ver todas las caras asignadas a ella en un solo lugar. Aquí puedes seleccionar, marcar con estrella una foto preferida (estableciendo su avatar) y bloquear identificaciones correctas, o eliminar cualquier cara con el nombre equivocado."
+    },
+    "preferred-face": {
+      "title": "Cara preferida",
+      "caption": "Haz clic en la estrella de tu imagen favorita de esta persona. Se convierte en su avatar en todo Photonarium."
+    },
+    "locking-and-unlocking": {
+      "title": "Bloquear y desbloquear caras",
+      "caption": "Las caras bloqueadas (candado verde) son las que has confirmado. Photonarium las usa como ejemplos fiables al intentar reconocer a esta persona en otras fotos. No puedes desbloquear la cara preferida. Las caras desbloqueadas pueden reasignarse automáticamente en cualquier momento si se encuentra una coincidencia mejor."
+    },
+    "faces-exiting": {
+      "title": "Salir",
+      "caption": "Haz clic en el botón de la barra de herramientas ⊕ / <span class=\"material-symbols-outlined\">center_focus_strong</span> (Enfocarse en una persona), o pulsa Escape, para volver a la pantalla principal de Faces."
+    },
+    "tagging-opening": {
+      "title": "Abrir",
+      "caption": "Vamos a encontrar fotos de alguien a quien hemos nombrado. Haz clic en Search en la barra de herramientas."
+    },
+    "people-picker": {
+      "title": "Selector de personas",
+      "caption": "En la sección People, haz clic en Select people para elegir por quién quieres filtrar. Consejo: si escribes el nombre de una persona conocida en el campo de descripción (por ejemplo, “Bob en la playa”), Photonarium la añade automáticamente como un chip de persona. Para búsquedas rápidas puede que no necesites el selector."
+    },
+    "people-picker-select": {
+      "title": "Selector de personas",
+      "caption": "Selecciona personas haciendo clic en ellas, o arrástralas entre las listas. Puedes elegir tantas como quieras."
+    },
+    "applying-people-filter": {
+      "title": "Aplicar el filtro de personas",
+      "caption": "Haz clic en Done y luego en Apply para ver los resultados. La galería ahora muestra solo las fotos que contienen a Alice."
+    },
+    "tagging-fullscreen": {
+      "title": "Pantalla completa",
+      "caption": "Haz doble clic en una foto para abrirla a pantalla completa. Sabemos que esta tiene a Alice porque usamos nuestro filtro."
+    },
+    "enabling-face-tagging": {
+      "title": "Activar el modo de etiquetado de caras",
+      "caption": "Haz clic en el icono de cara (arriba a la izquierda) para activar el etiquetado de caras. Aparecen recuadros de colores alrededor de las caras detectadas. Verde significa que la cara tiene nombre, rojo que es desconocida, gris que está ignorada y naranja aparece cuando estás escribiendo un nombre activamente. Pasa el ratón por encima de una cara para ver el nombre."
+    },
+    "tagging-naming": {
+      "title": "Poner nombre",
+      "caption": "Haz clic en cualquier cara para escribir o cambiar su nombre directamente en la foto. Las sugerencias de autocompletar aparecen mientras escribes y tienes acceso al botón de destellos para usar Quick Match en una cara, incluso si ya se ha nombrado o ignorado."
+    },
+    "tagging-ignoring": {
+      "title": "Ignorar",
+      "caption": "Pasa el ratón por encima de una cara para ver los mismos controles que en la pantalla Faces. Haz clic en el signo menos gris para ignorar, o en la X roja para eliminar una detección falsa. Una X verde quitará el nombre de la cara."
+    },
+    "sorting-by-people": {
+      "title": "Ordenar por personas",
+      "caption": "Esto agrupa tus fotos según quién aparezca en ellas. Las fotos de la misma persona aparecen juntas."
+    },
+    "switching-themes": {
+      "title": "Cambiar de tema",
+      "caption": "Haz clic en el icono de luna/sol para alternar entre los temas claro y oscuro."
+    },
+    "larger-thumbnails": {
+      "title": "Miniaturas más grandes",
+      "caption": "Haz clic en el botón Larger thumbnails para hacer la cuadrícula más grande. Cada foto muestra más detalle."
+    },
+    "smaller-thumbnails": {
+      "title": "Miniaturas más pequeñas",
+      "caption": "Haz clic en el botón Smaller thumbnails para reducirlas de nuevo. Así puedes ver más fotos a la vez."
+    },
+    "mobile-landscape": {
+      "title": "Móvil: horizontal",
+      "caption": "Photonarium también funciona en teléfonos y tabletas. En horizontal, el diseño se ajusta para mostrar una cuadrícula de miniaturas y el panel de información lado a lado, con una barra de herramientas compacta que se pliega en un menú hamburguesa."
+    },
+    "mobile-portrait": {
+      "title": "Móvil: vertical",
+      "caption": "En vertical, el panel de información se apila debajo de la cuadrícula y las barras de desplazamiento se ensanchan para el tacto. Es genial para explorar desde el sofá o comprobar tu biblioteca desde otra habitación. Varios dispositivos pueden usar Photonarium a la vez. Los cambios que hagas en uno (nombrar una cara, valorar una foto, crear un grupo) aparecen en los demás en cuestión de segundos, así que todo se mantiene sincronizado."
+    }
+  }
+}

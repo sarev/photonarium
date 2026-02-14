@@ -1,0 +1,358 @@
+{
+    "sections": [
+        {
+            "key": "getting-started",
+            "title": "はじめに：最初の写真を追加"
+        },
+        {
+            "key": "gallery",
+            "title": "写真を閲覧する"
+        },
+        {
+            "key": "fullscreen",
+            "title": "全画面ビューア：写真を拡大して見る"
+        },
+        {
+            "key": "search",
+            "title": "検索：特定の写真を見つける"
+        },
+        {
+            "key": "groups",
+            "title": "グループ：重複を見つける"
+        },
+        {
+            "key": "custom-groups",
+            "title": "カスタムグループ：写真を整理する"
+        },
+        {
+            "key": "faces",
+            "title": "顔：人物に名前を付ける"
+        },
+        {
+            "key": "fullscreen-tagging",
+            "title": "全画面での顔タグ付け"
+        },
+        {
+            "key": "gallery-extras",
+            "title": "ギャラリーの追加機能"
+        },
+        {
+            "key": "anywhere",
+            "title": "家のどこでも使えます"
+        }
+    ],
+    "steps": {
+        "first-launch": {
+            "title": "初回起動",
+            "caption": "Photonarium を初めて開くと、既定のライトテーマでデータベース画面が表示されます。まだフォルダも写真もありません。ここで Photonarium に写真の場所を教えます。「Edit Settings」ボタンを押すとアプリ内の設定エディタが開き、モデルの選択、顔検出のしきい値、サムネイル品質などの高度な設定を調整できます。"
+        },
+        "dark-theme": {
+            "title": "ダークテーマに切り替える",
+            "caption": "右上の太陽/月アイコンをクリックしてダークテーマに切り替えます。このチュートリアルのスクリーンショットの多くはダークテーマを使用しています。"
+        },
+        "adding-images": {
+            "title": "画像を追加する",
+            "caption": "「Add Folder」をクリックして、システムのフォルダ選択ダイアログを開きます。写真が入っているフォルダへ移動して選択してください。注意：環境によってはフォルダ選択がブラウザウィンドウの背面で開くことがあります。何も起きないように見える場合はタスクバーを確認してください。"
+        },
+        "indexing": {
+            "title": "インデックス作成",
+            "caption": "フォルダを選択すると、Photonarium が画像をスキャンし始めます。状態が「Updating」に変わり、インデックス作成が残り何件か表示されます。"
+        },
+        "processing": {
+            "title": "処理",
+            "caption": "インデックス作成後、Photonarium はサムネイルを生成し、意味検索のための埋め込みベクトルを計算します。これはバックグラウンドで実行されるため、最初のサムネイルが表示され次第すぐに閲覧を開始できます。"
+        },
+        "the-gallery": {
+            "title": "ギャラリー",
+            "caption": "ここにすべての写真がサムネイルのグリッドとして表示されます。スクロールして閲覧するか、ツールバーで並べ替え、検索、コレクション管理を行います。"
+        },
+        "gallery-toolbar": {
+            "title": "ツールバー",
+            "caption": "ツールバーは画面上部に表示されます。インターネット接続がある場合、ボタンは洗練されたアイコン（Google Fonts から一度だけ読み込み）で表示されます。オフラインでは代わりに簡易な記号が表示されます。どちらも動作は同じです。<table><tr><th>オフライン</th><th>オンライン</th><th>説明</th></tr><tr><td class=\"icon-cell\">−</td><td class=\"icon-cell\"><span class=\"material-symbols-outlined\">remove</span></td><td>サムネイルを小さく</td></tr><tr><td class=\"icon-cell\">✚</td><td class=\"icon-cell\"><span class=\"material-symbols-outlined\">add</span></td><td>サムネイルを大きく</td></tr><tr><td class=\"icon-cell\">⛶</td><td class=\"icon-cell\"><span class=\"material-symbols-outlined\">fullscreen</span></td><td>選択した写真を全画面で表示</td></tr><tr><td class=\"icon-cell\">📂</td><td class=\"icon-cell\"><span class=\"material-symbols-outlined\">folder_open</span></td><td>ディスク上でファイルを表示</td></tr><tr><td class=\"icon-cell\">⟲</td><td class=\"icon-cell\"><span class=\"material-symbols-outlined\">rotate_left</span></td><td>左に回転</td></tr><tr><td class=\"icon-cell\">⟳</td><td class=\"icon-cell\"><span class=\"material-symbols-outlined\">rotate_right</span></td><td>右に回転</td></tr><tr><td class=\"icon-cell\">🏷️</td><td class=\"icon-cell\"><span class=\"material-symbols-outlined\">person_add</span></td><td>顔タグ付けモードを切り替え</td></tr><tr><td class=\"icon-cell\">🏞️</td><td class=\"icon-cell\"><span class=\"material-symbols-outlined\">photo_library</span></td><td>ギャラリーに戻る</td></tr><tr><td class=\"icon-cell\">🖥️</td><td class=\"icon-cell\"><span class=\"material-symbols-outlined\">database</span></td><td>フォルダを管理</td></tr><tr><td class=\"icon-cell\">⧉</td><td class=\"icon-cell\"><span class=\"material-symbols-outlined\">copy_all</span></td><td>重複を検出</td></tr><tr><td class=\"icon-cell\">👤</td><td class=\"icon-cell\"><span class=\"material-symbols-outlined\">face</span></td><td>顔を閲覧</td></tr><tr><td class=\"icon-cell\">🔍</td><td class=\"icon-cell\"><span class=\"material-symbols-outlined\">search</span></td><td>検索 / フィルタ</td></tr><tr><td class=\"icon-cell\">✕</td><td class=\"icon-cell\"><span class=\"material-symbols-outlined\">search_off</span></td><td>フィルタを解除</td></tr><tr><td class=\"icon-cell\">📅</td><td class=\"icon-cell\"><span class=\"material-symbols-outlined\">calendar_month</span></td><td>日付で並べ替え</td></tr><tr><td class=\"icon-cell\">★</td><td class=\"icon-cell\"><span class=\"material-symbols-outlined\">star</span></td><td>評価で並べ替え</td></tr><tr><td class=\"icon-cell\">👥</td><td class=\"icon-cell\"><span class=\"material-symbols-outlined\">group</span></td><td>人物で並べ替え</td></tr><tr><td class=\"icon-cell\">🔗</td><td class=\"icon-cell\"><span class=\"material-symbols-outlined\">image_search</span></td><td>内容の類似度で並べ替え</td></tr><tr><td class=\"icon-cell\">✦</td><td class=\"icon-cell\"><span class=\"material-symbols-outlined\">stars</span></td><td>品質で並べ替え</td></tr><tr><td class=\"icon-cell\">↓</td><td class=\"icon-cell\"><span class=\"material-symbols-outlined\">arrow_downward</span></td><td>並べ替え方向を反転</td></tr><tr><td class=\"icon-cell\">▣</td><td class=\"icon-cell\"><span class=\"material-symbols-outlined\">select_all</span></td><td>すべて選択</td></tr><tr><td class=\"icon-cell\">▢</td><td class=\"icon-cell\"><span class=\"material-symbols-outlined\">deselect</span></td><td>選択を解除</td></tr><tr><td class=\"icon-cell\">🌙</td><td class=\"icon-cell\"><span class=\"material-symbols-outlined\">dark_mode</span></td><td>ライト/ダークテーマを切り替え</td></tr></table>"
+        },
+        "selecting-a-photo": {
+            "title": "写真を選択する",
+            "caption": "任意のサムネイルをクリックして選択します。選択した写真の周囲に枠が表示され、右側の情報パネルに詳細が表示されます。"
+        },
+        "the-info-panel": {
+            "title": "情報パネル",
+            "caption": "情報パネルはサムネイルグリッドの右側にあります。ファイル名、寸法、日付、ファイルサイズを表示します。説明や評価も追加でき、後でこの写真を見つけやすくなります。端のトグルで折りたたみ/展開できます。サムネイルの表示領域を広くしたいときに便利です。"
+        },
+        "adding-a-description": {
+            "title": "説明を追加する",
+            "caption": "説明を入力して Enter を押すと保存されます。説明は検索対象なので、今少し書いておくと後で時間を節約できます。"
+        },
+        "auto-captioning": {
+            "title": "自動キャプション",
+            "caption": "入力したくない場合は、きらめきボタンをクリックして自動キャプションを生成します。必要なら後から編集できます。"
+        },
+        "emojis": {
+            "title": "絵文字",
+            "caption": "評価欄の横にある絵文字ボタンをクリックしてピッカーを開きます。写真の評価にはどんな絵文字でも使えます。星やハートなど、後でその画像を見つける助けになるものを選んでください。"
+        },
+        "ratings": {
+            "title": "評価",
+            "caption": "好きなテキストを何でも使えます。絵文字が便利です。お気に入りには星、気に入ったものにはハートなどを試してみてください。"
+        },
+        "multiple-selection": {
+            "title": "複数選択",
+            "caption": "Shift を押しながらクリックすると範囲選択できます。Ctrl+クリックで個別選択したり、ドラッグして枠で囲んでグループ選択することもできます。"
+        },
+        "sort-direction-flip": {
+            "title": "並べ替え方向",
+            "caption": "既定では写真は日付で並べ替えられます。矢印ボタンをクリックして現在の並べ替え順を反転します。"
+        },
+        "sort-direction-restore": {
+            "title": "並べ替え方向",
+            "caption": "もう一度クリックすると元の並べ替え順に戻ります。探したいものに合う方向を使ってください。"
+        },
+        "similarity-select": {
+            "title": "類似度",
+            "caption": "類似度並べ替えの基準にする写真を1枚選びます。次に類似度で並べ替えをクリックします。選択した画像に最も似ている写真が先頭になるようにグリッドが並び替えられます。"
+        },
+        "similarity-result": {
+            "title": "類似度",
+            "caption": "これは、画像の類似度で並べ替えたギャラリーの例です。"
+        },
+        "fullscreen-opening": {
+            "title": "開く",
+            "caption": "任意のサムネイルをダブルクリックすると全画面表示になります。"
+        },
+        "fullscreen-controls": {
+            "title": "操作",
+            "caption": "全画面ツールバーは上部に表示されます。画面の端をクリックする（または矢印キーを使う）と写真を切り替えられます。<table><tr><th>オフライン</th><th>オンライン</th><th>説明</th></tr><tr><td class=\"icon-cell\">👤</td><td class=\"icon-cell\"><span class=\"material-symbols-outlined\">person_search</span></td><td>顔タグ付けを切り替え</td></tr><tr><td class=\"icon-cell\">🚫</td><td class=\"icon-cell\"><span class=\"material-symbols-outlined\">person_off</span></td><td>未知の顔をすべて無視</td></tr><tr><td class=\"icon-cell\">⟲</td><td class=\"icon-cell\"><span class=\"material-symbols-outlined\">rotate_left</span></td><td>左に回転</td></tr><tr><td class=\"icon-cell\">⟳</td><td class=\"icon-cell\"><span class=\"material-symbols-outlined\">rotate_right</span></td><td>右に回転</td></tr><tr><td class=\"icon-cell\">✕</td><td class=\"icon-cell\"><span class=\"material-symbols-outlined\">close</span></td><td>閉じる（または Escape キー）</td></tr><tr><td class=\"icon-cell\">❮</td><td class=\"icon-cell\"><span class=\"material-symbols-outlined\">chevron_left</span></td><td>前の写真（または左矢印キー）</td></tr><tr><td class=\"icon-cell\">❯</td><td class=\"icon-cell\"><span class=\"material-symbols-outlined\">chevron_right</span></td><td>次の写真（または右矢印キー）</td></tr></table>"
+        },
+        "navigating": {
+            "title": "ナビゲーション",
+            "caption": "左右の矢印キーで写真を順に表示できます。画面端の矢印アイコンをクリックして移動することもできます。"
+        },
+        "zooming-and-panning": {
+            "title": "ズームとパン",
+            "caption": "スクロールホイールで拡大/縮小し、クリックしてドラッグすると周囲を見回せます。ダブルクリックでズーム表示と通常表示を切り替えます。"
+        },
+        "fullscreen-closing": {
+            "title": "閉じる",
+            "caption": "閉じるアイコンまたは Escape キーを押してギャラリーに戻ります。"
+        },
+        "search-opening": {
+            "title": "開く",
+            "caption": "ツールバーの「Search」ボタンをクリックして写真のフィルタを作成します。"
+        },
+        "search-by-description": {
+            "title": "説明で検索",
+            "caption": "探している内容を入力します。これはスマート検索で、単なるキーワードではなく意味を理解します。類似度スライダーで一致の厳密さを調整できます。右に動かすほどクエリに近い結果になり、左に動かすと緩やかに一致します。"
+        },
+        "search-results": {
+            "title": "検索結果",
+            "caption": "「Apply」を押すと、検索との一致度が高い順にギャラリーへ結果が表示されます。ツールバーにはフィルタが有効であることが表示されます。"
+        },
+        "negative-terms": {
+            "title": "否定語",
+            "caption": "単語の前にマイナス記号を付けると除外できます。ここでは人物を除外して、木や植物を探しています。"
+        },
+        "negative-results": {
+            "title": "結果",
+            "caption": "ギャラリーは人物を除外した自然写真を優先して表示します。否定語は検索を絞り込む強力な方法です。"
+        },
+        "date-ranges": {
+            "title": "日付範囲",
+            "caption": "結果を日付範囲で絞り込みます。開始日または終了日を空欄にすると、片側が開いた範囲になります。"
+        },
+        "combined-filters": {
+            "title": "組み合わせフィルタ",
+            "caption": "フィルタは重ねて使えます。ここでは説明検索と日付範囲を組み合わせています。「Apply」をクリックすると、すべての条件に一致する写真だけが表示されます。"
+        },
+        "clearing-the-filter": {
+            "title": "フィルタを解除する",
+            "caption": "ツールバーの「Clear Filter」ボタンをクリックしてすべてのフィルタを解除し、画像ライブラリ全体を再表示します。"
+        },
+        "groups-opening": {
+            "title": "開く",
+            "caption": "ツールバーの「Groups」をクリックします。スライダーで表示するグループ化の種類を選べます。右側は完全な重複、そこから段階的に緩い類似度レベルになり、左側はディレクトリ単位のグループや自分のカスタムアルバムです。各スタックが写真のグループで、枚数が表示されます。"
+        },
+        "groups-toolbar": {
+            "title": "ツールバー",
+            "caption": "Groups 画面には専用のツールバーがあります。スライダーで厳密さレベルを選び、Min size で小さなグループを除外します。<table><tr><th>オフライン</th><th>オンライン</th><th>説明</th></tr><tr><td class=\"icon-cell\">−</td><td class=\"icon-cell\"><span class=\"material-symbols-outlined\">remove</span></td><td>サムネイルを小さく</td></tr><tr><td class=\"icon-cell\">✚</td><td class=\"icon-cell\"><span class=\"material-symbols-outlined\">add</span></td><td>サムネイルを大きく</td></tr><tr><td colspan=\"2\" style=\"text-align:left\">スライダー</td><td>同一 → ほぼ同一 → 類似 → 関連 → ディレクトリ → カスタム</td></tr><tr><td colspan=\"2\" style=\"text-align:left\">最小サイズ</td><td>これより小さいグループを隠す（自動レベルのみ）</td></tr><tr><td class=\"icon-cell\">🗑️</td><td class=\"icon-cell\"><span class=\"material-symbols-outlined\">delete_sweep</span></td><td>グループを整理（自動レベルのみ）</td></tr><tr><td class=\"icon-cell\">⇅</td><td class=\"icon-cell\"><span class=\"material-symbols-outlined\">sort</span></td><td>グループサイズで並べ替え</td></tr><tr><td class=\"icon-cell\">AZ</td><td class=\"icon-cell\"><span class=\"material-symbols-outlined\">sort_by_alpha</span></td><td>アルファベット順に並べ替え（名前付きグループのみ）</td></tr><tr><td class=\"icon-cell\">👥</td><td class=\"icon-cell\"><span class=\"material-symbols-outlined\">group</span></td><td>人物で並べ替え</td></tr><tr><td class=\"icon-cell\">🔗</td><td class=\"icon-cell\"><span class=\"material-symbols-outlined\">image_search</span></td><td>意味的類似度で並べ替え</td></tr></table>"
+        },
+        "strictness": {
+            "title": "厳密さ",
+            "caption": "スライダーを動かして一致の厳密さを変更します。「Identical」は完全一致のコピーを見つけ、「Related」は内容が関連する写真まで幅広く探します。さらに左側では「Directories」がディスク上のフォルダ単位で写真をグループ化し、「Custom」は自分で作成する手作業のアルバムです。"
+        },
+        "directories": {
+            "title": "ディレクトリ",
+            "caption": "スライダーを左から1つ右に動かすと「Directories」が表示されます。これらのグループはフォルダ構成を反映しており、それぞれが1つのフォルダ内の写真を含みます。グループ名には、フォルダを区別するために必要な最短の一意パスが表示されます。"
+        },
+        "opening-a-group": {
+            "title": "グループを開く",
+            "caption": "スタックをダブルクリックすると、そのグループがギャラリーで開き、写真を並べて比較できます。品質で自動的に並べ替えられ、最良の1枚が事前に選択されます。不要なものを選んで Delete を押すか、次のグループへ進んでください。"
+        },
+        "pruning-button": {
+            "title": "重複を整理する",
+            "caption": "重複を見つけたら、一括で整理できます。（強調表示された）prune ボタンを使うと、最良の画像を自動的に残し、残りを脇へ移動できます。"
+        },
+        "pruning-dialog": {
+            "title": "prune ダイアログ",
+            "caption": "prune ダイアログでは、各グループに残す画像の数を制御できます。最良の1枚だけ、固定枚数、または割合です。サマリーで影響を受ける画像数が正確に表示されます。心配はいりません。永久に削除されることはありません。整理された画像は「trash」フォルダへ移動されるので、いつでも復元できます。"
+        },
+        "moving-between-groups": {
+            "title": "グループ間を移動する",
+            "caption": "ツールバーの矢印ボタン（または Alt+Left / Alt+Right）で、Groups 画面に戻らずに次/前のグループへ移動できます。"
+        },
+        "custom-level": {
+            "title": "カスタムレベル",
+            "caption": "スライダーを一番左まで動かすとカスタムレベルになります。自動レベルとは異なり、カスタムグループは自分で作成して名前を付けるアルバムです。同じ写真を複数のグループに所属させることもできます。"
+        },
+        "creating-a-group": {
+            "title": "グループを作成する",
+            "caption": "ツールバーの「New Group」ボタンをクリックして名前を入力します。グループは最初は空です。次に写真を追加します。"
+        },
+        "adding-photos-from-gallery": {
+            "title": "ギャラリーから写真を追加する",
+            "caption": "ギャラリーに戻り、任意のサムネイルにマウスを合わせると小さな紫のバッジが表示されます。クリックすると Group Picker が開き、既存グループへの追加や新規作成ができます。複数の写真を選択している場合は、すべて一度に追加されます。"
+        },
+        "the-group-picker": {
+            "title": "Group Picker",
+            "caption": "バッジをクリックすると Group Picker が開きます。左ペインに利用可能なグループ一覧が表示され、クリックすると写真を追加します（右ペインには現在の所属が表示されます）。写真は同時に複数のグループに所属できます。必要な数だけ選択してください。「Done」をクリックすると保存し、「Cancel」で破棄します。"
+        },
+        "managing-groups": {
+            "title": "グループを管理する",
+            "caption": "カスタムレベルでは、ツールバーのボタンでグループの名前変更や削除ができます。ギャラリーでカスタムグループを表示しているときは、写真を選択して Backspace を押すと、写真自体を削除せずにグループから外せます。"
+        },
+        "faces-opening": {
+            "title": "開く",
+            "caption": "ツールバーの「Faces」ボタンをクリックします。この画面で、Photonarium が写真内で見つけた人物に名前を付けます。"
+        },
+        "faces-toolbar": {
+            "title": "ツールバー",
+            "caption": "Faces のツールバーには専用の操作があります。<table><tr><th>オフライン</th><th>オンライン</th><th>説明</th></tr><tr><td class=\"icon-cell\">─</td><td class=\"icon-cell\"><span class=\"material-symbols-outlined\">remove</span></td><td>顔サムネイルを小さく</td></tr><tr><td class=\"icon-cell\">✚</td><td class=\"icon-cell\"><span class=\"material-symbols-outlined\">add</span></td><td>顔サムネイルを大きく</td></tr><tr><td class=\"icon-cell\">❔</td><td class=\"icon-cell\"><span class=\"material-symbols-outlined\">help</span></td><td>未知の顔のみ表示</td></tr><tr><td class=\"icon-cell\">⊕</td><td class=\"icon-cell\"><span class=\"material-symbols-outlined\">center_focus_strong</span></td><td>1人にフォーカス</td></tr><tr><td class=\"icon-cell\">🔓</td><td class=\"icon-cell\"><span class=\"material-symbols-outlined\">lock_open</span></td><td>未ロックの顔のみ表示（人物ビュー）</td></tr><tr><td class=\"icon-cell\">↓</td><td class=\"icon-cell\"><span class=\"material-symbols-outlined\">arrow_downward</span></td><td>並べ替え方向を反転</td></tr></table>"
+        },
+        "unknown-faces": {
+            "title": "未知の顔",
+            "caption": "ここに初めて来ると、Photonarium が検出した顔が表示されます。まだ名前は付いていません。あなたの出番です。各顔の下に名前入力欄があります。"
+        },
+        "typing": {
+            "title": "入力",
+            "caption": "顔をクリックし、下の欄に名前を入力します。"
+        },
+        "naming": {
+            "title": "名前を付ける",
+            "caption": "Enter を押して保存します。これで最初の人物が作成されます。画面上部に「Known People」セクションが表示されます。"
+        },
+        "autocomplete": {
+            "title": "オートコンプリート",
+            "caption": "さらに顔に名前を付けていくと、入力中に候補が表示されます。候補を選ぶと、この顔を既存の人物に割り当てられます。"
+        },
+        "failed-face-detections": {
+            "title": "顔検出の失敗",
+            "caption": "Photonarium が顔ではないものを誤って検出することがあります。見つけたらクリックして選択できます。"
+        },
+        "selecting-multiple": {
+            "title": "複数選択",
+            "caption": "右クリックすると、既に選択しているものを保持したまま追加で選択できます。ここでは誤検出を8件選択しています。"
+        },
+        "removing": {
+            "title": "削除",
+            "caption": "選択したカードにマウスを合わせ、赤い X をクリックします。複数カードが選択されているため、Photonarium はそれらを一括で削除する提案をします。"
+        },
+        "the-ignore-control": {
+            "title": "無視コントロール",
+            "caption": "名前を付けたくない人物の顔は、選択して灰色のマイナスボタンをクリックします。検出を削除せずに脇へ移動できます。"
+        },
+        "ignoring": {
+            "title": "無視する",
+            "caption": "灰色のマイナスをクリックして選択した顔を無視します。必要なら後でいつでも名前を付け直せます。"
+        },
+        "ignored-group": {
+            "title": "無視グループ",
+            "caption": "無視された顔は「Known People」セクション内の特別な人物に所属します。邪魔になりませんが削除はされないので、いつでも再び見つけられます。"
+        },
+        "quick-match": {
+            "title": "クイックマッチ",
+            "caption": "顔の上にあるきらめきボタンをクリックすると、この顔が誰かの候補を表示します。Photonarium は名前を付けた人物の中から最も近い一致を示します。名前付き人物が増えるほど、顔の識別が速くなります。一致をクリックするだけで割り当てられます。"
+        },
+        "naming-another-face": {
+            "title": "別の顔に名前を付ける",
+            "caption": "今回はクイックマッチが見つからなかったので、この顔は自分で名前を付けましょう。"
+        },
+        "more-people": {
+            "title": "人物が増える",
+            "caption": "Enter を押して保存します。これでコレクションには2人の名前付き人物と、「ignored」顔のためのグループができました。"
+        },
+        "drag-and-drop": {
+            "title": "ドラッグ＆ドロップ",
+            "caption": "顔を「Known People」セクションの人物へ直接ドラッグして名前を割り当てることもできます。Ignore グループへも可能です。複数の顔を選択している場合でも動作します。"
+        },
+        "view-all": {
+            "title": "すべて表示",
+            "caption": "人物をダブルクリックすると、その人物に割り当てられたすべての顔が1か所に表示されます。ここで、好みの写真に星を付けて（アバターに設定し）、正しい識別をロックしたり、誤った名前の顔を削除できます。"
+        },
+        "preferred-face": {
+            "title": "お気に入りの顔",
+            "caption": "この人物の好きな画像の星をクリックします。これが Photonarium 全体でのアバターになります。"
+        },
+        "locking-and-unlocking": {
+            "title": "顔のロックと解除",
+            "caption": "ロックされた顔（緑の南京錠）は確認済みのものです。Photonarium はこれらを、他の写真でこの人物を認識するときの信頼できる例として使います。お気に入りの顔は解除できません。より良い一致が見つかると、未ロックの顔はいつでも自動的に再割り当てされる可能性があります。"
+        },
+        "faces-exiting": {
+            "title": "終了",
+            "caption": "ツールバーの ⊕ / <span class=\"material-symbols-outlined\">center_focus_strong</span>（1人にフォーカス）ボタンをクリックするか、Escape を押してメインの Faces 画面に戻ります。"
+        },
+        "tagging-opening": {
+            "title": "開く",
+            "caption": "名前を付けた人物の写真を探してみましょう。ツールバーの「Search」をクリックします。"
+        },
+        "people-picker": {
+            "title": "人物ピッカー",
+            "caption": "People セクションで「Select people」をクリックし、フィルタしたい人物を選びます。ヒント：説明欄に既知の人物名を入力すると（例：「ビーチの Bob」）、Photonarium が自動的に人物チップとして追加します。素早い検索ならピッカーが不要なこともあります。"
+        },
+        "people-picker-select": {
+            "title": "人物ピッカー",
+            "caption": "人物をクリックして選択するか、リスト間をドラッグして移動します。好きなだけ選べます。"
+        },
+        "applying-people-filter": {
+            "title": "人物フィルタを適用する",
+            "caption": "「Done」をクリックし、次に「Apply」で結果を表示します。ギャラリーには Alice を含む写真だけが表示されます。"
+        },
+        "tagging-fullscreen": {
+            "title": "全画面",
+            "caption": "写真をダブルクリックして全画面で開きます。フィルタを使っているので、これに Alice が写っていることが分かります。"
+        },
+        "enabling-face-tagging": {
+            "title": "顔タグ付けモードを有効にする",
+            "caption": "左上の顔アイコンをクリックして顔タグ付けをオンにします。検出された顔の周りに色付きの枠が表示されます。緑は名前付き、赤は未知、灰色は無視、オレンジは名前を入力中であることを示します。顔にマウスを合わせると名前が表示されます。"
+        },
+        "tagging-naming": {
+            "title": "名前を付ける",
+            "caption": "写真上で任意の顔をクリックして、名前を入力または変更できます。入力中にオートコンプリート候補が表示され、顔が既に名前付きや無視済みであっても、きらめきボタンからクイックマッチを使えます。"
+        },
+        "tagging-ignoring": {
+            "title": "無視する",
+            "caption": "顔にマウスを合わせると Faces 画面と同じ操作が表示されます。灰色のマイナスで無視、赤い X で誤検出を削除します。緑の X は顔の名前付けを解除します。"
+        },
+        "sorting-by-people": {
+            "title": "人物で並べ替え",
+            "caption": "写真を写っている人物ごとにまとめます。同じ人物の写真がまとまって表示されます。"
+        },
+        "switching-themes": {
+            "title": "テーマを切り替える",
+            "caption": "月/太陽アイコンをクリックしてライト/ダークテーマを切り替えます。"
+        },
+        "larger-thumbnails": {
+            "title": "サムネイルを大きく",
+            "caption": "「Larger thumbnails」ボタンをクリックしてグリッドを大きくします。各写真の詳細が見やすくなります。"
+        },
+        "smaller-thumbnails": {
+            "title": "サムネイルを小さく",
+            "caption": "「Smaller thumbnails」ボタンをクリックして元のサイズに戻します。この方法だと一度により多くの写真を表示できます。"
+        },
+        "mobile-landscape": {
+            "title": "モバイル：横向き",
+            "caption": "Photonarium はスマートフォンやタブレットでも動作します。横向きでは、レイアウトが調整され、サムネイルグリッドと情報パネルが左右に並び、コンパクトなツールバーはハンバーガーメニューに折りたたまれます。"
+        },
+        "mobile-portrait": {
+            "title": "モバイル：縦向き",
+            "caption": "縦向きでは、情報パネルはグリッドの下に積み重なり、スクロールバーはタッチ操作向けに太くなります。ソファでの閲覧や別の部屋からライブラリを確認するのに最適です。複数の端末で同時に Photonarium を使えます。ある端末で行った変更（顔の命名、写真の評価、グループ作成など）は数秒以内に他のすべての端末に反映され、常に同期された状態になります。"
+        }
+    }
+}
