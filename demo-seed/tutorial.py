@@ -1280,6 +1280,15 @@ def step_extras_smaller_thumbnails(page, ctx):
 
 
 # =========================================================================
+# Section 9: USE IT ANYWHERE
+# =========================================================================
+section('anywhere')
+
+manual_step('mobile-landscape', 'mobile-landscape.png')
+manual_step('mobile-portrait', 'mobile-portrait.png')
+
+
+# =========================================================================
 # Server lifecycle
 # =========================================================================
 

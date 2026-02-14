@@ -35,6 +35,10 @@
         {
             "key": "gallery-extras",
             "title": "Gallery extras"
+        },
+        {
+            "key": "anywhere",
+            "title": "Use it anywhere in your home"
         }
     ],
     "steps": {
@@ -341,6 +345,14 @@
         "smaller-thumbnails": {
             "title": "Smaller thumbnails",
             "caption": "Click the Smaller thumbnails button to shrink them back down. You can see more photos at once this way."
+        },
+        "mobile-landscape": {
+            "title": "Mobile \u2014 landscape",
+            "caption": "Photonarium works on phones and tablets too. In landscape, the layout adjusts to give you a thumbnail grid and info panel side by side, with a compact toolbar that collapses into a hamburger menu."
+        },
+        "mobile-portrait": {
+            "title": "Mobile \u2014 portrait",
+            "caption": "In portrait, the info panel stacks below the grid and scrollbars widen for touch. It\u2019s great for browsing on the sofa or checking your library from another room. Multiple devices can use Photonarium at the same time \u2014 changes you make on one (naming a face, rating a photo, creating a group) appear on every other device within seconds, so everything stays in sync."
         }
     }
 }
