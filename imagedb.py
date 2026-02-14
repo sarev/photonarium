@@ -596,22 +596,19 @@ def get_folders(conn: sqlite3.Connection) -> list[dict[str, Any]]:
 def add_folder(
     conn: sqlite3.Connection,
     path: Path | str,
-    config: Config | None = None,
 ) -> dict[str, Any] | None:
     """Register a new image source folder.
 
     Adds the folder to the database if not already registered. Does not
-    scan the folder for images - that should be triggered separately via
-    the ingestion queue.
+    scan the folder for images — the caller is responsible for triggering
+    a filesystem scan and queuing images for ingestion separately.
 
     Args:
         conn: Database connection.
         path: Absolute path to the folder to register.
-        config: Configuration object (used for image extensions when scanning).
-            If None, uses default configuration.
 
     Returns:
-        Dictionary with folder info {'path': str, 'count': int, 'new_images': list},
+        Dictionary with folder info {'path': str, 'count': int},
         or None if folder already registered.
 
     Raises:
@@ -641,16 +638,9 @@ def add_folder(
 
     logger.info(f'Registered folder: {path}')
 
-    # Find image files in the folder (for queuing to ingestion)
-    if config is None:
-        config = get_default_config()
-
-    new_images = list(find_images_in_folder(path, config.image_extensions))
-
     return {
         'path': path_str,
         'count': 0,  # No images ingested yet
-        'new_images': new_images,  # Paths to queue for ingestion
     }
 
 
@@ -5107,21 +5097,52 @@ class ImageDatabase:
             Folder info dict, or None if already registered.
         """
         with self._db_lock:
-            result = add_folder(self.conn, path, self.config)
+            result = add_folder(self.conn, path)
         if result is not None:
             # Enable full processing chain — adding a folder via the GUI
             # should trigger face detection and grouping just like Rescan
             self._run_face_detection = True
             self._run_face_grouping = True
-            # Queue images for ingestion
-            for image_path in result['new_images']:
-                self._ingestion_queue.put(image_path)
             emit_folder_added(self.event_queue, result['path'])
-            # Remove the paths list from return value
-            del result['new_images']
             # Re-validate trash dir (new folder may conflict)
             self._validate_trash_dir()
+            # Scan the folder for images in a background thread so the
+            # HTTP response returns immediately.  Walking a NAS path over
+            # SMB can take minutes for large collections; blocking the
+            # request would leave the user staring at a frozen UI.
+            scan_thread = threading.Thread(
+                target=self._scan_and_queue_folder,
+                args=(result['path'],),
+                daemon=True,
+                name='folder-scan',
+            )
+            scan_thread.start()
         return result
+
+    def _scan_and_queue_folder(self, folder_path: str) -> None:
+        """Scan a single folder for images and queue them for ingestion.
+
+        Runs in a background thread after a folder is registered so that
+        the API response is not blocked by potentially slow filesystem
+        traversal (e.g. network shares over SMB).
+        """
+        try:
+            count = 0
+            for image_path in find_images_in_folder(
+                folder_path,
+                self.config.image_extensions,
+            ):
+                if self._stop_event.is_set():
+                    logger.info(f'Folder scan interrupted by shutdown: {folder_path}')
+                    return
+                self._ingestion_queue.put(image_path)
+                count += 1
+            if count:
+                logger.info(f'Queued {count} image(s) from {folder_path}')
+            else:
+                logger.info(f'No images found in {folder_path}')
+        except Exception:
+            logger.exception(f'Error scanning folder: {folder_path}')
 
     def remove_folder(self, path: str) -> bool:
         """Remove a folder and mark orphaned images as deleted."""

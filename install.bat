@@ -324,7 +324,7 @@ echo.
 echo   To start Photonarium, open a terminal in this folder and run:
 echo.
 echo     Command Prompt:
-echo       %VENV_DIR%\Scripts\activate
+echo       %VENV_DIR%\Scripts\activate.bat
 echo       python app.py
 echo.
 echo     PowerShell:
