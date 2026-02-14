@@ -494,14 +494,8 @@ where string-formatted SQL is used for schema names with parameterised value bin
 
 ### Automation
 
-Two hooks enforce quality automatically:
-
-1. **Claude Code hook** (`.claude/hooks/lint.py`): Runs after every Edit/Write tool use.
-   Checks the changed file with ruff (`.py`) or ESLint (`.js`). Errors are shown
-   immediately so the AI can fix them.
-
-2. **Git pre-commit hook** (`.git/hooks/pre-commit`): Blocks commits if staged files have
-   lint or formatting errors. Prints fix commands on failure.
+A **git pre-commit hook** (`.git/hooks/pre-commit`) blocks commits if staged files have
+lint or formatting errors. It prints fix commands on failure.
 
 ### Suppressing Rules
 
