@@ -140,6 +140,73 @@ const App = {
     _isReady: false,
 
     /* ----------------------------------------------------------------------
+       Connectivity Tracking
+
+       Detects when the backend is unreachable and blocks mutations that
+       would succeed locally (optimistic update) but never persist.
+       Poll success callbacks call markOnline(); isOffline() checks
+       the time since the last successful poll.
+       ---------------------------------------------------------------------- */
+
+    /**
+     * Timestamp of the last successful backend poll (events or status).
+     * @type {number}
+     * @private
+     */
+    _lastSuccessfulPoll: Date.now(),
+
+    /**
+     * Whether we have shown the "offline" toast (avoids repeat toasts).
+     * @type {boolean}
+     * @private
+     */
+    _wasOffline: false,
+
+    /**
+     * Called by event/status polling on every successful response.
+     * Resets the offline timer and optionally shows a "restored" toast
+     * if the outage lasted more than 10 minutes (brief Wi-Fi blips
+     * are common and don't warrant a notification).
+     */
+    markOnline() {
+        const wasOfflineMs = Date.now() - this._lastSuccessfulPoll;
+        this._lastSuccessfulPoll = Date.now();
+        if (this._wasOffline) {
+            this._wasOffline = false;
+            // Only show "restored" toast after a long outage (>10 min).
+            // On flaky Wi-Fi, brief dropouts are common and the toast
+            // would be annoyingly spammy.
+            if (wasOfflineMs > 10 * 60 * 1000) {
+                this.showInfo('Connection restored.');
+            }
+        }
+    },
+
+    /**
+     * Check whether the backend appears unreachable.
+     * True when 3 consecutive 2-second polls have failed (6 seconds).
+     * @returns {boolean}
+     */
+    isOffline() {
+        return Date.now() - this._lastSuccessfulPoll > 6000;
+    },
+
+    /**
+     * Guard for mutation methods — returns false and shows a toast if
+     * the backend is unreachable. Call at the top of every AppState
+     * method that would do an optimistic update + API call.
+     * @returns {boolean} true if online and safe to proceed
+     */
+    requireOnline() {
+        if (this.isOffline()) {
+            this._wasOffline = true;
+            this.showError('You appear to be offline. Changes cannot be saved.');
+            return false;
+        }
+        return true;
+    },
+
+    /* ----------------------------------------------------------------------
        State Getters and Setters
        ---------------------------------------------------------------------- */
 

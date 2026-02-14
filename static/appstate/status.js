@@ -74,6 +74,9 @@ AppState.status = (function() {
                 const response = await App.apiGet('/status');
                 _status = response.data;
 
+                // Track connectivity for offline detection
+                App.markOnline();
+
                 // Check for face reassessment completion
                 const wasCompleted = _prevStatus?.face_reassessment?.completed;
                 const isCompleted = _status?.face_reassessment?.completed;

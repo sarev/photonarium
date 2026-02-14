@@ -759,6 +759,7 @@ AppState.faces = (function() {
          * @returns {Promise<{personId: string}>}
          */
         async identify(faceIds, personName, options = {}) {
+            if (!App.requireOnline()) return;
             if (!Array.isArray(faceIds)) faceIds = [faceIds];
             if (!faceIds?.length) return Promise.resolve();
 
@@ -918,6 +919,46 @@ AppState.faces = (function() {
         },
 
         /**
+         * Apply face updates from a multi-client event.
+         * Backend already persisted; this just updates the local cache.
+         * Idempotent: re-applying the same update is a no-op.
+         *
+         * @param {Object[]} updates - Array of {id, person_id?, person_name?, suppressed?, manually_tagged?}
+         */
+        autoUpdate(updates) {
+            if (!updates?.length || !_cache) return;
+            transaction(() => {
+                for (const upd of updates) {
+                    const face = _cache.get(upd.id);
+                    if (!face) continue;
+                    if ('person_id' in upd) {
+                        face.person_id = upd.person_id;
+                        face.person_name = upd.person_name || null;
+                    }
+                    if ('suppressed' in upd) face.suppressed = upd.suppressed;
+                    if ('manually_tagged' in upd) face.manually_tagged = upd.manually_tagged;
+                }
+                invalidateDerived();
+                markDirty(domainRef);
+            });
+        },
+
+        /**
+         * Remove faces from cache in response to a multi-client event.
+         * Backend already deleted; this just cleans up the local cache.
+         *
+         * @param {string[]} faceIds - IDs of deleted faces
+         */
+        autoRemove(faceIds) {
+            if (!faceIds?.length || !_cache) return;
+            transaction(() => {
+                for (const fid of faceIds) _cache.delete(fid);
+                invalidateDerived();
+                markDirty(domainRef);
+            });
+        },
+
+        /**
          * Unassign faces - return to unknown pool.
          * Unlocks the faces.
          *
@@ -925,6 +966,7 @@ AppState.faces = (function() {
          * @returns {Promise<void>}
          */
         async unassign(faceIds) {
+            if (!App.requireOnline()) return;
             if (!Array.isArray(faceIds)) faceIds = [faceIds];
             if (!faceIds?.length) return Promise.resolve();
 
@@ -987,6 +1029,7 @@ AppState.faces = (function() {
          * @returns {Promise<void>}
          */
         async suppress(faceIds) {
+            if (!App.requireOnline()) return;
             if (!Array.isArray(faceIds)) faceIds = [faceIds];
             if (!faceIds?.length) return Promise.resolve();
 
@@ -1067,6 +1110,7 @@ AppState.faces = (function() {
          * @returns {Promise<void>}
          */
         async setLocked(faceIds, locked) {
+            if (!App.requireOnline()) return;
             if (!Array.isArray(faceIds)) faceIds = [faceIds];
             if (!faceIds?.length) return Promise.resolve();
 
@@ -1168,6 +1212,7 @@ AppState.faces = (function() {
          * @returns {Promise<boolean>} New locked state
          */
         async toggleManualTag(faceId) {
+            if (!App.requireOnline()) return;
             // Ensure face is in cache before reading current state
             await this.ensureFacesInCache([faceId]);
             const face = _cache?.get(faceId);
@@ -1824,6 +1869,7 @@ AppState.people = (function() {
          * @returns {Promise<void>}
          */
         rename(personId, newName) {
+            if (!App.requireOnline()) return;
             const person = _internal.get(personId);
             if (!person) throw new Error('Person not found');
 
@@ -1886,6 +1932,7 @@ AppState.people = (function() {
          * @returns {Promise<void>}
          */
         async merge(fromId, toId) {
+            if (!App.requireOnline()) return;
             if (fromId === toId) return;
 
             const fromPerson = _internal.get(fromId);
@@ -1950,6 +1997,7 @@ AppState.people = (function() {
          * @returns {Promise<void>}
          */
         dissolve(personId) {
+            if (!App.requireOnline()) return;
             const person = _internal.get(personId);
             if (!person) throw new Error('Person not found');
 
@@ -2010,6 +2058,7 @@ AppState.people = (function() {
          * @returns {Promise<void>}
          */
         setPreferredFace(personId, faceId) {
+            if (!App.requireOnline()) return;
             const person = _internal.get(personId);
             if (!person) throw new Error('Person not found');
 
@@ -2060,6 +2109,7 @@ AppState.people = (function() {
          * @returns {Promise<Object>}
          */
         setThreshold(personId, threshold) {
+            if (!App.requireOnline()) return;
             const person = _internal.get(personId);
             if (!person) throw new Error('Person not found');
 
@@ -2104,6 +2154,7 @@ AppState.people = (function() {
          * @returns {Promise<Object>} Created person
          */
         create(name) {
+            if (!App.requireOnline()) return;
             const personId = crypto.randomUUID();
             const person = {
                 id: personId,
@@ -2141,6 +2192,39 @@ AppState.people = (function() {
          */
         delete(id) {
             return this.dissolve(id);
+        },
+
+        /**
+         * Upsert people from a multi-client event.
+         * Backend already persisted; this just updates the local cache.
+         * Idempotent: re-upserting the same data is a no-op.
+         *
+         * @param {Object[]} people - Array of person objects with at least {id}
+         */
+        autoUpsert(people) {
+            if (!people?.length || !_cache) return;
+            transaction(() => {
+                for (const p of people) {
+                    const existing = _cache.get(p.id);
+                    if (existing) Object.assign(existing, p);
+                    else _cache.set(p.id, { ...p });
+                }
+                markDirty(domainRef);
+            });
+        },
+
+        /**
+         * Remove people from cache in response to a multi-client event.
+         * Backend already deleted; this just cleans up the local cache.
+         *
+         * @param {string[]} personIds - IDs of deleted people
+         */
+        autoRemove(personIds) {
+            if (!personIds?.length || !_cache) return;
+            transaction(() => {
+                for (const pid of personIds) _cache.delete(pid);
+                markDirty(domainRef);
+            });
         },
 
         // =====================================================================

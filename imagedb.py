@@ -3879,6 +3879,13 @@ EVENT_FACES_REASSESSED = 'faces_reassessed'
 EVENT_IMAGES_MODIFIED = 'images_modified'
 EVENT_NIMA_COMPLETE = 'nima_complete'
 
+# Multi-client mutation events — emitted by Flask routes so that other
+# browser tabs/clients can pick up user-initiated changes via polling.
+EVENT_FACES_CHANGED = 'faces_changed'
+EVENT_PEOPLE_CHANGED = 'people_changed'
+EVENT_IMAGES_CHANGED = 'images_changed'
+EVENT_GROUPS_CHANGED = 'groups_changed'
+
 
 @dataclass
 class Event:
@@ -3887,26 +3894,31 @@ class Event:
     Attributes:
         event_type: Type of event (e.g., 'folder_added', 'processing_complete').
         data: Event payload as dictionary.
-        timestamp: When the event occurred.
+        timestamp: Unix timestamp (seconds) from time.time().
     """
     event_type: str
     data: dict[str, Any]
-    timestamp: datetime = field(default_factory=datetime.now)
+    timestamp: float = field(default_factory=time.time)
 
 
 class EventQueue:
-    """Thread-safe event queue for frontend polling.
+    """Thread-safe event queue for multi-client frontend polling.
 
-    Accumulates events in a single queue. Frontend polls periodically
-    to fetch pending events. This replaces SSE which blocked threads.
+    Accumulates events in a ring buffer. Clients poll with a cursor
+    (timestamp from previous response) to receive only new events.
+    Events are NOT drained on read — multiple clients can each
+    maintain their own cursor and independently catch up.
 
     Attributes:
-        _events: List of pending events.
+        _events: List of buffered events (oldest first).
         _lock: Threading lock for thread safety.
     """
 
-    # Maximum events to accumulate (prevents unbounded growth if frontend stops polling)
-    MAX_EVENTS = 100
+    # Maximum events to buffer (prevents unbounded growth).
+    # When exceeded, oldest events are dropped. Clients whose cursor
+    # falls behind the oldest event receive a 'stale' flag and must
+    # do a full reload instead of incremental catch-up.
+    MAX_EVENTS = 200
 
     def __init__(self):
         """Initialise the event queue."""
@@ -3926,29 +3938,56 @@ class EventQueue:
             # Trim oldest events if queue is too large
             if len(self._events) > self.MAX_EVENTS:
                 self._events = self._events[-self.MAX_EVENTS:]
-        logger.debug(f'Event queued: {event_type} (pending: {len(self._events)})')
+        logger.debug(f'Event queued: {event_type} (buffered: {len(self._events)})')
 
     def get_pending_count(self) -> int:
-        """Get number of pending events.
+        """Get number of buffered events.
 
         Returns:
-            Number of events waiting to be fetched.
+            Number of events currently in the buffer.
         """
         with self._lock:
             return len(self._events)
 
-    def get_pending(self) -> list[Event]:
-        """Fetch and clear all pending events.
+    def get_since(self, since: float = 0) -> dict[str, Any]:
+        """Get events newer than the given timestamp.
+
+        Uses a 100ms safety margin to avoid missing near-simultaneous
+        events due to floating-point timing. Events stay in the buffer
+        (not cleared on read) so multiple clients can each poll
+        independently.
+
+        Args:
+            since: Unix timestamp cursor from previous poll response.
+                   Pass 0 for the initial poll (returns all buffered events).
 
         Returns:
-            List of pending events (oldest first). Queue is cleared.
+            Dict with:
+                events: List of Event objects newer than ``since``.
+                server_time: Current server time (use as next cursor).
+                stale: True when client's cursor has fallen behind the
+                    buffer — the client missed events and must do a
+                    full state reload instead of incremental catch-up.
         """
+        now = time.time()
         with self._lock:
-            events = self._events
-            self._events = []
+            # Stale detection: client had a cursor (since > 0), the buffer
+            # is full, and the cursor is older than our oldest event.
+            stale = False
+            if since > 0 and len(self._events) >= self.MAX_EVENTS:
+                if self._events and since < self._events[0].timestamp:
+                    stale = True
+
+            if stale:
+                return {'events': [], 'server_time': now, 'stale': True}
+
+            # 100ms safety margin to catch near-simultaneous events
+            cutoff = since - 0.1 if since > 0 else 0
+            events = [e for e in self._events if e.timestamp >= cutoff]
+
         if events:
-            logger.debug(f'Fetched {len(events)} pending events')
-        return events
+            logger.debug(f'Returning {len(events)} events since {since:.3f}')
+        return {'events': events, 'server_time': now, 'stale': False}
 
 
 # Convenience functions for emitting specific events
@@ -5969,12 +6008,16 @@ class ImageDatabase:
     def create_custom_group(self, group_hash: str, name: str, image_ids: list[str]) -> None:
         """Create a custom group (album) with the given images.
 
+        Serialised with _db_lock to prevent concurrent group mutations
+        from corrupting the DuplicateManager's in-memory cache.
+
         Args:
             group_hash: Frontend-generated UUID for the group.
             name: Display name for the group.
             image_ids: Initial list of image IDs to include.
         """
-        self._duplicate_manager.create_custom_group(group_hash, name, image_ids)
+        with self._db_lock:
+            self._duplicate_manager.create_custom_group(group_hash, name, image_ids)
 
     def rename_custom_group(self, group_hash: str, name: str) -> None:
         """Rename a custom group.
@@ -5983,7 +6026,8 @@ class ImageDatabase:
             group_hash: The group identifier.
             name: New display name.
         """
-        self._duplicate_manager.rename_custom_group(group_hash, name)
+        with self._db_lock:
+            self._duplicate_manager.rename_custom_group(group_hash, name)
 
     def delete_custom_group(self, group_hash: str) -> None:
         """Delete a custom group and its image associations.
@@ -5991,7 +6035,8 @@ class ImageDatabase:
         Args:
             group_hash: The group identifier.
         """
-        self._duplicate_manager.delete_custom_group(group_hash)
+        with self._db_lock:
+            self._duplicate_manager.delete_custom_group(group_hash)
 
     def add_images_to_custom_group(self, group_hash: str, image_ids: list[str]) -> None:
         """Add images to an existing custom group.
@@ -6000,7 +6045,8 @@ class ImageDatabase:
             group_hash: The group identifier.
             image_ids: Image IDs to add.
         """
-        self._duplicate_manager.add_images_to_custom_group(group_hash, image_ids)
+        with self._db_lock:
+            self._duplicate_manager.add_images_to_custom_group(group_hash, image_ids)
 
     def remove_images_from_custom_group(self, group_hash: str, image_ids: list[str]) -> None:
         """Remove images from a custom group (group persists even if empty).
@@ -6009,7 +6055,8 @@ class ImageDatabase:
             group_hash: The group identifier.
             image_ids: Image IDs to remove.
         """
-        self._duplicate_manager.remove_images_from_custom_group(group_hash, image_ids)
+        with self._db_lock:
+            self._duplicate_manager.remove_images_from_custom_group(group_hash, image_ids)
 
     # =========================================================================
     # Public API - Stats and Status
@@ -6223,20 +6270,32 @@ class ImageDatabase:
     # Public API - Events (SSE)
     # =========================================================================
 
-    def get_pending_events(self) -> list[dict[str, Any]]:
-        """Get all pending events and clear the queue.
+    def get_pending_events(self, since: float = 0) -> dict[str, Any]:
+        """Get events newer than the given timestamp.
+
+        Multi-client safe: events are not drained on read. Each client
+        passes its cursor (``since``) and receives only new events.
+
+        Args:
+            since: Unix timestamp cursor from previous poll response.
+                   Pass 0 for the initial poll.
 
         Returns:
-            List of event dicts with 'type' and 'data' keys.
+            Dict with 'events' (list of dicts), 'server_time' (float),
+            and 'stale' (bool).
         """
-        events = self.event_queue.get_pending()
-        return [{'type': e.event_type, 'data': e.data} for e in events]
+        result = self.event_queue.get_since(since)
+        result['events'] = [
+            {'type': e.event_type, 'data': e.data}
+            for e in result['events']
+        ]
+        return result
 
     def get_pending_event_count(self) -> int:
-        """Get number of pending events without fetching them.
+        """Get number of buffered events.
 
         Returns:
-            Number of events in queue.
+            Number of events currently in the buffer.
         """
         return self.event_queue.get_pending_count()
 

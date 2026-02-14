@@ -9,12 +9,20 @@
  * - Folder changes
  * - Processing completion
  *
- * Event types:
+ * Backend-initiated event types:
  * - `faces_reassessed` - Async face matching completed
  * - `folder_added` / `folder_removed` - Folder registration changes
  * - `processing_complete` - Full processing cycle finished
  * - `image_ingested` - New image added to database
+ * - `images_modified` - Images rotated/rescanned
+ * - `nima_complete` - NIMA aesthetic scoring finished
  * - `error` - Backend error occurred
+ *
+ * Multi-client mutation event types:
+ * - `faces_changed` - Face assignments, suppression, lock changes
+ * - `people_changed` - People created, renamed, deleted, merged
+ * - `images_changed` - Images rated, described, trashed
+ * - `groups_changed` - Custom groups created, renamed, deleted, modified
  *
  * @fileoverview Backend event polling and dispatch.
  */
@@ -37,6 +45,9 @@ AppState.events = (function() {
 
     /** @type {number} Poll interval in ms */
     let _intervalMs = 2000;
+
+    /** @type {number} Cursor for multi-client polling — server_time from last response */
+    let _lastServerTime = 0;
 
     // =========================================================================
     // EVENT HANDLERS
@@ -98,6 +109,30 @@ AppState.events = (function() {
                 // data: { scored_count }
                 console.log('[AppState.events] NIMA scoring complete, reloading images');
                 AppState.images.load();
+                break;
+
+            // -----------------------------------------------------------------
+            // Multi-client mutation events
+            // -----------------------------------------------------------------
+
+            case 'faces_changed':
+                // data: { updated?: [{id, person_id?, ...}], removed?: [id] }
+                handleFacesChanged(data);
+                break;
+
+            case 'people_changed':
+                // data: { upserted?: [{id, name, ...}], removed?: [id] }
+                handlePeopleChanged(data);
+                break;
+
+            case 'images_changed':
+                // data: { updated_ids?: [id], removed_ids?: [id] }
+                await handleImagesChanged(data);
+                break;
+
+            case 'groups_changed':
+                // data: { level, invalidate: true }
+                handleGroupsChanged(data);
                 break;
 
             default:
@@ -286,20 +321,100 @@ AppState.events = (function() {
     }
 
     // =========================================================================
+    // MULTI-CLIENT EVENT HANDLERS
+    // =========================================================================
+
+    /**
+     * Handle faces_changed event from another client.
+     * Updates face cache incrementally and invalidates people (face counts).
+     * @param {Object} data - {updated?: [{id, person_id?, ...}], removed?: [id]}
+     */
+    function handleFacesChanged(data) {
+        if (data?.updated?.length) {
+            AppState.faces.autoUpdate(data.updated);
+        }
+        if (data?.removed?.length) {
+            AppState.faces.autoRemove(data.removed);
+        }
+        // People face counts may have changed — invalidate so next access re-fetches
+        if (AppState.people?.invalidate) {
+            AppState.people.invalidate();
+        }
+    }
+
+    /**
+     * Handle people_changed event from another client.
+     * @param {Object} data - {upserted?: [{id, name, ...}], removed?: [id]}
+     */
+    function handlePeopleChanged(data) {
+        if (data?.upserted?.length) {
+            AppState.people.autoUpsert(data.upserted);
+        }
+        if (data?.removed?.length) {
+            AppState.people.autoRemove(data.removed);
+        }
+    }
+
+    /**
+     * Handle images_changed event from another client.
+     * Removes trashed images from cache and refreshes updated ones.
+     * @param {Object} data - {updated_ids?: [id], removed_ids?: [id]}
+     */
+    async function handleImagesChanged(data) {
+        if (data?.removed_ids?.length) {
+            AppState.images.autoRemove(data.removed_ids);
+        }
+        if (data?.updated_ids?.length) {
+            await AppState.images.refreshByIds(data.updated_ids);
+        }
+    }
+
+    /**
+     * Handle groups_changed event from another client.
+     * Invalidates the duplicate group cache for the affected level.
+     * @param {Object} data - {level: number, invalidate: true}
+     */
+    function handleGroupsChanged(data) {
+        if (data?.level !== undefined && AppState.duplicates?.invalidate) {
+            AppState.duplicates.invalidate(data.level);
+        }
+        broadcast({ type: 'groupsChanged', level: data?.level });
+    }
+
+    // =========================================================================
     // POLLING
     // =========================================================================
 
     /**
-     * Poll for events from backend.
+     * Poll for events from backend using cursor-based pagination.
+     * Each poll sends the server_time from the previous response so only
+     * new events are returned. Multiple browser tabs can poll independently
+     * without draining events from each other.
      */
     async function poll() {
         if (_polling) return;
         _polling = true;
 
         try {
-            const response = await App.apiGet('/events');
-            const events = response?.data?.events || [];
+            const response = await App.apiGet(`/events?since=${_lastServerTime}`);
+            const data = response?.data;
 
+            // Track connectivity for offline detection
+            App.markOnline();
+
+            // Update cursor for next poll
+            if (data?.server_time) {
+                _lastServerTime = data.server_time;
+            }
+
+            // If client has fallen behind the event buffer, do a full reload
+            // instead of trying to process individual events
+            if (data?.stale) {
+                await handleStaleReload();
+                return;
+            }
+
+            const events = data?.events || [];
             for (const event of events) {
                 await processEvent(event);
             }
@@ -307,6 +422,33 @@ AppState.events = (function() {
             console.error('[AppState.events.poll] Error:', err);
         } finally {
             _polling = false;
+        }
+    }
+
+    /**
+     * Handle stale client — event buffer has wrapped and we missed events.
+     * Performs a full reload of all AppState domains so the client converges
+     * to the correct server state. Tries to be minimally disruptive: stays
+     * on the same screen, preserves selection and scroll where possible.
+     */
+    async function handleStaleReload() {
+        console.warn('[AppState.events] Client is stale, reloading all state');
+
+        // Reload all data domains — order matters: images first (faces reference them)
+        AppState.images.invalidate();
+        await AppState.images.load();
+
+        AppState.folders.load();
+        AppState.people.load(true);
+
+        // Only reload faces if they were already loaded (lazy domain)
+        if (AppState.faces.isLoaded()) {
+            AppState.faces.load(true);
+        }
+
+        // Invalidate all duplicate group caches (levels 0-5)
+        for (let level = 0; level <= 5; level++) {
+            AppState.duplicates.invalidate(level);
         }
     }
 
@@ -350,6 +492,7 @@ AppState.events = (function() {
 
         /**
          * Stop polling for events.
+         * Resets the cursor so the next startPolling() begins from scratch.
          */
         stopPolling() {
             if (_pollTimer) {
@@ -357,6 +500,7 @@ AppState.events = (function() {
                 clearInterval(_pollTimer);
                 _pollTimer = null;
             }
+            _lastServerTime = 0;
         },
 
         /**

@@ -74,7 +74,11 @@ def jsonify(data):
 
 
 from caption import CaptionGenerator
-from imagedb import ImageDatabase, register_signal_handlers
+from imagedb import (
+    ImageDatabase, register_signal_handlers,
+    EVENT_FACES_CHANGED, EVENT_PEOPLE_CHANGED,
+    EVENT_IMAGES_CHANGED, EVENT_GROUPS_CHANGED,
+)
 from trash import compute_quality_scores
 from rawimage import is_raw_format, open_image as raw_open_image
 from thumbnails import (
@@ -489,9 +493,14 @@ def update_image(image_id):
     if not allowed_updates:
         return error_response('No valid fields to update')
 
-    image = get_db().update_image(image_id, allowed_updates)
+    db = get_db()
+    image = db.update_image(image_id, allowed_updates)
     if image is None:
         return error_response('Image not found', 404)
+
+    # Broadcast for other clients
+    db.event_queue.emit(EVENT_IMAGES_CHANGED, {'updated_ids': [image_id]})
+
     return success_response(image)
 
 
@@ -593,6 +602,11 @@ def trash_images():
             checksum = db.get_checksum(image_id)
             if checksum:
                 cache.remove(checksum)
+
+        # Broadcast for other clients
+        db.event_queue.emit(EVENT_IMAGES_CHANGED, {
+            'removed_ids': result['trashed'],
+        })
 
     return success_response(result)
 
@@ -1508,6 +1522,15 @@ def prune_duplicates():
         for img_id, msg in result.get('errors', {}).items()
     ]
 
+    # Broadcast for other clients
+    if result['trashed']:
+        db.event_queue.emit(EVENT_IMAGES_CHANGED, {
+            'removed_ids': result['trashed'],
+        })
+    db.event_queue.emit(EVENT_GROUPS_CHANGED, {
+        'level': level, 'invalidate': True,
+    })
+
     return success_response({
         'trashed_count': len(result['trashed']),
         'group_count': pruned_group_count,
@@ -1549,7 +1572,10 @@ def create_group():
     image_ids = data.get('image_ids', [])
 
     try:
-        get_db().create_custom_group(group_hash, name, image_ids)
+        db = get_db()
+        db.create_custom_group(group_hash, name, image_ids)
+        # Broadcast for other clients
+        db.event_queue.emit(EVENT_GROUPS_CHANGED, {'level': 5, 'invalidate': True})
         return success_response(message='Group created')
     except Exception as e:
         logger.exception('Failed to create custom group')
@@ -1578,7 +1604,10 @@ def rename_group(group_hash):
         return error_response('Group name must be 255 characters or fewer')
 
     try:
-        get_db().rename_custom_group(group_hash, name)
+        db = get_db()
+        db.rename_custom_group(group_hash, name)
+        # Broadcast for other clients
+        db.event_queue.emit(EVENT_GROUPS_CHANGED, {'level': 5, 'invalidate': True})
         return success_response(message='Group renamed')
     except Exception as e:
         logger.exception('Failed to rename custom group')
@@ -1595,7 +1624,10 @@ def delete_group(group_hash):
         Success response on deletion.
     """
     try:
-        get_db().delete_custom_group(group_hash)
+        db = get_db()
+        db.delete_custom_group(group_hash)
+        # Broadcast for other clients
+        db.event_queue.emit(EVENT_GROUPS_CHANGED, {'level': 5, 'invalidate': True})
         return success_response(message='Group deleted')
     except Exception as e:
         logger.exception('Failed to delete custom group')
@@ -1622,7 +1654,10 @@ def add_images_to_group(group_hash):
         return error_response('image_ids array is required')
 
     try:
-        get_db().add_images_to_custom_group(group_hash, image_ids)
+        db = get_db()
+        db.add_images_to_custom_group(group_hash, image_ids)
+        # Broadcast for other clients
+        db.event_queue.emit(EVENT_GROUPS_CHANGED, {'level': 5, 'invalidate': True})
         return success_response(message='Images added to group')
     except Exception as e:
         logger.exception('Failed to add images to custom group')
@@ -1652,7 +1687,10 @@ def remove_images_from_group(group_hash):
         return error_response('image_ids array is required')
 
     try:
-        get_db().remove_images_from_custom_group(group_hash, image_ids)
+        db = get_db()
+        db.remove_images_from_custom_group(group_hash, image_ids)
+        # Broadcast for other clients
+        db.event_queue.emit(EVENT_GROUPS_CHANGED, {'level': 5, 'invalidate': True})
         return success_response(message='Images removed from group')
     except Exception as e:
         logger.exception('Failed to remove images from custom group')
@@ -1853,17 +1891,23 @@ def get_cache_stats():
 
 @app.route('/api/events', methods=['GET'])
 def get_events():
-    """Poll for pending events.
+    """Poll for pending events using cursor-based pagination.
 
-    Returns all queued events and clears the queue. Frontend should
-    poll this endpoint periodically (e.g., every 2 seconds) to receive
-    notifications about processing status, folder changes, etc.
+    Multi-client safe: events are not drained on read. Each client
+    passes its ``since`` cursor (from the previous response's
+    ``server_time``) and receives only newer events.
+
+    Query parameters:
+        since (float): Unix timestamp cursor. Pass 0 for initial poll.
 
     Returns:
-        JSON with 'events' array containing event objects with 'type' and 'data'.
+        JSON with 'events' array, 'server_time' (float — use as next
+        cursor), and 'stale' (bool — if true, client must reload all
+        state because it missed events).
     """
-    events = get_db().get_pending_events()
-    return success_response({'events': events})
+    since = float(request.args.get('since', 0))
+    result = get_db().get_pending_events(since=since)
+    return success_response(result)
 
 
 @app.route('/api/events/count', methods=['GET'])
@@ -1954,6 +1998,15 @@ def create_person_endpoint():
         # Set preferred face if provided
         if preferred_face_id:
             update_person(db.conn, person_id, preferred_face_id=preferred_face_id)
+
+        # Get the created person for the event payload
+        created_person = get_person(db.conn, person_id)
+
+    # Broadcast for other clients
+    if created_person:
+        db.event_queue.emit(EVENT_PEOPLE_CHANGED, {
+            'upserted': [dict(created_person)],
+        })
 
     return success_response(message='Person created')
 
@@ -2053,6 +2106,11 @@ def update_person_endpoint(person_id):
                 remaining = get_faces_for_person(db.conn, person_id)
                 if not remaining:
                     delete_person(db.conn, person_id)
+                    # Broadcast for other clients — person deleted, faces ejected
+                    db.event_queue.emit(EVENT_PEOPLE_CHANGED, {'removed': [person_id]})
+                    db.event_queue.emit(EVENT_FACES_CHANGED, {
+                        'updated': [{'id': fid, 'person_id': None} for fid in ejected_face_ids],
+                    })
                     # DESIGN: Response flags report cascade results (see design-audit.md 1.6)
                     return success_response({
                         'deleted': True,
@@ -2083,6 +2141,16 @@ def update_person_endpoint(person_id):
         response_data['unassigned'] = ejected_face_ids
     response_data['faces_changed'] = faces_changed or (threshold_changed and threshold_value is not None)
 
+    # Broadcast for other clients
+    if updated_person:
+        db.event_queue.emit(EVENT_PEOPLE_CHANGED, {
+            'upserted': [dict(updated_person)],
+        })
+    if ejected_face_ids:
+        db.event_queue.emit(EVENT_FACES_CHANGED, {
+            'updated': [{'id': fid, 'person_id': None} for fid in ejected_face_ids],
+        })
+
     return success_response(response_data)
 
 
@@ -2105,7 +2173,18 @@ def delete_person_endpoint(person_id):
         if person is None:
             return error_response('Person not found', 404)
 
+        # Get affected face IDs before deletion (they'll become untagged)
+        affected_faces = get_faces_for_person(db.conn, person_id)
+        affected_face_ids = [f['id'] for f in affected_faces] if affected_faces else []
+
         delete_person(db.conn, person_id)
+
+    # Broadcast for other clients
+    db.event_queue.emit(EVENT_PEOPLE_CHANGED, {'removed': [person_id]})
+    if affected_face_ids:
+        db.event_queue.emit(EVENT_FACES_CHANGED, {
+            'updated': [{'id': fid, 'person_id': None} for fid in affected_face_ids],
+        })
 
     return success_response(message=f'Person "{person["name"]}" deleted')
 
@@ -2373,6 +2452,14 @@ def assign_faces():
         )
         reassessment_triggered = True
 
+    # Broadcast for other clients
+    if assigned_count > 0:
+        person_name = person['name'] if person else None
+        db.event_queue.emit(EVENT_FACES_CHANGED, {
+            'updated': [{'id': fid, 'person_id': person_id, 'person_name': person_name}
+                        for fid in face_ids],
+        })
+
     return success_response(
         message=f'{assigned_count} faces assigned',
         data={'reassessment_triggered': reassessment_triggered}
@@ -2419,6 +2506,12 @@ def unassign_faces_simple():
             update_face_person(db.conn, face_id, None, manually_tagged=False)
             unassigned_count += 1
 
+    # Broadcast for other clients
+    if unassigned_count > 0:
+        db.event_queue.emit(EVENT_FACES_CHANGED, {
+            'updated': [{'id': fid, 'person_id': None} for fid in face_ids],
+        })
+
     return success_response(message=f'{unassigned_count} faces unassigned')
 
 
@@ -2460,6 +2553,12 @@ def suppress_faces_batch():
                 continue
             suppress_face(db.conn, face_id)
             suppressed_count += 1
+
+    # Broadcast for other clients
+    if suppressed_count > 0:
+        db.event_queue.emit(EVENT_FACES_CHANGED, {
+            'updated': [{'id': fid, 'suppressed': True} for fid in face_ids],
+        })
 
     return success_response(message=f'{suppressed_count} faces suppressed')
 
@@ -2508,6 +2607,12 @@ def update_faces_batch():
                 updated_count += 1
 
         db.conn.commit()
+
+    # Broadcast for other clients
+    if updated_count > 0 and locked is not None:
+        db.event_queue.emit(EVENT_FACES_CHANGED, {
+            'updated': [{'id': fid, 'manually_tagged': locked} for fid in face_ids],
+        })
 
     return success_response(message=f'{updated_count} faces updated')
 
@@ -2569,6 +2674,15 @@ def identify_face(face_id):
         face = get_face(db.conn, face_id)
         if 'embedding' in face:
             del face['embedding']
+
+    # Broadcast for other clients
+    db.event_queue.emit(EVENT_FACES_CHANGED, {
+        'updated': [{'id': face_id, 'person_id': person_id,
+                      'person_name': person['name'], 'manually_tagged': True}],
+    })
+    db.event_queue.emit(EVENT_PEOPLE_CHANGED, {
+        'upserted': [{'id': person_id, 'name': person['name']}],
+    })
 
     return success_response({
         'face': face,
@@ -2674,6 +2788,19 @@ def identify_faces_batch():
         'face_ids': result['faces'],
         'reassessment_triggered': True,
     }
+
+    # Broadcast for other clients
+    target_person = result['person']
+    db.event_queue.emit(EVENT_FACES_CHANGED, {
+        'updated': [{'id': fid, 'person_id': target_person['id'],
+                      'person_name': target_person['name'], 'manually_tagged': True}
+                     for fid in result['faces']],
+    })
+    db.event_queue.emit(EVENT_PEOPLE_CHANGED, {
+        'upserted': [target_person],
+        'removed': list(source_person_ids),  # Persons that may have been deleted
+    })
+
     logger.info(f'[FacesFlow] identify-batch SUCCESS: person_id={result["person"]["id"]}, identified={len(result["faces"])} faces')
     return success_response(response_data)
 
@@ -2751,8 +2878,21 @@ def unidentify_face(face_id):
         update_face_person(db.conn, face_id, None, manually_tagged=False)
 
         # Delete person if they have no more faces
+        person_deleted = False
         if old_person_id:
+            person_before = get_person(db.conn, old_person_id)
             delete_people_without_faces(db.conn)
+            person_after = get_person(db.conn, old_person_id)
+            person_deleted = person_before is not None and person_after is None
+
+    # Broadcast for other clients
+    db.event_queue.emit(EVENT_FACES_CHANGED, {
+        'updated': [{'id': face_id, 'person_id': None}],
+    })
+    if person_deleted:
+        db.event_queue.emit(EVENT_PEOPLE_CHANGED, {
+            'removed': [old_person_id],
+        })
 
     return success_response(message='Face unidentified')
 
@@ -2822,6 +2962,20 @@ def suppress_face_endpoint(face_id):
                 db.conn.commit()
                 new_preferred_selected = True
 
+    # Broadcast for other clients
+    db.event_queue.emit(EVENT_FACES_CHANGED, {
+        'updated': [{'id': face_id, 'suppressed': True}],
+    })
+    if person_deleted and old_person_id:
+        db.event_queue.emit(EVENT_PEOPLE_CHANGED, {'removed': [old_person_id]})
+    elif old_person_id and not person_deleted:
+        # Person still exists — face count changed, possibly preferred face too
+        updated_person = get_person(db.conn, old_person_id)
+        if updated_person:
+            db.event_queue.emit(EVENT_PEOPLE_CHANGED, {
+                'upserted': [dict(updated_person)],
+            })
+
     return success_response(
         message='Face suppressed',
         data={
@@ -2851,6 +3005,11 @@ def toggle_face_manual_tag_endpoint(face_id):
 
         if new_value is None:
             return error_response('Face not found', 404)
+
+    # Broadcast for other clients
+    db.event_queue.emit(EVENT_FACES_CHANGED, {
+        'updated': [{'id': face_id, 'manually_tagged': new_value}],
+    })
 
     return success_response(
         message='Manual tag toggled',
@@ -2884,8 +3043,17 @@ def delete_face_endpoint(face_id):
         delete_face(db.conn, face_id)
 
         # Delete person if they have no more faces
+        person_deleted = False
         if old_person_id:
+            person_before = get_person(db.conn, old_person_id)
             delete_people_without_faces(db.conn)
+            person_after = get_person(db.conn, old_person_id)
+            person_deleted = person_before is not None and person_after is None
+
+    # Broadcast for other clients
+    db.event_queue.emit(EVENT_FACES_CHANGED, {'removed': [face_id]})
+    if person_deleted and old_person_id:
+        db.event_queue.emit(EVENT_PEOPLE_CHANGED, {'removed': [old_person_id]})
 
     return success_response(message='Face deleted')
 
@@ -3013,6 +3181,20 @@ def unassign_face(face_id):
     # for interactive use. Groups are computed during initial processing
     # or via explicit "Rescan" request.
 
+    # Broadcast for other clients
+    db.event_queue.emit(EVENT_FACES_CHANGED, {
+        'updated': [{'id': face_id, 'person_id': None}],
+    })
+    if updated_person:
+        db.event_queue.emit(EVENT_PEOPLE_CHANGED, {
+            'upserted': [dict(updated_person)],
+        })
+    else:
+        # Person was deleted (no faces left)
+        db.event_queue.emit(EVENT_PEOPLE_CHANGED, {
+            'removed': [old_person_id],
+        })
+
     return success_response({
         'message': 'Face unassigned',
         'person': updated_person,  # Will be None if person was deleted
@@ -3097,6 +3279,19 @@ def unassign_faces_batch():
     # for interactive use (~minutes for 30k faces). Groups are computed
     # during initial processing or via explicit "Rescan" request.
 
+    # Broadcast for other clients
+    if unassigned_count > 0:
+        db.event_queue.emit(EVENT_FACES_CHANGED, {
+            'updated': [{'id': fid, 'person_id': None} for fid in face_ids],
+        })
+        # People may have been deleted or had face counts change
+        db.event_queue.emit(EVENT_PEOPLE_CHANGED, {
+            'removed': [pid for pid in affected_person_ids
+                        if get_person(db.conn, pid) is None],
+            'upserted': [dict(p) for pid in affected_person_ids
+                         if (p := get_person(db.conn, pid)) is not None],
+        })
+
     return success_response({
         'message': f'{unassigned_count} faces unassigned',
         'unassigned_count': unassigned_count,
@@ -3163,6 +3358,14 @@ def set_preferred_face(person_id):
         # Get updated person
         updated_person = get_person(db.conn, person_id)
 
+    # Broadcast for other clients
+    db.event_queue.emit(EVENT_PEOPLE_CHANGED, {
+        'upserted': [dict(updated_person)],
+    })
+    db.event_queue.emit(EVENT_FACES_CHANGED, {
+        'updated': [{'id': face_id, 'manually_tagged': True}],
+    })
+
     return success_response(updated_person)
 
 
@@ -3216,8 +3419,24 @@ def merge_person(person_id):
         delete_person(db.conn, person_id)
         db.conn.commit()
 
+        # Get faces that moved to the target (for the event payload)
+        merged_faces = get_faces_for_person(db.conn, target_id)
+        merged_face_ids = [f['id'] for f in merged_faces] if merged_faces else []
+
         # Get updated target person
         updated_person = get_person(db.conn, target_id)
+
+    # Broadcast for other clients
+    db.event_queue.emit(EVENT_PEOPLE_CHANGED, {
+        'removed': [person_id],
+        'upserted': [dict(updated_person)] if updated_person else [],
+    })
+    if merged_face_ids:
+        db.event_queue.emit(EVENT_FACES_CHANGED, {
+            'updated': [{'id': fid, 'person_id': target_id,
+                          'person_name': updated_person['name']}
+                         for fid in merged_face_ids],
+        })
 
     return success_response({
         'message': f'Merged "{from_person["name"]}" into "{to_person["name"]}"',
@@ -3245,11 +3464,13 @@ def dissolve_person(person_id):
         if person is None:
             return error_response('Person not found', 404)
 
-        # Count faces before dissolving
-        face_count = db.conn.execute(
-            'SELECT COUNT(*) FROM faces WHERE person_id = ? AND suppressed = 0',
+        # Get face IDs before dissolving (for event payload)
+        dissolved_faces = db.conn.execute(
+            'SELECT id FROM faces WHERE person_id = ? AND suppressed = 0',
             (person_id,)
-        ).fetchone()[0]
+        ).fetchall()
+        dissolved_face_ids = [f['id'] for f in dissolved_faces]
+        face_count = len(dissolved_face_ids)
 
         # Unidentify all faces (set person_id to NULL)
         db.conn.execute(
@@ -3260,6 +3481,13 @@ def dissolve_person(person_id):
         # Delete the person
         delete_person(db.conn, person_id)
         db.conn.commit()
+
+    # Broadcast for other clients
+    db.event_queue.emit(EVENT_PEOPLE_CHANGED, {'removed': [person_id]})
+    if dissolved_face_ids:
+        db.event_queue.emit(EVENT_FACES_CHANGED, {
+            'updated': [{'id': fid, 'person_id': None} for fid in dissolved_face_ids],
+        })
 
     return success_response({
         'message': f'Dissolved "{person["name"]}"',

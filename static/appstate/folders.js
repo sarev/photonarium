@@ -106,6 +106,7 @@ AppState.folders = (function() {
          * @returns {Promise<void>}
          */
         async add(path) {
+            if (!App.requireOnline()) return;
             console.log('[AppState.folders.add]', path);
 
             try {
@@ -128,6 +129,7 @@ AppState.folders = (function() {
          * @returns {Promise<void>}
          */
         async remove(path) {
+            if (!App.requireOnline()) return;
             console.log('[AppState.folders.remove]', path);
 
             try {

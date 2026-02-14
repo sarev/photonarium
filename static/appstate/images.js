@@ -555,6 +555,7 @@ AppState.images = (function() {
          * @returns {Promise<void>}
          */
         update(updates) {
+            if (!App.requireOnline()) return;
             if (!Array.isArray(updates)) updates = [updates];
 
             console.log('[AppState.images.update]', updates.length, 'images');
@@ -600,6 +601,7 @@ AppState.images = (function() {
          * @returns {Promise<void>}
          */
         delete(ids) {
+            if (!App.requireOnline()) return;
             if (!Array.isArray(ids)) ids = [ids];
 
             console.log('[AppState.images.delete]', ids.length, 'images');
@@ -640,6 +642,7 @@ AppState.images = (function() {
          * @returns {Promise<void>}
          */
         rotate(ids, degrees) {
+            if (!App.requireOnline()) return;
             if (!Array.isArray(ids)) ids = [ids];
 
             console.log('[AppState.images.rotate]', ids.length, 'images by', degrees + '°');
@@ -803,6 +806,24 @@ AppState.images = (function() {
             // Delta sync will fetch all images changed since last epoch,
             // which includes the rotated images (they have updated updated_at)
             await load();
+        },
+
+        /**
+         * Remove images from cache in response to a multi-client event.
+         * Backend already trashed/deleted; this cleans up the local cache
+         * and cascades to faces, people, and duplicate group caches.
+         *
+         * @param {string[]} ids - IDs of removed images
+         */
+        autoRemove(ids) {
+            if (!ids?.length || !_cache) return;
+            transaction(() => {
+                for (const id of ids) {
+                    handleFaceCleanup(id);
+                    AppState.duplicates._internal.removeImage(id);
+                    _internal.remove(id);
+                }
+            });
         },
 
         /**

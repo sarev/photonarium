@@ -403,6 +403,7 @@ AppState.duplicates = (function() {
          * @returns {Promise<string>} The new group hash (UUID)
          */
         async createGroup(name, imageIds = []) {
+            if (!App.requireOnline()) return;
             const groupHash = crypto.randomUUID();
             const backup = _backupLevel5();
 
@@ -445,6 +446,7 @@ AppState.duplicates = (function() {
          * @returns {Promise<void>}
          */
         async renameGroup(groupHash, name) {
+            if (!App.requireOnline()) return;
             const backup = _backupLevel5();
 
             // Phase 1: Synchronous optimistic update
@@ -472,6 +474,7 @@ AppState.duplicates = (function() {
          * @returns {Promise<void>}
          */
         async deleteGroup(groupHash) {
+            if (!App.requireOnline()) return;
             const backup = _backupLevel5();
 
             // Phase 1: Synchronous optimistic update
@@ -500,6 +503,7 @@ AppState.duplicates = (function() {
          * @returns {Promise<void>}
          */
         async addImages(groupHash, imageIds) {
+            if (!App.requireOnline()) return;
             if (!imageIds || imageIds.length === 0) return;
             const backup = _backupLevel5();
 
@@ -571,6 +575,7 @@ AppState.duplicates = (function() {
          * @returns {Promise<void>}
          */
         async removeImages(groupHash, imageIds) {
+            if (!App.requireOnline()) return;
             if (!imageIds || imageIds.length === 0) return;
             const backup = _backupLevel5();
 
