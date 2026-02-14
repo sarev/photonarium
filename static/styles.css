@@ -51,6 +51,9 @@
     --color-overlay-nav-bg: rgba(0, 0, 0, 0.4);
     --color-overlay-nav-hover: rgba(0, 0, 0, 0.7);
     --color-overlay-toast-bg: rgba(0, 0, 0, 0.7);
+    --color-overlay-toast-action: rgba(255, 255, 255, 0.2);
+    --color-overlay-toast-action-border: rgba(255, 255, 255, 0.4);
+    --color-overlay-toast-action-hover: rgba(255, 255, 255, 0.35);
 }
 
 /* Light theme (warm mauve) */
@@ -333,7 +336,12 @@ a:hover {
     text-decoration: underline;
 }
 
-/* Scrollbar styling */
+/* Scrollbar styling (WebKit + Firefox) */
+* {
+    scrollbar-width: thin;
+    scrollbar-color: var(--color-border) var(--color-bg-secondary);
+}
+
 ::-webkit-scrollbar {
     width: 10px;
     height: 10px;
@@ -382,6 +390,7 @@ a:hover {
     display: flex;
     flex-direction: column;
     height: 100vh;
+    height: 100dvh;    /* dynamic viewport height — tracks mobile address bar */
     overflow: hidden;
     background: var(--bg-gradient);
 }
@@ -451,6 +460,10 @@ a:hover {
     margin: 0 0.25rem;
 }
 
+/* Mobile bar and menu backdrop — hidden on desktop */
+.toolbar-mobile-bar { display: none; }
+.toolbar-menu-backdrop { display: none; }
+
 /* Logo button — always visible, links to tutorial */
 .toolbar-logo {
     text-decoration: none;
@@ -478,9 +491,15 @@ a:hover {
     transition: background-color 0.15s, color 0.15s;
 }
 
-.toolbar-btn:hover {
-    background-color: var(--color-accent-light);
-    color: var(--color-text-primary);
+/* Guard with (pointer: fine) so touch devices don't get sticky hover state.
+   Mobile browsers keep :hover applied after a tap since there's no mouse-out.
+   Using pointer:fine rather than hover:hover because Samsung Internet reports
+   hover:hover for touch devices (treating long-press as hover). */
+@media (pointer: fine) {
+    .toolbar-btn:hover {
+        background-color: var(--color-accent-light);
+        color: var(--color-text-primary);
+    }
 }
 
 .toolbar-btn:active {
@@ -502,9 +521,11 @@ a:hover {
     cursor: not-allowed;
 }
 
-.toolbar-btn:disabled:hover {
-    background: transparent;
-    color: var(--color-text-secondary);
+@media (pointer: fine) {
+    .toolbar-btn:disabled:hover {
+        background: transparent;
+        color: var(--color-text-secondary);
+    }
 }
 
 .toolbar-btn .material-symbols-outlined {
@@ -524,8 +545,10 @@ a:hover {
     transition: background-color 0.15s, color 0.15s;
 }
 
-.toolbar-checkbox:hover {
-    background-color: var(--color-accent-light);
+@media (pointer: fine) {
+    .toolbar-checkbox:hover {
+        background-color: var(--color-accent-light);
+    }
 }
 
 .toolbar-checkbox:has(input:checked) {
@@ -537,86 +560,88 @@ a:hover {
     accent-color: var(--color-face-unknown);
 }
 
-/* Pastel color hints for toolbar buttons */
-#btn-thumb-smaller:hover,
-#btn-thumb-larger:hover,
-#btn-dup-thumb-smaller:hover,
-#btn-dup-thumb-larger:hover {
-    background-color: var(--color-pastel-blue-bg);
-    color: var(--color-pastel-blue-fg);
-}
+/* Pastel color hints for toolbar buttons (guarded for touch devices) */
+@media (pointer: fine) {
+    #btn-thumb-smaller:hover,
+    #btn-thumb-larger:hover,
+    #btn-dup-thumb-smaller:hover,
+    #btn-dup-thumb-larger:hover {
+        background-color: var(--color-pastel-blue-bg);
+        color: var(--color-pastel-blue-fg);
+    }
 
-#btn-fullscreen:hover,
-#btn-reveal-folder:hover {
-    background-color: var(--color-pastel-green-bg);
-    color: var(--color-pastel-green-fg);
-}
+    #btn-fullscreen:hover,
+    #btn-reveal-folder:hover {
+        background-color: var(--color-pastel-green-bg);
+        color: var(--color-pastel-green-fg);
+    }
 
-#btn-rotate-ccw:hover,
-#btn-rotate-cw:hover {
-    background-color: var(--color-pastel-orange-bg);
-    color: var(--color-pastel-orange-fg);
-}
+    #btn-rotate-ccw:hover,
+    #btn-rotate-cw:hover {
+        background-color: var(--color-pastel-orange-bg);
+        color: var(--color-pastel-orange-fg);
+    }
 
-#btn-database:hover {
-    background-color: var(--color-pastel-pink-bg);
-    color: var(--color-pastel-pink-fg);
-}
+    #btn-database:hover {
+        background-color: var(--color-pastel-pink-bg);
+        color: var(--color-pastel-pink-fg);
+    }
 
-#btn-duplicates:hover {
-    background-color: var(--color-pastel-purple-bg);
-    color: var(--color-pastel-purple-fg);
-}
+    #btn-duplicates:hover {
+        background-color: var(--color-pastel-purple-bg);
+        color: var(--color-pastel-purple-fg);
+    }
 
-#btn-filter:hover {
-    background-color: var(--color-pastel-teal-bg);
-    color: var(--color-pastel-teal-fg);
-}
+    #btn-filter:hover {
+        background-color: var(--color-pastel-teal-bg);
+        color: var(--color-pastel-teal-fg);
+    }
 
-#btn-faces:hover,
-#btn-face-tagging:hover,
-#btn-faces-only-unknowns:hover,
-#btn-faces-focus-person:hover,
-#btn-picker-hide-locked:hover {
-    background-color: var(--color-pastel-green-bg);
-    color: var(--color-pastel-green-fg);
-}
+    #btn-faces:hover,
+    #btn-face-tagging:hover,
+    #btn-faces-only-unknowns:hover,
+    #btn-faces-focus-person:hover,
+    #btn-picker-hide-locked:hover {
+        background-color: var(--color-pastel-green-bg);
+        color: var(--color-pastel-green-fg);
+    }
 
-#btn-faces-thumb-smaller:hover,
-#btn-faces-thumb-larger:hover {
-    background-color: var(--color-pastel-blue-bg);
-    color: var(--color-pastel-blue-fg);
-}
+    #btn-faces-thumb-smaller:hover,
+    #btn-faces-thumb-larger:hover {
+        background-color: var(--color-pastel-blue-bg);
+        color: var(--color-pastel-blue-fg);
+    }
 
-#btn-sort-date:hover,
-#btn-sort-rating:hover,
-#btn-sort-content:hover,
-#btn-sort-people:hover,
-#btn-sort-direction:hover,
-#btn-dup-sort-size:hover,
-#btn-dup-sort-semantic:hover,
-#btn-dup-sort-people:hover,
-#btn-faces-sort-direction:hover {
-    background-color: var(--color-pastel-yellow-bg);
-    color: var(--color-pastel-yellow-fg);
-}
+    #btn-sort-date:hover,
+    #btn-sort-rating:hover,
+    #btn-sort-content:hover,
+    #btn-sort-people:hover,
+    #btn-sort-direction:hover,
+    #btn-dup-sort-size:hover,
+    #btn-dup-sort-semantic:hover,
+    #btn-dup-sort-people:hover,
+    #btn-faces-sort-direction:hover {
+        background-color: var(--color-pastel-yellow-bg);
+        color: var(--color-pastel-yellow-fg);
+    }
 
-#btn-select-all:hover,
-#btn-clear-selection:hover {
-    background-color: var(--color-pastel-indigo-bg);
-    color: var(--color-pastel-indigo-fg);
-}
+    #btn-select-all:hover,
+    #btn-clear-selection:hover {
+        background-color: var(--color-pastel-indigo-bg);
+        color: var(--color-pastel-indigo-fg);
+    }
 
-#btn-theme:hover {
-    background-color: var(--color-pastel-brown-bg);
-    color: var(--color-pastel-brown-fg);
-}
+    #btn-theme:hover {
+        background-color: var(--color-pastel-brown-bg);
+        color: var(--color-pastel-brown-fg);
+    }
 
-#btn-prev-group:hover,
-#btn-next-group:hover,
-#btn-back-gallery:hover {
-    background-color: var(--color-pastel-grey-bg);
-    color: var(--color-pastel-grey-fg);
+    #btn-prev-group:hover,
+    #btn-next-group:hover,
+    #btn-back-gallery:hover {
+        background-color: var(--color-pastel-grey-bg);
+        color: var(--color-pastel-grey-fg);
+    }
 }
 
 /* Sort controls */
@@ -852,7 +877,7 @@ a:hover {
     border: none;
     border-radius: 50%;
     background: var(--color-pastel-purple-fg);
-    color: #fff;
+    color: var(--color-overlay-text);
     opacity: 0;
     transition: opacity 0.2s;
     z-index: 10;
@@ -950,6 +975,35 @@ a:hover {
 
 .empty-state p {
     font-size: 1rem;
+}
+
+/* Info panel toggle button — vertical tab at the panel edge */
+.info-panel-toggle {
+    width: 20px;
+    flex-shrink: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: var(--color-bg-secondary);
+    border: none;
+    border-left: 1px solid var(--color-border);
+    color: var(--color-text-muted);
+    cursor: pointer;
+    padding: 0;
+    transition: color 0.15s;
+}
+
+.info-panel-toggle:hover {
+    color: var(--color-text-primary);
+}
+
+/* Collapsed state — panel hidden, chevron points left ("expand") */
+.info-panel.collapsed {
+    display: none;
+}
+
+.gallery-container.panel-collapsed .info-panel-toggle .material-symbols-outlined {
+    transform: scaleX(-1);
 }
 
 /* Info panel */
@@ -1768,7 +1822,13 @@ a:hover {
     transition: background-color 0.15s, width 0.15s;
 }
 
-.faces-divider:hover::before,
+@media (pointer: fine) {
+    .faces-divider:hover::before {
+        background: var(--color-text-muted);
+        width: 60px;
+    }
+}
+
 .faces-divider.dragging::before {
     background: var(--color-text-muted);
     width: 60px;
@@ -3587,9 +3647,9 @@ a:hover {
 }
 
 .info-toast-action {
-    background: rgba(255, 255, 255, 0.2);
+    background: var(--color-overlay-toast-action);
     color: inherit;
-    border: 1px solid rgba(255, 255, 255, 0.4);
+    border: 1px solid var(--color-overlay-toast-action-border);
     border-radius: 4px;
     padding: 0.25rem 0.75rem;
     font-size: 0.8rem;
@@ -3598,7 +3658,7 @@ a:hover {
 }
 
 .info-toast-action:hover {
-    background: rgba(255, 255, 255, 0.35);
+    background: var(--color-overlay-toast-action-hover);
 }
 
 /* Dialog (modal) base */
@@ -3612,6 +3672,7 @@ dialog {
     box-shadow: var(--shadow-lg);
     max-width: 90vw;
     max-height: 90vh;
+    max-height: 90dvh;     /* dynamic viewport height — tracks mobile address bar */
 }
 
 dialog::backdrop {
@@ -3891,24 +3952,124 @@ dialog::backdrop {
    Adaptations for smaller screens.
    ========================================================================== */
 
-@media (max-width: 768px) {
-    /* Stack info panel below on mobile */
-    #screen-gallery {
+@media (max-width: 768px), (pointer: coarse) {
+    /* Stack info panel below grid on mobile */
+    #screen-gallery,
+    .gallery-container {
         flex-direction: column;
     }
 
     .info-panel {
         width: 100%;
-        max-height: 40vh;
+        max-height: 40vh;          /* fallback for older browsers */
+        max-height: 40dvh;         /* dynamic viewport height — updates on rotate */
         border-left: none;
         border-top: 1px solid var(--color-border);
     }
 
-    /* Smaller toolbar */
+    /* Info panel toggle — horizontal tap bar between grid and panel on mobile */
+    .info-panel-toggle {
+        width: 100%;
+        height: 28px;
+        border-left: none;
+        border-top: 1px solid var(--color-border);
+    }
+
+    /* Chevron rotated for vertical expand/collapse direction */
+    .info-panel-toggle .material-symbols-outlined {
+        transform: rotate(90deg);   /* chevron_right → chevron_down */
+    }
+    .gallery-container.panel-collapsed .info-panel-toggle .material-symbols-outlined {
+        transform: rotate(-90deg);  /* chevron_up (panel is hidden below) */
+    }
+
+    /* ---- Mobile hamburger menu ---- */
+
+    /* Toolbar sits above the menu backdrop */
     #toolbar {
+        position: relative;
+        z-index: 100;
         padding: 0.5rem;
-        gap: 0.5rem;
+        gap: 0.25rem;
         flex-wrap: wrap;
+    }
+
+    /* Dissolve mobile bar so its children become direct toolbar flex items */
+    .toolbar-mobile-bar {
+        display: contents;
+    }
+
+    /* Hide title — nav buttons serve as screen indicators instead */
+    .toolbar-mobile-title {
+        display: none;
+    }
+
+    /* Order: logo(1) → nav-buttons(2) → theme(3) → hamburger(4) */
+    .toolbar-mobile-bar .toolbar-logo { order: 1; }
+    #toolbar .toolbar-center { order: 2; }
+    #toolbar #btn-theme-mobile { order: 3; }
+    #toolbar #btn-hamburger { order: 4; }
+
+    /* Show center nav buttons inline (not hidden behind hamburger) */
+    #toolbar .toolbar-center {
+        display: flex;
+        align-items: center;
+        gap: 0.25rem;
+        flex: 1;        /* take remaining space between logo and theme/hamburger */
+    }
+
+    /* Only left and right sections go behind hamburger */
+    #toolbar .toolbar-left,
+    #toolbar .toolbar-right {
+        display: none;
+    }
+
+    /* Hide desktop logo + separator (mobile bar has its own logo) */
+    #toolbar .toolbar-left > .toolbar-logo,
+    #toolbar .toolbar-left > .toolbar-logo + .toolbar-separator {
+        display: none;
+    }
+
+    /* Hide desktop theme toggle + preceding separator (mobile bar has its own) */
+    #toolbar #btn-theme,
+    #toolbar .toolbar-right > .toolbar-separator:nth-last-child(2) {
+        display: none;
+    }
+
+    /* When menu is open, show left and right sections as wrapped rows below */
+    #toolbar.menu-open {
+        padding-bottom: 0.75rem;
+    }
+
+    /* Pin theme + hamburger to top-right so they don't drift as expanded rows reflow */
+    #toolbar.menu-open #btn-theme-mobile,
+    #toolbar.menu-open #btn-hamburger {
+        position: absolute;
+        top: 0.5rem;
+    }
+    #toolbar.menu-open #btn-hamburger {
+        right: 0.5rem;
+    }
+    #toolbar.menu-open #btn-theme-mobile {
+        right: calc(0.5rem + 32px + 0.25rem);  /* hamburger width + gap */
+    }
+
+    #toolbar.menu-open .toolbar-left,
+    #toolbar.menu-open .toolbar-right {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 0.5rem;
+        padding: 0.25rem 0;
+        width: 100%;           /* force onto own row within flex-wrap */
+        order: 10;             /* push below the mobile bar items */
+    }
+
+    /* Backdrop for closing menu on outside tap */
+    .toolbar-menu-backdrop.active {
+        display: block;
+        position: fixed;
+        inset: 0;
+        z-index: 99; /* below toolbar (z-index: 100) */
     }
 
     .toolbar-btn {
@@ -3924,6 +4085,14 @@ dialog::backdrop {
     .gallery-grid,
     .duplicates-grid {
         --thumb-size: 140px;
+    }
+
+    /* Native scrollbar styling not supported on Samsung Internet —
+       edge-drag scroll in core.js provides touch scrollbar instead */
+
+    /* Larger divider hit target for touch (finger is ~40px) */
+    .faces-divider {
+        height: 24px;
     }
 
     /* Full-width dialogs */
@@ -4175,6 +4344,7 @@ dialog::backdrop {
     display: flex;
     flex-direction: column;
     max-height: 80vh;
+    max-height: 80dvh;     /* dynamic viewport height — tracks mobile address bar */
     padding: 0;
 }
 

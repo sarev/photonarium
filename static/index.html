@@ -105,6 +105,21 @@
              Hidden in Full-screen view.
              ============================================================ -->
         <header id="toolbar">
+            <!-- Mobile compact bar (hidden on desktop via CSS) -->
+            <div class="toolbar-mobile-bar">
+                <a href="https://photonarium.7thsoftware.co.uk/tutorial/" target="_blank" rel="noopener"
+                   class="toolbar-btn toolbar-logo" title="Open the Photonarium tutorial">
+                    <img src="favicon90.png" alt="Photonarium" width="28" height="28">
+                </a>
+                <span id="toolbar-mobile-title" class="toolbar-mobile-title"></span>
+                <button id="btn-theme-mobile" class="toolbar-btn" title="Toggle theme">
+                    <span class="icon" data-icon="dark_mode">🌙</span>
+                </button>
+                <button id="btn-hamburger" class="toolbar-btn" title="Menu" aria-expanded="false">
+                    <span class="icon" data-icon="menu">☰</span>
+                </button>
+            </div>
+
             <!-- Left section: screen-specific controls -->
             <div class="toolbar-left">
                 <!-- Logo — links to the online tutorial (visible on all screens) -->
@@ -331,6 +346,9 @@
             </div>
         </header>
 
+        <!-- Backdrop for closing mobile menu on outside tap -->
+        <div id="toolbar-menu-backdrop" class="toolbar-menu-backdrop" hidden></div>
+
         <!-- ============================================================
              GALLERY SCREEN
              Main view showing thumbnail grid with info panel.
@@ -344,6 +362,11 @@
                     </div>
 
                 </div>
+
+                <!-- Toggle button for collapsing/expanding the info panel -->
+                <button id="btn-toggle-info" class="info-panel-toggle" title="Toggle info panel">
+                    <span class="material-symbols-outlined">chevron_right</span>
+                </button>
 
                 <!-- Info panel (right side) -->
                 <aside id="info-panel" class="info-panel">

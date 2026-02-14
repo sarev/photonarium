@@ -860,35 +860,76 @@
 
     /**
      * Set up divider drag behavior for resizing known section.
+     * Supports both mouse and touch input.
      */
     function setupDividerDrag(divider, section) {
         let startY = 0;
         let startHeight = 0;
 
-        const onMouseMove = (e) => {
-            const delta = e.clientY - startY;
-            const maxHeight = Math.min(window.innerHeight * 0.5, window.innerHeight - 200);
-            const newHeight = Math.max(100, Math.min(startHeight + delta, maxHeight));
-            section.style.height = `${newHeight}px`;
+        /**
+         * Compute clamped height from drag delta.
+         * Min height is 60px (enough for ~1 row of person cards).
+         * Max height is 80% of viewport minus 200px for the unknown section.
+         */
+        const clampHeight = (delta) => {
+            const maxHeight = Math.min(window.innerHeight * 0.8, window.innerHeight - 200);
+            return Math.max(60, Math.min(startHeight + delta, maxHeight));
         };
 
-        const onMouseUp = () => {
-            document.removeEventListener('mousemove', onMouseMove);
-            document.removeEventListener('mouseup', onMouseUp);
-            // Save the new height
+        /** Persist the current section height to state and localStorage. */
+        const saveHeight = () => {
             knownSectionHeight = parseInt(section.style.height, 10);
             try {
                 localStorage.setItem('faces-known-height', String(knownSectionHeight));
             } catch (e) { /* ignore */ }
         };
 
+        // --- Mouse handlers ---
+        const onMouseMove = (e) => {
+            section.style.height = `${clampHeight(e.clientY - startY)}px`;
+        };
+
+        const onMouseUp = () => {
+            document.removeEventListener('mousemove', onMouseMove);
+            document.removeEventListener('mouseup', onMouseUp);
+            divider.classList.remove('dragging');
+            saveHeight();
+        };
+
         divider.addEventListener('mousedown', (e) => {
             e.preventDefault();
             startY = e.clientY;
             startHeight = section.offsetHeight;
+            divider.classList.add('dragging');
             document.addEventListener('mousemove', onMouseMove);
             document.addEventListener('mouseup', onMouseUp);
         });
+
+        // --- Touch handlers ---
+        const onTouchMove = (e) => {
+            if (!e.touches.length) return;
+            e.preventDefault(); // prevent page scroll while dragging divider
+            section.style.height = `${clampHeight(e.touches[0].clientY - startY)}px`;
+        };
+
+        const onTouchEnd = () => {
+            document.removeEventListener('touchmove', onTouchMove);
+            document.removeEventListener('touchend', onTouchEnd);
+            document.removeEventListener('touchcancel', onTouchEnd);
+            divider.classList.remove('dragging');
+            saveHeight();
+        };
+
+        divider.addEventListener('touchstart', (e) => {
+            if (!e.touches.length) return;
+            e.preventDefault();
+            startY = e.touches[0].clientY;
+            startHeight = section.offsetHeight;
+            divider.classList.add('dragging');
+            document.addEventListener('touchmove', onTouchMove, { passive: false });
+            document.addEventListener('touchend', onTouchEnd);
+            document.addEventListener('touchcancel', onTouchEnd);
+        }, { passive: false });
     }
 
     /**
@@ -3214,12 +3255,20 @@
         // from backend processing), restore the constrained layout.
         if (showPeople) {
             if (!hasUnknowns) {
-                // No unknowns — unconstrain so the section fills available space
+                // No unknowns — let the section fill available space as a flex
+                // child.  flex:1 + min-height:0 constrains it to the parent so
+                // overflow-y:auto still produces a scrollbar when content is tall.
                 peopleSection.style.maxHeight = 'none';
                 peopleSection.style.height = '';
+                peopleSection.style.flex = '1';
+                peopleSection.style.flexShrink = '';
+                peopleSection.style.minHeight = '0';
             } else {
                 // Unknowns present — re-apply CSS cap and saved divider height
                 peopleSection.style.maxHeight = '';
+                peopleSection.style.flex = '';
+                peopleSection.style.flexShrink = '';
+                peopleSection.style.minHeight = '';
                 if (knownSectionHeight) {
                     peopleSection.style.height = `${knownSectionHeight}px`;
                 }

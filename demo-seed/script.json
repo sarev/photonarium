@@ -72,7 +72,7 @@
         },
         "the-info-panel": {
             "title": "The info panel",
-            "caption": "This shows the filename, dimensions, date, and file size. You can also add a description and a rating to help you find this photo later."
+            "caption": "The info panel sits to the right of the thumbnail grid. It shows the filename, dimensions, date, and file size. You can also add a description and a rating to help you find this photo later. Use the toggle at its edge to collapse or expand it \u2014 handy when you want more room for thumbnails."
         },
         "adding-a-description": {
             "title": "Adding a description",

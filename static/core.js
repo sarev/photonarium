@@ -538,6 +538,9 @@ const App = {
         AppState.nav.setScreen(screen, { addToHistory: false }); // We manage history ourselves
         this.state.screen = screen;
 
+        // Close mobile menu on navigation
+        this._closeMobileMenu();
+
         // Update DOM
         this._updateScreenVisibility(screen);
         this._updateToolbarVisibility(screen);
@@ -626,6 +629,7 @@ const App = {
      * Shows/hides toolbar groups using data-for-screen attributes.
      * Hides navigation buttons for the current screen.
      * Hides entire toolbar for fullscreen view.
+     * Also updates the mobile screen title label.
      * @param {string} activeScreen - The current active screen
      * @private
      */
@@ -654,6 +658,19 @@ const App = {
             if (btn) {
                 btn.hidden = (activeScreen === screen);
             }
+        }
+
+        // Update mobile screen title
+        const mobileTitle = document.getElementById('toolbar-mobile-title');
+        if (mobileTitle) {
+            const screenNames = {
+                gallery: 'Gallery',
+                database: 'Database',
+                search: 'Search',
+                duplicates: 'Groups',
+                faces: 'Faces'
+            };
+            mobileTitle.textContent = screenNames[activeScreen] || '';
         }
     },
 
@@ -1253,17 +1270,310 @@ const App = {
     },
 
     /**
-     * Updates theme button icon.
+     * Updates theme button icon (both desktop and mobile).
      * @private
      */
     _updateThemeButton() {
-        const btn = document.getElementById('btn-theme');
-        if (btn) {
-            const icon = btn.querySelector('.material-symbols-outlined');
-            if (icon) {
-                icon.textContent = AppState.view.getTheme() === 'light' ? 'dark_mode' : 'light_mode';
+        const iconName = AppState.view.getTheme() === 'light' ? 'dark_mode' : 'light_mode';
+        for (const id of ['btn-theme', 'btn-theme-mobile']) {
+            const btn = document.getElementById(id);
+            if (btn) {
+                const icon = btn.querySelector('.material-symbols-outlined');
+                if (icon) {
+                    icon.textContent = iconName;
+                }
             }
         }
+    },
+
+    /* ----------------------------------------------------------------------
+       MOBILE HAMBURGER MENU
+
+       On narrow screens (<=768px), the toolbar collapses into a compact bar
+       with a hamburger button that reveals the full controls as a dropdown.
+       ---------------------------------------------------------------------- */
+
+    /**
+     * Initialise the mobile hamburger menu.
+     * Binds the hamburger button, backdrop, mobile theme toggle, and
+     * auto-close on resize to desktop width.
+     * @private
+     */
+    _initMobileMenu() {
+        const toolbar = document.getElementById('toolbar');
+        const hamburger = document.getElementById('btn-hamburger');
+        const backdrop = document.getElementById('toolbar-menu-backdrop');
+        const mobileTheme = document.getElementById('btn-theme-mobile');
+        if (!hamburger) return;
+
+        hamburger.addEventListener('click', () => {
+            const isOpen = toolbar.classList.toggle('menu-open');
+            hamburger.setAttribute('aria-expanded', isOpen);
+            if (backdrop) {
+                backdrop.classList.toggle('active', isOpen);
+                backdrop.hidden = !isOpen;
+            }
+        });
+
+        // Close on backdrop tap
+        if (backdrop) {
+            backdrop.addEventListener('click', () => this._closeMobileMenu());
+        }
+
+        // Mobile theme toggle
+        if (mobileTheme) {
+            mobileTheme.addEventListener('click', () => AppState.view.toggleTheme());
+        }
+
+        // Auto-close menu when resizing to desktop layout (mobile bar becomes hidden)
+        const mobileBar = document.querySelector('.toolbar-mobile-bar');
+        window.addEventListener('resize', () => {
+            if (mobileBar && getComputedStyle(mobileBar).display === 'none') {
+                this._closeMobileMenu();
+            }
+        });
+    },
+
+    /**
+     * Close the mobile hamburger menu if open.
+     * @private
+     */
+    _closeMobileMenu() {
+        const toolbar = document.getElementById('toolbar');
+        const hamburger = document.getElementById('btn-hamburger');
+        const backdrop = document.getElementById('toolbar-menu-backdrop');
+        toolbar.classList.remove('menu-open');
+        if (hamburger) hamburger.setAttribute('aria-expanded', 'false');
+        if (backdrop) {
+            backdrop.classList.remove('active');
+            backdrop.hidden = true;
+        }
+    },
+
+    /* ----------------------------------------------------------------------
+       TOUCH EDGE-DRAG SCROLLBAR
+
+       On touch devices, a touch zone on the right edge of the viewport
+       enables proportional scrolling.  Native scrollbar CSS styling
+       (`::-webkit-scrollbar`) is not supported on Samsung Internet, so
+       this uses a DOM overlay element instead.
+       ---------------------------------------------------------------------- */
+
+    /**
+     * Initialise the touch edge-drag scrollbar.
+     * Creates a visible touch zone on the right viewport edge.  When
+     * dragged vertically, scrolls the nearest scrollable ancestor
+     * proportionally.  Taps dispatch synthetic clicks to pass through.
+     * @private
+     */
+    _initEdgeDragScroll() {
+        // Only activate when the mobile layout media query is active.
+        // This matches the responsive breakpoint in styles.css and avoids
+        // showing the overlay on desktop (where `ontouchstart` may still
+        // be true on touch-capable screens).
+        const mobileQuery = matchMedia(
+            '(max-width: 768px), (pointer: coarse)');
+        if (!mobileQuery.matches) return;
+
+        const EDGE_WIDTH = 24;     // px — wide enough for a comfortable drag target
+        const DRAG_THRESHOLD = 6;  // px of movement before engaging drag
+        const LERP_FACTOR = 0.25;  // smoothing — lower = smoother but laggier
+        let scrollTarget = null;
+        let animFrame = null;
+        let targetRatio = 0;
+        let currentRatio = 0;
+        let trackEl = null;
+        let thumbEl = null;
+        let fadeTimer = null;
+
+        /**
+         * Walk up the DOM to find the nearest scrollable ancestor.
+         * @param {Element} el - Starting element
+         * @returns {Element|null}
+         */
+        const findScrollable = (el) => {
+            while (el && el !== document.documentElement) {
+                if (el.scrollHeight > el.clientHeight) {
+                    const ov = getComputedStyle(el).overflowY;
+                    if (ov === 'auto' || ov === 'scroll') return el;
+                }
+                el = el.parentElement;
+            }
+            return null;
+        };
+
+        /**
+         * Find the scrollable element at a given Y coordinate.
+         * Probes the horizontal centre of the viewport (not the edge) so
+         * we always land inside actual content, not in container padding.
+         * This handles screens like Faces where the scrollable element
+         * (e.g. the People list) is a deeply nested child, not an ancestor
+         * of whatever sits at the right edge.
+         * @param {number} clientY - The Y coordinate to probe
+         * @returns {Element|null}
+         */
+        const findScrollableAtY = (clientY) => {
+            edgeZone.style.pointerEvents = 'none';
+            const el = document.elementFromPoint(window.innerWidth / 2, clientY);
+            edgeZone.style.pointerEvents = '';
+            return el ? findScrollable(el) : null;
+        };
+
+        // --- Visual track indicator (shown during drag) ---
+
+        /** Create or show the track overlay and thumb. */
+        const showTrack = () => {
+            if (!trackEl) {
+                trackEl = document.createElement('div');
+                trackEl.style.cssText =
+                    'position:fixed;right:0;width:4px;' +
+                    'background:var(--color-text-muted);opacity:0.25;' +
+                    'border-radius:2px;z-index:9999;pointer-events:none;' +
+                    'transition:opacity 0.3s';
+                thumbEl = document.createElement('div');
+                thumbEl.style.cssText =
+                    'position:absolute;left:0;width:100%;' +
+                    'background:var(--color-text-primary);' +
+                    'border-radius:2px;min-height:20px';
+                trackEl.appendChild(thumbEl);
+                document.body.appendChild(trackEl);
+            }
+            const toolbar = document.getElementById('toolbar');
+            const top = toolbar && !toolbar.hidden
+                ? toolbar.getBoundingClientRect().bottom : 0;
+            trackEl.style.top = top + 'px';
+            trackEl.style.height = (window.innerHeight - top) + 'px';
+            trackEl.style.opacity = '0.25';
+            trackEl.style.display = '';
+            if (fadeTimer) { clearTimeout(fadeTimer); fadeTimer = null; }
+        };
+
+        /** Update thumb position to reflect scroll state. */
+        const updateThumb = () => {
+            if (!trackEl || !thumbEl || !scrollTarget) return;
+            const trackH = parseFloat(trackEl.style.height);
+            const maxScroll = scrollTarget.scrollHeight - scrollTarget.clientHeight;
+            if (maxScroll <= 0) return;
+            const thumbH = Math.max(20,
+                (scrollTarget.clientHeight / scrollTarget.scrollHeight) * trackH);
+            const thumbTop = (scrollTarget.scrollTop / maxScroll) * (trackH - thumbH);
+            thumbEl.style.height = thumbH + 'px';
+            thumbEl.style.top = thumbTop + 'px';
+        };
+
+        /** Fade out the track. */
+        const hideTrack = () => {
+            if (!trackEl) return;
+            trackEl.style.opacity = '0';
+            fadeTimer = setTimeout(() => {
+                if (trackEl) trackEl.style.display = 'none';
+            }, 300);
+        };
+
+        // --- Edge-zone overlay ---
+        //
+        // `touch-action: none` is processed by the compositor BEFORE any
+        // JS runs, so the browser will never start a native scroll/pan
+        // gesture for touches on this element.  This is more reliable than
+        // calling preventDefault() on document-level touch listeners.
+
+        const edgeZone = document.createElement('div');
+        edgeZone.style.cssText =
+            'position:fixed;top:0;right:0;bottom:0;' +
+            `width:${EDGE_WIDTH}px;` +
+            'z-index:9998;' +
+            'touch-action:none;' +
+            'background:transparent;';
+        document.body.appendChild(edgeZone);
+
+        // --- Tap pass-through ---
+        // Clicks on the overlay are re-dispatched to the element behind it
+        // so that thumbnails, buttons, etc. at the right edge remain tappable.
+        edgeZone.addEventListener('click', (e) => {
+            edgeZone.style.pointerEvents = 'none';
+            const behind = document.elementFromPoint(e.clientX, e.clientY);
+            edgeZone.style.pointerEvents = '';
+            if (behind) {
+                behind.dispatchEvent(new MouseEvent('click', {
+                    bubbles: true, cancelable: true, view: window,
+                    clientX: e.clientX, clientY: e.clientY
+                }));
+            }
+        });
+
+        // --- Touch drag handler ---
+        edgeZone.addEventListener('touchstart', (e) => {
+            if (e.touches.length !== 1) return;
+            const touch = e.touches[0];
+
+            const target = findScrollableAtY(touch.clientY);
+            if (!target) return;
+
+            // Don't preventDefault here — let the browser generate normal
+            // click events for taps.  touch-action:none already prevents
+            // native scroll/pan gestures on this element.
+            const startY = touch.clientY;
+            let engaged = false;
+
+            const onMove = (ev) => {
+                if (ev.touches.length !== 1) return;
+                ev.preventDefault();
+                const moveY = ev.touches[0].clientY;
+
+                if (!engaged) {
+                    if (Math.abs(moveY - startY) < DRAG_THRESHOLD) return;
+                    engaged = true;
+                    scrollTarget = target;
+                    const maxScroll = target.scrollHeight - target.clientHeight;
+                    currentRatio = maxScroll > 0 ? target.scrollTop / maxScroll : 0;
+                    showTrack();
+                    startSmooth();
+                }
+
+                // Compute target ratio from finger position
+                const toolbar = document.getElementById('toolbar');
+                const tBottom = toolbar && !toolbar.hidden
+                    ? toolbar.getBoundingClientRect().bottom : 0;
+                const usable = window.innerHeight - tBottom;
+                if (usable > 0) {
+                    targetRatio = Math.max(0, Math.min(1,
+                        (moveY - tBottom) / usable));
+                }
+            };
+
+            const onEnd = () => {
+                document.removeEventListener('touchmove', onMove);
+                document.removeEventListener('touchend', onEnd);
+                document.removeEventListener('touchcancel', onEnd);
+                if (engaged) {
+                    stopSmooth();
+                    scrollTarget = null;
+                    hideTrack();
+                }
+            };
+
+            document.addEventListener('touchmove', onMove, { passive: false });
+            document.addEventListener('touchend', onEnd);
+            document.addEventListener('touchcancel', onEnd);
+        }, { passive: false });
+
+        // --- RAF smooth scroll ---
+        const tick = () => {
+            if (!scrollTarget) return;
+            const diff = targetRatio - currentRatio;
+            currentRatio += Math.abs(diff) < 0.0005 ? diff : diff * LERP_FACTOR;
+            const max = scrollTarget.scrollHeight - scrollTarget.clientHeight;
+            scrollTarget.scrollTop = currentRatio * max;
+            updateThumb();
+            animFrame = requestAnimationFrame(tick);
+        };
+        const startSmooth = () => {
+            if (animFrame) cancelAnimationFrame(animFrame);
+            animFrame = requestAnimationFrame(tick);
+        };
+        const stopSmooth = () => {
+            if (animFrame) { cancelAnimationFrame(animFrame); animFrame = null; }
+        };
     },
 
     /* ----------------------------------------------------------------------
@@ -2027,6 +2337,12 @@ const App = {
 
         // Initialise toolbar
         this._initToolbar();
+
+        // Initialise mobile hamburger menu
+        this._initMobileMenu();
+
+        // Initialise touch edge-drag scrollbar for mobile devices
+        this._initEdgeDragScroll();
 
         // Initialise global keyboard shortcuts
         this._initGlobalKeyboardShortcuts();

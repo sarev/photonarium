@@ -260,8 +260,10 @@ const Gallery = {
         // Cache DOM elements
         this._els = {
             grid: App.$('gallery-grid'),
+            galleryContainer: document.querySelector('.gallery-container'),
             infoPanel: App.$('info-panel'),
             infoContent: App.$('info-content'),
+            btnToggleInfo: App.$('btn-toggle-info'),
             similarityControl: App.$('gallery-similarity-control'),
             similaritySlider: App.$('gallery-similarity-slider'),
             similarityValue: App.$('gallery-similarity-value'),
@@ -275,6 +277,9 @@ const Gallery = {
 
         // Create scroll indicator overlay
         this._createScrollOverlay();
+
+        // Info panel collapse toggle
+        this._initInfoPanelCollapse();
 
         // Delegated click handler for info panel interactive elements
         this._els.infoContent.addEventListener('click', async (e) => {
@@ -307,12 +312,22 @@ const Gallery = {
             }
         });
 
-        // Track mouse position for overlay positioning
+        // Track pointer position for scroll overlay positioning
         this._mouseTracker = (e) => {
             this._mousePos.x = e.clientX;
             this._mousePos.y = e.clientY;
         };
         document.addEventListener('mousemove', this._mouseTracker, { passive: true });
+
+        // On touch devices, also track touch position so the scroll overlay
+        // anchors near the finger rather than a stale/absent mouse position
+        this._touchTracker = (e) => {
+            if (e.touches.length === 1) {
+                this._mousePos.x = e.touches[0].clientX;
+                this._mousePos.y = e.touches[0].clientY;
+            }
+        };
+        document.addEventListener('touchmove', this._touchTracker, { passive: true });
 
         // Create VirtualGrid instance
         this._grid = VirtualGrid.create({
@@ -1016,6 +1031,65 @@ const Gallery = {
         this._scrollOverlay = document.createElement('div');
         this._scrollOverlay.className = 'scroll-overlay';
         this._scrollOverlay.hidden = true;
+    },
+
+    /**
+     * Initialise info panel collapse behaviour.
+     * Binds the toggle button, subscribes to state changes, handles auto-collapse
+     * when the info panel would take more than 20% of the viewport width.
+     * @private
+     */
+    _initInfoPanelCollapse() {
+        const { btnToggleInfo, infoPanel, galleryContainer } = this._els;
+        if (!btnToggleInfo) return;
+
+        // Click handler — delegates to AppState.view (marks preference as user-set)
+        btnToggleInfo.addEventListener('click', () => AppState.view.toggleInfoPanel());
+
+        // Apply initial state from stored preference
+        this._applyInfoPanelCollapsed(AppState.view.isInfoPanelCollapsed());
+
+        // Subscribe to state changes
+        this._unsubs.push(AppState.view.onChanged((event) => {
+            if (event.property === 'infoPanelCollapsed') {
+                this._applyInfoPanelCollapsed(AppState.view.isInfoPanelCollapsed());
+                // Let CSS reflow, then recalculate the virtual grid layout
+                setTimeout(() => this._grid._onResize(), 0);
+            }
+        }));
+
+        // Auto-collapse: if info panel (300px) would take >20% of viewport width
+        // and the user hasn't explicitly toggled the preference
+        this._autoCollapseInfoPanel();
+        this._resizeAutoCollapse = () => this._autoCollapseInfoPanel();
+        window.addEventListener('resize', this._resizeAutoCollapse);
+    },
+
+    /**
+     * Apply the collapsed/expanded visual state to the info panel and toggle button.
+     * @param {boolean} collapsed - Whether the panel should be collapsed
+     * @private
+     */
+    _applyInfoPanelCollapsed(collapsed) {
+        const { infoPanel, galleryContainer } = this._els;
+        if (infoPanel) {
+            infoPanel.classList.toggle('collapsed', collapsed);
+        }
+        if (galleryContainer) {
+            galleryContainer.classList.toggle('panel-collapsed', collapsed);
+        }
+    },
+
+    /**
+     * Auto-collapse the info panel if it would take >20% of the viewport width.
+     * Only applies when the user hasn't explicitly set a preference.
+     * @private
+     */
+    _autoCollapseInfoPanel() {
+        if (AppState.view.isInfoPanelUserSet()) return;
+        const infoPanelWidth = 300;
+        const shouldCollapse = infoPanelWidth > window.innerWidth * 0.2;
+        AppState.view.setInfoPanelCollapsed(shouldCollapse);
     },
 
     /**

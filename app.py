@@ -3402,6 +3402,16 @@ if __name__ == '__main__':
         help='Path to configuration file (default: OS-appropriate location)'
     )
     parser.add_argument(
+        '-a', '--add-folder',
+        type=str,
+        action='append',
+        default=None,
+        metavar='PATH',
+        help='Register a folder for indexing (repeatable). '
+             'Adds the folder to the database and exits. '
+             'Useful for headless servers where the GUI folder picker is unavailable.'
+    )
+    parser.add_argument(
         '--init-config',
         type=str,
         default=None,
@@ -3494,6 +3504,26 @@ if __name__ == '__main__':
             },
         }
         print(json.dumps(models))
+        sys.exit(0)
+
+    # Handle add-folder command (register folders for indexing, then exit)
+    if args.add_folder:
+        db = get_db()
+        added = 0
+        for folder_path in args.add_folder:
+            abs_path = os.path.abspath(folder_path)
+            if not os.path.isdir(abs_path):
+                logger.error(f'Not a directory: {abs_path}')
+                continue
+            result = db.add_folder(abs_path)
+            if result is None:
+                logger.info(f'Already registered: {abs_path}')
+            else:
+                logger.info(f'Added folder: {abs_path}')
+                added += 1
+        if added:
+            logger.info(f'Registered {added} new folder(s). '
+                        'Run with --scan to index their images.')
         sys.exit(0)
 
     # Handle thumbnail generation command

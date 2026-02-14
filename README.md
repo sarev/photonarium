@@ -38,6 +38,30 @@ Once you have run the model downloader, the models stay on your machine. Everyth
 7. Use **Groups** when you want to clean up duplicates or organise images into albums.
 8. Use **Faces** when you want to name people and improve recognition.
 
+## What to expect
+
+Photonarium is currently in **beta**. It works, and people are using it day-to-day, but installation is still a manual process, the interface is evolving, and you may encounter rough edges. If something breaks or feels wrong, please [open an issue](https://github.com/sarev/photonarium/issues) — feedback during this stage is especially valuable.
+
+### Intended setup
+
+Photonarium is a **desktop application** that runs in your browser, not a mobile app. The backend (Python) and the frontend (the browser tab) are designed to run on the same machine — typically your laptop, desktop PC, or a home server where your photos are stored.
+
+It also works over a local network: you can run the backend on one machine (say, a NAS or always-on PC) and open the UI in a browser on another. Most features work fine in this setup, with a few caveats:
+
+- **Performance** it may be a little slower, for two reasons: 1) the backend machine needs some grunt, ideally a decent GPU, especially during image ingestion, and 2) quite a bit of data between the backend and UI needs to go over your local network. 
+- **Reveal in folder** opens a file-manager window on the machine running the *backend*, which is only useful if that's also the machine you're sitting at. On a headless server this will either silently fail or pop a window nobody sees.
+- **The folder picker** (for adding image directories) likewise opens on the backend machine. If you're accessing Photonarium remotely, use the CLI instead: `python app.py --add-folder /path/to/photos`.
+
+### Mobile devices
+
+The UI adjusts for smaller screens and touch input — the toolbar collapses to a hamburger menu, touch-friendly scroll zones appear, and layout stacks vertically. It's usable for browsing and basic tasks on a phone or tablet, but the full experience (drag-box selection, keyboard shortcuts, side-by-side info panel) is designed for a desktop browser. Think of mobile as a handy way to flick through your library on the sofa, not a replacement for the desktop workflow.
+
+### Multi-user and security
+
+Photonarium has **no user accounts, no login, and no access control**. Anyone who can reach the server's address can view and modify your library. This is fine for personal use and trusted home networks, but you should not expose it to the public internet.
+
+There is also no multi-user coordination: if two people make changes at the same time (renaming faces, editing ratings, deleting images), their changes may conflict silently. For now, treat it as a single-user tool. Multi-user awareness is something we'd like to address in a future version.
+
 ## Getting around
 
 Use the toolbar buttons, or these shortcuts (ignored while you are typing in a text box):
@@ -115,6 +139,8 @@ Open full-screen with:
 - **Reveal in folder** opens your file manager at the image location (only available when exactly one image is selected).
 
 ### Gallery info panel
+
+The info panel sits to the right of the thumbnail grid. Click the toggle at its edge to collapse or expand it. On narrow screens or when the panel would take more than 20% of the viewport, it collapses automatically. Your preference is remembered across sessions.
 
 When you select a photo, the info panel shows basic details and lets you edit:
 

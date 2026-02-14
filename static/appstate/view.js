@@ -39,6 +39,12 @@ AppState.view = (function() {
     /** @type {string} Sort direction: 'asc' or 'desc' */
     let _sortDirection = storage.get('sortDirection', 'desc');
 
+    /** @type {boolean} Whether the info panel is collapsed */
+    let _infoPanelCollapsed = storage.get('infoPanelCollapsed', false);
+
+    /** @type {boolean} Whether the user has explicitly toggled the info panel (vs auto-collapse) */
+    let _infoPanelUserSet = storage.get('infoPanelUserSet', false);
+
     // Initialize theme from system preference if not set
     if (_theme === null) {
         _theme = window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
@@ -197,6 +203,47 @@ AppState.view = (function() {
          */
         toggleSortDirection() {
             this.setSortDirection(_sortDirection === 'asc' ? 'desc' : 'asc');
+        },
+
+        // --- Info Panel ---
+
+        /**
+         * Get whether the info panel is collapsed.
+         * @returns {boolean}
+         */
+        isInfoPanelCollapsed() {
+            return _infoPanelCollapsed;
+        },
+
+        /**
+         * Set whether the info panel is collapsed.
+         * @param {boolean} collapsed - Whether to collapse the panel
+         */
+        setInfoPanelCollapsed(collapsed) {
+            collapsed = !!collapsed;
+            if (_infoPanelCollapsed === collapsed) return;
+            _infoPanelCollapsed = collapsed;
+            storage.set('infoPanelCollapsed', collapsed);
+            broadcast({ type: 'changed', property: 'infoPanelCollapsed' });
+        },
+
+        /**
+         * Toggle the info panel collapsed state.
+         * Also marks the preference as user-set so auto-collapse stops overriding.
+         */
+        toggleInfoPanel() {
+            _infoPanelUserSet = true;
+            storage.set('infoPanelUserSet', true);
+            this.setInfoPanelCollapsed(!_infoPanelCollapsed);
+        },
+
+        /**
+         * Get whether the user has explicitly set the info panel state.
+         * Used to decide whether auto-collapse should apply.
+         * @returns {boolean}
+         */
+        isInfoPanelUserSet() {
+            return _infoPanelUserSet;
         }
     };
 })();
