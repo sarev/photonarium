@@ -49,19 +49,19 @@ esac
 echo "Detected platform: $PLATFORM_NAME"
 
 # ---------------------------------------------------------------------------
-# 2. Find Python 3.11+
+# 2. Find Python 3.10+
 # ---------------------------------------------------------------------------
 PYTHON_CMD=""
 
 check_python_version() {
-    # Returns 0 if the given command is Python >= 3.11
+    # Returns 0 if the given command is Python >= 3.10
     local cmd="$1"
     if ! command -v "$cmd" &>/dev/null; then
         return 1
     fi
     "$cmd" -c "
 import sys
-if sys.version_info >= (3, 11):
+if sys.version_info >= (3, 10):
     sys.exit(0)
 else:
     sys.exit(1)
@@ -77,15 +77,15 @@ done
 
 if [ -z "$PYTHON_CMD" ]; then
     echo ""
-    echo "Python 3.11 or later is required but was not found."
+    echo "Python 3.10 or later is required but was not found."
     echo ""
     if [ "$PLATFORM_NAME" = "macOS" ]; then
         echo "Install Python from https://www.python.org/downloads/"
-        echo "  or via Homebrew:  brew install python@3.11"
+        echo "  or via Homebrew:  brew install python@3.12"
     else
         echo "Install Python using your package manager, for example:"
-        echo "  Ubuntu/Debian:  sudo apt install python3.11 python3.11-venv"
-        echo "  Fedora:         sudo dnf install python3.11"
+        echo "  Ubuntu/Debian:  sudo apt install python3"
+        echo "  Fedora:         sudo dnf install python3"
         echo "  Arch:           sudo pacman -S python"
         echo "  or download from https://www.python.org/downloads/"
     fi
@@ -125,7 +125,7 @@ if ! "$PYTHON_CMD" -c "import tkinter" 2>/dev/null; then
         echo "WARNING: Could not install tkinter automatically."
         echo "Install it manually for your system:"
         if [ "$PLATFORM_NAME" = "macOS" ]; then
-            echo "  brew install python-tk@3.11"
+            echo "  brew install python-tk@3.12"
         else
             echo "  Ubuntu/Debian:  sudo apt install python3-tk"
             echo "  Fedora:         sudo dnf install python3-tkinter"
@@ -137,6 +137,74 @@ if ! "$PYTHON_CMD" -c "import tkinter" 2>/dev/null; then
         echo ""
     fi
 fi
+
+# ---------------------------------------------------------------------------
+# 2b. Detect CUDA version via nvidia-smi (Linux only — macOS uses MPS)
+# ---------------------------------------------------------------------------
+TORCH_VARIANT="cpu"
+GPU_DISPLAY="No NVIDIA GPU detected"
+
+detect_cuda() {
+    # macOS: use default PyPI (includes MPS support for Apple Silicon)
+    if [ "$PLATFORM_NAME" = "macOS" ]; then
+        TORCH_VARIANT="default"
+        GPU_DISPLAY="macOS (MPS acceleration if available)"
+        return
+    fi
+
+    # Linux: check for nvidia-smi and parse CUDA version
+    if ! command -v nvidia-smi &>/dev/null; then
+        return
+    fi
+
+    local cuda_ver
+    cuda_ver=$(nvidia-smi 2>/dev/null | grep -oP 'CUDA Version: \K[0-9]+\.[0-9]+' || true)
+    if [ -z "$cuda_ver" ]; then
+        return
+    fi
+
+    local major="${cuda_ver%%.*}"
+
+    # Get GPU name for display
+    local gpu_name
+    gpu_name=$(nvidia-smi --query-gpu=name --format=csv,noheader 2>/dev/null | head -1 || echo "NVIDIA GPU")
+    if [ -z "$gpu_name" ]; then
+        gpu_name="NVIDIA GPU"
+    fi
+
+    case "$major" in
+        12|13|14)
+            TORCH_VARIANT="cu124"
+            GPU_DISPLAY="$gpu_name (CUDA $cuda_ver detected)"
+            ;;
+        11)
+            TORCH_VARIANT="cu118"
+            GPU_DISPLAY="$gpu_name (CUDA $cuda_ver detected)"
+            ;;
+        *)
+            GPU_DISPLAY="$gpu_name (CUDA $cuda_ver — too old, using CPU)"
+            ;;
+    esac
+}
+
+detect_cuda
+
+echo ""
+case "$TORCH_VARIANT" in
+    default) echo "  GPU: $GPU_DISPLAY" ;;
+    cpu)
+        echo "  GPU: $GPU_DISPLAY"
+        echo "  PyTorch: Installing CPU-only build"
+        ;;
+    cu118)
+        echo "  GPU: $GPU_DISPLAY"
+        echo "  PyTorch: Installing with CUDA 11.8 acceleration"
+        ;;
+    cu124)
+        echo "  GPU: $GPU_DISPLAY"
+        echo "  PyTorch: Installing with CUDA 12.4 acceleration"
+        ;;
+esac
 
 # ---------------------------------------------------------------------------
 # 3. Ask data directory
@@ -283,39 +351,44 @@ echo "--- Upgrading pip ---"
 
 echo ""
 echo "--- Installing PyTorch ---"
-if [ "$PLATFORM_NAME" = "macOS" ]; then
-    # macOS: install from default PyPI (includes MPS support)
-    "$VENV_PIP" install torch torchvision torchaudio
-else
-    # Linux: try CUDA 12.4 build first, fall back to CPU-only if unavailable
-    echo "Trying CUDA 12.4 build (for NVIDIA GPU acceleration)..."
-    if ! "$VENV_PIP" install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu124 2>/dev/null; then
-        echo ""
-        echo "CUDA build not available for this platform/Python version."
-        echo "Installing CPU-only PyTorch instead (Photonarium will still work,"
-        echo "just without GPU acceleration)."
-        echo ""
+case "$TORCH_VARIANT" in
+    default)
+        # macOS: install from default PyPI (includes MPS support)
+        "$VENV_PIP" install torch torchvision torchaudio
+        ;;
+    cpu)
+        echo "Installing CPU-only PyTorch..."
         "$VENV_PIP" install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cpu
-    fi
-fi
+        ;;
+    *)
+        # CUDA variant (cu118 or cu124)
+        echo "Installing PyTorch with $TORCH_VARIANT support..."
+        if ! "$VENV_PIP" install torch torchvision torchaudio --index-url "https://download.pytorch.org/whl/$TORCH_VARIANT" 2>/dev/null; then
+            echo ""
+            echo "CUDA build not available for this platform/Python version."
+            echo "Installing CPU-only PyTorch instead (Photonarium will still work,"
+            echo "just without GPU acceleration)."
+            echo ""
+            "$VENV_PIP" install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cpu
+        fi
+        ;;
+esac
 
 echo ""
 echo "--- Installing OpenCLIP ---"
 "$VENV_PIP" install open_clip_torch
 
 echo ""
-echo "--- Installing face detection (facenet-pytorch) ---"
-"$VENV_PIP" install --no-deps facenet-pytorch
-
-echo ""
 echo "--- Installing remaining dependencies ---"
-"$VENV_PIP" install pillow opencv-python imagehash numpy pyyaml flask waitress orjson requests "transformers==4.44.*" rawpy exifread
+"$VENV_PIP" install pillow opencv-python imagehash numpy pyyaml flask waitress orjson requests transformers rawpy exifread
 
+# Install facenet-pytorch last with --no-deps to avoid its overly strict
+# version bounds on torch/numpy/pillow.  Suppress stderr so users don't
+# see the scary-looking (but harmless) pip dependency conflict warnings.
 echo ""
-echo "NOTE: You may see pip warnings about \"facenet-pytorch\" dependency"
-echo "conflicts above. These are safe to ignore -- facenet-pytorch declares"
-echo "strict version bounds that are too tight, so we install it with"
-echo "--no-deps and provide the correct versions ourselves."
+echo "--- Installing face detection (facenet-pytorch) ---"
+"$VENV_PIP" install --no-deps facenet-pytorch 2>/dev/null
+echo "  Installed facenet-pytorch (with relaxed dependency bounds)."
 
 # ---------------------------------------------------------------------------
 # Step 3/4: Initialise configuration

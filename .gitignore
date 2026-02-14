@@ -11,3 +11,5 @@ CLAUDE.md
 /examples
 /tutorials
 /trash
+compat-test/venvs/
+compat-test/results.txt

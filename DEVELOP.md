@@ -446,7 +446,7 @@ The following rules apply to all submissions to the Photonarium codebase:
 2. Aside from `download_models.py` and the speculative downloading of the Google Material-Symbols fonts, Photonarium should be able to run offline indefinitely.
 3. Photonarium should work correctly on (recent) Windows, Mac, and Linux machines.
 4. Photonarium does not collect user/performance data to be sent anywhere for analysis.
-5. While Photonarium prefers NVIDIA GPUs with CUDA cores for performance reasons, it should still be able to function in a pure CPU environment.
+5. While Photonarium benefits from GPU acceleration (NVIDIA CUDA or Apple MPS) for performance, it should still be able to function in a pure CPU environment.
 6. Must respect the pre-existing Photonarium coding styles and formatting.
 7. Must attempt to extend/adapt existing Photonarium code over re-inventing the wheel, duplicating.
 8. The UI/UX design should be clean, elegant, obvious, non-technical, and themically/semantically consistent.

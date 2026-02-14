@@ -17,14 +17,14 @@ set "VENV_DIR=env"
 cd /d "%~dp0"
 
 :: ---------------------------------------------------------------------------
-:: 1. Find Python 3.11+
+:: 1. Find Python 3.10+
 :: ---------------------------------------------------------------------------
 set "PYTHON_CMD="
 
 :: Try "python" first (most common on Windows)
 where python >nul 2>&1
 if !errorlevel! equ 0 (
-    python -c "import sys; sys.exit(0 if sys.version_info >= (3, 11) else 1)" 2>nul
+    python -c "import sys; sys.exit(0 if sys.version_info >= (3, 10) else 1)" 2>nul
     if !errorlevel! equ 0 (
         set "PYTHON_CMD=python"
     )
@@ -34,7 +34,7 @@ if !errorlevel! equ 0 (
 if not defined PYTHON_CMD (
     where python3 >nul 2>&1
     if !errorlevel! equ 0 (
-        python3 -c "import sys; sys.exit(0 if sys.version_info >= (3, 11) else 1)" 2>nul
+        python3 -c "import sys; sys.exit(0 if sys.version_info >= (3, 10) else 1)" 2>nul
         if !errorlevel! equ 0 (
             set "PYTHON_CMD=python3"
         )
@@ -45,7 +45,7 @@ if not defined PYTHON_CMD (
 if not defined PYTHON_CMD (
     where py >nul 2>&1
     if !errorlevel! equ 0 (
-        py -c "import sys; sys.exit(0 if sys.version_info >= (3, 11) else 1)" 2>nul
+        py -c "import sys; sys.exit(0 if sys.version_info >= (3, 10) else 1)" 2>nul
         if !errorlevel! equ 0 (
             set "PYTHON_CMD=py"
         )
@@ -54,21 +54,13 @@ if not defined PYTHON_CMD (
 
 if not defined PYTHON_CMD (
     echo.
-    echo Python 3.11 or later is required but was not found.
+    echo Python 3.10 or later is required but was not found.
     echo.
-    echo Download Python 3.11.9 from:
-    echo   https://www.python.org/downloads/release/python-3119/
-    echo.
-    echo   Scroll down to "Files" and download one of:
-    echo     - "Windows installer (64-bit)"   ^(most likely^)
-    echo     - "Windows installer (32-bit)"
+    echo Download Python from:
+    echo   https://www.python.org/downloads/
     echo.
     echo   During installation, make sure to check "Add Python to PATH", and
     echo   make sure "tcl/tk and IDLE" is also checked in the installer.
-    echo.
-    echo   IMPORTANT: Do NOT use the "Download Python install manager" link
-    echo   at the top of the page — that installs a newer Python which is
-    echo   incompatible with Photonarium's dependencies.
     echo.
     echo.
     goto :error
@@ -87,6 +79,61 @@ if !errorlevel! neq 0 (
     echo folder picker dialog. To fix this, re-run the Python installer,
     echo click "Modify", and make sure "tcl/tk and IDLE" is checked.
     echo.
+)
+
+:: ---------------------------------------------------------------------------
+:: 1b. Detect CUDA version via nvidia-smi
+:: ---------------------------------------------------------------------------
+set "TORCH_VARIANT=cpu"
+set "GPU_DISPLAY=No NVIDIA GPU detected"
+
+where nvidia-smi >nul 2>&1
+if !errorlevel! equ 0 (
+    :: nvidia-smi prints "CUDA Version: X.Y" in its header — extract it
+    for /f "tokens=*" %%a in ('nvidia-smi 2^>nul ^| findstr /C:"CUDA Version"') do (
+        set "NVIDIA_LINE=%%a"
+    )
+    if defined NVIDIA_LINE (
+        :: Extract the version number after "CUDA Version: "
+        for /f "tokens=3 delims=: " %%v in ("!NVIDIA_LINE!") do (
+            set "CUDA_FULL=%%v"
+        )
+        if defined CUDA_FULL (
+            :: Extract major version (before the dot)
+            for /f "tokens=1 delims=." %%m in ("!CUDA_FULL!") do (
+                set "CUDA_MAJOR=%%m"
+            )
+            :: Get GPU name for display
+            for /f "tokens=*" %%g in ('%PYTHON_CMD% -c "import subprocess; r=subprocess.run(['nvidia-smi','--query-gpu=name','--format=csv,noheader'], capture_output=True, text=True); print(r.stdout.strip().split(chr(10))[0])" 2^>nul') do (
+                set "GPU_NAME=%%g"
+            )
+            if not defined GPU_NAME set "GPU_NAME=NVIDIA GPU"
+
+            :: Map CUDA major version to PyTorch index
+            if !CUDA_MAJOR! geq 12 (
+                set "TORCH_VARIANT=cu124"
+                set "GPU_DISPLAY=!GPU_NAME! ^(CUDA !CUDA_FULL! detected^)"
+            ) else if !CUDA_MAJOR! equ 11 (
+                set "TORCH_VARIANT=cu118"
+                set "GPU_DISPLAY=!GPU_NAME! ^(CUDA !CUDA_FULL! detected^)"
+            ) else (
+                :: CUDA too old for PyTorch — fall back to CPU
+                set "GPU_DISPLAY=!GPU_NAME! ^(CUDA !CUDA_FULL! — too old, using CPU^)"
+            )
+        )
+    )
+)
+
+echo.
+if "!TORCH_VARIANT!"=="cpu" (
+    echo   GPU: !GPU_DISPLAY!
+    echo   PyTorch: Installing CPU-only build
+) else if "!TORCH_VARIANT!"=="cu118" (
+    echo   GPU: !GPU_DISPLAY!
+    echo   PyTorch: Installing with CUDA 11.8 acceleration
+) else (
+    echo   GPU: !GPU_DISPLAY!
+    echo   PyTorch: Installing with CUDA 12.4 acceleration
 )
 
 :: ---------------------------------------------------------------------------
@@ -229,16 +276,22 @@ if !errorlevel! neq 0 goto :error
 
 echo.
 echo --- Installing PyTorch ---
-echo Trying CUDA 12.4 build (for NVIDIA GPU acceleration)...
-"%VENV_PIP%" install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu124 2>nul
-if !errorlevel! neq 0 (
-    echo.
-    echo CUDA build not available for this platform/Python version.
-    echo Installing CPU-only PyTorch instead (Photonarium will still work,
-    echo just without GPU acceleration^).
-    echo.
+if "!TORCH_VARIANT!"=="cpu" (
+    echo Installing CPU-only PyTorch...
     "%VENV_PIP%" install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cpu
     if !errorlevel! neq 0 goto :error
+) else (
+    echo Installing PyTorch with !TORCH_VARIANT! support...
+    "%VENV_PIP%" install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/!TORCH_VARIANT!
+    if !errorlevel! neq 0 (
+        echo.
+        echo CUDA build not available for this platform/Python version.
+        echo Installing CPU-only PyTorch instead ^(Photonarium will still work,
+        echo just without GPU acceleration^).
+        echo.
+        "%VENV_PIP%" install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cpu
+        if !errorlevel! neq 0 goto :error
+    )
 )
 
 echo.
@@ -247,20 +300,18 @@ echo --- Installing OpenCLIP ---
 if !errorlevel! neq 0 goto :error
 
 echo.
-echo --- Installing face detection (facenet-pytorch) ---
-"%VENV_PIP%" install --no-deps facenet-pytorch
-if !errorlevel! neq 0 goto :error
-
-echo.
 echo --- Installing remaining dependencies ---
-"%VENV_PIP%" install pillow opencv-python imagehash numpy pyyaml flask waitress orjson requests "transformers==4.44.*" rawpy exifread
+"%VENV_PIP%" install pillow opencv-python imagehash numpy pyyaml flask waitress orjson requests transformers rawpy exifread
 if !errorlevel! neq 0 goto :error
 
+:: Install facenet-pytorch last with --no-deps to avoid its overly strict
+:: version bounds on torch/numpy/pillow.  Suppress stderr so users don't
+:: see the scary-looking (but harmless) pip dependency conflict warnings.
 echo.
-echo NOTE: You may see pip warnings about "facenet-pytorch" dependency
-echo conflicts above. These are safe to ignore -- facenet-pytorch declares
-echo strict version bounds that are too tight, so we install it with
-echo --no-deps and provide the correct versions ourselves.
+echo --- Installing face detection (facenet-pytorch) ---
+"%VENV_PIP%" install --no-deps facenet-pytorch 2>nul
+if !errorlevel! neq 0 goto :error
+echo   Installed facenet-pytorch (with relaxed dependency bounds).
 
 :: ---------------------------------------------------------------------------
 :: Step 3/4: Initialise configuration

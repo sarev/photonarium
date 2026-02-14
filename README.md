@@ -470,10 +470,27 @@ Supported image types include: `.jpg`, `.jpeg`, `.png`, `.gif`, `.bmp`, `.tiff`,
 
 ## Requirements
 
-- Python 3.11 or later (with tkinter -- see note below)
-- A CUDA-capable GPU is recommended for faster processing, but not required
+- Python 3.10 or later (with tkinter -- see note below)
+- A GPU is recommended for faster processing (NVIDIA with CUDA, or Apple Silicon with MPS), but not required
 
-**tkinter note:** Photonarium uses tkinter for the native folder picker dialog. On Windows, make sure "tcl/tk and IDLE" is checked during Python installation (it is by default, but some minimal installs omit it). On Linux, install the `python3-tk` package (e.g. `sudo apt install python3-tk`). On macOS with Homebrew, `brew install python-tk@3.11`. The installer scripts will warn you if tkinter is missing.
+### Tested configurations
+
+The installer auto-detects your CUDA version and installs the matching PyTorch build. These combinations have been verified to install and run correctly:
+
+| Python | PyTorch | CUDA | GPU acceleration |
+|--------|---------|------|------------------|
+| 3.10 | cu118 | 11.x | Yes |
+| 3.10 | cu124 | 12.x | Yes |
+| 3.10 | cpu | — | No |
+| 3.11 | cu118 | 11.x | Yes |
+| 3.11 | cu124 | 12.x | Yes |
+| 3.11 | cpu | — | No |
+| 3.13 | cu124 | 12.x | Yes |
+| 3.13 | cpu | — | No |
+
+macOS uses the default PyPI torch build (MPS acceleration on Apple Silicon).
+
+**tkinter note:** Photonarium uses tkinter for the native folder picker dialog. On Windows, make sure "tcl/tk and IDLE" is checked during Python installation (it is by default, but some minimal installs omit it). On Linux, install the `python3-tk` package (e.g. `sudo apt install python3-tk`). On macOS with Homebrew, `brew install python-tk@3.12`. The installer scripts will warn you if tkinter is missing.
 
 ## Quick install (recommended)
 
@@ -530,18 +547,19 @@ If you prefer to install manually, or the installer script doesn't suit your set
    python -m pip install --upgrade pip
 
    # PyTorch (with CUDA support for GPU acceleration)
-   # Windows / Linux:
+   # Replace cu124 with cu118 for CUDA 11.x, or cpu for no GPU:
    pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu124
-   # macOS (use default PyPI — the cu124 index has no macOS wheels):
+   # macOS (use default PyPI — the CUDA indexes have no macOS wheels):
    # pip install torch torchvision torchaudio
 
-   # Other dependencies (install facenet-pytorch with --no-deps to avoid replacing CUDA torch)
+   # Other dependencies
    pip install open_clip_torch
-   pip install --no-deps facenet-pytorch
-   pip install pillow numpy pyyaml opencv-python imagehash flask waitress requests orjson transformers==4.44.* rawpy exifread
-   ```
+   pip install pillow numpy pyyaml opencv-python imagehash flask waitress requests orjson transformers rawpy exifread
 
-   Note: you may see pip warnings about facenet-pytorch version conflicts with numpy, Pillow, and torch. These can usually be ignored.
+   # Install facenet-pytorch last with --no-deps to avoid its overly strict
+   # version bounds on torch/numpy/pillow (the package is unmaintained)
+   pip install --no-deps facenet-pytorch
+   ```
 
 4. **Initialise the configuration**
 
