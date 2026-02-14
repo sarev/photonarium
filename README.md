@@ -2,7 +2,27 @@
 
 ![Photonarium Logo](logo.png)
 
-[Photonarium](http://photonarium.org/) is a photo catalogue that stays on your computer. It’s for people who want the convenience of modern search and face grouping, without uploading their life to someone else’s servers.
+[Photonarium](http://photonarium.org/) is a photo catalogue that stays on your computer. It's for people who want the convenience of modern search and face grouping, without uploading their life to someone else's servers.
+
+## Contents
+
+- [Why Photonarium exists](#why-photonarium-exists)
+- [What it can do](#what-it-can-do)
+- [A quick start](#a-quick-start-how-most-people-use-it)
+- [What to expect](#what-to-expect)
+- [Getting around](#getting-around)
+- [Gallery](#gallery)
+- [Full-screen viewer](#full-screen-viewer)
+- [Face tagging](#face-tagging-in-full-screen)
+- [Search](#search)
+- [Groups](#groups)
+- [Faces](#faces)
+- [Database](#database)
+- [Installation](#installation)
+- [Running Photonarium](#running-photonarium)
+- [Configuration](#configuration)
+- [Tips](#tips)
+- [Acknowledgements](#acknowledgements)
 
 ## Why Photonarium exists
 
@@ -18,12 +38,16 @@ Find out more about the motivations behind Photonarium in [`BACKGROUND.md`](BACK
 
 ## What it can do
 
-- **Fast browsing** with a thumbnail grid that stays smooth on large libraries
-- **AI search** that understands what you type (for example: "sunset over mountains", "birthday cake"), with negative terms to exclude concepts (e.g. "beach -people")
-- **Face workflows**: detect faces, group unknowns, name people, and use those names later
-- **Duplicate finding** at multiple strictness levels (identical, near-identical, similar, related) plus auto-generated **directory groups** and user-curated **custom groups** (albums), with one-click **prune** to keep the best image per group
-- **EXIF metadata** viewing, searching, and filtering by camera settings (camera, lens, ISO, aperture, shutter speed, and more)
-- **Ratings and descriptions** so you can build your own "favourites" system
+- **100% offline and private** — runs entirely on your machine. No cloud, no accounts, no tracking. Your images never leave your computer.
+- **Multi-device sync** — use Photonarium from multiple devices at once. Changes made on one (naming faces, rating photos) appear on all others within seconds.
+- **Mobile friendly** — browse your library from any device on your network. The responsive layout adapts to phones and tablets in both portrait and landscape.
+- **AI-powered search** that understands what you type (e.g. "sunset over mountains", "birthday cake"), with negative terms to exclude concepts (e.g. "beach -people")
+- **Face recognition** — automatic face detection and recognition. Name faces and Photonarium finds them across your library.
+- **Quality scoring** — AI aesthetic scoring ranks your images by visual quality. Find your best shots instantly.
+- **Duplicate detection** at four levels of similarity (identical, near-identical, similar, related) plus auto-generated **directory groups** and user-curated **custom groups** (albums), with one-click **prune** to keep the best image per group
+- **Camera RAW support** — native support for 20+ camera RAW formats alongside JPEG, PNG, and other standard image types. No conversion needed.
+- **Camera data** — full EXIF metadata extraction. Search and filter by camera, lens, ISO, aperture, shutter speed, and more.
+- **Ratings and descriptions** so you can build your own favourites system
 
 Once you have run the model downloader, the models stay on your machine. Everything runs locally.
 
