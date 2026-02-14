@@ -81,6 +81,17 @@ const Search = {
     _selectedPeople: [],
 
     /**
+     * IDs of people auto-added by name detection from the text input.
+     * Tracked separately from manually-picked people so that when a longer
+     * name match subsumes a shorter auto-added one, the shorter chip can
+     * be swapped out without affecting manual picks.
+     * Persisted in the filter object across screen navigations.
+     * @type {Set<string>}
+     * @private
+     */
+    _autoAddedPeopleIds: new Set(),
+
+    /**
      * Selected metadata criteria for the filter.
      * Keys are metadata field names, values are filter strings.
      * @type {Object<string, string>}
@@ -172,6 +183,9 @@ const Search = {
         // Focus the text input for quick typing
         this._els.textInput.focus();
 
+        // Pre-load people cache so name extraction can work without delay
+        AppState.people.load();
+
         // Bind Escape key to return to gallery
         this._escapeHandler = (e) => {
             if (e.key === 'Escape') {
@@ -238,6 +252,19 @@ const Search = {
                 this._applyFilter();
             }
         });
+
+        // Auto-detect known person names typed into the description field.
+        // While typing, require a trailing separator (space/punctuation) so
+        // partial names like "ste" don't prematurely match "Ste".
+        const debouncedExtract = App.debounce(
+            () => this._extractPeopleFromText({ trailingRequired: true }),
+            400,
+        );
+        this._els.textInput.addEventListener('input', debouncedExtract);
+        // On blur the user has finished typing, so accept end-of-string.
+        this._els.textInput.addEventListener('blur',
+            () => this._extractPeopleFromText({ trailingRequired: false }),
+        );
 
         // People filter events
         if (this._els.peopleChips) {
@@ -427,6 +454,13 @@ const Search = {
         if (!this._els.peopleDialog) return;
 
         if (saveSelection) {
+            // Sync: drop auto-added IDs for people the user removed via picker
+            const selectedIds = new Set(this._selectedPeople.map(p => p.id));
+            for (const autoId of this._autoAddedPeopleIds) {
+                if (!selectedIds.has(autoId)) {
+                    this._autoAddedPeopleIds.delete(autoId);
+                }
+            }
             // Selection is already stored in _selectedPeople
             this._renderPeopleChips();
         }
@@ -576,12 +610,120 @@ const Search = {
             removeBtn.title = 'Remove';
             removeBtn.addEventListener('click', (e) => {
                 e.stopPropagation();
+                this._autoAddedPeopleIds.delete(person.id);
                 this._selectedPeople = this._selectedPeople.filter(p => p.id !== person.id);
                 this._renderPeopleChips();
             });
             chip.appendChild(removeBtn);
 
             this._els.peopleChips.appendChild(chip);
+        }
+    },
+
+    /* ----------------------------------------------------------------------
+       AUTO-DETECT PEOPLE FROM TEXT
+
+       Scans the description input for known person names and automatically
+       adds matching people as chips, drawing the user's attention to the
+       People Picker feature organically.
+       ---------------------------------------------------------------------- */
+
+    /**
+     * Escapes special regex metacharacters in a string.
+     * @param {string} str - Raw string to escape
+     * @returns {string} Regex-safe string
+     * @private
+     */
+    _escapeRegex(str) {
+        return str.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    },
+
+    /**
+     * Scans the description text input for known person names and adds any
+     * matches as people-filter chips.
+     *
+     * Matching is case-insensitive and word-boundary-aware (leading `\b`).
+     * Names are tested longest-first so "Mary Jane" matches before "Mary".
+     * People already selected are skipped.
+     *
+     * @param {Object} [options]
+     * @param {boolean} [options.trailingRequired=true] - Require a trailing separator
+     *   (space, comma, etc.) after the name — prevents premature matches while typing
+     * @private
+     */
+    _extractPeopleFromText({ trailingRequired = true } = {}) {
+        if (!this._faceDetectionEnabled || !AppState.people.isLoaded()) return;
+
+        let text = this._els.textInput.value;
+        if (!text.trim()) {
+            // Text is empty — remove any auto-added people
+            if (this._autoAddedPeopleIds.size > 0) {
+                this._selectedPeople = this._selectedPeople.filter(
+                    p => !this._autoAddedPeopleIds.has(p.id),
+                );
+                this._autoAddedPeopleIds.clear();
+                this._renderPeopleChips();
+            }
+            return;
+        }
+
+        // Sort longest-first so multi-word names match before their prefixes
+        const allPeople = [...AppState.people.getAll()].sort(
+            (a, b) => b.name.length - a.name.length,
+        );
+
+        // Phase 1: Greedy longest-first matching with consumed-region tracking.
+        // A matched character range cannot overlap a previously matched range,
+        // so "Mary Jane" consumes those characters before "Mary" or "Jane"
+        // can claim them independently.
+        const consumed = [];       // Array of [start, end] character ranges
+        const claimedIds = new Set();  // Person IDs the current text supports
+
+        for (const person of allPeople) {
+            const escaped = this._escapeRegex(person.name);
+            const pattern = trailingRequired
+                ? `\\b${escaped}\\b(?=[\\s,;.!?])`
+                : `\\b${escaped}\\b`;
+            const regex = new RegExp(pattern, 'gi');
+
+            let m;
+            while ((m = regex.exec(text)) !== null) {
+                const start = m.index;
+                const end = start + m[0].length;
+                const overlaps = consumed.some(([cs, ce]) => start < ce && end > cs);
+                if (!overlaps) {
+                    consumed.push([start, end]);
+                    claimedIds.add(person.id);
+                    break;  // one match per person is sufficient
+                }
+            }
+        }
+
+        // Phase 2: Reconcile auto-added people with current text claims.
+        const selectedIds = new Set(this._selectedPeople.map(p => p.id));
+        let changed = false;
+
+        // Remove auto-added people the text no longer claims (e.g. "Mary"
+        // was auto-added, but now "Mary Jane" consumes those characters)
+        for (const autoId of [...this._autoAddedPeopleIds]) {
+            if (!claimedIds.has(autoId)) {
+                this._selectedPeople = this._selectedPeople.filter(p => p.id !== autoId);
+                this._autoAddedPeopleIds.delete(autoId);
+                changed = true;
+            }
+        }
+
+        // Add newly claimed people not already in the selection
+        for (const person of allPeople) {
+            if (claimedIds.has(person.id) && !selectedIds.has(person.id)) {
+                this._selectedPeople.push({ id: person.id, name: person.name });
+                this._autoAddedPeopleIds.add(person.id);
+                changed = true;
+            }
+        }
+
+        if (changed) {
+            this._renderPeopleChips();
         }
     },
 
@@ -611,12 +753,13 @@ const Search = {
                 this._els.similarityValue.textContent = pct + '%';
             }
 
-            // Populate people filter
+            // Populate people filter (and restore auto-added tracking)
             if (filter.people && filter.people.length > 0) {
                 this._selectedPeople = [...filter.people];
             } else {
                 this._selectedPeople = [];
             }
+            this._autoAddedPeopleIds = new Set(filter.autoAddedPeopleIds || []);
             this._renderPeopleChips();
 
             // Populate metadata filter
@@ -643,6 +786,7 @@ const Search = {
         this._els.dateEnd.value = '';
         this._els.ratingInput.value = '';
         this._selectedPeople = [];
+        this._autoAddedPeopleIds = new Set();
         this._renderPeopleChips();
         this._selectedMetadata = {};
         this._renderMetadataChips();
@@ -675,6 +819,9 @@ const Search = {
             rating: rating || null,
             people: people,
             metadata: metadata,
+            // Persist auto-added tracking so it survives screen navigation
+            autoAddedPeopleIds: this._autoAddedPeopleIds.size > 0
+                ? [...this._autoAddedPeopleIds] : null,
         };
     },
 
@@ -746,18 +893,41 @@ const Search = {
             return;
         }
 
-        // Read form values and threshold BEFORE navigating away
+        // Final extraction pass: pick up any remaining person names the user
+        // finished typing but didn't trigger via input/blur (e.g. end-of-string).
+        this._extractPeopleFromText({ trailingRequired: false });
+
+        // Read form values and threshold BEFORE navigating away.
+        // The original text is preserved in the filter for display when the
+        // user returns to the Search screen.
         const filter = this._readForm();
         const threshold = parseInt(this._els.similaritySlider.value, 10) / 100;
+
+        // Build a CLIP-friendly query by stripping selected people's names
+        // so the embedding focuses on the descriptive content, not proper nouns.
+        let searchText = filter?.text || '';
+        if (searchText && this._selectedPeople.length > 0) {
+            // Strip longest names first so "Mary Jane" is removed before "Mary"
+            const sorted = [...this._selectedPeople].sort(
+                (a, b) => b.name.length - a.name.length,
+            );
+            for (const person of sorted) {
+                const escaped = this._escapeRegex(person.name);
+                searchText = searchText.replace(
+                    new RegExp('\\b' + escaped + '\\b', 'gi'), '',
+                );
+            }
+            searchText = searchText.replace(/\s{2,}/g, ' ').trim();
+        }
 
         // Navigate to gallery immediately for responsive UX
         App.showGallery();
 
         // If there's a text query, perform semantic search with loading indicator
-        if (filter && filter.text) {
+        if (filter && searchText) {
             AppState.loading.show('search', 'Searching…');
             try {
-                const response = await AppState.search.execute(filter.text, threshold, 10000);
+                const response = await AppState.search.execute(searchText, threshold, 10000);
 
                 if (response && response.results) {
                     // Store matching image IDs, scores, and threshold in the filter
