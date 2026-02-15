@@ -125,7 +125,7 @@ const Settings = {
             const icon = document.createElement('span');
             icon.className = 'material-symbols-outlined settings-warning-icon';
             icon.textContent = 'warning';
-            icon.title = 'Changing this setting may require reconfiguration';
+            icon.title = 'Read the comments carefully before changing this setting.';
             label.appendChild(icon);
         }
         wrapper.appendChild(label);

@@ -84,6 +84,9 @@ CONFIG_SCHEMA: list[tuple[str, list[tuple[str, list[str]]]]] = [
                 'data_dir',
                 [
                     '[!] Where Photonarium stores its database, thumbnails, and model files.',
+                    'Changing this without manually moving the contents of the old directory',
+                    'will lose your database and thumbnails. You will also need to re-run',
+                    'download_models.py to restore the LAION and NIMA weight files.',
                     'Set automatically by the installer. Use an absolute path for reliability.',
                     'Leave empty to use the current working directory.',
                 ],
@@ -104,7 +107,8 @@ CONFIG_SCHEMA: list[tuple[str, list[tuple[str, list[str]]]]] = [
             (
                 'server_port',
                 [
-                    '[!] Port number for the web server. Range: 1024-65535',
+                    '[!] Port number for the web server. Range: 1024-65535.',
+                    'Any open browser tabs or bookmarks will need updating to the new URL.',
                 ],
             ),
         ],
