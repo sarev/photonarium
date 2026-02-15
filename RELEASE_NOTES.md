@@ -1,5 +1,47 @@
 # Release Notes
 
+## v1.0.6-beta.6
+
+### Async Trash System
+
+Image trashing has been reworked from synchronous file moves to an asynchronous background worker with parallel I/O:
+
+- **TrashWorker:** Images are soft-deleted immediately (removed from the UI) and file moves run in a background thread using a configurable thread pool (`trash_threads` setting, 1-32, default 8).
+- **Live progress:** The Database screen shows a progress row while trash moves are in flight.
+- **Crash recovery:** Unfinished queue items are persisted to `.pending_trash.json` on shutdown and recovered on next startup, so no files are lost.
+- **Multi-client notifications:** Trashing now emits `groups_changed` events for every affected duplicate level, so other browser tabs see dissolved groups and updated counts immediately.
+
+### Prune Dialog: Keep/Trash Toggle
+
+The prune dialog (Groups screen) now supports both "keep the best" and "trash the worst" semantics:
+
+- **Clickable legend:** The "Keep per group" heading is now a toggle button. Click it to switch to "Trash per group" mode and back.
+- **Inverted labels:** In trash mode, "Best image only" becomes "Worst image only", "Top N" becomes "Bottom N", etc.
+- **Always keeps one:** Trash mode never removes every image from a group - at least one is always kept.
+- **API:** The backend accepts `trash_count`/`trash_percent` as alternatives to `keep_count`/`keep_percent`, with mutual exclusion validation.
+
+### Smart People Detection in Search
+
+Typing a known person's name in the search description field now automatically adds them as a People filter chip:
+
+- **Greedy matching:** Multi-word names like "Mary Jane" are preferred over shorter overlapping matches like "Mary" + "Jane".
+- **Non-destructive:** Detected names are stripped from the CLIP search query at apply time without altering the text you typed, so the full description is preserved when you return to the Search screen.
+- **Manual override:** Auto-detected chips coexist with manually-picked people from the People Picker. Removing an auto-detected chip and re-typing the name won't re-add it.
+
+### Internationalisation Tools
+
+- **String extraction/injection:** New `extract_strings.py` and `apply_strings.py` scripts in `demo-seed/` support round-tripping translatable tutorial title/caption strings for localisation.
+- **Translated tutorials:** Tutorial scripts for Spanish, French, and Japanese are now included.
+
+### Bug Fixes
+
+- **Trashing didn't update groups on other clients:** Previously, trashing images only emitted `images_changed` events. Other browser tabs would see the images disappear but group counts wouldn't update and dissolved groups would linger until a manual refresh. Now `groups_changed` is emitted for every affected duplicate level.
+- **Folder removal didn't update groups:** Removing a folder invalidated duplicate groups internally but never emitted group change events, so other clients' Groups screens would show stale data.
+- **Trash progress race condition:** The trash progress dict was read and written without a lock, which could cause inconsistent progress display under concurrent trash operations.
+- **Landscape info panel:** On mobile in landscape orientation, the info panel is now restored to the right side of the gallery (instead of stacking below) where vertical space is scarce and width is ample.
+- **Duplicate status on restart:** The duplicate detection status no longer shows stale "Waiting to compute..." when a prior epoch already exists.
+- **Tutorial reliability:** Slider interactions in the tutorial now use real click events instead of programmatic dispatch, and unnecessary screen navigation detours have been removed.
+
 ## v1.0.5-beta.5
 
 ### Unicode Path Support
