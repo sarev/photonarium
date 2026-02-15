@@ -6094,8 +6094,34 @@ class ImageDatabase:
                 matches = reassess_unknown_faces(self.conn, threshold=self.config.face_recognition_threshold)
             if matches:
                 logger.info(f'Face reassessment: matched {len(matches)} faces to known people')
-                # Emit event so frontend can refresh
-                self.event_queue.emit('faces_reassessed', {'matched': len(matches)})
+                # Build per-face update list for the frontend (same format as
+                # async reassessment in faces.py).  Look up person names so the
+                # frontend can update its cache without a round-trip.
+                person_names: dict[str, str] = {}
+                unique_pids = {pid for _, pid, _ in matches}
+                with self._db_lock:
+                    for pid in unique_pids:
+                        row = self.conn.execute(
+                            'SELECT name FROM people WHERE id = ?',
+                            (pid,),
+                        ).fetchone()
+                        if row:
+                            person_names[pid] = row['name']
+                updated_faces = [
+                    {
+                        'face_id': face_id,
+                        'person_id': pid,
+                        'person_name': person_names.get(pid, ''),
+                    }
+                    for face_id, pid, _ in matches
+                ]
+                self.event_queue.emit(
+                    'faces_reassessed',
+                    {
+                        'matched_count': len(matches),
+                        'updated_faces': updated_faces,
+                    },
+                )
             else:
                 logger.info('Face reassessment: no new matches found')
         finally:

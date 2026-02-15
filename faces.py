@@ -2712,7 +2712,7 @@ def reassess_unknown_faces_async(
                     embedding = np.frombuffer(row['embedding'], dtype=np.float32)
                     candidate_embeddings.append((row['id'], embedding))
                     face_timestamps[row['id']] = row['updated_at']
-                    candidate_person_ids[row['id']] = row.get('person_id', None)
+                    candidate_person_ids[row['id']] = row['person_id']
 
                 logger.debug(
                     f'Async reassessment: READ phase done - '

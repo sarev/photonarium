@@ -147,32 +147,47 @@ AppState.events = (function() {
      * Handle faces_reassessed event.
      * Auto-matched faces should be added to the person.
      *
-     * Uses incremental cache update (no full reload) for responsiveness.
-     * The autoAssign() call updates the cache directly - backend already persisted.
+     * Two event formats:
+     * - Async (single person): { person_id, updated_faces: [{face_id, ...}] }
+     * - Sync (multi person):   { updated_faces: [{face_id, person_id, person_name}, ...] }
      *
-     * Backend sends: { person_id, matched_count, updated_faces: [{face_id, person_id, person_name}, ...] }
+     * Async reassessment targets one person at a time so includes a top-level
+     * person_id.  Sync reassessment (during scan) matches all unknowns at once
+     * so each entry in updated_faces carries its own person_id.
+     *
+     * Uses incremental cache update (no full reload) for responsiveness.
+     * The backend already persisted the matches.
      */
     function handleFacesReassessed(data) {
         const { person_id, updated_faces } = data || {};
+        if (!updated_faces?.length) return;
 
-        if (updated_faces?.length && person_id) {
-            // Extract face IDs from the updated_faces array
+        if (person_id) {
+            // Async path: all faces matched to the same person
             const faceIds = updated_faces.map(f => f.face_id);
-
             console.log('[AppState.events] Faces reassessed:',
                 faceIds.length, 'faces matched to', person_id);
-
-            // Use autoAssign (no lock, no persist - backend already stored)
-            // This updates the faces cache incrementally
             if (AppState.faces?.autoAssign) {
                 AppState.faces.autoAssign(faceIds, person_id);
             }
-
-            // Invalidate people cache - face counts changed, new people may exist
-            // This ensures autocomplete has fresh data
-            if (AppState.people?.invalidate) {
-                AppState.people.invalidate();
+        } else {
+            // Sync path: faces matched to multiple people — use autoUpdate
+            // which accepts per-face person_id assignments
+            console.log('[AppState.events] Faces reassessed (bulk):',
+                updated_faces.length, 'faces matched');
+            if (AppState.faces?.autoUpdate) {
+                const updates = updated_faces.map(f => ({
+                    id: f.face_id,
+                    person_id: f.person_id,
+                    person_name: f.person_name,
+                }));
+                AppState.faces.autoUpdate(updates);
             }
+        }
+
+        // Invalidate people cache — face counts changed, new people may exist
+        if (AppState.people?.invalidate) {
+            AppState.people.invalidate();
         }
     }
 

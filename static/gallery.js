@@ -428,6 +428,13 @@ const Gallery = {
             this._grid.bind();
             // Refresh layout in case container size changed while away
             this._grid.refresh();
+            // Background delta sync: picks up images added while on another
+            // screen (e.g. user watched a scan on the Database screen then
+            // navigated here before processing_complete fired).  Delta loads
+            // are cheap — returns nothing if the cache is already current.
+            // If new images arrive, the broadcast triggers _onImagesChanged()
+            // which re-renders the grid automatically.
+            AppState.images.load();
         }
         // Bind selection handlers
         this._selection.bind();
