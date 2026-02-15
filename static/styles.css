@@ -1002,7 +1002,7 @@ a:hover {
     display: none;
 }
 
-.gallery-container.panel-collapsed .info-panel-toggle .material-symbols-outlined {
+.gallery-container.panel-collapsed .info-panel-toggle :is(.material-symbols-outlined, .icon) {
     transform: scaleX(-1);
 }
 
@@ -2815,7 +2815,7 @@ a:hover {
     text-decoration: underline;
 }
 
-.stats-reveal-link .material-symbols-outlined {
+.stats-reveal-link :is(.material-symbols-outlined, .icon) {
     font-size: 14px;
     flex-shrink: 0;
 }
@@ -4037,10 +4037,10 @@ dialog::backdrop {
     }
 
     /* Chevron rotated for vertical expand/collapse direction */
-    .info-panel-toggle .material-symbols-outlined {
+    .info-panel-toggle :is(.material-symbols-outlined, .icon) {
         transform: rotate(90deg);   /* chevron_right → chevron_down */
     }
-    .gallery-container.panel-collapsed .info-panel-toggle .material-symbols-outlined {
+    .gallery-container.panel-collapsed .info-panel-toggle :is(.material-symbols-outlined, .icon) {
         transform: rotate(-90deg);  /* chevron_up (panel is hidden below) */
     }
 
@@ -4188,10 +4188,10 @@ dialog::backdrop {
         border-left: 1px solid var(--color-border);
     }
 
-    .info-panel-toggle .material-symbols-outlined {
+    .info-panel-toggle :is(.material-symbols-outlined, .icon) {
         transform: none;               /* chevron_right = expand right */
     }
-    .gallery-container.panel-collapsed .info-panel-toggle .material-symbols-outlined {
+    .gallery-container.panel-collapsed .info-panel-toggle :is(.material-symbols-outlined, .icon) {
         transform: scaleX(-1);         /* chevron_left = expand left */
     }
 }
@@ -4471,7 +4471,7 @@ dialog::backdrop {
     color: var(--color-text-secondary);
 }
 
-.settings-reveal-link .material-symbols-outlined {
+.settings-reveal-link :is(.material-symbols-outlined, .icon) {
     font-size: 14px;
     flex-shrink: 0;
 }
