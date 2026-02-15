@@ -1,5 +1,24 @@
 # Release Notes
 
+## v1.0.7-beta.7
+
+### "On This Day..." Photo Album
+
+When you return to Photonarium after a long absence (8+ hours), it checks whether any photos in your library were taken on today's date across multiple years. If so, a nostalgic album overlay fades in - scattered photos on textured paper with a wire ring binder and coffee ring stain. You can dismiss it or click "View in Gallery" to see just those images as a filtered set. The album shows at most once per calendar day and can be disabled via the `on_this_day_enabled` config option.
+
+### Offline-Safe Icons
+
+Material Symbols icons now degrade gracefully when the Google font has not loaded (e.g. on a fresh install with no internet). A new `App.icon()` helper renders Unicode fallback glyphs that are upgraded to the real font icons once the stylesheet loads. This replaces 20+ sites that previously showed blank squares when offline.
+
+### Consolidated Reveal Endpoint
+
+The two separate "reveal in file manager" endpoints have been merged into a single `POST /api/reveal` that accepts a target parameter (`image`, `config`, or `trash`). The Database screen now shows a clickable "Trashed" stat that opens the trash directory directly.
+
+### Bug Fixes
+
+- **Selection lost when clearing a group filter:** Clearing a filter (e.g. leaving a duplicate group) was wiping the gallery selection. The selection is now preserved and the gallery scrolls back to the selected image.
+- **Improved settings tooltips:** The vague "may require reconfiguration" warning on dangerous settings fields has been replaced with specific guidance - `data_dir` warns about losing the database and thumbnails, `server_port` notes that bookmarks and open tabs will need updating.
+
 ## v1.0.6-beta.6
 
 ### Async Trash System
