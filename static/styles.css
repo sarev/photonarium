@@ -4582,3 +4582,270 @@ dialog::backdrop {
     border-top: 1px solid var(--color-border);
     flex-shrink: 0;
 }
+
+
+/* ============================================================================
+   ON THIS DAY OVERLAY
+   Nostalgic photo album shown on app load when there are photos from today's
+   date across multiple years.  Intentionally NOT themed - always cream/sepia.
+   ============================================================================ */
+
+#on-this-day-overlay {
+    position: fixed;
+    inset: 0;
+    z-index: 1100;
+    background: rgba(0, 0, 0, 0.75);
+    backdrop-filter: blur(8px);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 1.25vh 1.25vw;
+    visibility: hidden;
+    opacity: 0;
+    pointer-events: none;
+    transition: opacity 0.4s ease, visibility 0.4s;
+}
+
+#on-this-day-overlay.visible {
+    visibility: visible;
+    opacity: 1;
+    pointer-events: auto;
+}
+
+#on-this-day-album {
+    position: relative;
+    width: 100%;
+    height: 100%;
+    max-width: 1600px;
+    display: flex;
+    flex-direction: column;
+    justify-content: space-between;
+    /* Layered paper texture: fine horizontal fibres + diagonal weave +
+       sparse cross-fibres + warm base gradient */
+    background-color: #ede6d8;
+    background-image:
+        repeating-linear-gradient(
+            0deg, transparent, transparent 2px,
+            rgba(139, 119, 92, 0.045) 2px, rgba(139, 119, 92, 0.045) 3px),
+        repeating-linear-gradient(
+            127deg, transparent, transparent 8px,
+            rgba(160, 140, 110, 0.035) 8px, rgba(160, 140, 110, 0.035) 9px),
+        repeating-linear-gradient(
+            90deg, transparent, transparent 11px,
+            rgba(120, 100, 75, 0.025) 11px, rgba(120, 100, 75, 0.025) 12px),
+        linear-gradient(135deg, #f5f0e8 0%, #ede6d8 40%, #e8e0d0 70%, #e3dbc8 100%);
+    box-shadow:
+        0 8px 32px rgba(0, 0, 0, 0.5),
+        0 2px 8px rgba(0, 0, 0, 0.3),
+        inset 0 1px 0 rgba(255, 255, 255, 0.4),
+        inset 0 0 80px rgba(100, 80, 50, 0.06);
+    border-radius: 6px;
+    padding: 1rem 1.5rem;
+    font-family: 'Georgia', 'Times New Roman', serif;
+    color: #3a3028;
+}
+
+.otd-header,
+.otd-footer {
+    position: relative;
+    z-index: 4;
+    flex: 0 0 auto;
+}
+
+.otd-header {
+    text-align: center;
+    padding-bottom: 0.6rem;
+}
+
+.otd-title {
+    margin: 0 0 0.2rem;
+    font-size: 1.5rem;
+    font-weight: normal;
+    font-style: italic;
+    color: #5a4a38;
+    letter-spacing: 0.02em;
+}
+
+.otd-subtitle {
+    margin: 0;
+    font-size: 1.15rem;
+    color: #8a7a68;
+    letter-spacing: 0.05em;
+}
+
+/* Scatter container: overlays the full album page */
+.otd-photos {
+    position: absolute;
+    inset: 0;
+    z-index: 1;
+}
+
+/* Individual photo: absolutely positioned by JS scatter */
+.otd-photo {
+    position: absolute;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    animation: otd-fadeSlideIn 0.5s ease both;
+    animation-delay: var(--delay, 0s);
+}
+
+@keyframes otd-fadeSlideIn {
+    from {
+        opacity: 0;
+        transform: translateY(12px) rotate(var(--tilt, 0deg));
+    }
+    to {
+        opacity: 1;
+        transform: translateY(0) rotate(var(--tilt, 0deg));
+    }
+}
+
+.otd-photo-frame {
+    padding: 6px;
+    border-radius: 1px;
+    box-shadow:
+        0 2px 8px rgba(0, 0, 0, 0.15),
+        0 1px 2px rgba(0, 0, 0, 0.1);
+    background: linear-gradient(145deg, #ffffff, #faf8f4);
+    transition: transform 0.3s ease, box-shadow 0.3s ease;
+}
+
+.otd-photo-frame:hover {
+    transform: scale(1.05);
+    box-shadow:
+        0 6px 20px rgba(0, 0, 0, 0.2),
+        0 2px 6px rgba(0, 0, 0, 0.12);
+    z-index: 10;
+}
+
+.otd-photo-frame img {
+    display: block;
+    height: var(--photo-h, 150px);
+    width: auto;
+    /* Slight vintage tint: gently desaturated with a warm sepia wash */
+    filter: saturate(0.78) sepia(0.12);
+    transition: filter 0.4s ease;
+}
+
+.otd-photo-frame:hover img {
+    filter: saturate(1) sepia(0);
+}
+
+.otd-photo-year {
+    margin-top: 0.3rem;
+    font-size: 1.05rem;
+    font-style: italic;
+    color: #7a6a58;
+    letter-spacing: 0.04em;
+}
+
+/* Coffee mug ring stains */
+.otd-coffee-ring {
+    position: absolute;
+    pointer-events: none;
+    border-radius: 50%;
+    background: radial-gradient(
+        circle,
+        transparent 52%,
+        rgba(130, 95, 50, var(--ring-alpha, 0.06)) 54%,
+        rgba(140, 100, 55, var(--ring-alpha, 0.06)) 62%,
+        rgba(130, 95, 50, calc(var(--ring-alpha, 0.06) * 0.5)) 68%,
+        transparent 70%
+    );
+    filter: blur(0.8px);
+}
+
+/* Ring binder along one edge */
+.otd-binder {
+    position: absolute;
+    top: 0;
+    height: 100%;
+    pointer-events: none;
+    z-index: 2;
+}
+
+/* Close button (top-right X) */
+.otd-close {
+    position: absolute;
+    top: 0.75rem;
+    right: 0.75rem;
+    z-index: 5;
+    width: 28px;
+    height: 28px;
+    border: none;
+    border-radius: 50%;
+    background: rgba(90, 74, 56, 0.12);
+    color: #8a7a68;
+    font-size: 1.1rem;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    transition: background 0.2s, color 0.2s;
+}
+
+.otd-close:hover {
+    background: rgba(90, 74, 56, 0.25);
+    color: #5a4a38;
+}
+
+/* Footer with action buttons */
+.otd-footer {
+    display: flex;
+    justify-content: center;
+    gap: 1rem;
+    padding-top: 0.6rem;
+}
+
+.otd-btn {
+    padding: 0.5rem 1.5rem;
+    border: 1.5px solid #b8a890;
+    border-radius: 4px;
+    background: transparent;
+    color: #6a5a48;
+    font-family: inherit;
+    font-size: 0.9rem;
+    letter-spacing: 0.03em;
+    cursor: pointer;
+    transition: background 0.2s, color 0.2s, border-color 0.2s;
+}
+
+.otd-btn:hover {
+    background: rgba(90, 74, 56, 0.1);
+    border-color: #8a7a68;
+    color: #4a3a28;
+}
+
+.otd-btn-primary {
+    background: #6a5a48;
+    border-color: #6a5a48;
+    color: #f5f0e8;
+}
+
+.otd-btn-primary:hover {
+    background: #5a4a38;
+    border-color: #5a4a38;
+    color: #fff;
+}
+
+/* Responsive adjustments */
+@media (max-width: 600px) {
+    #on-this-day-album {
+        padding: 1rem;
+        border-radius: 0;
+    }
+
+    .otd-title {
+        font-size: 1.25rem;
+    }
+
+    .otd-footer {
+        gap: 0.5rem;
+    }
+
+    .otd-btn {
+        padding: 0.4rem 1rem;
+        font-size: 0.8rem;
+    }
+}

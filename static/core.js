@@ -177,6 +177,8 @@ const App = {
             // would be annoyingly spammy.
             if (wasOfflineMs > 10 * 60 * 1000) {
                 this.showInfo('Connection restored.');
+                // OnThisDay re-check is handled by the activity tracker —
+                // the user's first interaction after reconnect will fire it
             }
         }
     },
@@ -964,6 +966,8 @@ const App = {
                 timeoutMs: data.thumbnail_timeout_ms,
                 scrollThrottleMs: data.thumbnail_scroll_throttle_ms,
             };
+            // "On this day..." feature toggle
+            this._onThisDayEnabled = data.on_this_day_enabled ?? true;
             // Quality scoring weights (used by AppState.images for Quality sort)
             this._qualityConfig = {
                 weightAesthetic: data.quality_weight_aesthetic ?? 0.60,
@@ -993,6 +997,15 @@ const App = {
             alpha: 0.60,
             nimaEnabled: false,
         };
+    },
+
+    /**
+     * Check whether the "On this day..." feature is enabled via config.
+     * Defaults to true until the config has loaded.
+     * @returns {boolean}
+     */
+    isOnThisDayEnabled() {
+        return this._onThisDayEnabled ?? true;
     },
 
     /* ----------------------------------------------------------------------
@@ -2446,6 +2459,9 @@ const App = {
                 }
             }
         }
+
+        // Initialise On This Day overlay
+        if (typeof OnThisDay !== 'undefined') OnThisDay.init(); // eslint-disable-line no-undef
 
         // Determine initial screen
         this._determineInitialScreen();

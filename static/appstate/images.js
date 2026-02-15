@@ -254,8 +254,8 @@ AppState.images = (function() {
         }
 
         // Pre-compute filter values outside the loop (avoids per-image object creation)
-        const isSemantic = currentFilter.type === 'semantic' && Array.isArray(currentFilter.imageIds);
-        const idSet = isSemantic ? new Set(currentFilter.imageIds.map(String)) : null;
+        const isSemantic = currentFilter.type === 'semantic';
+        const idSet = Array.isArray(currentFilter.imageIds) ? new Set(currentFilter.imageIds.map(String)) : null;
         const scores = isSemantic ? (currentFilter.scores || {}) : null;
         const textLower = (!isSemantic && currentFilter.text) ? currentFilter.text.toLowerCase() : null;
         const dateStart = currentFilter.dateStart ? new Date(currentFilter.dateStart) : null;

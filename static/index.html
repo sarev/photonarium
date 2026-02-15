@@ -813,6 +813,27 @@
         </dialog>
 
         <!-- ============================================================
+             ON THIS DAY OVERLAY
+             Nostalgic "On this day..." photo album shown on app load
+             when there are photos from today's date across multiple
+             years.  Not themed - always cream/sepia aesthetic.
+             ============================================================ -->
+        <div id="on-this-day-overlay">
+            <div id="on-this-day-album">
+                <button id="on-this-day-close" class="otd-close" title="Close">&times;</button>
+                <div class="otd-header">
+                    <h1 class="otd-title">On this day&hellip;</h1>
+                    <p id="on-this-day-subtitle" class="otd-subtitle"></p>
+                </div>
+                <div id="on-this-day-photos" class="otd-photos"></div>
+                <div class="otd-footer">
+                    <button id="on-this-day-dismiss" class="otd-btn">Dismiss</button>
+                    <button id="on-this-day-gallery" class="otd-btn otd-btn-primary">View in Gallery</button>
+                </div>
+            </div>
+        </div>
+
+        <!-- ============================================================
              LOADING OVERLAY
              Global loading indicator that sits above all screens.
              Managed by AppState.loading with ownership tracking.
@@ -856,5 +877,6 @@
     <script src="search.js"></script>
     <script src="duplicates.js"></script>
     <script src="faces.js"></script>
+    <script src="onthisday.js"></script>
 </body>
 </html>

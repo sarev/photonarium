@@ -1190,6 +1190,7 @@ def get_config():
             'quality_weight_bpp': config.quality_weight_bpp,
             'quality_alpha': config.quality_alpha,
             'nima_enabled': config.nima_enabled,
+            'on_this_day_enabled': config.on_this_day_enabled,
             'trash_dir': str(db.trash_dir),
         }
     )

@@ -426,6 +426,19 @@ CONFIG_SCHEMA: list[tuple[str, list[tuple[str, list[str]]]]] = [
         ],
     ),
     (
+        'On This Day',
+        [
+            (
+                'on_this_day_enabled',
+                [
+                    'Show a nostalgic "On this day..." photo album when returning to the app',
+                    'after a long period of inactivity (8+ hours), if there are photos from',
+                    "today's date across multiple years.",
+                ],
+            ),
+        ],
+    ),
+    (
         'Trash Directory',
         [
             (
@@ -636,6 +649,7 @@ class Config:
     quality_weight_pixels: float = 0.15
     quality_weight_bpp: float = 0.05
     quality_alpha: float = 0.60
+    on_this_day_enabled: bool = True
     trash_dir: str = ''
 
     def __post_init__(self) -> None:
@@ -671,6 +685,8 @@ class Config:
             raise ValueError('caption_british_english must be a boolean')
         if not isinstance(self.nima_enabled, bool):
             raise ValueError('nima_enabled must be a boolean')
+        if not isinstance(self.on_this_day_enabled, bool):
+            raise ValueError('on_this_day_enabled must be a boolean')
 
         # --- image_extensions: coerce to set of dotted lowercase strings ---
         if not isinstance(self.image_extensions, (set, list, tuple)):
