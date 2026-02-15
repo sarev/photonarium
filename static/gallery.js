@@ -903,7 +903,7 @@ const Gallery = {
             if (this._selection) this._selection.unbind();
             if (this._grid) this._grid.unbind();
             ThumbnailLoader.clear();
-            grid.innerHTML = '<div class="empty-state"><span class="material-symbols-outlined">photo_library</span><p>No images to display</p></div>';
+            grid.innerHTML = `<div class="empty-state">${App.icon('photo_library', '\u{1F3DE}')}<p>No images to display</p></div>`;
             return;
         }
 
@@ -973,15 +973,7 @@ const Gallery = {
             className: 'gallery-item-group-btn',
             title: 'Manage groups',
         });
-        // Use Material Symbol if available, otherwise Unicode fallback
-        if (document.fonts?.check('24px "Material Symbols Outlined"')) {
-            const icon = document.createElement('span');
-            icon.className = 'material-symbols-outlined';
-            icon.textContent = 'photo_prints';
-            groupBtn.appendChild(icon);
-        } else {
-            groupBtn.textContent = '\u{1F5C2}';
-        }
+        groupBtn.innerHTML = App.icon('photo_prints', '\u{1F5C2}');
         groupBtn.addEventListener('click', (e) => {
             e.stopPropagation();
             // Blur so the button loses :focus and its opacity returns to 0
@@ -1419,7 +1411,7 @@ const Gallery = {
                 <div class="info-label-row">
                     <label class="info-label" for="info-description">Description</label>
                     <button type="button" id="info-generate-caption-btn" class="toolbar-btn toolbar-btn-small" title="Generate AI caption">
-                        <span class="material-symbols-outlined">auto_awesome</span>
+                        ${App.icon('auto_awesome', '\u2728')}
                     </button>
                 </div>
                 <textarea id="info-description" class="info-input" rows="3">${App.escapeHtml(img.description || '')}</textarea>
@@ -1430,7 +1422,7 @@ const Gallery = {
                 <div class="info-rating-row">
                     <input type="text" id="info-rating" class="info-input" value="${App.escapeHtml(img.rating || '')}">
                     <button type="button" id="info-emoji-btn" class="toolbar-btn" title="Add emoji">
-                        <span class="material-symbols-outlined">add_reaction</span>
+                        ${App.icon('add_reaction', '\u{1F44D}')}
                     </button>
                 </div>
             </div>
@@ -1649,8 +1641,6 @@ const Gallery = {
         const extras = allKeys.filter(k => !keyOrder.includes(k)).sort();
         const sortedKeys = [...ordered, ...extras];
 
-        const hasMaterial = document.fonts?.check('24px "Material Symbols Outlined"');
-
         for (const key of sortedKeys) {
             const value = exifData[key];
             const row = document.createElement('div');
@@ -1671,15 +1661,7 @@ const Gallery = {
                 const filterBtn = document.createElement('button');
                 filterBtn.className = 'metadata-filter-btn';
                 filterBtn.title = 'Add to search filter';
-
-                if (hasMaterial) {
-                    const icon = document.createElement('span');
-                    icon.className = 'material-symbols-outlined';
-                    icon.textContent = 'filter_alt';
-                    filterBtn.appendChild(icon);
-                } else {
-                    filterBtn.textContent = '\u2767';
-                }
+                filterBtn.innerHTML = App.icon('filter_alt', '\u2767');
 
                 filterBtn.addEventListener('click', (e) => {
                     e.stopPropagation();

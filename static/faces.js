@@ -735,7 +735,7 @@
         const renameBtn = document.createElement('button');
         renameBtn.className = 'faces-rename-btn';
         renameBtn.title = 'Rename person';
-        renameBtn.innerHTML = '<span class="material-symbols-outlined">edit</span>';
+        renameBtn.innerHTML = App.icon('edit', '\u270F');
         renameBtn.addEventListener('click', handleRenamePersonClick);
 
         titleLeft.appendChild(pickerTitleEl);
@@ -810,7 +810,7 @@
         const resetBtn = document.createElement('button');
         resetBtn.className = 'faces-threshold-reset';
         resetBtn.title = 'Reset to default';
-        resetBtn.innerHTML = '<span class="material-symbols-outlined">restart_alt</span>';
+        resetBtn.innerHTML = App.icon('restart_alt', '\u21BB');
         resetBtn.addEventListener('click', () => handleThresholdReset(pickerThresholdSlider, pickerThresholdValue));
 
         thresholdControl.appendChild(thresholdLabel);
@@ -1753,7 +1753,7 @@
         const unassignBtn = document.createElement('button');
         unassignBtn.className = 'face-card-unassign';
         unassignBtn.title = 'Unassign from person';
-        unassignBtn.innerHTML = '<span class="material-symbols-outlined">close</span>';
+        unassignBtn.innerHTML = App.icon('close', '\u2715');
         unassignBtn.addEventListener('click', async (e) => {
             e.stopPropagation();
             e.preventDefault();
@@ -1780,7 +1780,7 @@
             ignoreBtn = document.createElement('button');
             ignoreBtn.className = 'face-card-ignore';
             ignoreBtn.title = 'Move to ignored list';
-            ignoreBtn.innerHTML = '<span class="material-symbols-outlined">remove</span>';
+            ignoreBtn.innerHTML = App.icon('remove', '\u2212');
             ignoreBtn.addEventListener('click', async (e) => {
                 e.stopPropagation();
                 e.preventDefault();
@@ -1811,7 +1811,7 @@
         const star = document.createElement('div');
         star.className = 'face-card-star' + (face.is_preferred ? ' preferred' : '');
         star.dataset.faceId = face.id;
-        star.innerHTML = '<span class="material-symbols-outlined">star</span>';
+        star.innerHTML = App.icon('star', '\u2605');
         star.title = face.is_preferred ? 'Preferred face' : 'Set as preferred face';
         star.addEventListener('click', (e) => {
             e.stopPropagation();
@@ -1825,7 +1825,9 @@
         const isManuallyTagged = Boolean(face.manually_tagged);
         padlock.className = 'face-card-padlock' + (isManuallyTagged ? '' : ' unlocked');
         padlock.dataset.faceId = face.id;
-        padlock.innerHTML = `<span class="material-symbols-outlined">${isManuallyTagged ? 'lock' : 'lock_open'}</span>`;
+        padlock.innerHTML = isManuallyTagged
+            ? App.icon('lock', '\u{1F512}')
+            : App.icon('lock_open', '\u{1F513}');
         padlock.title = isManuallyTagged
             ? 'Manually tagged - used for recognition'
             : 'Auto-tagged - not used for recognition';
@@ -2024,10 +2026,9 @@
      */
     function updatePadlockIcon(padlockElement, isManuallyTagged) {
         padlockElement.classList.toggle('unlocked', !isManuallyTagged);
-        const icon = padlockElement.querySelector('.material-symbols-outlined');
-        if (icon) {
-            icon.textContent = isManuallyTagged ? 'lock' : 'lock_open';
-        }
+        padlockElement.innerHTML = isManuallyTagged
+            ? App.icon('lock', '\u{1F512}')
+            : App.icon('lock_open', '\u{1F513}');
         padlockElement.title = isManuallyTagged
             ? 'Manually tagged - used for recognition'
             : 'Auto-tagged - not used for recognition';
@@ -2856,10 +2857,9 @@
      */
     function updateSortDirectionIcon() {
         if (btnFacesSortDirection) {
-            const icon = btnFacesSortDirection.querySelector('.material-symbols-outlined');
-            if (icon) {
-                icon.textContent = sortAscending ? 'arrow_downward' : 'arrow_upward';
-            }
+            btnFacesSortDirection.innerHTML = sortAscending
+                ? App.icon('arrow_downward', '\u2193')
+                : App.icon('arrow_upward', '\u2191');
         }
     }
 
@@ -3375,7 +3375,7 @@
         const suppressBtn = document.createElement('button');
         suppressBtn.className = 'face-card-suppress';
         suppressBtn.title = 'Mark as false positive (not a face)';
-        suppressBtn.innerHTML = '<span class="material-symbols-outlined">close</span>';
+        suppressBtn.innerHTML = App.icon('close', '\u2715');
         suppressBtn.addEventListener('click', async (e) => {
             e.stopPropagation();
             e.preventDefault();
@@ -3397,7 +3397,7 @@
         const ignoreBtn = document.createElement('button');
         ignoreBtn.className = 'face-card-ignore';
         ignoreBtn.title = 'Move to ignored list';
-        ignoreBtn.innerHTML = '<span class="material-symbols-outlined">remove</span>';
+        ignoreBtn.innerHTML = App.icon('remove', '\u2212');
         ignoreBtn.addEventListener('click', async (e) => {
             e.stopPropagation();
             e.preventDefault();
@@ -3530,7 +3530,7 @@
         if (faceCount > 1) {
             const badge = document.createElement('div');
             badge.className = 'face-card-badge';
-            badge.innerHTML = '<span class="material-symbols-outlined">star</span>';
+            badge.innerHTML = App.icon('star', '\u2605');
             badge.title = `${faceCount} faces`;
             card.appendChild(badge);
         }
@@ -3538,7 +3538,7 @@
         // Add filter badge (left side) - click to filter gallery by this person
         const filterBadge = document.createElement('div');
         filterBadge.className = 'face-card-filter-badge';
-        filterBadge.innerHTML = '<span class="material-symbols-outlined">filter_alt</span>';
+        filterBadge.innerHTML = App.icon('filter_alt', '\u25BC');
         filterBadge.title = `Show all images with ${person.name}`;
         filterBadge.addEventListener('click', (e) => {
             e.stopPropagation(); // Don't trigger card selection
@@ -4142,7 +4142,7 @@
         // Create action button (unidentify for known faces, suppress for unknown)
         const actionBtn = document.createElement('button');
         actionBtn.className = 'face-delete-btn';
-        actionBtn.innerHTML = '<span class="material-symbols-outlined">close</span>';
+        actionBtn.innerHTML = App.icon('close', '\u2715');
 
         if (face.person_id) {
             // Known face: green button to unidentify
@@ -4196,7 +4196,7 @@
         if (!isIgnored) {
             ignoreBtn = document.createElement('button');
             ignoreBtn.className = 'face-ignore-btn';
-            ignoreBtn.innerHTML = '<span class="material-symbols-outlined">remove</span>';
+            ignoreBtn.innerHTML = App.icon('remove', '\u2212');
             ignoreBtn.title = 'Move to ignored list';
             ignoreBtn.addEventListener('click', async (e) => {
                 e.stopPropagation();
@@ -5111,8 +5111,7 @@
         const btn = document.createElement('button');
         btn.className = 'face-card-quickmatch';
         btn.title = 'Find matching person';
-        // Use auto_awesome icon with magic unicode fallback
-        btn.innerHTML = '<span class="material-symbols-outlined">auto_awesome</span>';
+        btn.innerHTML = App.icon('auto_awesome', '\u2728');
 
         btn.addEventListener('click', async (e) => {
             e.stopPropagation();
@@ -5146,7 +5145,7 @@
         const btn = document.createElement('button');
         btn.className = 'face-quickmatch-btn';
         btn.title = 'Find matching person';
-        btn.innerHTML = '<span class="material-symbols-outlined">auto_awesome</span>';
+        btn.innerHTML = App.icon('auto_awesome', '\u2728');
 
         btn.addEventListener('click', async (e) => {
             e.stopPropagation();

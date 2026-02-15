@@ -1297,10 +1297,9 @@ const App = {
         // Update direction icon
         const dirBtn = document.getElementById('btn-sort-direction');
         if (dirBtn) {
-            const icon = dirBtn.querySelector('.material-symbols-outlined');
-            if (icon) {
-                icon.textContent = direction === 'asc' ? 'arrow_upward' : 'arrow_downward';
-            }
+            dirBtn.innerHTML = direction === 'asc'
+                ? this.icon('arrow_upward', '\u2191')
+                : this.icon('arrow_downward', '\u2193');
         }
     },
 
@@ -1340,14 +1339,14 @@ const App = {
      * @private
      */
     _updateThemeButton() {
-        const iconName = AppState.view.getTheme() === 'light' ? 'dark_mode' : 'light_mode';
+        const isLight = AppState.view.getTheme() === 'light';
+        const iconHtml = isLight
+            ? this.icon('dark_mode', '\u{1F319}')
+            : this.icon('light_mode', '\u2600');
         for (const id of ['btn-theme', 'btn-theme-mobile']) {
             const btn = document.getElementById(id);
             if (btn) {
-                const icon = btn.querySelector('.material-symbols-outlined');
-                if (icon) {
-                    icon.textContent = iconName;
-                }
+                btn.innerHTML = iconHtml;
             }
         }
     },
@@ -2243,6 +2242,24 @@ const App = {
         const div = document.createElement('div');
         div.textContent = str;
         return div.innerHTML;
+    },
+
+    /**
+     * Returns an icon HTML string.  When the Material Symbols font has loaded
+     * (tracked by `window._materialSymbolsLoaded`), emits a `<span>` with the
+     * font class.  Otherwise emits the Unicode fallback wrapped in the
+     * `.icon[data-icon]` pattern so the startup upgrade script can swap it
+     * later if the font arrives after this call.
+     *
+     * @param {string} name     - Material Symbols icon name (e.g. "delete")
+     * @param {string} fallback - Unicode character(s) shown when offline
+     * @returns {string} HTML string for the icon `<span>`
+     */
+    icon(name, fallback) {
+        if (window._materialSymbolsLoaded) {
+            return `<span class="material-symbols-outlined">${name}</span>`;
+        }
+        return `<span class="icon" data-icon="${name}">${fallback}</span>`;
     },
 
     /**

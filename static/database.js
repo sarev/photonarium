@@ -345,7 +345,7 @@ const Database = {
             removeBtn.type = 'button';
             removeBtn.className = 'toolbar-btn folder-remove';
             removeBtn.title = "Remove folder from Photonarium (doesn't affect the folder/files on disk!)";
-            removeBtn.innerHTML = '<span class="material-symbols-outlined">delete</span>';
+            removeBtn.innerHTML = App.icon('delete', '\u{1F5D1}');
             removeBtn.addEventListener('click', () => this._removeFolder(folder.path));
 
             li.appendChild(pathEl);

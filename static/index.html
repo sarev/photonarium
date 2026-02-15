@@ -54,6 +54,11 @@
     <!-- Icon font: show Unicode fallback by default, swap to Material Symbols once loaded -->
     <script>
         (function() {
+            // Global flag: true once the Material Symbols font has loaded successfully.
+            // Dynamically-created icons check this via App.icon() to decide whether to
+            // emit a <span class="material-symbols-outlined"> or the Unicode fallback.
+            window._materialSymbolsLoaded = false;
+
             // When Material Symbols font loads, upgrade icons from Unicode to font icons
             function upgradeIcons() {
                 if (!document.fonts) return;
@@ -61,6 +66,7 @@
                 // Actively try to load the font, then check if it succeeded
                 document.fonts.load('24px "Material Symbols Outlined"').then(function(fonts) {
                     if (fonts.length > 0) {
+                        window._materialSymbolsLoaded = true;
                         document.querySelectorAll('.icon[data-icon]').forEach(function(el) {
                             el.className = 'material-symbols-outlined';
                             el.textContent = el.dataset.icon;

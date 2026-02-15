@@ -122,11 +122,9 @@ const Settings = {
         label.className = 'settings-key';
         label.textContent = field.key;
         if (field.warning) {
-            const icon = document.createElement('span');
-            icon.className = 'material-symbols-outlined settings-warning-icon';
-            icon.textContent = 'warning';
-            icon.title = 'Read the comments carefully before changing this setting.';
-            label.appendChild(icon);
+            label.insertAdjacentHTML('beforeend',
+                `<span class="settings-warning-icon" title="Read the comments carefully before changing this setting.">${App.icon('warning', '\u26A0')}</span>`,
+            );
         }
         wrapper.appendChild(label);
 
