@@ -4137,6 +4137,39 @@ dialog::backdrop {
     }
 }
 
+/* Landscape on mobile/touch: restore the right-side info panel.
+   The main responsive block above stacks it below the grid, which is fine
+   in portrait. But in landscape, vertical space is scarce and width is ample,
+   so the panel belongs on the right (same as desktop). */
+@media (orientation: landscape) and (max-height: 600px) {
+    #screen-gallery,
+    .gallery-container {
+        flex-direction: row;
+    }
+
+    .info-panel {
+        width: 300px;
+        max-height: none;
+        border-top: none;
+        border-left: 1px solid var(--color-border);
+    }
+
+    /* Restore vertical toggle tab (same as desktop) */
+    .info-panel-toggle {
+        width: 20px;
+        height: auto;
+        border-top: none;
+        border-left: 1px solid var(--color-border);
+    }
+
+    .info-panel-toggle .material-symbols-outlined {
+        transform: none;               /* chevron_right = expand right */
+    }
+    .gallery-container.panel-collapsed .info-panel-toggle .material-symbols-outlined {
+        transform: scaleX(-1);         /* chevron_left = expand left */
+    }
+}
+
 
 /* ============================================================================
    METADATA DIALOG (EXIF viewer / metadata filter)
