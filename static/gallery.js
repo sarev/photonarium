@@ -304,7 +304,7 @@ const Gallery = {
                 const imageId = pathEl.dataset.imageId;
                 if (!imageId) return;
                 try {
-                    await App.apiPost(`/images/${imageId}/reveal`, {});
+                    await App.apiPost('/reveal', { target: 'image', id: imageId });
                 } catch (error) {
                     console.error('Failed to open folder:', error);
                     App.showError('Failed to open containing folder.');

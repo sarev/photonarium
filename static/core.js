@@ -1169,7 +1169,7 @@ const App = {
         if (this.state.selectedImages.length === 1) {
             const imageId = this.state.selectedImages[0];
             try {
-                await this.apiPost(`/images/${imageId}/reveal`, {});
+                await this.apiPost('/reveal', { target: 'image', id: imageId });
             } catch (error) {
                 console.error('Failed to open folder:', error);
                 this.showError('Failed to open containing folder.');

@@ -2800,6 +2800,32 @@ a:hover {
     font-variant-numeric: tabular-nums;
 }
 
+/* Clickable reveal link inside the stats table (e.g. "Trashed" row) */
+.stats-reveal-link {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.25rem;
+    color: var(--color-text-secondary);
+    text-decoration: none;
+    cursor: pointer;
+}
+
+.stats-reveal-link:hover {
+    color: var(--color-text-primary);
+    text-decoration: underline;
+}
+
+.stats-reveal-link .material-symbols-outlined {
+    font-size: 14px;
+    flex-shrink: 0;
+}
+
+.stats-reveal-link.disabled {
+    opacity: 0.4;
+    cursor: default;
+    pointer-events: none;
+}
+
 /* Scan controls */
 .scan-controls {
     margin-bottom: 1rem;

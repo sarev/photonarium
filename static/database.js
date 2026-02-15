@@ -146,6 +146,7 @@ const Database = {
             faceEmbeddingsRow: App.$('face-embeddings-row'),
             faceEmbeddingsStatus: App.$('face-embeddings-status'),
             revealConfigBtn: App.$('btn-reveal-config'),
+            trashedLink: App.$('status-trashed-link'),
         };
 
         this._bindEvents();
@@ -172,6 +173,7 @@ const Database = {
                         }
                         if (typeof stats.totalTrashed === 'number') {
                             this._els.statusTrashed.textContent = String(stats.totalTrashed);
+                            this._updateTrashedLink(stats.totalTrashed);
                         }
                     }
                 }
@@ -238,6 +240,19 @@ const Database = {
         this._els.addFolderBtn.addEventListener('click', () => this._addFolder());
         this._els.rescanBtn.addEventListener('click', () => this._rescanAll());
         this._els.revealConfigBtn.addEventListener('click', () => Settings.show());
+
+        // "Trashed" stat link — opens the trash directory in the file manager
+        if (this._els.trashedLink) {
+            this._els.trashedLink.addEventListener('click', async (e) => {
+                e.preventDefault();
+                if (this._els.trashedLink.classList.contains('disabled')) return;
+                try {
+                    await App.apiPost('/reveal', { target: 'trash' });
+                } catch {
+                    App.showError('Could not open trash folder.');
+                }
+            });
+        }
     },
 
     /* ----------------------------------------------------------------------
@@ -381,6 +396,16 @@ const Database = {
     },
 
     /**
+     * Enables or disables the "Trashed" reveal link based on the count.
+     * @param {number} count - Current number of trashed images
+     * @private
+     */
+    _updateTrashedLink(count) {
+        if (!this._els.trashedLink) return;
+        this._els.trashedLink.classList.toggle('disabled', count === 0);
+    },
+
+    /**
      * Updates the status display based on backend response.
      * @param {Object} status - Status object from backend
      * @param {string} status.status - 'up_to_date' or 'updating'
@@ -429,6 +454,7 @@ const Database = {
         }
         if (typeof status.trashed_count === 'number') {
             this._els.statusTrashed.textContent = String(status.trashed_count);
+            this._updateTrashedLink(status.trashed_count);
         }
 
         // Determine if any processing is active

@@ -817,43 +817,91 @@ def get_full_image(image_id):
     return send_file(path)
 
 
-@app.route('/api/images/<image_id>/reveal', methods=['POST'])
-def reveal_image(image_id):
-    """Open the containing folder and select the image file.
+def _reveal_path(path):
+    """Open a file or folder in the system file manager.
 
-    Uses platform-specific commands to reveal the image in the file manager:
-    - Windows: explorer /select
-    - macOS: open -R
-    - Linux: xdg-open (opens folder only)
+    For files, selects/highlights the file in its containing folder.
+    For directories, opens them directly.
 
     Args:
-        image_id: The unique identifier of the image.
+        path: Absolute filesystem path to reveal.
 
-    Returns:
-        Success response, or 404 if image not found.
+    Raises:
+        subprocess.CalledProcessError: If the file manager command fails
+            (Windows ``explorer`` is called with ``check=False`` because it
+            returns non-zero even on success).
     """
-    image = get_db().get_image(image_id)
-    if image is None:
-        return error_response('Image not found', 404)
-
-    path = image['path']
-    if not os.path.exists(path):
-        return error_response('Image file not found on disk', 404)
-
-    try:
+    if os.path.isdir(path):
         if sys.platform == 'win32':
-            # Windows: explorer /select highlights the file
+            subprocess.run(['explorer', path], check=False)
+        elif sys.platform == 'darwin':
+            subprocess.run(['open', path], check=True)
+        else:
+            subprocess.run(['xdg-open', path], check=True)
+    else:
+        if sys.platform == 'win32':
             subprocess.run(['explorer', '/select,', path], check=False)
         elif sys.platform == 'darwin':
-            # macOS: open -R reveals file in Finder
             subprocess.run(['open', '-R', path], check=True)
         else:
-            # Linux: open the containing folder (no file selection)
             folder = os.path.dirname(path)
             subprocess.run(['xdg-open', folder], check=True)
+
+
+@app.route('/api/reveal', methods=['POST'])
+def reveal():
+    """Open the file manager for a known application resource.
+
+    Accepts a JSON body with ``target`` identifying what to reveal:
+
+    - ``image``: Reveal an image file (requires ``id``).
+    - ``config``: Reveal the configuration YAML file.
+    - ``trash``: Open the trash directory.
+
+    The frontend never sends raw paths — the backend resolves them
+    server-side from its own state, keeping the allowlist closed.
+
+    Returns:
+        Success response, or 404/400 on errors.
+    """
+    data = request.get_json() or {}
+    target = data.get('target')
+
+    if target == 'image':
+        image_id = data.get('id')
+        if not image_id:
+            return error_response('Missing image id')
+        image = get_db().get_image(image_id)
+        if image is None:
+            return error_response('Image not found', 404)
+        path = image['path']
+        if not os.path.exists(path):
+            return error_response('Image file not found on disk', 404)
+
+    elif target == 'config':
+        path = _config_file_path
+        if not path:
+            from config import get_default_config_path
+
+            path = str(get_default_config_path())
+        path = os.path.abspath(path)
+        if not os.path.exists(path):
+            return error_response('Configuration file not found', 404)
+
+    elif target == 'trash':
+        path = str(get_db().trash_dir)
+        # Trash directory may not exist yet — that's fine, nothing to open
+        if not os.path.isdir(path):
+            return error_response('Trash directory does not exist', 404)
+
+    else:
+        return error_response('Unknown reveal target')
+
+    try:
+        _reveal_path(path)
         return success_response(message='Folder opened')
     except Exception as e:
-        logger.exception('Failed to open folder')
+        logger.exception('Failed to reveal %s', target)
         return error_response(f'Failed to open folder: {e!s}', 500)
 
 
@@ -1145,42 +1193,6 @@ def get_config():
             'trash_dir': str(db.trash_dir),
         }
     )
-
-
-@app.route('/api/config/reveal', methods=['POST'])
-def reveal_config():
-    """Open the file manager with the configuration file selected.
-
-    Uses the same platform-specific commands as image reveal:
-    - Windows: explorer /select
-    - macOS: open -R
-    - Linux: xdg-open (opens containing folder)
-
-    Returns:
-        Success response, or error if the file doesn't exist.
-    """
-    config_path = _config_file_path
-    if not config_path:
-        from config import get_default_config_path
-
-        config_path = str(get_default_config_path())
-    config_path = os.path.abspath(config_path)
-
-    if not os.path.exists(config_path):
-        return error_response('Configuration file not found', 404)
-
-    try:
-        if sys.platform == 'win32':
-            subprocess.run(['explorer', '/select,', config_path], check=False)
-        elif sys.platform == 'darwin':
-            subprocess.run(['open', '-R', config_path], check=True)
-        else:
-            folder = os.path.dirname(config_path)
-            subprocess.run(['xdg-open', folder], check=True)
-        return success_response(message='Folder opened')
-    except Exception as e:
-        logger.exception('Failed to reveal config file')
-        return error_response(f'Failed to open folder: {e!s}', 500)
 
 
 @app.route('/api/config/schema', methods=['GET'])

@@ -64,7 +64,7 @@ const Settings = {
                 linkEl.onclick = async (e) => {
                     e.preventDefault();
                     try {
-                        await App.apiPost('/config/reveal', {});
+                        await App.apiPost('/reveal', { target: 'config' });
                     } catch {
                         App.showError('Could not open config file location.');
                     }
