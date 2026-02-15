@@ -579,11 +579,11 @@ def generate_caption(image_id):
 
 @app.route('/api/images/trash', methods=['POST'])
 def trash_images():
-    """Move images to the trash directory and soft-delete from database.
+    """Enqueue images for background trashing.
 
-    Moves files out of indexed folders into the configured trash directory
-    so they stop appearing in Photonarium, while remaining on disk for
-    manual recovery.  File moves are parallelised for performance.
+    Immediately soft-deletes from the database and invalidates caches.
+    File moves to the trash directory happen asynchronously via the
+    background TrashWorker thread.  Returns as soon as the enqueue is done.
 
     Request Body:
         JSON object with:
@@ -591,8 +591,7 @@ def trash_images():
 
     Returns:
         JSON object with:
-            - results: Object mapping image_id to success boolean
-            - trashed: Array of successfully trashed image IDs
+            - enqueued: Array of image IDs accepted for trashing
             - errors: Object mapping image_id to error message
     """
     data = request.get_json()
@@ -608,25 +607,19 @@ def trash_images():
     db = get_db()
 
     try:
-        result = db.trash_images(image_ids)
+        result = db.enqueue_trash(image_ids)
     except ValueError as e:
         return error_response(str(e))
 
-    # Invalidate thumbnail RAM cache for trashed images
-    if result['trashed']:
+    # Invalidate thumbnail RAM cache for enqueued images (fast dict removals)
+    if result['enqueued']:
         cache = get_thumbnail_cache()
-        for image_id in result['trashed']:
+        for image_id in result['enqueued']:
             checksum = db.get_checksum(image_id)
             if checksum:
                 cache.remove(checksum)
 
-        # Broadcast for other clients
-        db.event_queue.emit(
-            EVENT_IMAGES_CHANGED,
-            {
-                'removed_ids': result['trashed'],
-            },
-        )
+    # enqueue_trash() already emits EVENT_IMAGES_CHANGED and EVENT_GROUPS_CHANGED
 
     return success_response(result)
 
@@ -1433,12 +1426,20 @@ def prune_duplicates():
     (weighted percentile composite of NIMA+LAION aesthetic, sharpness,
     pixel count, and bits-per-pixel).
 
+    Supports two mutually exclusive modes:
+    - **Keep mode** (default): keep the best N images, trash the rest.
+    - **Trash mode**: trash the worst N images, keep the rest.
+
     Request Body:
         JSON object with:
             - level: Similarity level (0-3, auto-detected only)
             - keep_count: Number of images to keep per group (default: 1)
             - keep_percent: Percentage of images to keep (overrides keep_count).
                           Rounded up so at least 1 image is always kept.
+            - trash_count: Number of worst images to trash per group.
+                          Mutually exclusive with keep_count/keep_percent.
+            - trash_percent: Percentage of worst images to trash per group.
+                           Mutually exclusive with keep_count/keep_percent.
             - group_hashes: Optional array of specific group hashes to prune.
                           If omitted, prunes all groups at the level.
 
@@ -1458,12 +1459,27 @@ def prune_duplicates():
     if not isinstance(level, int) or level < 0 or level > 3:
         return error_response('level must be 0-3 (auto-detected duplicates only)')
 
-    keep_count = data.get('keep_count', 1)
+    keep_count = data.get('keep_count')
     keep_percent = data.get('keep_percent')
+    trash_count = data.get('trash_count')
+    trash_percent = data.get('trash_percent')
     group_hashes = data.get('group_hashes')
 
-    if not isinstance(keep_count, int) or keep_count < 1:
+    # Validate mutual exclusion: keep and trash params cannot both be provided
+    has_keep = keep_count is not None or keep_percent is not None
+    has_trash = trash_count is not None or trash_percent is not None
+    if has_keep and has_trash:
+        return error_response('Cannot specify both keep and trash parameters')
+
+    # Validate individual params
+    if keep_count is not None and (not isinstance(keep_count, int) or keep_count < 1):
         return error_response('keep_count must be a positive integer')
+    if trash_count is not None and (not isinstance(trash_count, int) or trash_count < 1):
+        return error_response('trash_count must be a positive integer')
+
+    # Default to keep_count=1 when no mode specified
+    if not has_keep and not has_trash:
+        keep_count = 1
 
     db = get_db()
 
@@ -1499,8 +1515,17 @@ def prune_duplicates():
         images = group['images']
         n = len(images)
 
-        # Determine how many to keep for this group
-        if keep_percent is not None:
+        # Determine how many to keep for this group.
+        # Trash mode: trash the worst N, keep the rest (always keep >= 1).
+        # Keep mode: keep the best N, trash the rest.
+        if trash_percent is not None:
+            group_trash = math.ceil(n * trash_percent / 100)
+            group_trash = max(0, min(group_trash, n - 1))
+            group_keep = n - group_trash
+        elif trash_count is not None:
+            group_trash = max(0, min(trash_count, n - 1))
+            group_keep = n - group_trash
+        elif keep_percent is not None:
             group_keep = math.ceil(n * keep_percent / 100)
         else:
             group_keep = keep_count
@@ -1530,16 +1555,16 @@ def prune_duplicates():
             }
         )
 
-    # Trash all images in one batch
+    # Enqueue all images for background trashing (instant return)
     try:
-        result = db.trash_images(all_trash_ids)
+        result = db.enqueue_trash(all_trash_ids)
     except ValueError as e:
         return error_response(str(e))
 
-    # Invalidate thumbnail RAM cache for trashed images
-    if result['trashed']:
+    # Invalidate thumbnail RAM cache for enqueued images (fast dict removals)
+    if result['enqueued']:
         cache = get_thumbnail_cache()
-        for image_id in result['trashed']:
+        for image_id in result['enqueued']:
             checksum = db.get_checksum(image_id)
             if checksum:
                 cache.remove(checksum)
@@ -1547,25 +1572,12 @@ def prune_duplicates():
     # Collect error messages
     error_messages = [f'{img_id}: {msg}' for img_id, msg in result.get('errors', {}).items()]
 
-    # Broadcast for other clients
-    if result['trashed']:
-        db.event_queue.emit(
-            EVENT_IMAGES_CHANGED,
-            {
-                'removed_ids': result['trashed'],
-            },
-        )
-    db.event_queue.emit(
-        EVENT_GROUPS_CHANGED,
-        {
-            'level': level,
-            'invalidate': True,
-        },
-    )
+    # enqueue_trash() already emits EVENT_IMAGES_CHANGED and EVENT_GROUPS_CHANGED
+    # for all affected levels, so no need to emit here.
 
     return success_response(
         {
-            'trashed_count': len(result['trashed']),
+            'trashed_count': len(result['enqueued']),
             'group_count': pruned_group_count,
             'errors': error_messages,
         }

@@ -452,6 +452,7 @@
                             <tr><td>Images</td><td id="status-total">0</td></tr>
                             <tr><td>People</td><td id="status-people">0</td></tr>
                             <tr><td>Faces</td><td id="status-faces">0</td></tr>
+                            <tr><td>Trashed</td><td id="status-trashed">0</td></tr>
                         </table>
                     </div>
                     <!-- Processing status indicator -->
@@ -465,6 +466,7 @@
                             <p><span class="queue-label">Embedding:</span> <span id="embedding-count">0</span> remaining<span id="embedding-eta" class="queue-eta"></span></p>
                             <p id="face-queue-row" hidden><span class="queue-label">Face Detection:</span> <span id="face-count">0</span> remaining<span id="face-eta" class="queue-eta"></span></p>
                             <p id="nima-queue-row" hidden><span class="queue-label">Aesthetic:</span> <span id="nima-count">0</span> remaining<span id="nima-eta" class="queue-eta"></span></p>
+                            <p id="trash-queue-row" hidden><span class="queue-label">Trashing:</span> <span id="trash-queue-count">0</span> remaining</p>
                             <p id="duplicates-row" hidden><span class="queue-label">Finding Duplicates:</span> <span id="duplicates-status">level 0</span></p>
                             <p id="face-grouping-row" hidden><span class="queue-label">Grouping Faces:</span> <span id="face-grouping-status">computing</span></p>
                             <p id="face-reassess-row" hidden><span class="queue-label">Matching Faces:</span> <span id="face-reassess-status">computing</span></p>
@@ -740,20 +742,26 @@
                 <p id="dialog-prune-scope" class="dialog-prune-scope"></p>
 
                 <fieldset class="dialog-prune-fieldset">
-                    <legend>Keep per group</legend>
+                    <legend>
+                        <button type="button" id="dialog-prune-toggle" class="prune-legend-toggle"
+                                title="Click to switch between keeping best and trashing worst">
+                            <span id="dialog-prune-legend-text">Keep per group</span>
+                            <span class="material-symbols-outlined prune-toggle-icon">swap_vert</span>
+                        </button>
+                    </legend>
                     <label class="dialog-prune-option">
                         <input type="radio" name="prune-mode" value="best" checked>
-                        <span>Best image only</span>
+                        <span id="dialog-prune-label-best">Best</span><span> image only</span>
                     </label>
                     <label class="dialog-prune-option">
                         <input type="radio" name="prune-mode" value="count">
-                        <span>Top</span>
+                        <span id="dialog-prune-label-top-count">Top</span>
                         <input type="number" id="dialog-prune-count" class="dialog-prune-number" min="1" max="999" value="2">
                         <span>images</span>
                     </label>
                     <label class="dialog-prune-option">
                         <input type="radio" name="prune-mode" value="percent">
-                        <span>Top</span>
+                        <span id="dialog-prune-label-top-pct">Top</span>
                         <input type="number" id="dialog-prune-percent" class="dialog-prune-number" min="1" max="99" value="33">
                         <span>%</span>
                     </label>

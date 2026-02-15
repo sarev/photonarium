@@ -132,7 +132,7 @@ AppState.events = (function() {
 
             case 'groups_changed':
                 // data: { level, invalidate: true }
-                handleGroupsChanged(data);
+                await handleGroupsChanged(data);
                 break;
 
             default:
@@ -371,12 +371,16 @@ AppState.events = (function() {
 
     /**
      * Handle groups_changed event from another client.
-     * Invalidates the duplicate group cache for the affected level.
+     * Invalidates the duplicate group cache for the affected level and
+     * forces a reload so the Duplicates screen picks up dissolved groups
+     * (e.g. after another client pruned duplicates).
      * @param {Object} data - {level: number, invalidate: true}
      */
-    function handleGroupsChanged(data) {
+    async function handleGroupsChanged(data) {
         if (data?.level !== undefined && AppState.duplicates?.invalidate) {
             AppState.duplicates.invalidate(data.level);
+            // Force reload so subscribers (Duplicates screen) see the update
+            await AppState.duplicates.loadLevel(data.level, true);
         }
         broadcast({ type: 'groupsChanged', level: data?.level });
     }

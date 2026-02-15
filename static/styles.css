@@ -3902,6 +3902,41 @@ dialog::backdrop {
     padding: 0 0.4rem;
 }
 
+/* Toggle button inside legend — looks like a clickable label */
+.prune-legend-toggle {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.3rem;
+    background: none;
+    border: none;
+    padding: 0;
+    margin: 0;
+    font: inherit;
+    font-size: inherit;
+    font-weight: inherit;
+    color: inherit;
+    cursor: pointer;
+    border-radius: 3px;
+}
+
+.prune-legend-toggle:hover {
+    color: var(--color-text-primary);
+}
+
+.prune-legend-toggle:focus-visible {
+    outline: 2px solid var(--color-action-primary);
+    outline-offset: 2px;
+}
+
+.prune-toggle-icon {
+    font-size: 1rem;
+    opacity: 0.6;
+}
+
+.prune-legend-toggle:hover .prune-toggle-icon {
+    opacity: 1;
+}
+
 .dialog-prune-option {
     display: flex;
     align-items: center;

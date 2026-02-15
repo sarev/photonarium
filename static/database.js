@@ -119,6 +119,7 @@ const Database = {
             statusTotal: App.$('status-total'),
             statusPeople: App.$('status-people'),
             statusFaces: App.$('status-faces'),
+            statusTrashed: App.$('status-trashed'),
             processingStatus: App.$('processing-status'),
             statusIndicator: App.$('status-indicator'),
             statusText: App.$('status-text'),
@@ -133,6 +134,8 @@ const Database = {
             nimaQueueRow: App.$('nima-queue-row'),
             nimaCount: App.$('nima-count'),
             nimaEta: App.$('nima-eta'),
+            trashQueueRow: App.$('trash-queue-row'),
+            trashQueueCount: App.$('trash-queue-count'),
             // Phase 4 status elements
             duplicatesRow: App.$('duplicates-row'),
             duplicatesStatus: App.$('duplicates-status'),
@@ -166,6 +169,9 @@ const Database = {
                         }
                         if (typeof stats.totalFaces === 'number') {
                             this._els.statusFaces.textContent = String(stats.totalFaces);
+                        }
+                        if (typeof stats.totalTrashed === 'number') {
+                            this._els.statusTrashed.textContent = String(stats.totalTrashed);
                         }
                     }
                 }
@@ -421,9 +427,13 @@ const Database = {
         if (typeof status.total_faces === 'number') {
             this._els.statusFaces.textContent = String(status.total_faces);
         }
+        if (typeof status.trashed_count === 'number') {
+            this._els.statusTrashed.textContent = String(status.trashed_count);
+        }
 
         // Determine if any processing is active
-        const hasQueueWork = indexing > 0 || embedding > 0 || faces > 0 || nima > 0;
+        const trashQueue = status.trash_queue || 0;
+        const hasQueueWork = indexing > 0 || embedding > 0 || faces > 0 || nima > 0 || trashQueue > 0;
         const hasPhase4Work = duplicates || faceGrouping || faceEmbeddings;
         const hasAnyWork = hasQueueWork || hasPhase4Work;
 
@@ -475,6 +485,17 @@ const Database = {
                     this._els.nimaQueueRow.hidden = true;
                     this._nimaHistory = [];
                     if (this._els.nimaEta) this._els.nimaEta.textContent = '';
+                }
+            }
+
+            // Show/hide trash queue row
+            if (this._els.trashQueueRow && this._els.trashQueueCount) {
+                const trashQueue = status.trash_queue || 0;
+                if (trashQueue > 0) {
+                    this._els.trashQueueRow.hidden = false;
+                    this._els.trashQueueCount.textContent = trashQueue;
+                } else {
+                    this._els.trashQueueRow.hidden = true;
                 }
             }
 
@@ -537,6 +558,7 @@ const Database = {
             this._els.embeddingCount.parentElement.hidden = false;
             if (this._els.faceQueueRow) this._els.faceQueueRow.hidden = true;
             if (this._els.nimaQueueRow) this._els.nimaQueueRow.hidden = true;
+            if (this._els.trashQueueRow) this._els.trashQueueRow.hidden = true;
             if (this._els.duplicatesRow) this._els.duplicatesRow.hidden = true;
             if (this._els.faceGroupingRow) this._els.faceGroupingRow.hidden = true;
             if (this._els.faceReassessRow) this._els.faceReassessRow.hidden = true;

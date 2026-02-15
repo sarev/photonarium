@@ -3840,6 +3840,147 @@ def emit_processing_complete(event_queue: EventQueue) -> None:
 
 
 # =============================================================================
+# TRASH WORKER THREAD
+# =============================================================================
+
+
+class TrashWorker(threading.Thread):
+    """Background thread for asynchronous file-move trash operations.
+
+    Reads ``(image_id, file_path)`` tuples from a queue and moves files
+    into the trash directory using a ``ThreadPoolExecutor`` for I/O
+    parallelism.  The DB soft-delete and cache invalidation have already
+    happened by the time items reach this worker — only the slow
+    filesystem I/O is deferred.
+
+    Progress is tracked via ``_trash_progress`` on the owning
+    ``ImageDatabase`` so ``/api/status`` can report live numbers.
+    On graceful shutdown, any remaining queue items are persisted to
+    ``<trash_dir>/.pending_trash.json`` for recovery on next startup.
+
+    Follows the same daemon-thread pattern as :class:`NimaThread`.
+    """
+
+    def __init__(
+        self,
+        trash_queue: queue.Queue[tuple[str, str]],
+        stop_event: threading.Event,
+        trash_dir: Path,
+        max_workers: int,
+        progress: dict | None,
+        progress_lock: threading.Lock,
+    ):
+        """Initialise the trash worker thread.
+
+        Args:
+            trash_queue: Queue of ``(image_id, file_path)`` tuples to move.
+            stop_event: Event to signal thread should stop.
+            trash_dir: Destination trash directory.
+            max_workers: Number of threads in the file-move pool.
+            progress: Shared ``_trash_progress`` dict reference (may be None).
+            progress_lock: Lock protecting ``_trash_progress`` mutations.
+        """
+        super().__init__(name='TrashWorker', daemon=True)
+        self._queue = trash_queue
+        self._stop_event = stop_event
+        self._trash_dir = trash_dir
+        self._max_workers = max_workers
+        # The progress dict is *replaced* (not mutated) by the owner, so
+        # we store a reference to the owner object and read its attribute.
+        self._progress = progress
+        self._progress_lock = progress_lock
+
+    def run(self) -> None:
+        """Main loop — drain queue items and move files in parallel."""
+        logger.info('Trash worker thread started')
+
+        while not self._stop_event.is_set():
+            # Block briefly for the first item
+            batch: list[tuple[str, str]] = []
+            try:
+                item = self._queue.get(timeout=0.2)
+                batch.append(item)
+                # Drain up to 200 more without blocking (batched I/O)
+                while len(batch) < 200:
+                    try:
+                        batch.append(self._queue.get_nowait())
+                    except queue.Empty:
+                        break
+            except queue.Empty:
+                continue
+
+            # Move files in parallel
+            self._process_batch(batch)
+
+            # Yield GIL briefly
+            time.sleep(0.01)
+
+        # On shutdown, drain remaining items and persist for recovery
+        remaining = self._drain_remaining()
+        if remaining:
+            self._persist_pending(remaining)
+
+        logger.info('Trash worker thread stopped')
+
+    def _process_batch(self, batch: list[tuple[str, str]]) -> None:
+        """Move a batch of files to trash using a thread pool.
+
+        Args:
+            batch: List of ``(image_id, file_path)`` tuples.
+        """
+
+        def move_one(item: tuple[str, str]) -> None:
+            _image_id, file_path = item
+            try:
+                move_to_trash(Path(file_path), self._trash_dir)
+            except Exception as e:
+                logger.error(f'TrashWorker: failed to move {file_path}: {e}')
+            finally:
+                with self._progress_lock:
+                    if self._progress is not None:
+                        self._progress['done'] += 1
+
+        with ThreadPoolExecutor(max_workers=self._max_workers) as executor:
+            futures = [executor.submit(move_one, item) for item in batch]
+            # Wait for all moves in this batch to complete
+            for future in futures:
+                try:
+                    future.result()
+                except Exception as e:
+                    logger.error(f'TrashWorker: executor error: {e}')
+
+    def _drain_remaining(self) -> list[tuple[str, str]]:
+        """Drain any items left in the queue after stop_event is set.
+
+        Returns:
+            List of un-processed ``(image_id, file_path)`` tuples.
+        """
+        remaining: list[tuple[str, str]] = []
+        while True:
+            try:
+                remaining.append(self._queue.get_nowait())
+            except queue.Empty:
+                break
+        return remaining
+
+    def _persist_pending(self, items: list[tuple[str, str]]) -> None:
+        """Write un-processed items to disk for crash recovery.
+
+        Args:
+            items: List of ``(image_id, file_path)`` tuples to persist.
+        """
+        pending_path = self._trash_dir / '.pending_trash.json'
+        try:
+            pending_path.write_text(
+                json.dumps([{'id': iid, 'path': fp} for iid, fp in items]),
+                encoding='utf-8',
+            )
+            logger.info(f'Persisted {len(items)} pending trash items to {pending_path}')
+        except Exception as e:
+            logger.error(f'Failed to persist pending trash items: {e}')
+
+
+# =============================================================================
 # IMAGE DATABASE CLASS (STARTUP SEQUENCE)
 # =============================================================================
 
@@ -3940,22 +4081,22 @@ class ImageDatabase:
         self._rotations_done = threading.Condition(self._rotations_lock)  # Signal when rotations complete
 
         # Trash directory state — resolved in startup() after folders are verified
-        self._active_trash_ops = 0  # Count of in-flight trash operations
-        self._trash_ops_lock = threading.Lock()  # Lock for the counter
-        self._trash_ops_done = threading.Condition(self._trash_ops_lock)  # Signal when trash ops complete
         self._trash_progress: dict | None = None  # {total, done, started_at} during trash ops
+        self._trash_progress_lock = threading.Lock()  # Protects _trash_progress mutations
 
         # Create queues
         self._ingestion_queue: queue.Queue[Path] = queue.Queue()
         self._embedding_queue: queue.Queue[str] = queue.Queue()
         self._face_queue: queue.Queue[str] = queue.Queue()
         self._nima_queue: queue.Queue[str] = queue.Queue()
+        self._trash_queue: queue.Queue[tuple[str, str]] = queue.Queue()  # (image_id, file_path)
 
         # Thread references (created when started)
         self._ingestion_thread: IngestionThread | None = None
         self._embedding_thread: EmbeddingThread | None = None
         self._face_thread: FaceDetectionThread | None = None
         self._nima_thread: NimaThread | None = None
+        self._trash_thread: TrashWorker | None = None
 
         # Phase 4 status tracking (post-processing after queues empty)
         self._phase4_status_lock = threading.Lock()
@@ -4747,6 +4888,18 @@ class ImageDatabase:
         )
         self._nima_thread.start()
 
+        # Start trash worker thread (moves files asynchronously)
+        if getattr(self, '_trash_enabled', False):
+            self._trash_thread = TrashWorker(
+                trash_queue=self._trash_queue,
+                stop_event=self._stop_event,
+                trash_dir=self.trash_dir,
+                max_workers=self.config.trash_threads,
+                progress=self._trash_progress,
+                progress_lock=self._trash_progress_lock,
+            )
+            self._trash_thread.start()
+
         logger.info('Background threads started')
 
     def stop_threads(self, timeout: float = 5.0) -> None:
@@ -4778,6 +4931,11 @@ class ImageDatabase:
             if self._nima_thread.is_alive():
                 logger.warning('NIMA scoring thread did not stop in time')
 
+        if self._trash_thread is not None:
+            self._trash_thread.join(timeout=timeout)
+            if self._trash_thread.is_alive():
+                logger.warning('Trash worker thread did not stop in time')
+
         logger.info('Background threads stopped')
 
     def close(self) -> None:
@@ -4798,12 +4956,6 @@ class ImageDatabase:
             while self._active_rotations > 0:
                 logger.info(f'Waiting for {self._active_rotations} rotation(s) to complete...')
                 self._rotations_done.wait(timeout=5.0)
-
-        # Wait for any in-flight trash operations to complete
-        with self._trash_ops_lock:
-            while self._active_trash_ops > 0:
-                logger.info(f'Waiting for {self._active_trash_ops} trash operation(s) to complete...')
-                self._trash_ops_done.wait(timeout=5.0)
 
         with self._db_lock:
             if self.conn:
@@ -4910,7 +5062,12 @@ class ImageDatabase:
             if result:
                 # Clean up duplicate groups for orphaned images
                 if orphaned_ids:
-                    self._duplicate_manager.invalidate_images(orphaned_ids)
+                    _count, affected_levels = self._duplicate_manager.invalidate_images(orphaned_ids)
+                    for level in affected_levels:
+                        self.event_queue.emit(
+                            EVENT_GROUPS_CHANGED,
+                            {'level': level, 'invalidate': True},
+                        )
                 # Re-sync directory groups (removes groups for the deleted folder)
                 self._duplicate_manager.sync_directory_groups(self.conn, self._db_lock)
                 emit_folder_removed(self.event_queue, path)
@@ -5137,10 +5294,48 @@ class ImageDatabase:
         except OSError as e:
             logger.error(f'Failed to create trash directory {self.trash_dir}: {e}')
             self._trash_enabled = False
+            self._trashed_count = 0
             return
+
+        # Count existing trashed files for the status display
+        self._trashed_count = sum(1 for f in self.trash_dir.iterdir() if f.is_file())
 
         # Validate against indexed folders
         self._validate_trash_dir()
+
+        # Crash recovery: re-enqueue items persisted from a previous shutdown
+        self._recover_pending_trash()
+
+    def _recover_pending_trash(self) -> None:
+        """Re-enqueue trash items saved from a previous interrupted shutdown.
+
+        Reads ``.pending_trash.json`` from the trash directory.  If found,
+        queues the items for the TrashWorker and deletes the file.
+        """
+        pending_path = self.trash_dir / '.pending_trash.json'
+        if not pending_path.exists():
+            return
+
+        try:
+            data = json.loads(pending_path.read_text(encoding='utf-8'))
+            if not isinstance(data, list):
+                logger.warning(f'Invalid pending trash file format, ignoring: {pending_path}')
+                pending_path.unlink(missing_ok=True)
+                return
+
+            count = 0
+            for item in data:
+                image_id = item.get('id', '')
+                file_path = item.get('path', '')
+                if image_id and file_path:
+                    self._trash_queue.put((image_id, file_path))
+                    count += 1
+
+            pending_path.unlink(missing_ok=True)
+            if count:
+                logger.info(f'Re-enqueued {count} pending trash items from previous shutdown')
+        except Exception as e:
+            logger.error(f'Failed to load pending trash items: {e}')
 
     def _validate_trash_dir(self) -> None:
         """Validate trash dir does not overlap indexed folders.
@@ -5172,119 +5367,103 @@ class ImageDatabase:
             Dict with ``total``, ``done``, and ``started_at`` keys while
             a trash operation is running, or None when idle.
         """
-        return self._trash_progress
+        with self._trash_progress_lock:
+            return dict(self._trash_progress) if self._trash_progress else None
 
-    def trash_images(self, image_ids: list[str]) -> dict[str, Any]:
-        """Move images to the trash directory and soft-delete from DB.
+    def enqueue_trash(self, image_ids: list[str]) -> dict[str, Any]:
+        """Enqueue images for background trashing.
 
-        File moves are parallelised using a thread pool (same pattern as
-        :meth:`rotate_images`).  DB updates are batched after all moves
-        complete.
+        Immediately: looks up paths, soft-deletes in DB, invalidates caches,
+        and emits ``EVENT_IMAGES_CHANGED``.  File moves happen asynchronously
+        via the :class:`TrashWorker` thread.
 
         Args:
             image_ids: List of image UUIDs to trash.
 
         Returns:
             Dict with:
-                - results: Dict mapping image_id → success boolean
-                - trashed: List of successfully trashed image IDs
+                - enqueued: List of image IDs accepted for trashing
                 - errors: Dict mapping image_id → error message
 
         Raises:
             ValueError: If trash is disabled.
         """
         if self._closed:
-            logger.warning('trash_images: Database is closed')
-            return {'results': {id: False for id in image_ids}, 'trashed': [], 'errors': {}}
+            logger.warning('enqueue_trash: Database is closed')
+            return {'enqueued': [], 'errors': {id: 'Database closed' for id in image_ids}}
 
         if not self._trash_enabled:
             raise ValueError('Trash directory is disabled. Check that it does not overlap an indexed folder.')
 
-        # Track this operation for graceful shutdown
-        with self._trash_ops_lock:
-            self._active_trash_ops += 1
+        # Look up file paths for all images (single batch query)
+        paths: dict[str, str] = {}
+        with self._db_lock:
+            placeholders = ','.join('?' for _ in image_ids)
+            cursor = self.conn.execute(f'SELECT id, path FROM images WHERE id IN ({placeholders})', image_ids)
+            for row in cursor.fetchall():
+                paths[row['id']] = row['path']
 
-        try:
-            # Set up progress tracking
-            self._trash_progress = {
-                'total': len(image_ids),
-                'done': 0,
-                'started_at': datetime.now().isoformat(),
-            }
+        enqueued: list[str] = []
+        errors: dict[str, str] = {}
 
-            # Look up file paths for all images (single batch query)
-            paths = {}
-            with self._db_lock:
-                placeholders = ','.join('?' for _ in image_ids)
-                cursor = self.conn.execute(f'SELECT id, path FROM images WHERE id IN ({placeholders})', image_ids)
-                for row in cursor.fetchall():
-                    paths[row['id']] = row['path']
+        for image_id in image_ids:
+            if image_id in paths:
+                enqueued.append(image_id)
+            else:
+                errors[image_id] = 'Image not found'
 
-            results = {}
-            trashed = []
-            errors = {}
+        if not enqueued:
+            return {'enqueued': [], 'errors': errors}
 
-            # Move files in parallel
-            max_workers = self.config.indexing_threads
+        # Soft-delete in DB immediately (images vanish from queries at once)
+        now = datetime.now().isoformat()
+        with self._db_lock:
+            placeholders = ','.join('?' for _ in enqueued)
+            self.conn.execute(
+                f'UPDATE images SET deleted = 1, updated_at = ? WHERE id IN ({placeholders})',
+                [now] + enqueued,
+            )
+            self.conn.commit()
 
-            def trash_one(image_id: str) -> tuple[str, bool, str | None]:
-                """Move a single image to trash. Returns (id, success, error_msg)."""
-                file_path = paths.get(image_id)
-                if not file_path:
-                    return (image_id, False, 'Image not found')
+        # Update trashed count and invalidate caches
+        self._trashed_count += len(enqueued)
+        with self._checksum_cache_lock:
+            for image_id in enqueued:
+                self._checksum_cache.pop(image_id, None)
+        _affected_count, affected_levels = self._duplicate_manager.invalidate_images(enqueued)
 
-                try:
-                    dest = move_to_trash(Path(file_path), self.trash_dir)
-                    if dest is None:
-                        # File was already missing — still soft-delete the DB row
-                        return (image_id, True, None)
-                    return (image_id, True, None)
-                except Exception as e:
-                    return (image_id, False, str(e))
+        # Set up or accumulate progress tracking
+        with self._trash_progress_lock:
+            if self._trash_progress is None:
+                self._trash_progress = {
+                    'total': len(enqueued),
+                    'done': 0,
+                    'started_at': now,
+                }
+            else:
+                self._trash_progress['total'] += len(enqueued)
 
-            with ThreadPoolExecutor(max_workers=max_workers) as executor:
-                futures = [executor.submit(trash_one, img_id) for img_id in image_ids]
-                for future in futures:
-                    try:
-                        image_id, success, error_msg = future.result()
-                        results[image_id] = success
-                        if success:
-                            trashed.append(image_id)
-                        elif error_msg:
-                            errors[image_id] = error_msg
-                    except Exception as e:
-                        logger.error(f'trash_images: Thread error: {e}')
+            # Keep the TrashWorker's reference current
+            if self._trash_thread is not None:
+                self._trash_thread._progress = self._trash_progress
 
-                    # Update progress
-                    if self._trash_progress:
-                        self._trash_progress['done'] += 1
+        # Enqueue file moves for background processing
+        for image_id in enqueued:
+            self._trash_queue.put((image_id, paths[image_id]))
 
-            # Batch soft-delete all successfully trashed images in one DB write
-            if trashed:
-                now = datetime.now().isoformat()
-                with self._db_lock:
-                    placeholders = ','.join('?' for _ in trashed)
-                    self.conn.execute(
-                        f'UPDATE images SET deleted = 1, updated_at = ? WHERE id IN ({placeholders})', [now] + trashed
-                    )
-                    self.conn.commit()
+        # Emit event for other clients (and the current client's image cache)
+        self.event_queue.emit(EVENT_IMAGES_CHANGED, {'removed_ids': enqueued})
 
-                # Clean up caches
-                with self._checksum_cache_lock:
-                    for image_id in trashed:
-                        self._checksum_cache.pop(image_id, None)
-                self._duplicate_manager.invalidate_images(trashed)
+        # Notify other clients that groups were affected at each level where
+        # images were removed (counts may have changed, groups may be dissolved)
+        for level in affected_levels:
+            self.event_queue.emit(
+                EVENT_GROUPS_CHANGED,
+                {'level': level, 'invalidate': True},
+            )
 
-            logger.info(f'Trashed {len(trashed)}/{len(image_ids)} images ({len(errors)} errors)')
-
-            return {'results': results, 'trashed': trashed, 'errors': errors}
-
-        finally:
-            # Clear progress and signal completion
-            self._trash_progress = None
-            with self._trash_ops_lock:
-                self._active_trash_ops -= 1
-                self._trash_ops_done.notify_all()
+        logger.info(f'Enqueued {len(enqueued)}/{len(image_ids)} images for trashing ({len(errors)} errors)')
+        return {'enqueued': enqueued, 'errors': errors}
 
     def rotate_images(
         self,
@@ -5769,6 +5948,7 @@ class ImageDatabase:
             'totalFolders': total_folders,
             'totalPeople': total_people,
             'totalFaces': total_faces,
+            'totalTrashed': self._trashed_count,
         }
 
     def get_processing_status(self) -> dict[str, Any]:
@@ -5781,6 +5961,15 @@ class ImageDatabase:
         embedding_count = self._embedding_queue.qsize()
         face_count = self._face_queue.qsize()
         nima_count = self._nima_queue.qsize() if self._nima_queue else 0
+        trash_count = self._trash_queue.qsize()
+
+        # Auto-clear trash progress when queue has drained
+        if trash_count == 0:
+            with self._trash_progress_lock:
+                if self._trash_progress is not None:
+                    self._trash_progress = None
+                    if self._trash_thread is not None:
+                        self._trash_thread._progress = None
 
         # Get Phase 4 statuses
         duplicate_status = self._duplicate_manager.get_status()
@@ -5795,8 +5984,10 @@ class ImageDatabase:
         face_embedding_computing = face_embedding_status.get('status') == 'computing'
         face_reassess_computing = face_reassess_status is not None and face_reassess_status.get('status') == 'computing'
 
-        # Determine overall status (NIMA queue also contributes to 'updating')
-        queues_empty = indexing_count == 0 and embedding_count == 0 and face_count == 0 and nima_count == 0
+        # Determine overall status (NIMA + trash queues also contribute to 'updating')
+        queues_empty = (
+            indexing_count == 0 and embedding_count == 0 and face_count == 0 and nima_count == 0 and trash_count == 0
+        )
         phase4_idle = not (
             duplicates_computing or face_grouping_computing or face_embedding_computing or face_reassess_computing
         )
@@ -5822,6 +6013,8 @@ class ImageDatabase:
             'total_images': total_images,
             'total_people': total_people,
             'total_faces': total_faces,
+            'trash_queue': trash_count,
+            'trashed_count': self._trashed_count,
             'face_detection_enabled': self.config.face_detection_enabled,
             'nima_enabled': self.config.nima_enabled,
         }

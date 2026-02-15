@@ -221,6 +221,14 @@ CONFIG_SCHEMA: list[tuple[str, list[tuple[str, list[str]]]]] = [
                     'Range: 5-50, recommended: 15-25',
                 ],
             ),
+            (
+                'trash_threads',
+                [
+                    'Number of threads for parallel file moves when trashing images (1-32).',
+                    'File I/O benefits from high parallelism, especially on SSDs or NAS.',
+                    'Recommended: 4-8 for HDD, 8-16 for SSD, 16-32 for NAS',
+                ],
+            ),
         ],
     ),
     (
@@ -479,6 +487,7 @@ FIELD_CONSTRAINTS: dict[str, dict[str, int | float | bool]] = {
     'similarity_threshold_level2': {'min': 0.0, 'max': 1.0, 'step': 0.01},
     'similarity_threshold_level3': {'min': 0.0, 'max': 1.0, 'step': 0.01},
     'indexing_threads': {'min': 1, 'max': 16, 'step': 1},
+    'trash_threads': {'min': 1, 'max': 32, 'step': 1},
     'max_incremental_duplicates': {'min': 1, 'max': 10000, 'step': 1},
     'incremental_threshold_percent': {'min': 5, 'max': 50, 'step': 1},
     'thumbnail_concurrent_requests': {'min': 1, 'max': 12, 'step': 1},
@@ -522,6 +531,7 @@ class Config:
         similarity_threshold_level2: Cosine similarity threshold for level 2.
         similarity_threshold_level3: Cosine similarity threshold for level 3.
         indexing_threads: Number of threads for parallel image indexing (1-16).
+        trash_threads: Number of threads for parallel file moves when trashing (1-32).
         max_incremental_duplicates: Max dirty images for incremental duplicate detection.
             If more images need checking, falls back to full recomputation.
         incremental_threshold_percent: Percentage of total images that triggers full
@@ -597,6 +607,7 @@ class Config:
     similarity_threshold_level2: float = 0.93
     similarity_threshold_level3: float = 0.85
     indexing_threads: int = 4
+    trash_threads: int = 8
     max_incremental_duplicates: int = 500
     incremental_threshold_percent: int = 20
     thumbnail_concurrent_requests: int = 6

@@ -1079,6 +1079,14 @@ Duplicates._showPruneDialog = function(level, targetGroups, hasSelection, totalI
     const countInput = document.getElementById('dialog-prune-count');
     const pctInput = document.getElementById('dialog-prune-percent');
     const radios = dialog.querySelectorAll('input[name="prune-mode"]');
+    const toggleBtn = document.getElementById('dialog-prune-toggle');
+    const legendText = document.getElementById('dialog-prune-legend-text');
+    const labelBest = document.getElementById('dialog-prune-label-best');
+    const labelTopCount = document.getElementById('dialog-prune-label-top-count');
+    const labelTopPct = document.getElementById('dialog-prune-label-top-pct');
+
+    // --- Mode state: keep (default) vs trash ---
+    let trashMode = false;
 
     // --- Populate scope description ---
     const groupCount = targetGroups.length;
@@ -1092,6 +1100,10 @@ Duplicates._showPruneDialog = function(level, targetGroups, hasSelection, totalI
 
     /**
      * Compute how many images would be trashed for the current settings.
+     *
+     * In keep mode: keep the best N, trash the rest.
+     * In trash mode: trash the worst N, keep the rest (always keep >= 1).
+     *
      * @returns {number} Count of images that would be moved to trash
      */
     const computeTrashCount = () => {
@@ -1100,16 +1112,23 @@ Duplicates._showPruneDialog = function(level, targetGroups, hasSelection, totalI
 
         for (const group of targetGroups) {
             const n = group.count;
-            let keep;
+            let value;
             if (mode === 'best') {
-                keep = 1;
+                value = 1;
             } else if (mode === 'count') {
-                keep = parseInt(countInput.value, 10) || 1;
+                value = parseInt(countInput.value, 10) || 1;
             } else {
-                keep = Math.ceil(n * (parseInt(pctInput.value, 10) || 1) / 100);
+                value = Math.ceil(n * (parseInt(pctInput.value, 10) || 1) / 100);
             }
-            keep = Math.max(1, Math.min(keep, n));
-            trashTotal += n - keep;
+
+            if (trashMode) {
+                // Trash N worst, but always keep at least 1
+                trashTotal += Math.min(value, n - 1);
+            } else {
+                // Keep N best, trash the rest
+                const keep = Math.max(1, Math.min(value, n));
+                trashTotal += n - keep;
+            }
         }
         return trashTotal;
     };
@@ -1130,6 +1149,16 @@ Duplicates._showPruneDialog = function(level, targetGroups, hasSelection, totalI
         }
     };
 
+    // --- Toggle handler: switch between keep and trash semantics ---
+    const onToggle = () => {
+        trashMode = !trashMode;
+        legendText.textContent = trashMode ? 'Trash per group' : 'Keep per group';
+        labelBest.textContent = trashMode ? 'Worst' : 'Best';
+        labelTopCount.textContent = trashMode ? 'Bottom' : 'Top';
+        labelTopPct.textContent = trashMode ? 'Bottom' : 'Top';
+        updateSummary();
+    };
+
     // --- Bind events ---
 
     /** Clicking a number input auto-selects its radio button. */
@@ -1145,6 +1174,7 @@ Duplicates._showPruneDialog = function(level, targetGroups, hasSelection, totalI
     const onInput = () => updateSummary();
 
     const cleanup = () => {
+        toggleBtn.removeEventListener('click', onToggle);
         radios.forEach(r => r.removeEventListener('change', onInput));
         countInput.removeEventListener('input', onInput);
         countInput.removeEventListener('focus', onCountFocus);
@@ -1163,15 +1193,18 @@ Duplicates._showPruneDialog = function(level, targetGroups, hasSelection, totalI
         const toTrash = computeTrashCount();
         if (toTrash <= 0) return;
 
-        // Build options from dialog state
+        // Build options from dialog state, sending keep or trash params
+        // based on the current toggle mode
         const mode = dialog.querySelector('input[name="prune-mode"]:checked')?.value || 'best';
         const options = {};
-        if (mode === 'best') {
-            options.keepCount = 1;
-        } else if (mode === 'count') {
-            options.keepCount = parseInt(countInput.value, 10) || 1;
+        if (trashMode) {
+            if (mode === 'best') options.trashCount = 1;
+            else if (mode === 'count') options.trashCount = parseInt(countInput.value, 10) || 1;
+            else options.trashPercent = parseInt(pctInput.value, 10) || 1;
         } else {
-            options.keepPercent = parseInt(pctInput.value, 10) || 1;
+            if (mode === 'best') options.keepCount = 1;
+            else if (mode === 'count') options.keepCount = parseInt(countInput.value, 10) || 1;
+            else options.keepPercent = parseInt(pctInput.value, 10) || 1;
         }
         if (hasSelection) {
             options.groupHashes = selectedHashes;
@@ -1179,12 +1212,12 @@ Duplicates._showPruneDialog = function(level, targetGroups, hasSelection, totalI
 
         cleanup();
 
-        // Execute the prune
-        AppState.loading.show('duplicates-prune', 'Pruning duplicate groups\u2026');
+        // Execute the prune — endpoint returns fast, file moves are async
+        AppState.loading.show('duplicates-prune', 'Computing quality rankings\u2026');
         try {
             const result = await AppState.duplicates.pruneGroups(level, options);
             App.showInfo(
-                `Pruned ${result.groupCount} groups: ${result.trashedCount} images moved to trash.`,
+                `Pruned ${result.groupCount.toLocaleString()} groups: ${result.trashedCount.toLocaleString()} images moved to trash.`,
             );
         } catch (err) {
             App.showError('Failed to prune groups: ' + (err.message || err));
@@ -1204,6 +1237,7 @@ Duplicates._showPruneDialog = function(level, targetGroups, hasSelection, totalI
         }
     };
 
+    toggleBtn.addEventListener('click', onToggle);
     radios.forEach(r => r.addEventListener('change', onInput));
     countInput.addEventListener('input', onInput);
     countInput.addEventListener('focus', onCountFocus);
@@ -1214,7 +1248,12 @@ Duplicates._showPruneDialog = function(level, targetGroups, hasSelection, totalI
     dialog.addEventListener('cancel', onCancel);
     dialog.addEventListener('keydown', onKeyDown);
 
-    // Reset to defaults and compute initial summary
+    // Reset to defaults (keep mode) and compute initial summary
+    trashMode = false;
+    legendText.textContent = 'Keep per group';
+    labelBest.textContent = 'Best';
+    labelTopCount.textContent = 'Top';
+    labelTopPct.textContent = 'Top';
     dialog.querySelector('input[name="prune-mode"][value="best"]').checked = true;
     countInput.value = '2';
     pctInput.value = '33';

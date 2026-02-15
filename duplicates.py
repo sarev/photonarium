@@ -1325,7 +1325,16 @@ class DuplicateManager:
         self._db_path = db_path
         self._config = config or get_default_config()
         self._status_lock = threading.Lock()
-        self._status: dict[int, str] = {0: 'pending', 1: 'pending', 2: 'pending', 3: 'pending'}
+
+        # If a duplicate epoch exists, groups were computed in a previous session
+        # and are already stored in the DB — start as 'done' so the frontend
+        # doesn't show "Waiting to compute…" for levels that are already complete.
+        conn = self._get_db()
+        try:
+            initial = 'done' if _get_duplicate_epoch(conn) else 'pending'
+        finally:
+            conn.close()
+        self._status: dict[int, str] = {0: initial, 1: initial, 2: initial, 3: initial}
 
         # In-memory group cache (lazy loaded)
         self._cache_lock = threading.Lock()
@@ -1528,7 +1537,7 @@ class DuplicateManager:
         finally:
             conn.close()
 
-    def invalidate_images(self, image_ids: list[str]) -> int:
+    def invalidate_images(self, image_ids: list[str]) -> tuple[int, set[int]]:
         """Remove multiple images from duplicate groups (batch operation).
 
         More efficient than calling invalidate_image() repeatedly for bulk
@@ -1538,10 +1547,12 @@ class DuplicateManager:
             image_ids: List of image IDs to remove.
 
         Returns:
-            Number of images that were in at least one group.
+            Tuple of (affected_count, affected_levels) where affected_count
+            is the number of images that were in at least one group, and
+            affected_levels is the set of group levels that were modified.
         """
         if not image_ids:
-            return 0
+            return 0, set()
 
         conn = self._get_db()
         affected_count = 0
@@ -1555,7 +1566,7 @@ class DuplicateManager:
             affected_groups = [(row['level'], row['group_hash']) for row in cursor.fetchall()]
 
             if not affected_groups:
-                return 0
+                return 0, set()
 
             # Count how many images were actually in groups
             cursor = conn.execute(
@@ -1593,6 +1604,9 @@ class DuplicateManager:
         finally:
             conn.close()
 
+        # Collect distinct levels that were affected (for event notification)
+        affected_levels = {level for level, _gh in affected_groups}
+
         # Update cache if loaded
         def remove_from_cache(img_id: str) -> None:
             """Remove a single image from cache, dissolving singleton groups."""
@@ -1619,7 +1633,7 @@ class DuplicateManager:
                     for image_id in image_ids:
                         remove_from_cache(image_id)
 
-        return affected_count
+        return affected_count, affected_levels
 
     # =========================================================================
     # Status

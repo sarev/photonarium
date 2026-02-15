@@ -63,6 +63,61 @@ AppState.duplicates = (function() {
     const domainRef = { _name: 'duplicates', _notify: notify };
 
     // =========================================================================
+    // HELPERS
+    // =========================================================================
+
+    /**
+     * Wait for the background trash queue to drain completely.
+     *
+     * Polls ``/api/status`` at 1s intervals and updates the loading overlay
+     * with live "Moving to trash: done / total…" progress.  Resolves when
+     * ``trash_progress`` disappears from the status (queue empty).
+     *
+     * @returns {Promise<void>}
+     */
+    function _waitForTrashQueueDrain() {
+        return new Promise((resolve) => {
+            const POLL_MS = 1000;
+            const TIMEOUT_MS = 10 * 60 * 1000; // 10 minutes safety limit
+            const startedAt = Date.now();
+
+            const poll = async () => {
+                try {
+                    const status = await AppState.status.load();
+                    const progress = status?.trash_progress;
+
+                    if (progress) {
+                        const done = (progress.done || 0).toLocaleString();
+                        const total = (progress.total || 0).toLocaleString();
+                        AppState.loading.setMessage(`Moving to trash: ${done} / ${total}\u2026`);
+                    }
+
+                    // Queue drained — progress cleared by backend
+                    if (!progress && (status?.trash_queue || 0) === 0) {
+                        resolve();
+                        return;
+                    }
+
+                    // Safety timeout
+                    if (Date.now() - startedAt > TIMEOUT_MS) {
+                        resolve(); // Don't fail — files will finish in background
+                        return;
+                    }
+
+                    setTimeout(poll, POLL_MS);
+                } catch (err) {
+                    // Network blip — retry silently
+                    console.warn('[_waitForTrashQueueDrain] poll error:', err);
+                    setTimeout(poll, POLL_MS);
+                }
+            };
+
+            // First poll after a short delay (give the worker time to start)
+            setTimeout(poll, 500);
+        });
+    }
+
+    // =========================================================================
     // INTERNAL API
     // =========================================================================
 
@@ -539,13 +594,22 @@ AppState.duplicates = (function() {
         /**
          * Prune duplicate groups by trashing lower-quality images.
          *
-         * NOT optimistic — waits for backend completion then reloads
-         * affected data, since this is a bulk destructive operation.
+         * The backend endpoint returns quickly after enqueueing (soft-delete
+         * + cache invalidation are immediate).  File moves happen
+         * asynchronously via the TrashWorker.  If images were enqueued,
+         * this method waits for the trash queue to drain while updating
+         * the loading overlay with live progress.
+         *
+         * Supports two mutually exclusive modes:
+         * - **Keep mode** (default): keep the best N images, trash the rest.
+         * - **Trash mode**: trash the worst N images, keep the rest.
          *
          * @param {number} level - Similarity level (0-3)
          * @param {Object} [options]
-         * @param {number} [options.keepCount=1] - Images to keep per group
+         * @param {number} [options.keepCount] - Images to keep per group
          * @param {number} [options.keepPercent] - Percentage to keep (overrides keepCount)
+         * @param {number} [options.trashCount] - Images to trash per group (inverse of keepCount)
+         * @param {number} [options.trashPercent] - Percentage to trash (inverse of keepPercent)
          * @param {string[]} [options.groupHashes] - Specific groups to prune
          * @returns {Promise<{trashedCount: number, groupCount: number}>}
          */
@@ -554,16 +618,25 @@ AppState.duplicates = (function() {
                 level,
                 keep_count: options.keepCount,
                 keep_percent: options.keepPercent,
+                trash_count: options.trashCount,
+                trash_percent: options.trashPercent,
                 group_hashes: options.groupHashes,
             });
 
-            // Full reload of affected data after prune completes
+            const data = response.data;
+
+            if (data.trashed_count > 0) {
+                // Wait for background file moves to complete
+                await _waitForTrashQueueDrain();
+            }
+
+            // Reload affected data (reflects soft-deletes)
             await AppState.images.load(true);
             await this.loadLevel(level, true);
 
             return {
-                trashedCount: response.data.trashed_count,
-                groupCount: response.data.group_count,
+                trashedCount: data.trashed_count,
+                groupCount: data.group_count,
             };
         },
 
