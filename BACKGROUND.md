@@ -42,11 +42,11 @@ There are a number of worthy, free apps out there for managing your images. Here
 
 The heavyweight champion of open-source photo management. It's a KDE project licensed under GPL-2.0, runs on Windows, Mac, and Linux, works fully offline, and collects zero telemetry. It has face detection and recognition using deep learning, duplicate detection via perceptual hashing, extensive RAW support (1260+ camera formats), non-destructive editing, and a staggering breadth of metadata tools. It's the most feature-complete free desktop photo manager by a wide margin.
 
-The downsides? The UI is dense and technical — very much a power-user tool with a KDE aesthetic that can feel overwhelming. It's a large download due to bundled KDE frameworks. And critically, it has no CLIP-style semantic search yet (the team is exploring it, but as of late 2025 it's still partial/planned). No web UI, no mobile interface. Face training requires a fair bit of manual effort up front.
+The downsides? The UI is dense and technical - very much a power-user tool with a KDE aesthetic that can feel overwhelming. It's a large download due to bundled KDE frameworks. And critically, it has no CLIP-style semantic search yet (the team is exploring it, but as of late 2025 it's still partial/planned). No web UI, no mobile interface. Face training requires a fair bit of manual effort up front.
 
 ### [Immich](https://immich.app/)
 
-The darling of the self-hosted community and the closest thing to a free Google Photos replacement. Licensed under AGPL-3.0, it's a server application with a polished web UI and native iOS/Android apps with automatic photo backup. It uses CLIP for semantic search, InsightFace for face recognition, and has ML-based duplicate detection. Multi-user support, shared albums, map views — it's impressively complete for a project that only reached stable v2.0 in October 2025.
+The darling of the self-hosted community and the closest thing to a free Google Photos replacement. Licensed under AGPL-3.0, it's a server application with a polished web UI and native iOS/Android apps with automatic photo backup. It uses CLIP for semantic search, InsightFace for face recognition, and has ML-based duplicate detection. Multi-user support, shared albums, map views - it's impressively complete for a project that only reached stable v2.0 in October 2025.
 
 The catch is that it's a *server*, not a desktop app. You need Docker, at least 6-8GB of RAM for the ML processing, and ideally a Linux host (Windows/macOS via Docker Desktop is supported but discouraged). If you're comfortable running infrastructure, it's excellent. If you just want to point something at your photo folders and go, it's overkill.
 
@@ -54,27 +54,27 @@ The catch is that it's a *server*, not a desktop app. You need Docker, at least 
 
 A more established self-hosted alternative to Immich, also AGPL-3.0. It has AI-powered classification (recently upgraded to TensorFlow 2), face recognition, a decent web PWA, and optional integration with Ollama/OpenAI for captioning. Runs via Docker, self-hosted, no telemetry.
 
-However, some features are paywalled behind expensive paid memberships (Essentials ~€200/year, Plus ~€600/year) — including multi-user management, which feels restrictive for an AGPL project. Its duplicate detection is basic (exact checksums only, no visual similarity browsing). No native mobile app, no phone backup. Overall it does less than Immich while asking you to pay for some of it.
+However, some features are paywalled behind expensive paid memberships (Essentials ~EUR200/year, Plus ~EUR600/year) - including multi-user management, which feels restrictive for an AGPL project. Its duplicate detection is basic (exact checksums only, no visual similarity browsing). No native mobile app, no phone backup. Overall it does less than Immich while asking you to pay for some of it.
 
 ### [darktable](https://www.darktable.org/)
 
-A superb open-source RAW editor and non-destructive photo processor (GPL-3.0). If your goal is *editing* photos — tone curves, colour grading, masking, noise reduction — darktable is world-class. But it is not really a photo *manager*. It has no meaningful face recognition (only via a community Lua script), no semantic search, and minimal duplicate detection. It's the wrong tool for this job, though it pairs well with a dedicated catalogue tool.
+A superb open-source RAW editor and non-destructive photo processor (GPL-3.0). If your goal is *editing* photos - tone curves, colour grading, masking, noise reduction - darktable is world-class. But it is not really a photo *manager*. It has no meaningful face recognition (only via a community Lua script), no semantic search, and minimal duplicate detection. It's the wrong tool for this job, though it pairs well with a dedicated catalogue tool.
 
 ### [XnView MP](https://www.xnview.com/en/xnviewmp/)
 
-A fast, lightweight file browser that reads 500+ image formats. Free for personal use, but it's closed-source freeware — not open source. It has a basic duplicate finder (file-based, not ML) and rudimentary face detection, but no semantic search, no meaningful face recognition, and no web interface. It's excellent for quickly viewing and batch-converting files, but it's a file browser, not a catalogue.
+A fast, lightweight file browser that reads 500+ image formats. Free for personal use, but it's closed-source freeware - not open source. It has a basic duplicate finder (file-based, not ML) and rudimentary face detection, but no semantic search, no meaningful face recognition, and no web interface. It's excellent for quickly viewing and batch-converting files, but it's a file browser, not a catalogue.
 
 ### [Google Photos](https://photos.google.com/)
 
-The benchmark for AI-powered photo search. Google's semantic search is genuinely best-in-class — natural language queries like "dog on a beach at sunset" just work. Face recognition is excellent, including pets. Mobile backup is seamless. And 15GB is free.
+The benchmark for AI-powered photo search. Google's semantic search is genuinely best-in-class - natural language queries like "dog on a beach at sunset" just work. Face recognition is excellent, including pets. Mobile backup is seamless. And 15GB is free.
 
 The price is your privacy. Your photos live on Google's servers, processed by Google's AI, governed by Google's privacy policy, under US jurisdiction. The 15GB free tier is shared with Gmail and Drive. Advanced editing features increasingly require a Google One subscription. You don't control your data, and Google has a track record of shutting down services. If criteria (d) and (e) from my list above matter to you at all, this is a non-starter.
 
 ### [Apple Photos](https://www.apple.com/photos/)
 
-Apple's answer to the same problem, and arguably the best *consumer* photo management experience. On-device face recognition and semantic search powered by Apple's ML frameworks — your photos are analysed locally, not in the cloud. Duplicate detection is built in. The UI is clean and polished.
+Apple's answer to the same problem, and arguably the best *consumer* photo management experience. On-device face recognition and semantic search powered by Apple's ML frameworks - your photos are analysed locally, not in the cloud. Duplicate detection is built in. The UI is clean and polished.
 
-But it only exists within Apple's ecosystem — no Windows, no Linux. It's closed-source and proprietary. Organisational features are shallow compared to any dedicated tool (no meaningful tagging, limited metadata). iCloud free tier is a miserly 5GB. And if you're not already in the Apple ecosystem, it's simply not an option.
+But it only exists within Apple's ecosystem - no Windows, no Linux. It's closed-source and proprietary. Organisational features are shallow compared to any dedicated tool (no meaningful tagging, limited metadata). iCloud free tier is a miserly 5GB. And if you're not already in the Apple ecosystem, it's simply not an option.
 
 ### [Adobe Bridge](https://www.adobe.com/products/bridge.html)
 
@@ -92,7 +92,7 @@ The five key criteria from above: **(a)** semantic search, **(b)** face recognit
 | **(a) Semantic search** | Yes (CLIP) | Planned/partial | Yes (CLIP)\* | Yes (TF2 + optional LLM)\* | No | No | Yes (best-in-class)\* | Yes (on-device)\* | No |
 | **(b) Face recognition** | Yes | Yes | Yes | Yes | No | Basic | Yes | Yes (on-device) | No |
 | **(c) Duplicate detection** | Yes (4 levels) | Yes (perceptual hash) | Yes (ML-based) | Basic (checksums only) | Minimal | File-based | Basic | Yes | No |
-| **(d) Data stays local** | Yes | Yes¹ | Mostly² | Mostly³ | Yes⁴ | Mostly⁵ | No | No | No |
+| **(d) Data stays local** | Yes | Yes [1] | Mostly [2] | Mostly [3] | Yes [4] | Mostly [5] | No | No | No |
 | **(e) Truly free** | Yes | Yes | Yes | Partially (paywalled features) | Yes | Personal use only | 15GB free tier | Bundled with hardware | Yes |
 | **Image captioning** | Yes (BLIP/BLIP-2) | No | No | Optional (external LLM) | No | No | Yes | Yes | No |
 | **Web-based UI** | Yes | No | Yes | Yes | No | No | Yes | Limited | No |
@@ -104,21 +104,21 @@ The five key criteria from above: **(a)** semantic search, **(b)** face recognit
 
 \* These apps offer semantic search but do not support negative terms (e.g. "beach -sunset") to exclude concepts from results. Photonarium does.
 
-¹ digiKam: core library is local; map/geolocation views may use external map/tile services.
+[1] digiKam: core library is local; map/geolocation views may use external map/tile services.
 
-² Immich: core is self-hosted/local; some features commonly pull external map tiles and some deployments need pre-seeded ML assets to be fully offline.
+[2] Immich: core is self-hosted/local; some features commonly pull external map tiles and some deployments need pre-seeded ML assets to be fully offline.
 
-³ PhotoPrism: core is local; Places (maps/reverse geocoding) typically relies on external services unless disabled.
+[3] PhotoPrism: core is local; Places (maps/reverse geocoding) typically relies on external services unless disabled.
 
-⁴ darktable: core is local; the map module uses external map providers if you enable it.
+[4] darktable: core is local; the map module uses external map providers if you enable it.
 
-⁵ XnView MP: local file manager, but commonly phones home for update checks unless you disable it.
+[5] XnView MP: local file manager, but commonly phones home for update checks unless you disable it.
 
 ### Where Photonarium Fits
 
-Photonarium occupies a niche that none of the above quite covers: a lightweight, fully offline desktop tool that combines CLIP semantic search, face detection and recognition, multi-level duplicate detection, and BLIP image captioning — all accessible via a browser-based UI, without requiring Docker infrastructure, a database server, KDE frameworks, or a cloud account. It's the simplest install of any AI-powered option (just Python and pip), and it runs on Windows, Mac, and Linux with zero telemetry under a permissive Apache-2.0 license.
+Photonarium occupies a niche that none of the above quite covers: a lightweight, fully offline desktop tool that combines CLIP semantic search, face detection and recognition, multi-level duplicate detection, and BLIP image captioning - all accessible via a browser-based UI, without requiring Docker infrastructure, a database server, KDE frameworks, or a cloud account. It's the simplest install of any AI-powered option (just Python and pip), and it runs on Windows, Mac, and Linux with zero telemetry under a permissive Apache-2.0 license.
 
-The trade-offs are: no mobile apps or phone backup, no multi-user support, and no non-destructive editing. It's also new so has a much smaller community than the established projects! But if what you want is to point a tool at your photo folders and immediately start searching them semantically, finding duplicates, and tagging faces — all without sending a single byte off your machine — Photonarium is designed for exactly that.
+The trade-offs are: no mobile apps or phone backup, no multi-user support, and no non-destructive editing. It's also new so has a much smaller community than the established projects! But if what you want is to point a tool at your photo folders and immediately start searching them semantically, finding duplicates, and tagging faces - all without sending a single byte off your machine - Photonarium is designed for exactly that.
 
 ## The Great 'AI' Debate
 

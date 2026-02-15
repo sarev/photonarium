@@ -8,7 +8,7 @@ on the codebase.
 
 ## Backend (Python)
 
-### `app.py` — Flask REST API
+### `app.py` - Flask REST API
 
 The HTTP layer. Receives requests from the frontend and delegates to the
 backend modules for database operations and image processing. Uses the waitress
@@ -32,7 +32,7 @@ WSGI server in production.
 | `/api/faces/:id/thumbnail` | Cropped face thumbnail |
 | `/api/events` | Backend event polling (faces_reassessed, etc.) |
 
-### `imagedb.py` — Image Database Engine
+### `imagedb.py` - Image Database Engine
 
 The core backend module. Maintains a SQLite database of image files and their
 metadata, discovers images by scanning user-registered folders, computes derived
@@ -41,23 +41,23 @@ background processing in threads.
 
 **Concepts:**
 
-- **Images and metadata** — When ingesting an image the module extracts a "best"
+- **Images and metadata** - When ingesting an image the module extracts a "best"
   timestamp (preferring EXIF, then filename patterns, then filesystem), a
   content checksum, a perceptual hash, basic dimensions, and optional
   user-editable fields (description, rating).
-- **OpenCLIP embeddings** — CLIP models map both images and text into the same
+- **OpenCLIP embeddings** - CLIP models map both images and text into the same
   vector space, enabling semantic search (text query vs image vectors) and
   visual similarity (image vs image). Description embeddings improve search
   recall. Cosine similarity reduces to a dot product because vectors are
   pre-normalised.
-- **Duplicate detection levels** — Level 0 (exact checksum), Level 1
+- **Duplicate detection levels** - Level 0 (exact checksum), Level 1
   (perceptual hash distance), Level 2 (high embedding similarity), Level 3
   (lower embedding similarity). Thresholds are configurable in
   `photonarium.yml`.
-- **Thumbnails** — Generated on demand and cached on disk keyed by image
+- **Thumbnails** - Generated on demand and cached on disk keyed by image
   checksum. Most thumbnail logic lives in `thumbnails.py`; only
   database-dependent stubs remain here.
-- **Events** — A cursor-based event queue (`EventQueue`) supports multi-client
+- **Events** - A cursor-based event queue (`EventQueue`) supports multi-client
   polling. Backend processes and mutation routes emit events; each client polls
   with a `?since=T` cursor so events are never drained on read. If a client
   falls behind the 200-event ring buffer it receives a `stale` flag and
@@ -85,7 +85,7 @@ connection is shared and protected by `threading.RLock`. Embedding and face
 detection threads yield the GIL periodically (10ms sleep between batches) to
 prevent blocking Flask request handling.
 
-### `faces.py` — Face Detection and Recognition
+### `faces.py` - Face Detection and Recognition
 
 Face detection using MTCNN and face embeddings using InceptionResnetV1 from
 facenet-pytorch.
@@ -107,25 +107,25 @@ optional phase after OpenCLIP embedding generation. Background reassessment and
 grouping run asynchronously and use optimistic locking (`updated_at`) to avoid
 overwriting concurrent user edits.
 
-### `thumbnails.py` — Thumbnail Generation and Caching
+### `thumbnails.py` - Thumbnail Generation and Caching
 
 Generates, caches, and manages image thumbnails. Also includes image rotation
 utilities (which invalidate thumbnails).
 
 **Components:**
 
-- `generate_thumbnail()` — Generate a single thumbnail with sharpening
-- `get_thumbnail_cache_path()` — Compute cache path for a thumbnail
-- `generate_missing_thumbnails()` — Bulk generate thumbnails for many images
-- `ThumbnailCache` — Thread-safe LRU RAM cache for thumbnail bytes (backed by
+- `generate_thumbnail()` - Generate a single thumbnail with sharpening
+- `get_thumbnail_cache_path()` - Compute cache path for a thumbnail
+- `generate_missing_thumbnails()` - Bulk generate thumbnails for many images
+- `ThumbnailCache` - Thread-safe LRU RAM cache for thumbnail bytes (backed by
   `OrderedDict` for O(1) eviction)
-- `rotate_image_file()` — Rotate an image and invalidate its thumbnails
+- `rotate_image_file()` - Rotate an image and invalidate its thumbnails
 
 Only two canonical sizes are stored on disk: **200px** and **400px**. The
 frontend uses CSS to scale to the exact display size. Cache structure:
 `<thumbnail_dir>/<size>/<first2chars>/<checksum>.jpg`.
 
-### `duplicates.py` — Duplicate Detection
+### `duplicates.py` - Duplicate Detection
 
 Finds and groups duplicate or similar images across 4 similarity levels:
 
@@ -141,7 +141,7 @@ O(n^2) comparisons, chunked matrix multiplication for Levels 2-3 to manage
 memory, union-find with path compression for efficient clustering, and
 incremental updates for small batches of new/modified images.
 
-### `caption.py` — Image Captioning
+### `caption.py` - Image Captioning
 
 Automatic image description generation using BLIP/BLIP-2 models from
 HuggingFace transformers.
@@ -157,7 +157,7 @@ The model is loaded lazily on first use to avoid startup delays. Runs in
 offline mode (`HF_HUB_OFFLINE=1`); models must be pre-downloaded via
 `download_models.py`.
 
-### `config.py` — Configuration
+### `config.py` - Configuration
 
 Loads, saves, and validates configuration from `photonarium.yml` stored at the
 OS-appropriate location (Windows: `%LOCALAPPDATA%\Photonarium\`, macOS:
@@ -166,7 +166,7 @@ If no config exists on first run, auto-migrates a legacy `.photonarium.yml` from
 the working directory if found, otherwise creates a default with full comments.
 The `data_dir` field tells the app where to find its database and thumbnails.
 
-### `timestamps.py` — Timestamp Extraction
+### `timestamps.py` - Timestamp Extraction
 
 Extracts and derives timestamps from images using multiple sources, in priority
 order:
@@ -176,7 +176,7 @@ order:
 3. Parsed from filename/path (more reliable than filesystem dates)
 4. Filesystem creation/modification time
 
-### `download_models.py` — Model Downloader
+### `download_models.py` - Model Downloader
 
 Standalone script that queries `app.py --list-models` for the current
 configuration, then downloads the required OpenCLIP and BLIP/BLIP-2 models from
@@ -184,53 +184,53 @@ HuggingFace. Run before first use or after changing model settings.
 
 ---
 
-## Frontend — Screen Modules (`static/`)
+## Frontend - Screen Modules (`static/`)
 
 All frontend files live in the `static/` folder. The application is a
 single-page app (`index.html`) with screen modules that register with a global
 `App` object.
 
-### `core.js` — Application Framework
+### `core.js` - Application Framework
 
 Central infrastructure that all screen modules depend on. Initialises first and
 exposes the global `App` object.
 
 **Responsibilities:**
 
-- **State management** — Current screen, theme (light/dark with localStorage
+- **State management** - Current screen, theme (light/dark with localStorage
   persistence), thumbnail size preferences, pub/sub event system for
   cross-module communication.
-- **Screen navigation** — Transitions between screens via `data-screen`
+- **Screen navigation** - Transitions between screens via `data-screen`
   attribute, toolbar group visibility, navigation history for back-button,
   lifecycle hooks (`onEnter`, `onLeave`).
-- **API communication** — Wrapper functions for all backend API calls,
+- **API communication** - Wrapper functions for all backend API calls,
   request/response serialisation, error handling.
-- **Toolbar management** — Event listeners for common buttons, button state
+- **Toolbar management** - Event listeners for common buttons, button state
   updates, per-screen toolbar visibility.
-- **Dialog system** — Modal dialogs, confirmation dialogs with Promise-based
+- **Dialog system** - Modal dialogs, confirmation dialogs with Promise-based
   responses, emoji picker.
-- **Utilities** — DOM helpers (`App.$(id)`, `App.createElement()`), debounce
+- **Utilities** - DOM helpers (`App.$(id)`, `App.createElement()`), debounce
   and throttle, image URL builders, date and file size formatting.
-- **Module registration** — `App.registerModule()` for screen modules,
+- **Module registration** - `App.registerModule()` for screen modules,
   `App.ready()` for post-initialisation logic.
 
-### `thumbnails.js` — Shared Grid Infrastructure
+### `thumbnails.js` - Shared Grid Infrastructure
 
 Reusable components for thumbnail grid management, used by Gallery, Duplicates,
 and Faces screens.
 
 **Components:**
 
-- **ThumbnailLoader** — Fetches thumbnails with scroll-aware prioritisation.
+- **ThumbnailLoader** - Fetches thumbnails with scroll-aware prioritisation.
   Real-time priority based on distance from visible area centre.
   Auto-pruning of requests outside buffer zone. Timeout and scroll-abort
   protection. API: `request()`, `cancel()`, `prioritize()`, `bustCache()`,
   `clear()`.
-- **VirtualGrid** — Virtual scrolling with absolute positioning. Only renders
+- **VirtualGrid** - Virtual scrolling with absolute positioning. Only renders
   visible items plus a buffer. Spacer-based layout for correct scroll height.
   RAF-throttled scroll handling. API: `render()`, `refresh()`, `scrollTo()`,
   `scrollToId()`, `bind()`, `unbind()`.
-- **GridSelection** — Unified selection handling. Click (single, Ctrl, Shift,
+- **GridSelection** - Unified selection handling. Click (single, Ctrl, Shift,
   right-click toggle), drag-box with auto-scroll, keyboard (arrows, Ctrl+A,
   Escape, Enter, Delete), long-press for touch. API: `select()`, `toggle()`,
   `selectRange()`, `selectAll()`, `clear()`, `bind()`, `unbind()`.
@@ -251,24 +251,24 @@ destroyed.
 
 **Critical gotchas:**
 
-1. **Unbind before destroying DOM** — Clearing `innerHTML` without `unbind()`
+1. **Unbind before destroying DOM** - Clearing `innerHTML` without `unbind()`
    first orphans scroll listeners. Always: unbind, destroy, then clear DOM.
-2. **Hidden containers have zero dimensions** — Don't call `render()` on hidden
+2. **Hidden containers have zero dimensions** - Don't call `render()` on hidden
    containers. Set a `needsRefresh` flag instead.
-3. **`bind()` triggers `_updateVisibleItems`** — Ensures thumbnails load when
+3. **`bind()` triggers `_updateVisibleItems`** - Ensures thumbnails load when
    returning to a screen.
-4. **Scroll container must be `config.container`** — VirtualGrid listens on
+4. **Scroll container must be `config.container`** - VirtualGrid listens on
    this element. Nested scroll containers will cause mismatches.
-5. **Blob URL memory leak** — Each thumbnail creates a blob URL that must be
+5. **Blob URL memory leak** - Each thumbnail creates a blob URL that must be
    revoked when the item scrolls out of view or on destroy.
-6. **Selection persists across unbind/bind** — Intentional. Call
+6. **Selection persists across unbind/bind** - Intentional. Call
    `selection.clear()` when recreating a grid with new data.
-7. **Keyboard handler is on `document`** — Captures keys globally. Only the
+7. **Keyboard handler is on `document`** - Captures keys globally. Only the
    active grid's selection should be bound.
-8. **O(n) lookups during scroll** — Fixed by building an `id -> index` Map once
+8. **O(n) lookups during scroll** - Fixed by building an `id -> index` Map once
    per scroll update. Maintain this if modifying `_updateVisibleItems`.
 
-### `gallery.js` — Gallery Screen
+### `gallery.js` - Gallery Screen
 
 Primary view for browsing the image catalogue.
 
@@ -278,84 +278,84 @@ Primary view for browsing the image catalogue.
 - **Info panel** with editable Description and Rating fields
 - **Sorting** by date, rating, content similarity, or people
 - **Filtering** applied from the Search screen
-- **Navigation** — double-click/Enter opens fullscreen, scroll position
+- **Navigation** - double-click/Enter opens fullscreen, scroll position
   preserved on return
-- **Deletion** — Delete key with confirmation dialog
+- **Deletion** - Delete key with confirmation dialog
 
-### `fullscreen.js` — Fullscreen Viewer
+### `fullscreen.js` - Fullscreen Viewer
 
 Modal overlay for full-screen image viewing with zoom, pan, and navigation. Not
-part of the screen navigation system — it floats over whatever screen is active.
+part of the screen navigation system - it floats over whatever screen is active.
 
-- **Image display** — Full-resolution with fit-to-screen scaling. Overlays
+- **Image display** - Full-resolution with fit-to-screen scaling. Overlays
   (close button, filename) fade after 3 seconds and reappear on interaction.
-- **Zoom** — Mouse scroll wheel centred on cursor, touch pinch centred on
+- **Zoom** - Mouse scroll wheel centred on cursor, touch pinch centred on
   midpoint, double-tap toggles fit-to-screen vs 100%.
-- **Pan** — Click-and-drag or touch drag when zoomed in, constrained to keep
+- **Pan** - Click-and-drag or touch drag when zoomed in, constrained to keep
   image edges visible.
-- **Navigation** — Left/Right arrows (wrapping), swipe on touch devices.
-- **API** — `open(imageId)`, `close()`, `isOpen()`.
+- **Navigation** - Left/Right arrows (wrapping), swipe on touch devices.
+- **API** - `open(imageId)`, `close()`, `isOpen()`.
 
-### `database.js` — Database Management Screen
+### `database.js` - Database Management Screen
 
 Manage image source folders and monitor processing status. Shown by default
 when the database is empty.
 
-- **Folder management** — List registered folders with image counts, add via
+- **Folder management** - List registered folders with image counts, add via
   native folder picker, remove with confirmation.
-- **Processing status** — Polls backend for indexing, embedding, and face
+- **Processing status** - Polls backend for indexing, embedding, and face
   detection queue sizes.
-- **Statistics** — Displays total image count.
+- **Statistics** - Displays total image count.
 
-### `settings.js` — In-App Configuration Editor
+### `settings.js` - In-App Configuration Editor
 
 A standalone `Settings` object (not a screen module) that opens a modal dialog
 for editing `photonarium.yml` from the browser. The form is entirely
-schema-driven — the backend sends field types, constraints, and help text in
+schema-driven - the backend sends field types, constraints, and help text in
 one `/api/config/schema` response, and the frontend renders a generic form.
 
-- **Schema-driven** — zero hardcoded knowledge of individual settings.
-- **Field types** — text, number, checkbox, textarea (for set-type fields).
-- **Danger fields** — red border and warning icon for settings that require care.
-- **Client + server validation** — range checks in the browser plus full
+- **Schema-driven** - zero hardcoded knowledge of individual settings.
+- **Field types** - text, number, checkbox, textarea (for set-type fields).
+- **Danger fields** - red border and warning icon for settings that require care.
+- **Client + server validation** - range checks in the browser plus full
   validation on save via the Config constructor.
 
-### `search.js` — Search and Filter Screen
+### `search.js` - Search and Filter Screen
 
 Create filters to narrow down the gallery view.
 
-- **Text search** — Semantic search via OpenCLIP similarity, not just keyword
+- **Text search** - Semantic search via OpenCLIP similarity, not just keyword
   matching. Results ranked by relevance.
-- **Date range** — Start and/or end date pickers filtering by image timestamp.
-- **Rating filter** — Emoji-based filtering with an emoji picker dialog.
-- **People filter** — Filter by people detected in images.
-- **Validation** — Date range validation, input feedback.
-- **Filter lifecycle** — Apply returns to Gallery, Clear resets all fields.
+- **Date range** - Start and/or end date pickers filtering by image timestamp.
+- **Rating filter** - Emoji-based filtering with an emoji picker dialog.
+- **People filter** - Filter by people detected in images.
+- **Validation** - Date range validation, input feedback.
+- **Filter lifecycle** - Apply returns to Gallery, Clear resets all fields.
   Filter criteria preserved when navigating away.
 
-### `duplicates.js` — Duplicates Screen
+### `duplicates.js` - Duplicates Screen
 
 Find and manage duplicate or similar images.
 
-- **Similarity slider** — 4 levels from Related (loose) to Identical (strict).
+- **Similarity slider** - 4 levels from Related (loose) to Identical (strict).
   Changing the slider immediately recomputes the display.
-- **Stack display** — Duplicate groups shown as stacked thumbnail cards sorted
+- **Stack display** - Duplicate groups shown as stacked thumbnail cards sorted
   by group size. The "best" image (highest resolution, best focus, lossless
   preferred) appears on top.
-- **Interaction** — Click to select stacks, double-click to open the group in
+- **Interaction** - Click to select stacks, double-click to open the group in
   Gallery with the best image pre-selected. Keyboard navigation supported.
-- **Performance** — Groups pre-computed on backend, cached on frontend for
+- **Performance** - Groups pre-computed on backend, cached on frontend for
   quick slider changes. Virtual scrolling via VirtualGrid.
 
-### `faces.js` — Face Tagging
+### `faces.js` - Face Tagging
 
 Handles two distinct UI contexts:
 
-**1. Fullscreen tagging mode** — Overlay on the fullscreen image viewer.
+**1. Fullscreen tagging mode** - Overlay on the fullscreen image viewer.
 Renders bounding boxes over detected faces with inline name input and
 autocomplete. Suppress button (X) marks false positives.
 
-**2. Faces screen** — Dedicated screen with three view modes:
+**2. Faces screen** - Dedicated screen with three view modes:
 
 | Mode | Description |
 |------|-------------|
@@ -368,7 +368,7 @@ VirtualGrid. All mutations go through AppState APIs. Refresh flags
 (`needsRefresh`, `needsRerender`, `reloadPending`) coordinate updates without
 full reloads.
 
-### `faceThumbnails.js` — Face Thumbnail Cache-Busting
+### `faceThumbnails.js` - Face Thumbnail Cache-Busting
 
 Manages cache-busting for face thumbnail URLs. When images are modified
 (rotation, rescan), face thumbnails are regenerated on the backend. This
@@ -377,25 +377,25 @@ query parameter.
 
 ---
 
-## Frontend — State Management (`static/appstate/`)
+## Frontend - State Management (`static/appstate/`)
 
 Central state management split into domain files. All domains attach to the
 global `AppState` object created by `core.js`. GUI modules read from AppState,
-subscribe to changes, and mutate via AppState methods — they never maintain
+subscribe to changes, and mutate via AppState methods - they never maintain
 local copies of data.
 
-### `core.js` — Transaction System and Utilities
+### `core.js` - Transaction System and Utilities
 
 Foundation for the AppState architecture.
 
-- **Subscriber system** — `createSubscriberSystem()` returns `subscribe`,
+- **Subscriber system** - `createSubscriberSystem()` returns `subscribe`,
   `broadcast`, and `notify` for reactive updates.
-- **Transaction batching** — `transaction()` batches synchronous cache updates
+- **Transaction batching** - `transaction()` batches synchronous cache updates
   so subscribers fire once. `queueTransaction()` serialises async API calls.
-- **localStorage helpers** — `storage.get()` / `storage.set()` with JSON
+- **localStorage helpers** - `storage.get()` / `storage.set()` with JSON
   serialisation.
 
-### `index.js` — Domain Load Order
+### `index.js` - Domain Load Order
 
 Documents the required script load order and verifies all domains are present
 at startup.
@@ -403,16 +403,16 @@ at startup.
 **Load order:**
 
 ```
-core.js → view.js → nav.js → filter.js → selection.js → status.js →
-search.js → folders.js → duplicates.js → identity.js → images.js →
-loading.js → events.js → index.js
+core.js -> view.js -> nav.js -> filter.js -> selection.js -> status.js ->
+search.js -> folders.js -> duplicates.js -> identity.js -> images.js ->
+loading.js -> events.js -> index.js
 ```
 
 **Dependencies:**
 
 - `core.js` is the foundation (no dependencies)
 - `view`, `nav`, `filter`, `selection` are independent domains
-- `identity.js` contains both `faces` and `people` (tightly coupled — a face
+- `identity.js` contains both `faces` and `people` (tightly coupled - a face
   operation may create/delete a person, renaming triggers merge/dissolve)
 - `images.js` depends on `duplicates._internal` for cascade delete
 
@@ -452,17 +452,17 @@ Automated linting, formatting, and static analysis for both Python and JavaScrip
 ### Quick Reference
 
 ```bash
-# Python — lint and format
+# Python -- lint and format
 ruff check .              # Check for errors
 ruff check --fix .        # Auto-fix safe issues
 ruff format .             # Format all Python files
 ruff format --check .     # Verify formatting (no changes)
 
-# JavaScript — lint and format
+# JavaScript -- lint and format
 npx eslint static/        # Check for errors
 npx eslint --fix static/  # Auto-fix safe issues
 
-# TypeScript — type checking (informational, not enforced)
+# TypeScript -- type checking (informational, not enforced)
 npx tsc --project jsconfig.json --noEmit
 ```
 

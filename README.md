@@ -38,15 +38,15 @@ Find out more about the motivations behind Photonarium in [`BACKGROUND.md`](BACK
 
 ## What it can do
 
-- **100% offline and private** — runs entirely on your machine. No cloud, no accounts, no tracking. Your images never leave your computer.
-- **Multi-device sync** — use Photonarium from multiple devices at once. Changes made on one (naming faces, rating photos) appear on all others within seconds.
-- **Mobile friendly** — browse your library from any device on your network. The responsive layout adapts to phones and tablets in both portrait and landscape.
+- **100% offline and private** - runs entirely on your machine. No cloud, no accounts, no tracking. Your images never leave your computer.
+- **Multi-device sync** - use Photonarium from multiple devices at once. Changes made on one (naming faces, rating photos) appear on all others within seconds.
+- **Mobile friendly** - browse your library from any device on your network. The responsive layout adapts to phones and tablets in both portrait and landscape.
 - **AI-powered search** that understands what you type (e.g. "sunset over mountains", "birthday cake"), with negative terms to exclude concepts (e.g. "beach -people")
-- **Face recognition** — automatic face detection and recognition. Name faces and Photonarium finds them across your library.
-- **Quality scoring** — AI aesthetic scoring ranks your images by visual quality. Find your best shots instantly.
+- **Face recognition** - automatic face detection and recognition. Name faces and Photonarium finds them across your library.
+- **Quality scoring** - AI aesthetic scoring ranks your images by visual quality. Find your best shots instantly.
 - **Duplicate detection** at four levels of similarity (identical, near-identical, similar, related) plus auto-generated **directory groups** and user-curated **custom groups** (albums), with one-click **prune** to keep the best image per group
-- **Camera RAW support** — native support for 20+ camera RAW formats alongside JPEG, PNG, and other standard image types. No conversion needed.
-- **Camera data** — full EXIF metadata extraction. Search and filter by camera, lens, ISO, aperture, shutter speed, and more.
+- **Camera RAW support** - native support for 20+ camera RAW formats alongside JPEG, PNG, and other standard image types. No conversion needed.
+- **Camera data** - full EXIF metadata extraction. Search and filter by camera, lens, ISO, aperture, shutter speed, and more.
 - **Ratings and descriptions** so you can build your own favourites system
 
 Once you have run the model downloader, the models stay on your machine. Everything runs locally.
@@ -64,11 +64,11 @@ Once you have run the model downloader, the models stay on your machine. Everyth
 
 ## What to expect
 
-Photonarium is currently in **beta**. It works, and people are using it day-to-day, but installation is still a manual process, the interface is evolving, and you may encounter rough edges. If something breaks or feels wrong, please [open an issue](https://github.com/sarev/photonarium/issues) — feedback during this stage is especially valuable.
+Photonarium is currently in **beta**. It works, and people are using it day-to-day, but installation is still a manual process, the interface is evolving, and you may encounter rough edges. If something breaks or feels wrong, please [open an issue](https://github.com/sarev/photonarium/issues) - feedback during this stage is especially valuable.
 
 ### Intended setup
 
-Photonarium is a **desktop application** that runs in your browser, not a mobile app. The backend (Python) and the frontend (the browser tab) are designed to run on the same machine — typically your laptop, desktop PC, or a home server where your photos are stored.
+Photonarium is a **desktop application** that runs in your browser, not a mobile app. The backend (Python) and the frontend (the browser tab) are designed to run on the same machine - typically your laptop, desktop PC, or a home server where your photos are stored.
 
 It also works over a local network: you can run the backend on one machine (say, a NAS or always-on PC) and open the UI in a browser on another. Most features work fine in this setup, with a few caveats:
 
@@ -78,7 +78,7 @@ It also works over a local network: you can run the backend on one machine (say,
 
 ### Mobile devices
 
-The UI adjusts for smaller screens and touch input — the toolbar collapses to a hamburger menu, touch-friendly scroll zones appear, and layout stacks vertically. It's usable for browsing and basic tasks on a phone or tablet, but the full experience (drag-box selection, keyboard shortcuts, side-by-side info panel) is designed for a desktop browser. Think of mobile as a handy way to flick through your library on the sofa, not a replacement for the desktop workflow.
+The UI adjusts for smaller screens and touch input - the toolbar collapses to a hamburger menu, touch-friendly scroll zones appear, and layout stacks vertically. It's usable for browsing and basic tasks on a phone or tablet, but the full experience (drag-box selection, keyboard shortcuts, side-by-side info panel) is designed for a desktop browser. Think of mobile as a handy way to flick through your library on the sofa, not a replacement for the desktop workflow.
 
 ### Multi-user and security
 
@@ -109,7 +109,7 @@ Most screens use the same selection behaviour:
 Mouse and trackpad:
 - **Click** to select.
 - **Ctrl/Cmd + click** toggles an item in the selection.
-- **Shift + click** selects a range (from the last “anchor” selection).
+- **Shift + click** selects a range (from the last "anchor" selection).
 - **Right click** toggles an item in the selection.
 - **Drag on empty space** to draw a selection box:
   - Left button: replaces the selection with what is inside the box
@@ -208,8 +208,8 @@ These shortcuts use Ctrl on Windows/Linux and Cmd on macOS:
 
 - **Ctrl/Cmd + F** toggles face tagging mode on or off.
 - **Ctrl/Cmd + I** ignores all unknown faces in the current image (marks them as `-`).
-- **Ctrl/Cmd + R** rotates the image right (90° clockwise).
-- **Ctrl/Cmd + L** rotates the image left (90°).
+- **Ctrl/Cmd + R** rotates the image right (90 deg clockwise).
+- **Ctrl/Cmd + L** rotates the image left (90 deg).
 - **Ctrl/Cmd + Backspace** or **Ctrl/Cmd + Delete** moves the current image to trash and advances to the next one.
 
 ---
@@ -238,8 +238,8 @@ When you hover a face box, you may see:
 
 ### Naming a face
 
-- Click a face’s label and type a name.
-- As you type, you’ll see suggestions.
+- Click a face's label and type a name.
+- As you type, you'll see suggestions.
 - **Up / Down arrows** move through suggestions.
 - **Enter** confirms.
 - **Escape** cancels your edit (restores the previous value).
@@ -251,11 +251,11 @@ As more photos are tagged, Photonarium can recognise that person in other images
 
 ## Search
 
-Search lets you narrow a large library down to “just the photos I mean”. It builds a filter, then the Gallery shows only the matching images.
+Search lets you narrow a large library down to "just the photos I mean". It builds a filter, then the Gallery shows only the matching images.
 
 You can combine multiple filters at once, for example:
-- “summer holiday” + “⭐️⭐️⭐️” + People ("Sam")
-- “Red steam train on sunny day”
+- "summer holiday" + "***" + People ("Sam")
+- "Red steam train on sunny day"
 
 ### Text search (description)
 
@@ -299,11 +299,11 @@ You can also add people manually using the picker:
 
 #### People picker dialog
 
-- Type part of a person’s name to narrow the list.
+- Type part of a person's name to narrow the list.
 - Click a person to add them to the filter.
 - Click them again (in the selected list) to remove them.
 - You can also drag and drop people between the available and selected lists.
-- **Enter** confirms (unless you’re typing in the search box).
+- **Enter** confirms (unless you're typing in the search box).
 - **Escape** cancels.
 
 ### Metadata
@@ -311,7 +311,7 @@ You can also add people manually using the picker:
 Filter by EXIF camera settings such as Camera, Lens, ISO, Aperture, Shutter Speed, and others. This is useful for finding all images taken with a particular camera body, lens, or shooting settings.
 
 - Click the metadata area or the camera button to open the metadata picker.
-- Type into any field to search — matching is fuzzy (subsequence), so "nkn" will find "Nikon" and "d85" will find "D850".
+- Type into any field to search - matching is fuzzy (subsequence), so "nkn" will find "Nikon" and "d85" will find "D850".
 - As you type, a dropdown shows matching values from your library.
 - Click **Done** to confirm your choices. Each filled field appears as a chip in the filter bar.
 - Click the **x** on a chip to remove that criterion.
@@ -348,7 +348,7 @@ Slide to **Directories** to see your images organised by folder. Directory group
 - Each directory that contains images becomes a group, named after the folder.
 - When two folders share the same name, parent directories are added to make names unique (e.g. `Holiday/Beach` vs `Birthday/Beach`).
 - Hover over a directory group name to see the full path.
-- Directory groups are read-only — they mirror the filesystem and update automatically.
+- Directory groups are read-only - they mirror the filesystem and update automatically.
 
 ### Custom groups (albums)
 
@@ -375,26 +375,26 @@ Negative terms work here too. Use `blurry -sharp` or `dark -bright -colorful` to
 
 When you open a group in the Gallery, images are automatically sorted by **Quality** with the best image pre-selected. The quality score is a blend of several factors:
 
-- **Aesthetic appeal** (60%) — how visually pleasing the image is, scored by two neural networks (NIMA and LAION) that were trained on large datasets of human aesthetic judgements.
-- **Sharpness** (20%) — how well-focused the image is, measured by Laplacian variance.
-- **Resolution** (15%) — total pixel count (higher resolution = better).
-- **Compression quality** (5%) — bits per pixel, which favours less-compressed originals over heavily compressed copies.
+- **Aesthetic appeal** (60%) - how visually pleasing the image is, scored by two neural networks (NIMA and LAION) that were trained on large datasets of human aesthetic judgements.
+- **Sharpness** (20%) - how well-focused the image is, measured by Laplacian variance.
+- **Resolution** (15%) - total pixel count (higher resolution = better).
+- **Compression quality** (5%) - bits per pixel, which favours less-compressed originals over heavily compressed copies.
 
-Each factor is ranked within the group (percentile), so the scores are always relative — a "good" score in one group doesn't necessarily equal the same absolute quality as in another.
+Each factor is ranked within the group (percentile), so the scores are always relative - a "good" score in one group doesn't necessarily equal the same absolute quality as in another.
 
 These weights can be adjusted in `photonarium.yml` to suit your preferences:
 
-- `quality_weight_aesthetic`, `quality_weight_sharpness`, `quality_weight_pixels`, `quality_weight_bpp` — the four component weights (should sum to 1.0).
-- `quality_alpha` — controls how the two aesthetic models are blended (0.0 = LAION only, 1.0 = NIMA only, default 0.60 = a mix of both, leaning more to NIMA).
-- `nima_enabled` — set to `false` to skip NIMA scoring entirely (quality falls back to LAION with sharpness and resolution).
+- `quality_weight_aesthetic`, `quality_weight_sharpness`, `quality_weight_pixels`, `quality_weight_bpp` - the four component weights (should sum to 1.0).
+- `quality_alpha` - controls how the two aesthetic models are blended (0.0 = LAION only, 1.0 = NIMA only, default 0.60 = a mix of both, leaning more to NIMA).
+- `nima_enabled` - set to `false` to skip NIMA scoring entirely (quality falls back to LAION with sharpness and resolution).
 
-NIMA and LAION approach aesthetics differently. NIMA was trained on hundreds of thousands of photos rated by people, so it has a good sense of what makes a photograph look appealing — composition, lighting, colour. LAION is faster and lighter but more impressionistic; it can favour vibrant or striking images even if they're technically flawed. Blending the two gives more balanced results than either alone, which is why both are used by default.
+NIMA and LAION approach aesthetics differently. NIMA was trained on hundreds of thousands of photos rated by people, so it has a good sense of what makes a photograph look appealing - composition, lighting, colour. LAION is faster and lighter but more impressionistic; it can favour vibrant or striking images even if they're technically flawed. Blending the two gives more balanced results than either alone, which is why both are used by default.
 
 ---
 
 ## Faces
 
-Faces is where you clean up and organise people so you can later filter the Gallery by who is in the photo. It’s designed to be fast to tidy up: name people, ignore false detections, merge duplicates, and choose a good thumbnail for each person.
+Faces is where you clean up and organise people so you can later filter the Gallery by who is in the photo. It's designed to be fast to tidy up: name people, ignore false detections, merge duplicates, and choose a good thumbnail for each person.
 
 ### Known People list
 
@@ -453,7 +453,7 @@ Open a person to manage them in more detail. This mode is for improving one pers
 - Double click a face to open the source image in the full-screen viewer.
 
 Matching threshold:
-- You can adjust the “Matching threshold” slider to re-evaluate which faces belong to this person. Lowering it tends to add more matches, raising it tends to remove weaker matches.
+- You can adjust the "Matching threshold" slider to re-evaluate which faces belong to this person. Lowering it tends to add more matches, raising it tends to remove weaker matches.
 - Locked faces are used as reliable examples when re-evaluating, and changes can add or remove faces for this person.
 
 ### Advice on tagging faces
@@ -490,7 +490,7 @@ Database is where you tell Photonarium where your photos live, and where you can
 - Watch progress for indexing, embeddings, and face work (with ETAs when possible)
 - Click **Edit Settings** to open the in-app settings editor (works from any device on your network)
 
-Supported image types include: `.jpg`, `.jpeg`, `.png`, `.gif`, `.bmp`, `.tiff`, `.tif`, `.webp`, and camera RAW formats (`.cr2`, `.cr3`, `.nef`, `.nrw`, `.arw`, `.srf`, `.dng`, `.raf`, `.rw2`, `.orf`, `.pef`, `.srw`, `.x3f`, `.3fr`, `.iiq`, `.rwl`, `.kdc`, `.dcr`, `.erf`). RAW support requires the `rawpy` package. Note that RAW files cannot be rotated within Photonarium. RAW files are also slower to process than standard formats — each file requires full demosaicing of the sensor data, so indexing and opening full-screen images will take a little longer than with JPEGs.
+Supported image types include: `.jpg`, `.jpeg`, `.png`, `.gif`, `.bmp`, `.tiff`, `.tif`, `.webp`, and camera RAW formats (`.cr2`, `.cr3`, `.nef`, `.nrw`, `.arw`, `.srf`, `.dng`, `.raf`, `.rw2`, `.orf`, `.pef`, `.srw`, `.x3f`, `.3fr`, `.iiq`, `.rwl`, `.kdc`, `.dcr`, `.erf`). RAW support requires the `rawpy` package. Note that RAW files cannot be rotated within Photonarium. RAW files are also slower to process than standard formats - each file requires full demosaicing of the sensor data, so indexing and opening full-screen images will take a little longer than with JPEGs.
 
 ---
 
@@ -498,7 +498,7 @@ Supported image types include: `.jpg`, `.jpeg`, `.png`, `.gif`, `.bmp`, `.tiff`,
 
 ## Requirements
 
-- Python 3.10 or later (with tkinter -- see note below)
+- Python 3.10 or later (with tkinter - see note below)
 - A GPU is recommended for faster processing (NVIDIA with CUDA, or Apple Silicon with MPS), but not required
 
 ### Tested configurations
@@ -509,12 +509,12 @@ The installer auto-detects your CUDA version and installs the matching PyTorch b
 |--------|---------|------|------------------|
 | 3.10 | cu118 | 11.x | Yes |
 | 3.10 | cu124 | 12.x | Yes |
-| 3.10 | cpu | — | No |
+| 3.10 | cpu | - | No |
 | 3.11 | cu118 | 11.x | Yes |
 | 3.11 | cu124 | 12.x | Yes |
-| 3.11 | cpu | — | No |
+| 3.11 | cpu | - | No |
 | 3.13 | cu124 | 12.x | Yes |
-| 3.13 | cpu | — | No |
+| 3.13 | cpu | - | No |
 
 macOS uses the default PyPI torch build (MPS acceleration on Apple Silicon).
 
@@ -526,7 +526,7 @@ The installer scripts create a virtual environment, install all dependencies in 
 
 **Windows:**
 
-Open the Photonarium folder in File Explorer and double-click `install.bat`. If Windows SmartScreen shows a "Windows protected your PC" warning, click **More info** then **Run anyway** — the script only installs Python packages and downloads ML models.
+Open the Photonarium folder in File Explorer and double-click `install.bat`. If Windows SmartScreen shows a "Windows protected your PC" warning, click **More info** then **Run anyway** - the script only installs Python packages and downloads ML models.
 
 Alternatively, open Command Prompt, navigate to the Photonarium folder, and run:
 
@@ -577,7 +577,7 @@ If you prefer to install manually, or the installer script doesn't suit your set
    # PyTorch (with CUDA support for GPU acceleration)
    # Replace cu124 with cu118 for CUDA 11.x, or cpu for no GPU:
    pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu124
-   # macOS (use default PyPI — the CUDA indexes have no macOS wheels):
+   # macOS (use default PyPI -- the CUDA indexes have no macOS wheels):
    # pip install torch torchvision torchaudio
 
    # Other dependencies
@@ -630,7 +630,7 @@ If you prefer to install manually, or the installer script doesn't suit your set
 
   By default, the server listens on all network interfaces (`0.0.0.0`), so other devices on your local network can reach it. To restrict access to this machine only, set `server_host: 127.0.0.1` in `photonarium.yml`.
 
-  **Important:** Photonarium is designed for use on a trusted home network. It has not been hardened for exposure to the public internet or untrusted networks. Do not make it accessible outside your local network — doing so may introduce security risks that are outside the scope of this project.
+  **Important:** Photonarium is designed for use on a trusted home network. It has not been hardened for exposure to the public internet or untrusted networks. Do not make it accessible outside your local network - doing so may introduce security risks that are outside the scope of this project.
 
 ### Command line options
 
@@ -650,7 +650,7 @@ python app.py --list-models            # Output required models as JSON (for scr
 
 By default, no processing runs at startup. Add flags to opt in to the phases you want.
 
-After running the installer (or `--init-config`), `python app.py` reads the data directory from the config file — no `--data-dir` needed.
+After running the installer (or `--init-config`), `python app.py` reads the data directory from the config file - no `--data-dir` needed.
 
 ### Changing ML models
 
@@ -714,14 +714,14 @@ When you delete images (from the Gallery, full-screen viewer, or the Groups prun
 
 Photonarium is built on the shoulders of some remarkable open-source AI/ML work:
 
-- [OpenCLIP](https://github.com/mlfoundations/open_clip) (LAION) — the semantic image embeddings that power search and similarity
-- [BLIP / BLIP-2](https://github.com/salesforce/LAVIS) (Salesforce Research) — automatic image captioning
-- [facenet-pytorch](https://github.com/timesler/facenet-pytorch) — MTCNN face detection and InceptionResnetV1 face recognition
-- [LAION Aesthetic Predictor](https://github.com/LAION-AI/aesthetic-predictor) (LAION) — lightweight aesthetic quality scoring
-- [NIMA](https://github.com/truskovskiyk/nima.pytorch) — neural image quality assessment trained on human aesthetic judgements
-- [PyTorch](https://pytorch.org/) (Meta) — the foundation all of the above is built on
+- [OpenCLIP](https://github.com/mlfoundations/open_clip) (LAION) - the semantic image embeddings that power search and similarity
+- [BLIP / BLIP-2](https://github.com/salesforce/LAVIS) (Salesforce Research) - automatic image captioning
+- [facenet-pytorch](https://github.com/timesler/facenet-pytorch) - MTCNN face detection and InceptionResnetV1 face recognition
+- [LAION Aesthetic Predictor](https://github.com/LAION-AI/aesthetic-predictor) (LAION) - lightweight aesthetic quality scoring
+- [NIMA](https://github.com/truskovskiyk/nima.pytorch) - neural image quality assessment trained on human aesthetic judgements
+- [PyTorch](https://pytorch.org/) (Meta) - the foundation all of the above is built on
 
-Thanks to the broader Python community — Flask, Pillow, NumPy, OpenCV, and countless other libraries — for making a project like this feasible for a small team.
+Thanks to the broader Python community - Flask, Pillow, NumPy, OpenCV, and countless other libraries - for making a project like this feasible for a small team.
 
 The tutorial example images come from [Lorem Picsum](https://picsum.photos), which serves freely usable photos from [Unsplash](https://unsplash.com).
 
@@ -729,14 +729,14 @@ Finally, thanks to [Anthropic](https://www.anthropic.com) and [Claude Code](http
 
 ## Support 7th software
 
-We hope you enjoy Photonarium and find it valuable. If you’d like to show your support, please use one of the links below:
+We hope you enjoy Photonarium and find it valuable. If you'd like to show your support, please use one of the links below:
 
 ![Payment links](support.png)
 
 - [USD ($) contribution](https://buy.stripe.com/fZu3cv4WOdN0b0N8Jaebu01)
-- [GBP (£) contribution](https://buy.stripe.com/14A14nexodN00m94sUebu00)
-- [EUR (€) contribution](https://buy.stripe.com/dRmbJ1blc4cq3ylbVmebu02)
+- [GBP contribution](https://buy.stripe.com/14A14nexodN00m94sUebu00)
+- [EUR contribution](https://buy.stripe.com/dRmbJ1blc4cq3ylbVmebu02)
 
 ## Licence
 
-Copyright © 2026 7th software Ltd. · Licensed under Apache 2.0
+Copyright (c) 2026 7th software Ltd. - Licensed under Apache 2.0
