@@ -344,7 +344,7 @@ def _reset_exif_orientation(path: Path) -> bool:
                         with tempfile.NamedTemporaryFile(
                             suffix='.jpg',
                             delete=False,
-                            dir=path.parent,
+                            dir=tempfile.gettempdir(),
                         ) as tmp:
                             tmp_path = Path(tmp.name)
                         tmp_path.write_bytes(data)
@@ -389,7 +389,7 @@ def _rotate_jpeg_lossless(path: Path, degrees: float) -> bool:
         with tempfile.NamedTemporaryFile(
             suffix='.jpg',
             delete=False,
-            dir=path.parent,
+            dir=tempfile.gettempdir(),
         ) as tmp:
             tmp_path = Path(tmp.name)
 
@@ -485,7 +485,7 @@ def _rotate_with_pillow(path: Path, degrees: float) -> bool:
             with tempfile.NamedTemporaryFile(
                 suffix=suffix,
                 delete=False,
-                dir=path.parent,
+                dir=tempfile.gettempdir(),
             ) as tmp:
                 tmp_path = Path(tmp.name)
 
