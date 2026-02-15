@@ -155,7 +155,7 @@ def manual_step(key, filename):
 
 def wait_for_thumbnails(page, selector='.gallery-item img[src]', count=1):
     """Wait until at least `count` thumbnail images have loaded."""
-    page.wait_for_selector(selector, timeout=10000)
+    page.wait_for_selector(selector, timeout=5000)
     page.wait_for_timeout(SETTLE_MS)
 
 
@@ -181,6 +181,25 @@ def navigate_to(page, screen):
     }
     click_toolbar(page, btn_map[screen])
     page.wait_for_selector(f'#screen-{screen}', state='visible', timeout=5000)
+    wait_for_idle(page)
+
+
+def set_similarity_slider(page, position):
+    """Click the similarity slider to a specific position (0-5).
+
+    Position 0 = Custom (leftmost), 5 = Identical (rightmost).
+    Uses Playwright click with a calculated x-offset so the interaction
+    looks like a real user clicking the slider track.
+    """
+    slider = page.locator('#similarity-slider')
+    box = slider.bounding_box()
+    # The usable range sits inside the slider's bounding box with a bit of
+    # padding at each end for the thumb.  Calculate x so that position 0
+    # lands near the left edge and position 5 near the right edge.
+    padding = box['height']  # thumb is roughly as wide as the slider is tall
+    usable = box['width'] - 2 * padding
+    x = padding + (position / 5) * usable
+    slider.click(position={'x': x, 'y': box['height'] / 2})
     wait_for_idle(page)
 
 
@@ -592,7 +611,7 @@ def step_groups_opening(page, ctx):
     except Exception:
         pass
     navigate_to(page, 'duplicates')
-    page.wait_for_selector('.duplicate-stack', timeout=10000)
+    page.wait_for_selector('.duplicate-stack', timeout=5000)
     wait_for_idle(page)
 
 
@@ -603,19 +622,8 @@ def step_groups_toolbar(page, ctx):
 
 @step('strictness')
 def step_groups_strictness(page, ctx):
-    # Move the similarity slider to "Related" level.
-    # Slider is inverted: position 0=Custom, 1=Directories, 2=Related, 3=Similar, 4=Near-identical, 5=Identical
-    # Remove existing stacks first so wait_for_selector only matches fresh ones
-    # (avoids race where stale stacks from the previous level match instantly).
-    page.evaluate("""() => {
-        document.querySelectorAll('.duplicate-stack').forEach(el => el.remove());
-        const slider = document.querySelector('#similarity-slider');
-        if (slider) {
-            slider.value = 2;
-            slider.dispatchEvent(new Event('input', { bubbles: true }));
-            slider.dispatchEvent(new Event('change', { bubbles: true }));
-        }
-    }""")
+    # Move the similarity slider to "Related" level (position 2).
+    set_similarity_slider(page, 2)
     page.wait_for_selector('.duplicate-stack', timeout=15000)
     wait_for_idle(page)
     highlight_element(page, '#similarity-slider', color='rgba(255, 180, 0, 0.5)', width='2px')
@@ -642,11 +650,8 @@ def step_groups_moving_between_groups(page, ctx):
 @step('pruning-button')
 def step_groups_pruning_button(page, ctx):
     # Return to the Groups screen to show the prune toolbar button.
-    # We're in Gallery group-view mode where both btn-back-gallery
-    # and btn-duplicates are hidden.  Route via Database.
-    navigate_to(page, 'database')
     navigate_to(page, 'duplicates')
-    page.wait_for_selector('.duplicate-stack', timeout=10000)
+    page.wait_for_selector('.duplicate-stack', timeout=5000)
     wait_for_idle(page)
     # Cache the 4th group's hash (aurora photos) for use in section 5.
     # Must use Duplicates.state.groups (display order) rather than
@@ -670,22 +675,9 @@ def step_groups_directories(page, ctx):
     # Close the prune dialog from the previous step
     page.click('#dialog-prune-cancel')
     page.wait_for_timeout(200)
-    # Move slider to Directories (position 1)
-    page.evaluate("""() => {
-        const slider = document.querySelector('#similarity-slider');
-        if (slider) {
-            slider.value = 1;
-            slider.dispatchEvent(new Event('input', { bubbles: true }));
-            slider.dispatchEvent(new Event('change', { bubbles: true }));
-        }
-    }""")
-    # Wait for groups to load — directory groups may or may not exist yet
-    # depending on whether the demo-seed has subdirectories.
-    try:
-        page.wait_for_selector('#loading-overlay.visible', timeout=2000)
-        page.wait_for_selector('#loading-overlay:not(.visible)', timeout=15000)
-    except Exception:
-        pass
+    # Move slider to Directories (position 1).
+    # Directory groups may or may not exist depending on demo-seed structure.
+    set_similarity_slider(page, 1)
     # Give the level switch time to settle even if there are no stacks
     page.wait_for_timeout(1000)
     wait_for_idle(page)
@@ -700,24 +692,10 @@ section('custom-groups')
 
 @step('custom-level')
 def step_custom_groups_custom_level(page, ctx):
-    # Navigate to Groups via Database (always visible) to ensure
-    # a clean onLeave/onEnter cycle regardless of starting screen.
-    navigate_to(page, 'database')
-    navigate_to(page, 'duplicates')
-    page.wait_for_timeout(300)
-    # Move slider to Custom (position 0).  Remove stale stacks first
-    # so we don't race with the level transition.
+    # Move slider to Custom (position 0).
     # Custom level starts empty (no groups yet) so we just wait a beat
     # rather than waiting for stacks.
-    page.evaluate("""() => {
-        document.querySelectorAll('.duplicate-stack').forEach(el => el.remove());
-        const slider = document.querySelector('#similarity-slider');
-        if (slider) {
-            slider.value = 0;
-            slider.dispatchEvent(new Event('input', { bubbles: true }));
-            slider.dispatchEvent(new Event('change', { bubbles: true }));
-        }
-    }""")
+    set_similarity_slider(page, 0)
     page.wait_for_timeout(500)
     wait_for_idle(page)
     highlight_element(page, '#similarity-slider', color='rgba(255, 180, 0, 0.5)', width='2px')
@@ -738,19 +716,10 @@ def step_custom_groups_adding_photos(page, ctx):
     # Confirm the "Aurora" group left open by the previous step
     page.click('#dialog-prompt-ok')
     page.wait_for_timeout(500)
-    # Navigate to the Groups screen and open the aurora group (cached
-    # in step 4.7) — a perfect match for the "Aurora" custom group.
-    navigate_to(page, 'database')
-    navigate_to(page, 'duplicates')
-    page.evaluate("""() => {
-        document.querySelectorAll('.duplicate-stack').forEach(el => el.remove());
-        const slider = document.querySelector('#similarity-slider');
-        if (slider) {
-            slider.value = 2;
-            slider.dispatchEvent(new Event('input', { bubbles: true }));
-            slider.dispatchEvent(new Event('change', { bubbles: true }));
-        }
-    }""")
+    # Switch to Related level (position 2) and open the aurora group
+    # (cached in step 4.7) — a perfect match for the "Aurora" custom group.
+    # We're already on the Groups screen from the previous step.
+    set_similarity_slider(page, 2)
     page.wait_for_selector('.duplicate-stack', timeout=15000)
     wait_for_idle(page)
     # Open the aurora group by its hash (position may vary between runs)
@@ -789,37 +758,13 @@ def step_custom_groups_managing_groups(page, ctx):
     page.locator('.entity-picker-item:has-text("Aurora")').click()
     page.wait_for_timeout(300)
     page.click('#dialog-group-done')
-    page.wait_for_timeout(500)
-
-    # Create another group so this step has multiple to show.
-    # The await ensures backend persistence completes before we navigate.
-    # createGroup() does an optimistic cache update followed by a forced
-    # loadLevel(5, true) reload, so _groupCache[5] is correct when this
-    # returns.  We do NOT invalidate afterwards — that would clear the
-    # valid cache and force a redundant re-fetch.
-    page.evaluate("""async () => {
-        const images = AppState.images.getAll();
-        if (images.length < 10) return;
-
-        const setB = images.slice(5, 10).map(i => i.id);
-
-        await AppState.duplicates.createGroup('Holiday snaps', setB);
-    }""")
+    page.wait_for_timeout(2500)
 
     # Navigate to Groups screen and switch to Custom level.
-    navigate_to(page, 'database')
     navigate_to(page, 'duplicates')
-    page.evaluate("""() => {
-        document.querySelectorAll('.duplicate-stack').forEach(el => el.remove());
-        const slider = document.querySelector('#similarity-slider');
-        if (slider) {
-            slider.value = 0;
-            slider.dispatchEvent(new Event('input', { bubbles: true }));
-            slider.dispatchEvent(new Event('change', { bubbles: true }));
-        }
-    }""")
+    set_similarity_slider(page, 0)
     # Wait for the custom group stacks to render
-    page.wait_for_selector('.duplicate-stack', timeout=10000)
+    page.wait_for_selector('.duplicate-stack', timeout=5000)
     wait_for_idle(page)
     highlight_element(page, '#toolbar')
 
@@ -833,7 +778,7 @@ section('faces')
 @step('faces-opening')
 def step_faces_opening(page, ctx):
     navigate_to(page, 'faces')
-    page.wait_for_selector('.face-card', timeout=10000)
+    page.wait_for_selector('.face-card', timeout=5000)
     wait_for_idle(page)
 
 
@@ -900,7 +845,7 @@ def step_faces_naming(page, ctx):
         return imgs.length > 0
             && [...imgs].every(img => img.complete && img.naturalWidth > 0);
     }""",
-        timeout=10000,
+        timeout=5000,
     )
     page.wait_for_timeout(300)
 
@@ -952,7 +897,7 @@ def step_faces_autocomplete(page, ctx):
         return imgs.length > 0
             && [...imgs].every(img => img.complete && img.naturalWidth > 0);
     }""",
-        timeout=10000,
+        timeout=5000,
     )
     page.wait_for_timeout(200)
 
@@ -1075,7 +1020,7 @@ def step_faces_more_people(page, ctx):
         return imgs.length > 0
             && [...imgs].every(img => img.complete && img.naturalWidth > 0);
     }""",
-        timeout=10000,
+        timeout=5000,
     )
     page.wait_for_timeout(300)
 
@@ -1100,7 +1045,7 @@ def step_faces_drag_and_drop(page, ctx):
         return imgs.length > 0
             && [...imgs].every(img => img.complete && img.naturalWidth > 0);
     }""",
-        timeout=10000,
+        timeout=5000,
     )
 
     # Instead of performing an actual drag (which is hard to visualise in a
