@@ -747,8 +747,12 @@ const Gallery = {
         const filter = App.getFilter();
         const isSemanticFilter = filter && filter.type === 'semantic';
 
-        // Clear selection so the gallery doesn't scroll back to a stale position
-        AppState.selection.clear('gallery');
+        // When applying a filter, clear selection — the selected image may not
+        // be in the filtered set.  When clearing a filter, keep it — the image
+        // is guaranteed to be in the full (unfiltered) list.
+        if (filter) {
+            AppState.selection.clear('gallery');
+        }
 
         if (this._els.similarityControl) {
             this._els.similarityControl.style.display = isSemanticFilter ? 'flex' : 'none';
@@ -806,7 +810,14 @@ const Gallery = {
             if (showLoading) {
                 this._hideLoading();
             }
-            this._scrollToTop();
+            // When clearing a filter, scroll to the preserved selection so the
+            // user keeps their place.  When applying, scroll to top.
+            const selected = AppState.selection.get('gallery');
+            if (!filter && selected.length > 0 && this._grid) {
+                this._grid.scrollToId(selected[0], 'auto');
+            } else {
+                this._scrollToTop();
+            }
         } else {
             this.state.needsRefresh = true;
         }
