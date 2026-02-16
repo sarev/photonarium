@@ -153,6 +153,7 @@ const Search = {
             textWarning: App.$('filter-text-warning'),
             similaritySlider: App.$('filter-similarity'),
             similarityValue: App.$('similarity-value'),
+            dateLabel: App.$('filter-date-label'),
             dateStart: App.$('filter-date-start'),
             dateEnd: App.$('filter-date-end'),
             ratingInput: App.$('filter-rating'),
@@ -274,6 +275,15 @@ const Search = {
                 this._els.ratingInput.focus();
             });
         });
+
+        // Easter egg: clicking the "Date Range" label triggers On This Day
+        if (this._els.dateLabel) {
+            this._els.dateLabel.addEventListener('click', () => {
+                if (typeof OnThisDay !== 'undefined' && OnThisDay.tryShowNow) {
+                    OnThisDay.tryShowNow();
+                }
+            });
+        }
 
         // Allow Enter key to apply filter from text input
         this._els.textInput.addEventListener('keydown', (e) => {

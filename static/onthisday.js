@@ -30,6 +30,12 @@ const OnThisDay = {
     /** @type {string[]|null} Image IDs currently shown in the album */
     _imageIds: null,
 
+    /** @type {number} Query month (1-based) for the current OTD display */
+    _queryMonth: 0,
+
+    /** @type {number} Query day for the current OTD display */
+    _queryDay: 0,
+
     /** @type {string} Which side the binder is on ('left' or 'right') */
     _binderSide: 'left',
 
@@ -137,7 +143,10 @@ const OnThisDay = {
         const dateKey = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, '0')}-${String(today.getDate()).padStart(2, '0')}`;
         if (localStorage.getItem('onThisDay_lastShown') === dateKey) return;
 
-        const result = this._query(today.getMonth() + 1, today.getDate());
+        this._queryMonth = today.getMonth() + 1;
+        this._queryDay = today.getDate();
+
+        const result = this._query(this._queryMonth, this._queryDay);
         if (!result) return;
 
         const { byYear, images } = result;
@@ -150,6 +159,31 @@ const OnThisDay = {
         const yearRange = `${years[0]} \u2013 ${years[years.length - 1]}`;
 
         this._show(monthDay, yearRange, images);
+    },
+
+    /**
+     * Force-show On This Day for today, bypassing the date gate, config
+     * check, and minimum-image thresholds.  Used as a hidden testing hook.
+     */
+    tryShowNow() {
+        if (this._overlay) return;  // already showing
+        if (!this._imagesReady) return;
+
+        const today = new Date();
+        this._queryMonth = today.getMonth() + 1;
+        this._queryDay = today.getDate();
+
+        const result = this._query(this._queryMonth, this._queryDay);
+        if (!result || !result.images.length) {
+            console.warn('[OnThisDay] No images found for today');
+            return;
+        }
+
+        const monthDay = today.toLocaleDateString('en-US', { month: 'long', day: 'numeric' });
+        const years = Object.keys(result.byYear).map(Number).sort((a, b) => a - b);
+        const yearRange = `${years[0]} \u2013 ${years[years.length - 1]}`;
+
+        this._show(monthDay, yearRange, result.images);
     },
 
     // =========================================================================
@@ -631,14 +665,30 @@ const OnThisDay = {
     },
 
     /**
-     * Dismiss the overlay and navigate to the gallery with the album
-     * images shown as a filtered set.
+     * Dismiss the overlay and navigate to the gallery with ALL images
+     * from the same month/day across all years — not just the cherry-picked
+     * display set, so the user gets full context around the highlights.
      * @private
      */
     _viewInGallery() {
-        const ids = this._imageIds;
+        const month = this._queryMonth;
+        const day = this._queryDay;
         this._dismiss();
-        if (ids?.length) {
+
+        if (!month || !day) return;
+
+        // Collect every image matching this month/day (not just the top-N)
+        const all = AppState.images.getAll();
+        const ids = [];
+        for (const img of all) {
+            if (!img.timestamp) continue;
+            const d = new Date(img.timestamp);
+            if (d.getMonth() + 1 === month && d.getDate() === day) {
+                ids.push(img.id);
+            }
+        }
+
+        if (ids.length) {
             AppState.filter.set({ imageIds: ids });
             App.navigateTo('gallery');
         }

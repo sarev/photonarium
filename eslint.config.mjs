@@ -27,6 +27,7 @@ export default [
                 Database: 'readonly',
                 Duplicates: 'readonly',
                 Faces: 'readonly',
+                OnThisDay: 'readonly',
             },
         },
         rules: {
