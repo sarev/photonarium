@@ -158,6 +158,24 @@ const Fullscreen = {
     _crossFadeTimer: null,
 
     /**
+     * Preloaded Image for the next slideshow advance.  Created during the
+     * hold period by _scheduleSlideshowAdvance() so the browser has the
+     * full image cached before the cross-fade begins.
+     * @type {{ id: string, img: HTMLImageElement }|null}
+     * @private
+     */
+    _slideshowPreload: null,
+
+    /**
+     * Unsubscribe function for AppState.images.onChanged subscription.
+     * Active while fullscreen is open so we can prune trashed images
+     * from the navigation list (including deletions by other clients).
+     * @type {Function|null}
+     * @private
+     */
+    _unsubImages: null,
+
+    /**
      * Whether overlays are currently visible (avoids redundant DOM work).
      * @type {boolean}
      * @private
@@ -490,6 +508,11 @@ const Fullscreen = {
         this._els.container.addEventListener('touchend', this._handlers.touchend, { passive: true });
         window.addEventListener('resize', this._handlers.resize);
 
+        // Subscribe to image changes so we can prune trashed images from
+        // the navigation list — including deletions by other clients that
+        // arrive via event polling.
+        this._unsubImages = AppState.images.onChanged(() => this._onImagesChanged());
+
         // Populate container rect cache now that we're open
         this._cachedContainerRect = null;
     },
@@ -509,6 +532,11 @@ const Fullscreen = {
         this._els.container.removeEventListener('touchmove', this._handlers.touchmove);
         this._els.container.removeEventListener('touchend', this._handlers.touchend);
         window.removeEventListener('resize', this._handlers.resize);
+
+        if (this._unsubImages) {
+            this._unsubImages();
+            this._unsubImages = null;
+        }
 
         this._handlers = {};
         this._cachedContainerRect = null;
@@ -649,6 +677,16 @@ const Fullscreen = {
 
         const preloadNext = new Image();
         preloadNext.src = ThumbnailLoader.getFullImageUrl(imageList[nextIndex].id);
+
+        // During shuffle slideshow, the next advance target may differ from
+        // the index-adjacent images — preload it too so the cross-fade is smooth.
+        if (this._slideshowActive && this._slideshowShuffled) {
+            const shuffleNext = this._getNextSlideshowTarget();
+            if (shuffleNext !== prevIndex && shuffleNext !== nextIndex) {
+                const preloadShuffle = new Image();
+                preloadShuffle.src = ThumbnailLoader.getFullImageUrl(imageList[shuffleNext].id);
+            }
+        }
 
         // Note: Adjacent face preloading disabled - was causing SQLite contention
         // that made fullscreen navigation unresponsive. Faces are loaded on-demand
@@ -1500,6 +1538,102 @@ const Fullscreen = {
     },
 
     /* ----------------------------------------------------------------------
+       IMAGE LIST SYNC
+
+       Reacts to AppState.images changes (including deletions by other
+       clients) to keep the navigation list in sync with reality.
+       ---------------------------------------------------------------------- */
+
+    /**
+     * Handles AppState.images changes while fullscreen is open.
+     *
+     * Prunes images that no longer exist in AppState (trashed locally or
+     * by another client).  If the currently-displayed image was removed,
+     * closes fullscreen immediately.  If a slideshow is active and the
+     * list shrank, resyncs slideshow state so indices stay valid.
+     * @private
+     */
+    _onImagesChanged() {
+        if (!this.state.isOpen) return;
+
+        const currentId = this.state.currentId;
+
+        // If the current image was removed from the database, exit
+        if (currentId && !AppState.images.getById(currentId)) {
+            this.close();
+            return;
+        }
+
+        // Prune any removed images from the navigation list
+        const prevLength = this.state.imageList.length;
+        this.state.imageList = this.state.imageList.filter(
+            img => AppState.images.getById(img.id),
+        );
+
+        // Nothing was pruned — no work to do
+        if (this.state.imageList.length === prevLength) return;
+
+        // List is now empty — close
+        if (this.state.imageList.length === 0) {
+            this.close();
+            return;
+        }
+
+        // Re-locate current image in the pruned list
+        this.state.currentIndex = Math.max(0,
+            this.state.imageList.findIndex(img => img.id === currentId),
+        );
+
+        // Resync slideshow state if active (indices may have shifted)
+        if (this._slideshowActive) {
+            this._resyncSlideshow();
+        }
+    },
+
+    /**
+     * Rebuilds slideshow position and order after the imageList was pruned.
+     *
+     * For linear mode, resets position to currentIndex.  For shuffle mode,
+     * generates a fresh shuffle order with the current image at position 0
+     * so it isn't revisited immediately.  Cancels any in-progress cross-fade
+     * (its target index may now be invalid) and reschedules the advance.
+     * @private
+     */
+    _resyncSlideshow() {
+        const { imageList, currentIndex } = this.state;
+
+        // Can't run a slideshow with 0 or 1 images
+        if (imageList.length <= 1) {
+            this.stopSlideshow();
+            return;
+        }
+
+        // Cancel any in-progress cross-fade — its target index may be stale
+        this._cancelCrossFade();
+
+        if (this._slideshowShuffled) {
+            // Rebuild shuffle order for the pruned list
+            const order = Array.from({ length: imageList.length }, (_, i) => i);
+            for (let i = order.length - 1; i > 0; i--) {
+                const j = Math.floor(Math.random() * (i + 1));
+                [order[i], order[j]] = [order[j], order[i]];
+            }
+            // Place current image at position 0 so it isn't revisited next
+            const curPos = order.indexOf(currentIndex);
+            if (curPos > 0) {
+                [order[0], order[curPos]] = [order[curPos], order[0]];
+            }
+            this._slideshowOrder = order;
+            this._slideshowPosition = 0;
+        } else {
+            this._slideshowPosition = currentIndex;
+        }
+
+        // Reschedule advance (also re-preloads the correct next image)
+        this._scheduleSlideshowAdvance();
+    },
+
+    /* ----------------------------------------------------------------------
        SLIDESHOW
 
        Auto-advancing image display with optional shuffle.
@@ -1571,6 +1705,7 @@ const Fullscreen = {
         this._slideshowShuffled = false;
         this._slideshowOrder = null;
         this._slideshowPosition = -1;
+        this._slideshowPreload = null;
         this._lastMousePos = null;
 
         // Remove active highlight from both buttons
@@ -1582,7 +1717,22 @@ const Fullscreen = {
     },
 
     /**
+     * Returns the imageList index the slideshow will advance to next,
+     * without mutating position state.  Used for preloading.
+     * @returns {number} Index into imageList
+     * @private
+     */
+    _getNextSlideshowTarget() {
+        const nextPos = (this._slideshowPosition + 1) % this.state.imageList.length;
+        return this._slideshowShuffled
+            ? this._slideshowOrder[nextPos]
+            : nextPos;
+    },
+
+    /**
      * Schedules the next slideshow advance after the configured interval.
+     * Also preloads the next image so it's browser-cached before the
+     * cross-fade fires — eliminates flash-of-black on slow loads.
      * Clears any existing timer first so re-calling this resets the countdown.
      * @private
      */
@@ -1591,14 +1741,32 @@ const Fullscreen = {
             clearTimeout(this._slideshowTimer);
         }
         const ms = (App.getSlideshowInterval() || 5) * 1000;
+
+        // Preload the actual next slideshow image during the hold period.
+        // In shuffle mode this may differ from the index-adjacent images
+        // that _preloadAdjacent() handles for manual arrow-key navigation.
+        const { imageList } = this.state;
+        if (imageList.length > 1) {
+            const targetIndex = this._getNextSlideshowTarget();
+            const nextImage = imageList[targetIndex];
+            if (nextImage) {
+                const img = new Image();
+                img.src = ThumbnailLoader.getFullImageUrl(nextImage.id);
+                this._slideshowPreload = { id: nextImage.id, img };
+            }
+        }
+
         this._slideshowTimer = setTimeout(() => this._slideshowAdvance(), ms);
     },
 
     /**
      * Advances to the next image with a cross-fade transition.
-     * Fades out the current image, navigates while invisible, then fades in.
-     * The next advance is scheduled after the fade-in completes so the full
-     * image is visible for the entire configured interval.
+     *
+     * Waits for the preloaded image to be browser-cached, then fades out
+     * the current image, navigates while invisible (instant from cache),
+     * and fades in.  The next advance is scheduled after the fade-in
+     * completes so the full image is visible for the entire configured
+     * interval.
      * @private
      */
     _slideshowAdvance() {
@@ -1613,39 +1781,69 @@ const Fullscreen = {
             ? this._slideshowOrder[this._slideshowPosition]
             : this._slideshowPosition;
 
-        // Suppress overlay display for the duration of the cross-fade
-        this._slideshowAdvancing = true;
-        const img = this._els.image;
-        const ms = this.CROSSFADE_MS;
+        const targetImage = imageList[targetIndex];
+        if (!targetImage) return;
 
-        // Phase 1: fade out current image
-        img.style.transition = `opacity ${ms}ms ease`;
-        img.style.opacity = '0';
+        // Use the image preloaded during the hold period if it matches,
+        // otherwise create a fresh preload (e.g. after manual navigation
+        // changed the slideshow position).
+        let preloaded;
+        if (this._slideshowPreload?.id === targetImage.id) {
+            preloaded = this._slideshowPreload.img;
+        } else {
+            preloaded = new Image();
+            preloaded.src = ThumbnailLoader.getFullImageUrl(targetImage.id);
+        }
+        this._slideshowPreload = null;
 
-        this._crossFadeTimer = setTimeout(() => {
-            // Bail if slideshow was stopped during fade-out
-            if (!this._slideshowActive) {
-                this._clearCrossFadeStyles();
-                return;
-            }
+        // Begin the cross-fade once the next image is cached.
+        const doCrossFade = () => {
+            if (!this._slideshowActive) return;
 
-            // Phase 2: navigate while invisible
-            this._navigateToIndex(targetIndex);
+            // Suppress overlay display for the duration of the cross-fade
+            this._slideshowAdvancing = true;
+            const img = this._els.image;
+            const ms = this.CROSSFADE_MS;
 
-            // Phase 3: fade in — wait one frame for the new src to take effect
-            requestAnimationFrame(() => {
-                img.style.opacity = '1';
+            // Phase 1: fade out current image
+            img.style.transition = `opacity ${ms}ms ease`;
+            img.style.opacity = '0';
 
-                this._crossFadeTimer = setTimeout(() => {
-                    this._crossFadeTimer = null;
+            this._crossFadeTimer = setTimeout(() => {
+                // Bail if slideshow was stopped during fade-out
+                if (!this._slideshowActive) {
                     this._clearCrossFadeStyles();
+                    return;
+                }
 
-                    if (this._slideshowActive) {
-                        this._scheduleSlideshowAdvance();
-                    }
-                }, ms);
-            });
-        }, ms);
+                // Phase 2: navigate while invisible (image is cached, loads instantly)
+                this._navigateToIndex(targetIndex);
+
+                // Phase 3: fade in — wait one frame for the new src to take effect
+                requestAnimationFrame(() => {
+                    img.style.opacity = '1';
+
+                    this._crossFadeTimer = setTimeout(() => {
+                        this._crossFadeTimer = null;
+                        this._clearCrossFadeStyles();
+
+                        if (this._slideshowActive) {
+                            this._scheduleSlideshowAdvance();
+                        }
+                    }, ms);
+                });
+            }, ms);
+        };
+
+        // If the image is already cached (common — preloaded during the
+        // full hold duration), start the cross-fade immediately.
+        if (preloaded.complete && preloaded.naturalWidth > 0) {
+            doCrossFade();
+        } else {
+            // Still loading — wait for it, then cross-fade.
+            preloaded.onload = doCrossFade;
+            preloaded.onerror = doCrossFade; // degrade gracefully
+        }
     },
 
     /**
