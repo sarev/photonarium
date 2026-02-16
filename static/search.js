@@ -150,6 +150,7 @@ const Search = {
         // Cache DOM elements
         this._els = {
             textInput: App.$('filter-text'),
+            textWarning: App.$('filter-text-warning'),
             similaritySlider: App.$('filter-similarity'),
             similarityValue: App.$('similarity-value'),
             dateStart: App.$('filter-date-start'),
@@ -681,11 +682,14 @@ const Search = {
      * @private
      */
     _extractPeopleFromText({ trailingRequired = true } = {}) {
-        if (!this._faceDetectionEnabled || !AppState.people.isLoaded()) return;
+        if (!this._faceDetectionEnabled || !AppState.people.isLoaded()) {
+            if (this._els.textWarning) this._els.textWarning.hidden = true;
+            return;
+        }
 
         let text = this._els.textInput.value;
         if (!text.trim()) {
-            // Text is empty — remove any auto-added people
+            // Text is empty — remove any auto-added people and hide warning
             if (this._autoAddedPeopleIds.size > 0) {
                 this._selectedPeople = this._selectedPeople.filter(
                     p => !this._autoAddedPeopleIds.has(p.id),
@@ -693,6 +697,7 @@ const Search = {
                 this._autoAddedPeopleIds.clear();
                 this._renderPeopleChips();
             }
+            if (this._els.textWarning) this._els.textWarning.hidden = true;
             return;
         }
 
@@ -754,6 +759,40 @@ const Search = {
         if (changed) {
             this._renderPeopleChips();
         }
+
+        // Show a warning if the description text, after stripping matched
+        // people names, contains no letters — the semantic search will likely
+        // return nothing since it only sees whitespace/punctuation.
+        this._updateTextWarning(text, consumed);
+    },
+
+    /**
+     * Shows or hides the warning icon next to the text input.
+     *
+     * The warning appears when the description text is non-empty and, after
+     * stripping all matched people-name regions, contains no letters — meaning
+     * the semantic search would be fed only punctuation/whitespace.
+     *
+     * @param {string} text - The raw description input value
+     * @param {Array<[number, number]>} consumed - Character ranges matched as names
+     * @private
+     */
+    _updateTextWarning(text, consumed) {
+        if (!this._els.textWarning) return;
+
+        let show = false;
+        if (text.trim() && consumed.length > 0) {
+            // Build the text with matched name regions removed
+            const sorted = [...consumed].sort((a, b) => b[0] - a[0]);
+            let remainder = text;
+            for (const [start, end] of sorted) {
+                remainder = remainder.slice(0, start) + remainder.slice(end);
+            }
+            // If no letters remain, the search text is effectively empty
+            show = !/[a-zA-Z]/.test(remainder);
+        }
+
+        this._els.textWarning.hidden = !show;
     },
 
     /* ----------------------------------------------------------------------
@@ -809,6 +848,7 @@ const Search = {
      */
     _clearForm() {
         this._els.textInput.value = '';
+        if (this._els.textWarning) this._els.textWarning.hidden = true;
         this._els.similaritySlider.value = 20;
         this._els.similarityValue.textContent = '20%';
         this._els.dateStart.value = '';

@@ -522,7 +522,10 @@
                     <!-- Text description search -->
                     <div class="filter-group">
                         <label for="filter-text">Description</label>
-                        <input type="text" id="filter-text" placeholder="Search by description..." title="Describe what you're looking for. Use -word to exclude concepts. More terms = better results (e.g. 'beach sand sea -people -crowd' works better than 'beach -people').">
+                        <div class="filter-text-wrapper">
+                            <input type="text" id="filter-text" placeholder="Search by description..." title="Describe what you're looking for. Use -word to exclude concepts. More terms = better results (e.g. 'beach sand sea -people -crowd' works better than 'beach -people').">
+                            <span id="filter-text-warning" class="filter-text-warning" hidden title="Descriptions containing only names may return empty results. Use the 'People' section below for people searches.">&#x26A0;</span>
+                        </div>
                         <div class="similarity-slider">
                             <label for="filter-similarity">Similarity: <span id="similarity-value">20%</span></label>
                             <input type="range" id="filter-similarity" min="15" max="35" value="20" step="1">
@@ -530,6 +533,19 @@
                                 <span>Loose</span>
                                 <span>Strict</span>
                             </div>
+                        </div>
+                    </div>
+
+                    <!-- People filter -->
+                    <div class="filter-group" id="filter-people-group">
+                        <label>People</label>
+                        <div class="people-filter">
+                            <div id="filter-people-chips" class="people-chips">
+                                <span class="people-placeholder">Click to add people...</span>
+                            </div>
+                            <button id="btn-people-picker" class="toolbar-btn" title="Select people">
+                                <span class="icon" data-icon="person_add">🏷️</span>
+                            </button>
                         </div>
                     </div>
 
@@ -550,19 +566,6 @@
                             <input type="text" id="filter-rating" placeholder="Enter emoji ratings...">
                             <button id="btn-emoji-picker" class="toolbar-btn" title="Open emoji picker">
                                 <span class="icon" data-icon="add_reaction">👍</span>
-                            </button>
-                        </div>
-                    </div>
-
-                    <!-- People filter -->
-                    <div class="filter-group" id="filter-people-group">
-                        <label>People</label>
-                        <div class="people-filter">
-                            <div id="filter-people-chips" class="people-chips">
-                                <span class="people-placeholder">Click to add people...</span>
-                            </div>
-                            <button id="btn-people-picker" class="toolbar-btn" title="Select people">
-                                <span class="icon" data-icon="person_add">🏷️</span>
                             </button>
                         </div>
                     </div>

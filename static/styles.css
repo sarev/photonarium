@@ -2969,6 +2969,23 @@ a:hover {
     box-shadow: 0 0 0 2px var(--color-accent-light);
 }
 
+/* Wrapper for the description input + warning icon */
+.filter-text-wrapper {
+    position: relative;
+}
+
+.filter-text-warning {
+    position: absolute;
+    right: 0.6rem;
+    top: 50%;
+    transform: translateY(-50%);
+    font-size: 1.1rem;
+    line-height: 1;
+    color: var(--color-warning);
+    cursor: help;
+    opacity: 0.85;
+}
+
 .date-range {
     display: flex;
     align-items: center;
