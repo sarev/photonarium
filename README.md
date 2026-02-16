@@ -13,9 +13,11 @@
 - [Getting around](#getting-around)
 - [Gallery](#gallery)
 - [Full-screen viewer](#full-screen-viewer)
+- [Slideshow](#slideshow)
 - [Face tagging](#face-tagging-in-full-screen)
 - [Search](#search)
 - [Groups](#groups)
+- [Smart Groups](#smart-groups)
 - [Faces](#faces)
 - [Database](#database)
 - [Installation](#installation)
@@ -44,6 +46,8 @@ Find out more about the motivations behind Photonarium in [`BACKGROUND.md`](BACK
 - **AI-powered search** that understands what you type (e.g. "sunset over mountains", "birthday cake"), with negative terms to exclude concepts (e.g. "beach -people")
 - **Face recognition** - automatic face detection and recognition. Name faces and Photonarium finds them across your library.
 - **Quality scoring** - AI aesthetic scoring ranks your images by visual quality. Find your best shots instantly.
+- **Slideshow** mode in the full-screen viewer with smooth cross-fade transitions, linear or shuffled playback, and configurable timing
+- **Smart Groups** - saved searches that stay up to date automatically. Set your filter criteria once and matching images appear whenever you open the group, even photos added later.
 - **Duplicate detection** at four levels of similarity (identical, near-identical, similar, related) plus auto-generated **directory groups** and user-curated **custom groups** (albums), with one-click **prune** to keep the best image per group
 - **Camera RAW support** - native support for 20+ camera RAW formats alongside JPEG, PNG, and other standard image types. No conversion needed.
 - **Camera data** - full EXIF metadata extraction. Search and filter by camera, lens, ISO, aperture, shutter speed, and more.
@@ -214,6 +218,31 @@ These shortcuts use Ctrl on Windows/Linux and Cmd on macOS:
 
 ---
 
+## Slideshow
+
+The slideshow lets you sit back and watch your photos play through automatically, with smooth cross-fade transitions between images.
+
+### Starting a slideshow
+
+- In the full-screen viewer, click the **play** button in the toolbar for linear playback (in the current sort order), or the **shuffle** button for random order.
+- On the Groups screen, hover over any group stack to reveal play and shuffle badges - click one to jump straight into a full-screen slideshow scoped to that group's images.
+- Press **Space** to start a linear slideshow from anywhere in the full-screen viewer.
+
+### While a slideshow is running
+
+- **Space** pauses or resumes.
+- **Escape** stops the slideshow and exits full-screen.
+- **Left / Right arrows** manually skip to the previous or next image. The slideshow continues from the new position.
+- Moving the mouse or pressing any key resets the hold timer, so the current image stays on screen a little longer while you interact.
+
+Clicking the other mode button (play or shuffle) while a slideshow is running switches to that mode without stopping.
+
+### Timing
+
+The hold duration (how long each image stays on screen) defaults to 5 seconds and can be changed in `photonarium.yml` with the `slideshow_interval` setting (in seconds).
+
+---
+
 ## Face tagging (in full-screen)
 
 Face tagging helps you name people, ignore false positives, and correct mistakes directly on the photo.
@@ -279,16 +308,6 @@ Hyphens within words are preserved: `double-blind` searches for the phrase "doub
 
 **Tip:** More terms give better results. A simple query like `beach -people` may still return beach photos with people in them. For stronger exclusion, be more specific: `beach sand sea waves blue skies sunshine -people -man -woman -child -person -crowd` does a much better job of finding empty beaches. The same applies to positive terms: adding synonyms and related words helps the model understand exactly what you want.
 
-### Date range
-
-- Set a start date and/or end date.
-- Leave either blank to make it open-ended.
-
-### Rating
-
-- Type directly into the rating field.
-- Or click the emoji button to insert an emoji quickly.
-
 ### People
 
 Only available when face detection is enabled and you have named people.
@@ -306,6 +325,16 @@ You can also add people manually using the picker:
 - **Enter** confirms (unless you're typing in the search box).
 - **Escape** cancels.
 
+### Date range
+
+- Set a start date and/or end date.
+- Leave either blank to make it open-ended.
+
+### Rating
+
+- Type directly into the rating field.
+- Or click the emoji button to insert an emoji quickly.
+
 ### Metadata
 
 Filter by EXIF camera settings such as Camera, Lens, ISO, Aperture, Shutter Speed, and others. This is useful for finding all images taken with a particular camera body, lens, or shooting settings.
@@ -319,9 +348,10 @@ Filter by EXIF camera settings such as Camera, Lens, ISO, Aperture, Shutter Spee
 
 You can also add metadata filters directly from the Gallery: open the info panel, click **View EXIF data**, then click the filter icon next to any value you want to filter by.
 
-### Applying or clearing
+### Applying, saving, or clearing
 
 - **Apply** uses your current filters and returns to the Gallery.
+- **Save as Smart Group** saves your current filters as a [Smart Group](#smart-groups) - a dynamic group that re-evaluates the criteria each time you open it.
 - **Clear** removes all filters.
 
 Tip: You can also leave Search with **Escape**, returning to the Gallery.
@@ -389,6 +419,41 @@ These weights can be adjusted in `photonarium.yml` to suit your preferences:
 - `nima_enabled` - set to `false` to skip NIMA scoring entirely (quality falls back to LAION with sharpness and resolution).
 
 NIMA and LAION approach aesthetics differently. NIMA was trained on hundreds of thousands of photos rated by people, so it has a good sense of what makes a photograph look appealing - composition, lighting, colour. LAION is faster and lighter but more impressionistic; it can favour vibrant or striking images even if they're technically flawed. Blending the two gives more balanced results than either alone, which is why both are used by default.
+
+---
+
+## Smart Groups
+
+Regular custom groups are like photo albums - you add specific images by hand. Smart Groups are more like saved searches: you define what you are looking for (a text description, a date range, certain people, camera settings, a rating - any combination of the filters on the Search screen) and Photonarium finds matching images every time you open the group. If new photos are added to your library later, they appear automatically when they match the criteria.
+
+### Creating a Smart Group
+
+1. Go to the **Search** screen and set up the filters you want (text, date range, rating, people, metadata - any combination).
+2. Click **Save as Smart Group**.
+3. Enter a name when prompted.
+
+The new group appears on the Groups screen alongside your regular custom groups.
+
+### Viewing a Smart Group
+
+On the Groups screen, slide to **Custom** to see your Smart Groups mixed in with regular groups. Smart Groups are easy to spot: they show "Smart Group" in italics beneath the name instead of an image count.
+
+Double-click (or press **Enter**) to open the group. Photonarium evaluates the saved filters and opens the Gallery with the matching images. This can take a moment if the filter includes a text search, since it runs a fresh semantic search each time.
+
+### Editing a Smart Group
+
+Hover over a Smart Group stack to reveal an **edit** badge (green circle, top-right). Click it to go back to the Search screen with the saved filters pre-loaded. Adjust anything you like, then click **Update Smart Group** to save the changes. Close the Search screen and the button returns to "Save as Smart Group" for new groups.
+
+### How they differ from regular groups
+
+| | Regular group | Smart Group |
+|---|---|---|
+| Membership | You add and remove images by hand | Determined automatically by filter criteria |
+| Stays current | Only contains what you put in | Picks up new matching photos automatically |
+| Add images via Gallery | Yes (group picker) | No - membership is dynamic |
+| Slideshow from stack | Yes (hover badges) | Open the group first, then start a slideshow from fullsceen view |
+
+You can rename and delete Smart Groups the same way as regular groups. The Gallery's "Add to Group" picker only shows regular groups, since adding a specific image to a dynamic group would not make sense.
 
 ---
 

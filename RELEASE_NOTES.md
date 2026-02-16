@@ -1,5 +1,53 @@
 # Release Notes
 
+## v1.0.8-beta.8
+
+### Slideshow Mode
+
+The full-screen viewer now supports slideshows with smooth cross-fade transitions between images.
+
+- **Two playback modes:** Linear (in the current sort order) or shuffled (Fisher-Yates random).
+- **Toolbar and keyboard:** Play/shuffle buttons in the full-screen toolbar, or press Space to start. Space pauses/resumes, Escape exits, arrow keys skip manually.
+- **Configurable timing:** The hold duration defaults to 5 seconds and can be changed via the `slideshow_interval` setting in `photonarium.yml` (1-60 seconds).
+- **Groups integration:** Hover over any group stack on the Groups screen to reveal play and shuffle badges that jump straight into a slideshow scoped to that group.
+- **Preloading:** The next image is preloaded during the hold period so it is browser-cached before the cross-fade begins, eliminating flashes of black or stale images. In shuffle mode, the actual shuffle-next target is preloaded (not just the index-adjacent image).
+
+### Smart Groups
+
+Smart Groups are saved searches with dynamic membership. Instead of manually adding images to a group, you define filter criteria (text, date range, rating, people, metadata) and Photonarium evaluates them each time you open the group - so new photos that match your criteria appear automatically.
+
+- **Create from Search:** Set up filters on the Search screen and click "Save as Smart Group". Enter a name and the group appears alongside your regular custom groups.
+- **Dynamic evaluation:** Opening a Smart Group runs a fresh filter evaluation. If the filter includes a text search, this runs a live semantic search each time.
+- **Edit in place:** An edit badge appears on hover. Click it to return to the Search screen with the saved criteria pre-loaded, modify them, and click "Update Smart Group".
+- **Preview thumbnails:** Smart Group stacks show a representative thumbnail that updates automatically. Trashing the preview image triggers a fresh evaluation to pick a new one.
+- **Group picker exclusion:** The Gallery's "Add to Group" dialog only shows regular groups, since adding static images to a dynamic group does not make sense.
+- **Schema:** Adds `filter_json` and `preview_image_id` columns to `custom_groups` via migration. Existing custom groups are unaffected (both columns are NULL for them).
+
+### Fullscreen Sync with External Deletions
+
+The full-screen viewer now subscribes to image changes from AppState, so images trashed by other clients (or other browser tabs) are pruned from the navigation list in real time. If the currently-displayed image is trashed externally, fullscreen closes immediately. Slideshow state (position, shuffle order) is rebuilt after pruning.
+
+### Search UX Improvements
+
+- **People filter moved up:** The People section now sits directly below Description on the Search screen, making it harder to overlook.
+- **Name-only warning:** A warning triangle appears inside the description input when it contains only recognised people names with no other descriptive text. This catches cases where the semantic search would receive an empty query after name extraction.
+
+### On This Day Improvements
+
+- **Full context in Gallery:** "View in Gallery" now shows all images matching the month and day across all years, not just the cherry-picked highlights from the album. This gives wider context around the photos you just saw.
+
+### Damaged Smart Group Detection
+
+Smart Groups that reference people in their filter criteria are now tracked for staleness. When a person is deleted (from any path - direct deletion, merge, dissolve, face cleanup, etc.), any Smart Group whose filter references that person is flagged as "damaged". A warning icon and amber label appear on the group's stack in the Groups screen, with a tooltip explaining the issue. Opening a damaged group still works (it just skips the missing person), and editing the filter clears the damage automatically since stale person references are pruned on load.
+
+### Bug Fixes
+
+- **Stale people in Search filter:** Deleting a person on one client left stale references in the Search screen's people chips, auto-added tracking set, and active filter on other clients. The people subscriber now prunes deleted people automatically.
+- **Gallery not showing new images after rescan:** The Gallery skipped its delta sync when no explicit refresh was requested, so newly scanned images only appeared after a full page reload.
+- **Face auto-recognition broken:** Async face reassessment crashed on every run with a Row attribute error, so automatic spread of face identities to other photos never worked. Additionally, sync reassessment during scanning emitted incomplete event payloads, so faces detected during a rescan were never auto-identified against known people.
+- **Rotation left temp files in photo directories:** Image rotation used the photo's own directory for temporary files. Cloud sync services (Dropbox, OneDrive) would pick these up before the rename completed, creating orphaned 0-byte files. Temp files are now written to the system temp directory instead.
+- **OpenCLIP thread-safety race:** Concurrent requests could hit a window where the CLIP model was loaded but the tokenizer was not yet initialised, causing smart group preview evaluation and search to crash. Fixed with double-checked locking.
+
 ## v1.0.7-beta.7
 
 ### "On This Day..." Photo Album

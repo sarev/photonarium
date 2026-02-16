@@ -2,10 +2,22 @@
 
 Brainstormed 2026-02-15. Not prioritised yet.
 
+## Notes to Self
+
+### Tutorial Generator
+
+- Add slideshow and smartgroups stuff
+- Add optional CLI switch to regenerate the initial "manual" screenshots,
+  using the `examples` images and a clean, disposable app instance.
+
+### README
+
+Needs to include slideshow and smart groups. - DONE
+
 
 ## Browsing & Discovery
 
-### Slideshow Mode
+### Slideshow Mode - DONE
 
 Relatively easy -- builds on existing fullscreen viewer infrastructure.
 Always deactivates face tagging mode on start.
@@ -20,7 +32,7 @@ Entry points:
    linear progression through the group, one for shuffled. Enters fullscreen
    in slideshow mode scoped to that group's images.
 
-### Smart Albums
+### Smart Albums - DONE
 
 Relatively easy -- builds on existing filter + custom groups infrastructure.
 
