@@ -1077,6 +1077,8 @@ const App = {
         this._bindBtn('btn-thumb-smaller', () => this.setThumbnailSize(AppState.view.getThumbnailSize() - 50));
         this._bindBtn('btn-thumb-larger', () => this.setThumbnailSize(AppState.view.getThumbnailSize() + 50));
         this._bindBtn('btn-fullscreen', () => this._handleFullscreenClick());
+        this._bindBtn('btn-slideshow', () => this._startGallerySlideshow(false));
+        this._bindBtn('btn-shuffle', () => this._startGallerySlideshow(true));
         this._bindBtn('btn-reveal-folder', () => this._handleRevealFolderClick());
         this._bindBtn('btn-rotate-ccw', () => this._handleRotateClick(270));
         this._bindBtn('btn-rotate-cw', () => this._handleRotateClick(90));
@@ -1103,6 +1105,7 @@ const App = {
 
         // Subscribe to state changes to update button states
         this.on('selectionChanged', () => this._updateToolbarStates());
+        AppState.images.onChanged(() => this._updateToolbarStates());
         this.on('sortChanged', () => this._updateSortButtons());
         this.on('filterChanged', () => this._updateFilterButton());
         this.on('themeChanged', () => this._updateThemeButton());
@@ -1181,6 +1184,47 @@ const App = {
         if (this.state.selectedImages.length === 1) {
             this.showFullscreen(this.state.selectedImages[0]);
         }
+    },
+
+    /**
+     * Launches a slideshow from the Gallery toolbar.
+     *
+     * Selection behaviour:
+     * - No selection: all images in current display order, starting first.
+     * - One selected: all images, starting from the selected one.
+     * - Multiple selected: only the selected images, in display order.
+     *
+     * Follows the same open-then-start pattern used by
+     * {@link Duplicates._startGroupSlideshow}.
+     * @param {boolean} shuffle - True for shuffled playback
+     * @private
+     */
+    _startGallerySlideshow(shuffle) {
+        const selectedIds = this.state.selectedImages;
+        const displayList = AppState.images.getDisplayList();
+        if (displayList.length === 0) return;
+
+        let imageList, startId;
+
+        if (selectedIds.length > 1) {
+            // Multiple selected: only iterate selected images (in display order)
+            const selectedSet = new Set(selectedIds);
+            imageList = displayList.filter(img => selectedSet.has(img.id));
+            if (imageList.length === 0) return;
+            startId = imageList[0].id;
+        } else if (selectedIds.length === 1) {
+            // One selected: all images, starting from the selected one
+            startId = selectedIds[0];
+        } else {
+            // None selected: all images from the beginning
+            startId = displayList[0].id;
+        }
+
+        // Same open-then-start pattern as Duplicates._startGroupSlideshow
+        Fullscreen.open(startId, imageList ? { imageList } : undefined);
+        setTimeout(() => {
+            Fullscreen.startSlideshow(shuffle);
+        }, 100);
     },
 
     /**
@@ -1299,6 +1343,14 @@ const App = {
             rotateCwBtn.disabled = rotateDisabled;
             rotateCwBtn.title = rotateTitle || rotateCwBtn.getAttribute('data-default-title') || 'Rotate right';
         }
+
+        // Slideshow buttons: enabled when the effective image list has > 1 images
+        const slideshowBtn = document.getElementById('btn-slideshow');
+        const shuffleBtn = document.getElementById('btn-shuffle');
+        const canSlideshow = selCount > 1
+            || AppState.images.getDisplayList().length > 1;
+        if (slideshowBtn) slideshowBtn.disabled = !canSlideshow;
+        if (shuffleBtn) shuffleBtn.disabled = !canSlideshow;
     },
 
     /**
