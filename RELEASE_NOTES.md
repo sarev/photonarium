@@ -1,5 +1,28 @@
 # Release Notes
 
+## v1.0.9-beta.9
+
+### Refine Groups
+
+The old Prune feature (levels 0-3 only, trash-only) has been replaced by a general-purpose Refine Groups tool available at all 6 group levels (including directories and custom groups).
+
+- **Quality filtering:** Choose how many images to keep (or trash) per group - best only, top N, or top N%. Uses the same composite quality scoring as the Gallery Quality sort.
+- **View in Gallery:** The primary action opens the selected subset (best or worst images) as a filtered Gallery view without changing anything. Works for all group levels including directories and custom/smart groups.
+- **Trash:** An optional secondary action (levels 0-4) moves the non-kept images to the trash directory. Custom groups and smart groups are view-only since their membership is user-curated or dynamically evaluated.
+- **Smart group support:** For smart groups, the refine dialog resolves filter criteria asynchronously (including live semantic search if needed) and caches the resulting image IDs to avoid double evaluation.
+
+### Gallery Slideshow Buttons
+
+The Gallery toolbar now has slideshow (play) and shuffle buttons, in addition to the existing fullscreen toolbar buttons. The buttons are selection-aware:
+
+- **No selection:** Plays all images in the current sort order.
+- **Single selection:** Starts the slideshow from that image.
+- **Multiple selection:** Plays only the selected images.
+
+### Apple MPS Device Support
+
+PyTorch device selection now detects Apple Silicon GPU acceleration (MPS) in addition to NVIDIA CUDA. All four ML model sites (OpenCLIP embeddings, NIMA aesthetic scoring, face detection, and image captioning) use the priority order CUDA > MPS > CPU. The BLIP/BLIP-2 captioning models also use float16 precision on MPS (previously only on CUDA), improving performance on Apple Silicon.
+
 ## v1.0.8-beta.8
 
 ### Slideshow Mode
