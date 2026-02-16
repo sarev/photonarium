@@ -353,6 +353,21 @@ def error_response(message, status_code=400):
     return jsonify({'success': False, 'error': message}), status_code
 
 
+def _check_smart_group_damage(person_ids):
+    """Mark smart groups as damaged if they reference deleted people.
+
+    Called after person deletion to flag any smart groups whose filter
+    references the removed person(s).  Emits ``groups_changed`` so all
+    connected clients can show a warning indicator.
+
+    Args:
+        person_ids: List of person UUIDs that were just deleted.
+    """
+    dup = get_db()._duplicate_manager
+    if dup and dup.mark_smart_groups_damaged(person_ids):
+        get_db().event_queue.emit(EVENT_GROUPS_CHANGED, {'level': 5, 'invalidate': True})
+
+
 # =============================================================================
 # Static File Serving (Development)
 # =============================================================================
@@ -2230,6 +2245,7 @@ def update_person_endpoint(person_id):
                     delete_person(db.conn, person_id)
                     # Broadcast for other clients — person deleted, faces ejected
                     db.event_queue.emit(EVENT_PEOPLE_CHANGED, {'removed': [person_id]})
+                    _check_smart_group_damage([person_id])
                     db.event_queue.emit(
                         EVENT_FACES_CHANGED,
                         {
@@ -2314,6 +2330,7 @@ def delete_person_endpoint(person_id):
 
     # Broadcast for other clients
     db.event_queue.emit(EVENT_PEOPLE_CHANGED, {'removed': [person_id]})
+    _check_smart_group_damage([person_id])
     if affected_face_ids:
         db.event_queue.emit(
             EVENT_FACES_CHANGED,
@@ -3072,6 +3089,7 @@ def unidentify_face(face_id):
                 'removed': [old_person_id],
             },
         )
+        _check_smart_group_damage([old_person_id])
 
     return success_response(message='Face unidentified')
 
@@ -3153,6 +3171,7 @@ def suppress_face_endpoint(face_id):
     )
     if person_deleted and old_person_id:
         db.event_queue.emit(EVENT_PEOPLE_CHANGED, {'removed': [old_person_id]})
+        _check_smart_group_damage([old_person_id])
     elif old_person_id and not person_deleted:
         # Person still exists — face count changed, possibly preferred face too
         updated_person = get_person(db.conn, old_person_id)
@@ -3242,6 +3261,7 @@ def delete_face_endpoint(face_id):
     db.event_queue.emit(EVENT_FACES_CHANGED, {'removed': [face_id]})
     if person_deleted and old_person_id:
         db.event_queue.emit(EVENT_PEOPLE_CHANGED, {'removed': [old_person_id]})
+        _check_smart_group_damage([old_person_id])
 
     return success_response(message='Face deleted')
 
@@ -3393,6 +3413,7 @@ def unassign_face(face_id):
                 'removed': [old_person_id],
             },
         )
+        _check_smart_group_damage([old_person_id])
 
     return success_response(
         {
@@ -3491,13 +3512,16 @@ def unassign_faces_batch():
             },
         )
         # People may have been deleted or had face counts change
+        removed_pids = [pid for pid in affected_person_ids if get_person(db.conn, pid) is None]
         db.event_queue.emit(
             EVENT_PEOPLE_CHANGED,
             {
-                'removed': [pid for pid in affected_person_ids if get_person(db.conn, pid) is None],
+                'removed': removed_pids,
                 'upserted': [dict(p) for pid in affected_person_ids if (p := get_person(db.conn, pid)) is not None],
             },
         )
+        if removed_pids:
+            _check_smart_group_damage(removed_pids)
 
     return success_response(
         {
@@ -3649,6 +3673,7 @@ def merge_person(person_id):
             'upserted': [dict(updated_person)] if updated_person else [],
         },
     )
+    _check_smart_group_damage([person_id])
     if merged_face_ids:
         db.event_queue.emit(
             EVENT_FACES_CHANGED,
@@ -3705,6 +3730,7 @@ def dissolve_person(person_id):
 
     # Broadcast for other clients
     db.event_queue.emit(EVENT_PEOPLE_CHANGED, {'removed': [person_id]})
+    _check_smart_group_damage([person_id])
     if dissolved_face_ids:
         db.event_queue.emit(
             EVENT_FACES_CHANGED,

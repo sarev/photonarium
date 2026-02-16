@@ -318,6 +318,8 @@ _SQL_MIGRATIONS = [
     'ALTER TABLE custom_groups ADD COLUMN filter_json TEXT',
     # → No backfill needed (smart group thumbnail, computed by frontend)
     'ALTER TABLE custom_groups ADD COLUMN preview_image_id TEXT',
+    # → No backfill needed (0 = healthy, 1 = references deleted person)
+    'ALTER TABLE custom_groups ADD COLUMN damaged INTEGER DEFAULT 0',
 ]
 
 # SQL schema for the image_metadata table (indexed EXIF key-value pairs for search)

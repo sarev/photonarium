@@ -3672,6 +3672,12 @@ a:hover {
     opacity: 0.7;
 }
 
+/* Smart group with stale people references */
+.duplicate-stack-count-sub.smart-group-damaged {
+    color: var(--color-warning);
+    opacity: 1;
+}
+
 /* Duplicates empty state */
 /* Duplicates empty state - overlays the grid */
 #duplicates-empty {

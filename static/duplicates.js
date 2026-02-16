@@ -1464,8 +1464,15 @@ Duplicates._createStackElement = function(group, index, blobUrl) {
         const countEl = document.createElement('div');
         countEl.className = 'duplicate-stack-count-sub';
         if (isSmart) {
-            countEl.textContent = 'Smart Group';
-            countEl.classList.add('smart-group-label');
+            if (group.damaged) {
+                countEl.innerHTML = App.icon('warning', '\u26A0') + ' Smart Group';
+                countEl.title = 'One or more people in this Smart Group\'s filter '
+                    + 'have been deleted \u2014 edit the filter to fix';
+                countEl.classList.add('smart-group-label', 'smart-group-damaged');
+            } else {
+                countEl.textContent = 'Smart Group';
+                countEl.classList.add('smart-group-label');
+            }
         } else {
             countEl.textContent = group.count === 1 ? '1 image' : `${group.count} images`;
         }

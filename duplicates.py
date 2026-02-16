@@ -20,6 +20,7 @@ The module uses several optimization techniques:
 
 from __future__ import annotations
 
+import json
 import logging
 import sqlite3
 import threading
@@ -1820,9 +1821,9 @@ class DuplicateManager:
         conn = self._get_db()
         try:
             # Get all custom groups (source_path IS NULL) with their names,
-            # optional filter_json (non-NULL for smart groups), and preview
+            # optional filter_json (non-NULL for smart groups), preview, and damage flag
             cursor = conn.execute("""
-                SELECT cg.group_hash, cg.name, cg.filter_json, cg.preview_image_id
+                SELECT cg.group_hash, cg.name, cg.filter_json, cg.preview_image_id, cg.damaged
                 FROM custom_groups cg
                 WHERE cg.source_path IS NULL
                 ORDER BY cg.name COLLATE NOCASE ASC
@@ -1900,9 +1901,11 @@ class DuplicateManager:
                         'image_ids': image_ids,
                         'best_image': best_image,
                     }
-                    # Include filter_json only for smart groups (saves bandwidth)
+                    # Include filter_json and damage flag only for smart groups (saves bandwidth)
                     if filter_json is not None:
                         group_dict['filter_json'] = filter_json
+                        if row['damaged']:
+                            group_dict['damaged'] = True
                     groups.append(group_dict)
 
             return groups
@@ -2384,11 +2387,63 @@ class DuplicateManager:
         conn = self._get_db()
         try:
             conn.execute(
-                'UPDATE custom_groups SET filter_json = ?, preview_image_id = ?, updated_at = ? WHERE group_hash = ?',
+                'UPDATE custom_groups SET filter_json = ?, preview_image_id = ?,'
+                ' damaged = 0, updated_at = ? WHERE group_hash = ?',
                 (filter_json, preview_image_id, now, group_hash),
             )
             conn.commit()
             logger.info(f'Updated filter for smart group {group_hash}')
+        finally:
+            conn.close()
+
+    def mark_smart_groups_damaged(self, removed_person_ids: list[str]) -> bool:
+        """Mark smart groups as damaged if they reference deleted people.
+
+        Scans all undamaged smart groups whose filter_json contains a
+        people list, and flags any that reference a person ID in
+        ``removed_person_ids``.  This is cheap: only undamaged smart
+        groups are checked (typically few), and the person ID lookup is
+        a set membership test.
+
+        Args:
+            removed_person_ids: Person UUIDs that were just deleted.
+
+        Returns:
+            True if any groups were newly marked damaged.
+        """
+        if not removed_person_ids:
+            return False
+
+        removed_set = set(removed_person_ids)
+        conn = self._get_db()
+        try:
+            cursor = conn.execute(
+                'SELECT group_hash, filter_json FROM custom_groups WHERE filter_json IS NOT NULL AND damaged = 0'
+            )
+            damaged_hashes = []
+            for row in cursor.fetchall():
+                try:
+                    filt = json.loads(row['filter_json'])
+                except (json.JSONDecodeError, TypeError):
+                    continue
+                people = filt.get('people')
+                if not people:
+                    continue
+                # people is [{id, name}, ...] — check if any id was deleted
+                if any(p.get('id') in removed_set for p in people):
+                    damaged_hashes.append(row['group_hash'])
+
+            if not damaged_hashes:
+                return False
+
+            placeholders = ','.join('?' * len(damaged_hashes))
+            conn.execute(
+                f'UPDATE custom_groups SET damaged = 1 WHERE group_hash IN ({placeholders})',
+                damaged_hashes,
+            )
+            conn.commit()
+            logger.info('Marked %d smart group(s) as damaged: %s', len(damaged_hashes), damaged_hashes)
+            return True
         finally:
             conn.close()
 
