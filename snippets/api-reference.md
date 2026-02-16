@@ -1,6 +1,6 @@
 # API Reference
 
-Complete list of REST API endpoints in `app.py` (54 routes).
+Complete list of REST API endpoints in `app.py` (71 routes).
 For design principles and conventions, see the API section in `CLAUDE.md`.
 
 ## Images (11 routes)
@@ -10,11 +10,11 @@ For design principles and conventions, see the API section in `CLAUDE.md`.
 | GET | `/api/images` | List all images with metadata |
 | GET | `/api/images/:id` | Get single image metadata |
 | POST | `/api/images/:id` | Update image (description, rating) |
+| GET | `/api/images/:id/exif` | Get EXIF metadata for an image |
 | POST | `/api/images/trash` | Move images to trash `{image_ids: []}` |
 | GET | `/api/images/:id/thumbnail?size=N` | Get thumbnail (snapped to 200 or 400px) |
 | GET | `/api/images/:id/full` | Get full-resolution image |
 | GET | `/api/images/:id/histogram` | Get image histogram data |
-| POST | `/api/images/:id/reveal` | Reveal image in OS file explorer |
 | POST | `/api/images/:id/generate-caption` | Generate BLIP caption for image |
 | POST | `/api/images/rotate` | Rotate images `{image_ids: [], direction}` |
 | GET | `/api/images/people-names` | Get people names appearing in images |
@@ -35,6 +35,14 @@ For design principles and conventions, see the API section in `CLAUDE.md`.
 | POST | `/api/search` | Semantic search `{text, threshold}` |
 | GET | `/api/similar/:id` | Get images similar to a given image |
 
+## Metadata (3 routes)
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| POST | `/api/metadata-search` | Subsequence search on EXIF metadata `{criteria: {key: query}}` |
+| GET | `/api/metadata-keys` | All distinct metadata keys in the database |
+| GET | `/api/metadata-values?key=X` | Distinct values for a key (autocomplete) |
+
 ## Status & Config (5 routes)
 
 | Method | Endpoint | Description |
@@ -49,9 +57,21 @@ For design principles and conventions, see the API section in `CLAUDE.md`.
 
 | Method | Endpoint | Description |
 |--------|----------|-------------|
-| GET | `/api/duplicates?level=N` | Get duplicate groups at level 0-3 |
+| GET | `/api/duplicates?level=N` | Get duplicate groups at level 0-5 |
 | POST | `/api/duplicates/sort-semantic` | Sort duplicate groups by semantic similarity |
 | POST | `/api/duplicates/prune` | Prune groups: keep best, trash rest `{level, keep_count}` |
+
+## Groups (7 routes)
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| POST | `/api/groups/preview` | Preview keep/trash split for all groups at a level |
+| POST | `/api/groups` | Create custom group `{group_hash, name, image_ids}` |
+| PATCH | `/api/groups/:hash` | Rename custom group `{name}` |
+| DELETE | `/api/groups/:hash` | Delete custom group |
+| POST | `/api/groups/:hash/preview` | Preview smart-group membership changes |
+| POST | `/api/groups/:hash/images` | Add images to group `{image_ids}` |
+| POST | `/api/groups/:hash/images/remove` | Remove images from group `{image_ids}` |
 
 ## Stats (2 routes)
 
@@ -66,6 +86,12 @@ For design principles and conventions, see the API section in `CLAUDE.md`.
 |--------|----------|-------------|
 | GET | `/api/events` | Fetch and clear pending events |
 | GET | `/api/events/count` | Get count of pending events (lightweight) |
+
+## Utility (1 route)
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| POST | `/api/reveal` | Reveal a file or folder in the OS file explorer `{path}` |
 
 ## People (10 routes)
 
@@ -82,7 +108,7 @@ For design principles and conventions, see the API section in `CLAUDE.md`.
 | GET | `/api/people/:id/faces` | Get all faces for a person |
 | GET | `/api/people/:id/thumbnail` | Get preferred face thumbnail |
 
-## Faces (20 routes)
+## Faces (21 routes)
 
 | Method | Endpoint | Description |
 |--------|----------|-------------|

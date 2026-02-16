@@ -176,7 +176,13 @@ class CaptionGenerator:
     def device(self) -> str:
         """Get the PyTorch device, auto-detecting if not set."""
         if self._device is None:
-            self._device = 'cuda' if torch.cuda.is_available() else 'cpu'
+            # Priority: CUDA (NVIDIA GPU) > MPS (Apple Silicon) > CPU
+            if torch.cuda.is_available():
+                self._device = 'cuda'
+            elif hasattr(torch.backends, 'mps') and torch.backends.mps.is_available():
+                self._device = 'mps'
+            else:
+                self._device = 'cpu'
             logger.info(f'Caption generator using device: {self._device}')
         return self._device
 
@@ -214,7 +220,7 @@ class CaptionGenerator:
                 )
                 model = Blip2ForConditionalGeneration.from_pretrained(
                     self.model_name,
-                    torch_dtype=torch.float16 if self.device == 'cuda' else torch.float32,
+                    torch_dtype=torch.float16 if self.device != 'cpu' else torch.float32,
                 )
             else:
                 # Standard BLIP models (smaller, faster)
@@ -226,7 +232,7 @@ class CaptionGenerator:
                 )
                 model = BlipForConditionalGeneration.from_pretrained(
                     self.model_name,
-                    torch_dtype=torch.float16 if self.device == 'cuda' else torch.float32,
+                    torch_dtype=torch.float16 if self.device != 'cpu' else torch.float32,
                 )
 
             model = model.to(self.device)
@@ -314,7 +320,7 @@ class CaptionGenerator:
             # Load and preprocess image (handles both standard and RAW formats)
             image = raw_open_image(image_path).convert('RGB')
             inputs = self.processor(images=image, return_tensors='pt').to(
-                self.device, torch.float16 if self.device == 'cuda' else torch.float32
+                self.device, torch.float16 if self.device != 'cpu' else torch.float32
             )
 
             # Use provided parameters or instance defaults

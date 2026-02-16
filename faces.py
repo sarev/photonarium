@@ -249,7 +249,13 @@ class FaceDetector:
     def device(self) -> str:
         """Get the PyTorch device, auto-detecting if not set."""
         if self._device is None:
-            self._device = 'cuda' if torch.cuda.is_available() else 'cpu'
+            # Priority: CUDA (NVIDIA GPU) > MPS (Apple Silicon) > CPU
+            if torch.cuda.is_available():
+                self._device = 'cuda'
+            elif hasattr(torch.backends, 'mps') and torch.backends.mps.is_available():
+                self._device = 'mps'
+            else:
+                self._device = 'cpu'
             logger.info(f'Face detector using device: {self._device}')
         return self._device
 

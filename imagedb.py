@@ -2214,7 +2214,13 @@ class OpenCLIPModel:
         self.model_name = model_name
         self.pretrained = pretrained
         self.max_dimension = max_dimension
-        self.device = 'cuda' if torch.cuda.is_available() else 'cpu'
+        # Priority: CUDA (NVIDIA GPU) > MPS (Apple Silicon) > CPU
+        if torch.cuda.is_available():
+            self.device = 'cuda'
+        elif hasattr(torch.backends, 'mps') and torch.backends.mps.is_available():
+            self.device = 'mps'
+        else:
+            self.device = 'cpu'
 
         self._model = None
         self._preprocess = None
@@ -3303,8 +3309,13 @@ class NimaThread(threading.Thread):
             try:
                 from nima import load_nima_model
 
-                # Use CUDA if available, otherwise CPU
-                device = 'cuda' if torch.cuda.is_available() else 'cpu'
+                # Priority: CUDA (NVIDIA GPU) > MPS (Apple Silicon) > CPU
+                if torch.cuda.is_available():
+                    device = 'cuda'
+                elif hasattr(torch.backends, 'mps') and torch.backends.mps.is_available():
+                    device = 'mps'
+                else:
+                    device = 'cpu'
                 self._model = load_nima_model(str(checkpoint_path), device=device)
                 self._device = device
                 logger.info(f'NIMA model loaded on {device}')

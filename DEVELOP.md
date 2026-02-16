@@ -25,6 +25,12 @@ WSGI server in production.
 | `/api/status` | Processing status (indexing, embedding, face queues) |
 | `/api/rescan` | Trigger folder rescan |
 | `/api/duplicates` | Duplicate group retrieval and pruning by similarity level |
+| `/api/groups` | Group CRUD (create, rename, delete, add/remove images) |
+| `/api/search` | Semantic search via OpenCLIP similarity |
+| `/api/similar` | Visual similarity (find images similar to a given image) |
+| `/api/metadata-*` | EXIF metadata search, keys, and value autocomplete |
+| `/api/config` | Configuration read/write/schema |
+| `/api/reveal` | Reveal file or folder in OS file explorer |
 | `/api/stats` | Database and cache statistics |
 | `/api/people` | People CRUD, merge, dissolve |
 | `/api/people/:id/thumbnail` | Preferred face thumbnail for a person |
@@ -68,7 +74,7 @@ background processing in threads.
 1. Database schema and initialisation (WAL mode, tables, indexes, migrations)
 2. Folder management and scanning
 3. Image CRUD helpers
-4. Metadata extraction (delegates timestamps to `timestamps.py`)
+4. Metadata extraction (delegates to `metadata.py`)
 5. Ingestion thread (consumes file paths, extracts metadata, queues for
    embedding)
 6. Embedding thread (batches image IDs, computes OpenCLIP embeddings, stores
@@ -127,7 +133,8 @@ frontend uses CSS to scale to the exact display size. Cache structure:
 
 ### `duplicates.py` - Duplicate Detection
 
-Finds and groups duplicate or similar images across 4 similarity levels:
+Finds and groups duplicate or similar images across 6 levels (4 auto-detected
+plus 2 named group types):
 
 | Level | Name | Method |
 |-------|------|--------|
@@ -135,6 +142,8 @@ Finds and groups duplicate or similar images across 4 similarity levels:
 | 1 | Near-identical | Perceptual hash within Hamming distance threshold |
 | 2 | Similar | High OpenCLIP embedding cosine similarity |
 | 3 | Related | Lower embedding similarity threshold |
+| 4 | Directories | Auto-generated from filesystem folder structure (synced on scan) |
+| 5 | Custom | User-curated groups/albums (overlap allowed, persist when empty) |
 
 **Optimisation techniques:** multi-index hashing (LSH) for Level 1 to avoid
 O(n^2) comparisons, chunked matrix multiplication for Levels 2-3 to manage
@@ -166,15 +175,50 @@ If no config exists on first run, auto-migrates a legacy `.photonarium.yml` from
 the working directory if found, otherwise creates a default with full comments.
 The `data_dir` field tells the app where to find its database and thumbnails.
 
-### `timestamps.py` - Timestamp Extraction
+### `metadata.py` - EXIF Metadata and Timestamp Extraction
 
-Extracts and derives timestamps from images using multiple sources, in priority
-order:
+Extracts EXIF metadata and derives timestamps from images. A single-pass EXIF
+read produces normalised, human-readable key-value pairs (e.g. "Camera":
+"Nikon D850"). The same data is reused for timestamp derivation to avoid
+opening the file twice during indexing.
+
+Timestamp priority order:
 
 1. EXIF `DateTimeOriginal` tag (when photo was taken)
 2. EXIF `DateTime` tag (when file was last modified by software)
 3. Parsed from filename/path (more reliable than filesystem dates)
 4. Filesystem creation/modification time
+
+### `rawimage.py` - Camera RAW Image Loading
+
+Unified interface for loading both standard image formats (via Pillow) and
+camera RAW formats (via rawpy/LibRaw). All image loading goes through
+`open_image()` so that RAW files are handled transparently. Returns
+fully-decoded PIL Images with EXIF orientation already applied, so callers
+no longer need `ImageOps.exif_transpose()`. Also provides
+`get_raw_dimensions()` for fast header-only dimension reads without full
+demosaicing, and `extract_raw_exif()` using the pure-Python `exifread` library
+for RAW EXIF timestamps.
+
+### `trash.py` - Trash and Quality Scoring Utilities
+
+Pure utility functions for the trash-based deletion workflow and the composite
+quality scoring algorithm used by duplicate pruning. Has no dependency on
+ImageDatabase, no threading, and no direct database access - callers pass in
+paths and data as arguments. The quality scoring algorithm is a Python port of
+the frontend `_computeQualityScores()` in `static/appstate/images.js`, ensuring
+that the backend prune endpoint ranks images identically to the frontend Quality
+sort.
+
+### `nima.py` - NIMA Aesthetic Scoring
+
+MobileNetV2-based NIMA (Neural IMage Assessment) model from Talebi & Milanfar
+(2018). Predicts a probability distribution over aesthetic ratings 1-10; the
+weighted mean serves as the aesthetic score. Uses the pretrained checkpoint from
+truskovskiyk/nima.pytorch (MIT licence) trained on the AVA dataset (~255k
+images). The MobileNetV2 backbone is lightweight (~9MB) and runs efficiently on
+both GPU and CPU. Standalone implementation using only torch and torchvision
+(already installed for OpenCLIP and facenet-pytorch).
 
 ### `download_models.py` - Model Downloader
 
@@ -337,7 +381,8 @@ Create filters to narrow down the gallery view.
 
 Find and manage duplicate or similar images.
 
-- **Similarity slider** - 4 levels from Related (loose) to Identical (strict).
+- **Similarity slider** - 6 levels from Custom (user-curated) through
+  Directories, Related, Similar, Near-identical, to Identical (strictest).
   Changing the slider immediately recomputes the display.
 - **Stack display** - Duplicate groups shown as stacked thumbnail cards sorted
   by group size. The "best" image (highest resolution, best focus, lossless
@@ -374,6 +419,16 @@ Manages cache-busting for face thumbnail URLs. When images are modified
 (rotation, rescan), face thumbnails are regenerated on the backend. This
 utility ensures the frontend fetches fresh versions by appending a timestamp
 query parameter.
+
+### `onthisday.js` - "On This Day" Nostalgia Overlay
+
+Standalone object (not a registered screen module, like Settings) that shows
+a scattered-photo album overlay when the app starts, if there are photos taken
+on today's month/day across multiple years. Triggers after 8+ hours of user
+inactivity (screensaver pattern), shows at most once per calendar day
+(localStorage gate), and can be disabled via the `on_this_day_enabled` config
+option. The aesthetic is intentionally hardcoded (cream paper, sepia tint,
+coffee rings, ring binder) and does not follow the light/dark theme toggle.
 
 ---
 
