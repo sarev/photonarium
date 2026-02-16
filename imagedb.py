@@ -314,6 +314,10 @@ _SQL_MIGRATIONS = [
     'ALTER TABLE custom_groups ADD COLUMN source_path TEXT',
     # → _migrate_add_exif_metadata()
     'ALTER TABLE images ADD COLUMN exif_data TEXT',
+    # → No backfill needed (NULL = regular custom group, non-NULL = smart group)
+    'ALTER TABLE custom_groups ADD COLUMN filter_json TEXT',
+    # → No backfill needed (smart group thumbnail, computed by frontend)
+    'ALTER TABLE custom_groups ADD COLUMN preview_image_id TEXT',
 ]
 
 # SQL schema for the image_metadata table (indexed EXIF key-value pairs for search)
@@ -2213,6 +2217,7 @@ class OpenCLIPModel:
         self._model = None
         self._preprocess = None
         self._tokenizer = None
+        self._load_lock = threading.Lock()
 
     def _load_image_safe(self, path: Path | str) -> Image.Image | None:
         """Load an image, downsampling if it exceeds max_dimension.
@@ -2246,31 +2251,43 @@ class OpenCLIPModel:
             return None
 
     def _load_model(self) -> None:
-        """Load the model (called on first use)."""
-        if self._model is not None:
+        """Load the model (called on first use).
+
+        Thread-safe: uses double-checked locking so concurrent threads
+        block while the model is loading rather than returning before
+        all components (model, preprocess, tokenizer) are ready.
+        """
+        # Fast path: tokenizer is set last, so if it's ready everything is.
+        if self._tokenizer is not None:
             return
 
-        logger.info('=' * 60)
-        logger.info(f'Loading OpenCLIP model: {self.model_name} ({self.pretrained})')
-        logger.info(f'Device: {self.device}')
-        logger.info('-' * 60)
+        with self._load_lock:
+            # Re-check under lock in case another thread loaded while we waited.
+            if self._tokenizer is not None:
+                return
 
-        start_time = time.time()
+            logger.info('=' * 60)
+            logger.info(f'Loading OpenCLIP model: {self.model_name} ({self.pretrained})')
+            logger.info(f'Device: {self.device}')
+            logger.info('-' * 60)
 
-        # Suppress QuickGELU mismatch warning from open_clip
-        with warnings.catch_warnings():
-            warnings.filterwarnings('ignore', message='QuickGELU mismatch')
-            self._model, _, self._preprocess = open_clip.create_model_and_transforms(
-                self.model_name,
-                pretrained=self.pretrained,
-            )
-        self._model.eval().to(self.device)
-        self._tokenizer = open_clip.get_tokenizer(self.model_name)
+            start_time = time.time()
 
-        elapsed = time.time() - start_time
-        logger.info('-' * 60)
-        logger.info(f'OpenCLIP model loaded in {elapsed:.1f}s')
-        logger.info('=' * 60)
+            # Suppress QuickGELU mismatch warning from open_clip
+            with warnings.catch_warnings():
+                warnings.filterwarnings('ignore', message='QuickGELU mismatch')
+                self._model, _, self._preprocess = open_clip.create_model_and_transforms(
+                    self.model_name,
+                    pretrained=self.pretrained,
+                )
+            self._model.eval().to(self.device)
+            # Tokenizer MUST be set last — it's the sentinel for the fast-path check.
+            self._tokenizer = open_clip.get_tokenizer(self.model_name)
+
+            elapsed = time.time() - start_time
+            logger.info('-' * 60)
+            logger.info(f'OpenCLIP model loaded in {elapsed:.1f}s')
+            logger.info('=' * 60)
 
     @property
     def model(self):
@@ -5872,8 +5889,15 @@ class ImageDatabase:
     # Public API - Custom Groups (Albums)
     # =========================================================================
 
-    def create_custom_group(self, group_hash: str, name: str, image_ids: list[str]) -> None:
-        """Create a custom group (album) with the given images.
+    def create_custom_group(
+        self,
+        group_hash: str,
+        name: str,
+        image_ids: list[str],
+        filter_json: str | None = None,
+        preview_image_id: str | None = None,
+    ) -> None:
+        """Create a custom group (album) or smart group with filter criteria.
 
         Serialised with _db_lock to prevent concurrent group mutations
         from corrupting the DuplicateManager's in-memory cache.
@@ -5881,10 +5905,35 @@ class ImageDatabase:
         Args:
             group_hash: Frontend-generated UUID for the group.
             name: Display name for the group.
-            image_ids: Initial list of image IDs to include.
+            image_ids: Initial list of image IDs to include (ignored for smart groups).
+            filter_json: JSON string of filter criteria for smart groups.
+            preview_image_id: Representative image for smart group thumbnails.
         """
         with self._db_lock:
-            self._duplicate_manager.create_custom_group(group_hash, name, image_ids)
+            self._duplicate_manager.create_custom_group(group_hash, name, image_ids, filter_json, preview_image_id)
+
+    def update_custom_group_filter(
+        self, group_hash: str, filter_json: str, preview_image_id: str | None = None
+    ) -> None:
+        """Update the filter criteria (and optionally preview) of a smart group.
+
+        Args:
+            group_hash: The group identifier.
+            filter_json: New JSON string of filter criteria.
+            preview_image_id: New representative image ID (or None to clear).
+        """
+        with self._db_lock:
+            self._duplicate_manager.update_custom_group_filter(group_hash, filter_json, preview_image_id)
+
+    def update_smart_group_preview(self, group_hash: str, preview_image_id: str | None) -> None:
+        """Update only the preview thumbnail of a smart group.
+
+        Args:
+            group_hash: The group identifier.
+            preview_image_id: Image ID for the thumbnail, or None to clear.
+        """
+        with self._db_lock:
+            self._duplicate_manager.update_smart_group_preview(group_hash, preview_image_id)
 
     def rename_custom_group(self, group_hash: str, name: str) -> None:
         """Rename a custom group.

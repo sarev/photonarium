@@ -2243,7 +2243,8 @@ const Gallery = {
         const grid = App.$('group-picker-available');
         if (!grid || !this._groupPickerState) return;
 
-        const allGroups = AppState.duplicates.getCustomGroups();
+        // Exclude smart groups — can't add static images to a dynamic group
+        const allGroups = AppState.duplicates.getStaticCustomGroups();
         const selectedHashes = this._groupPickerState.selectedGroups;
         const searchInput = App.$('group-picker-search');
         const filter = (searchInput?.value || '').toLowerCase().trim();
@@ -2278,7 +2279,8 @@ const Gallery = {
         const grid = App.$('group-picker-selected');
         if (!grid || !this._groupPickerState) return;
 
-        const allGroups = AppState.duplicates.getCustomGroups();
+        // Exclude smart groups — can't add static images to a dynamic group
+        const allGroups = AppState.duplicates.getStaticCustomGroups();
         const selectedHashes = this._groupPickerState.selectedGroups;
 
         const selected = allGroups.filter(g => selectedHashes.has(g.group_hash));

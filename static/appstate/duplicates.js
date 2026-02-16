@@ -118,6 +118,161 @@ AppState.duplicates = (function() {
     }
 
     // =========================================================================
+    // SMART GROUP PREVIEW HELPERS
+    // =========================================================================
+
+    /**
+     * Set of smart group hashes whose preview image was removed and needs
+     * async re-evaluation.
+     * @type {Set<string>}
+     */
+    const _stalePreviewHashes = new Set();
+
+    /**
+     * Debounced wrapper for _refreshStalePreviews to batch multiple
+     * image removals into a single evaluation pass.
+     */
+    const _refreshStalePreviewsDebounced = App.debounce(() => _refreshStalePreviews(), 500);
+
+    /**
+     * Re-evaluates previews for smart groups whose thumbnail was removed.
+     * @private
+     */
+    async function _refreshStalePreviews() {
+        const hashes = [..._stalePreviewHashes];
+        _stalePreviewHashes.clear();
+
+        const groups = _groupCache[5] || [];
+        for (const hash of hashes) {
+            const group = groups.find(g => g.group_hash === hash);
+            if (!group?.filter_json) continue;
+
+            const imageId = await _evaluatePreview(group.filter_json);
+            if (imageId) {
+                const img = AppState.images.getById(imageId);
+                transaction(() => {
+                    group.best_image = img ? { id: img.id, basename: img.basename } : null;
+                    markDirty(domainRef);
+                });
+            }
+            // Persist to backend (fire-and-forget)
+            App.apiPost(`/groups/${hash}/preview`, { image_id: imageId }).catch(() => {});
+        }
+    }
+
+    /**
+     * Evaluate a smart group's filter criteria to find the best preview image.
+     *
+     * Applies date, rating, people, text (semantic search), and metadata
+     * filters, then picks the highest-aesthetic-scoring match.
+     *
+     * @param {Object|string} filterJson - Filter criteria (object or JSON string)
+     * @returns {Promise<string|null>} Best image ID, or null if no matches
+     * @private
+     */
+    async function _evaluatePreview(filterJson) {
+        const filter = typeof filterJson === 'string'
+            ? JSON.parse(filterJson)
+            : filterJson;
+
+        // Start with all non-deleted images
+        let candidates = AppState.images.getAll();
+        if (!candidates.length) return null;
+
+        // Date range filter
+        if (filter.dateStart) {
+            const start = new Date(filter.dateStart);
+            candidates = candidates.filter(img => {
+                if (!img.timestamp) return false;
+                return new Date(img.timestamp) >= start;
+            });
+        }
+        if (filter.dateEnd) {
+            const end = new Date(filter.dateEnd);
+            end.setHours(23, 59, 59, 999);
+            candidates = candidates.filter(img => {
+                if (!img.timestamp) return false;
+                return new Date(img.timestamp) <= end;
+            });
+        }
+
+        // Rating filter
+        if (filter.rating) {
+            const ratingChars = [...filter.rating];
+            candidates = candidates.filter(img =>
+                img.rating && ratingChars.some(r => img.rating.includes(r)),
+            );
+        }
+
+        // People filter — uses backend endpoint for image-to-person mapping
+        if (filter.people?.length) {
+            try {
+                const peopleIds = filter.people.map(p => p.id);
+                const peopleImageIds = await AppState.images.getFilteredByPeople(peopleIds);
+                candidates = candidates.filter(img => peopleImageIds.has(String(img.id)));
+            } catch (err) {
+                console.warn('[_evaluatePreview] People filter failed:', err);
+            }
+        }
+
+        // Text search (semantic) — returns only matching IDs
+        if (filter.text) {
+            try {
+                const threshold = filter.threshold || 0.2;
+                // Strip people names for a CLIP-friendly query
+                let searchText = filter.text;
+                if (filter.people?.length) {
+                    const sorted = [...filter.people].sort((a, b) => b.name.length - a.name.length);
+                    for (const person of sorted) {
+                        const escaped = person.name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+                        searchText = searchText.replace(new RegExp('\\b' + escaped + '\\b', 'gi'), '');
+                    }
+                    searchText = searchText.replace(/\s{2,}/g, ' ').trim();
+                }
+                if (searchText) {
+                    const response = await AppState.search.execute(searchText, threshold, 10000);
+                    if (response?.results) {
+                        const matchIds = new Set(response.results.map(r => r.id));
+                        candidates = candidates.filter(img => matchIds.has(img.id));
+                    }
+                }
+            } catch (err) {
+                console.warn('[_evaluatePreview] Semantic search failed:', err);
+            }
+        }
+
+        // Metadata filter
+        if (filter.metadata && Object.keys(filter.metadata).length > 0) {
+            try {
+                const response = await App.apiPost('/metadata-search', {
+                    criteria: filter.metadata,
+                });
+                if (response?.data?.image_ids) {
+                    const metaIds = new Set(response.data.image_ids);
+                    candidates = candidates.filter(img => metaIds.has(img.id));
+                }
+            } catch (err) {
+                console.warn('[_evaluatePreview] Metadata search failed:', err);
+            }
+        }
+
+        if (candidates.length === 0) return null;
+
+        // Pick the best by aesthetic score (same ranking as backend best_image)
+        candidates.sort((a, b) => {
+            const aScore = a.aesthetic_laion ?? -1;
+            const bScore = b.aesthetic_laion ?? -1;
+            if (bScore !== aScore) return bScore - aScore;
+            const aSharp = a.laplacian_var ?? -1;
+            const bSharp = b.laplacian_var ?? -1;
+            if (bSharp !== aSharp) return bSharp - aSharp;
+            return a.id.localeCompare(b.id);
+        });
+
+        return candidates[0].id;
+    }
+
+    // =========================================================================
     // INTERNAL API
     // =========================================================================
 
@@ -159,11 +314,24 @@ AppState.duplicates = (function() {
                             groups.splice(i, 1);
                         }
                     }
+
+                    // Clear smart group preview if it was the removed image
+                    if (group.filter_json && group.best_image?.id === imageId) {
+                        group.best_image = null;
+                        changed = true;
+                        // Queue async re-evaluation of this group's preview
+                        _stalePreviewHashes.add(group.group_hash);
+                    }
                 }
             }
 
             if (changed) {
                 markDirty(domainRef);
+            }
+
+            // Kick off async preview refresh for affected smart groups
+            if (_stalePreviewHashes.size > 0) {
+                _refreshStalePreviewsDebounced();
             }
         },
     };
@@ -351,6 +519,17 @@ AppState.duplicates = (function() {
         },
 
         /**
+         * Get static (non-smart) custom groups only.
+         * Filters out smart groups (those with filter_json).
+         * Used by the group picker since adding static images to a
+         * dynamic smart group is semantically wrong.
+         * @returns {Array} Static custom group objects
+         */
+        getStaticCustomGroups() {
+            return (_groupCache[5] || []).filter(g => !g.filter_json);
+        },
+
+        /**
          * Get level-5 (custom) groups that contain ALL of the given image IDs.
          * Used by the Group Picker to show which groups the selected images share.
          * @param {string[]} imageIds - Image IDs to check
@@ -449,15 +628,17 @@ AppState.duplicates = (function() {
         // --- Actions (custom groups, level 5) ---
 
         /**
-         * Create a new custom group (album).
+         * Create a new custom group (album) or smart group.
          * Uses optimistic update: cache is updated synchronously, then
          * API call is made. On error, cache is rolled back.
          *
          * @param {string} name - Group display name
-         * @param {string[]} [imageIds=[]] - Initial image IDs
+         * @param {string[]} [imageIds=[]] - Initial image IDs (ignored for smart groups)
+         * @param {Object} [filterJson] - Filter criteria for smart groups.
+         *   When provided, creates a smart group with virtual membership.
          * @returns {Promise<string>} The new group hash (UUID)
          */
-        async createGroup(name, imageIds = []) {
+        async createGroup(name, imageIds = [], filterJson) {
             if (!App.requireOnline()) return;
             const groupHash = crypto.randomUUID();
             const backup = _backupLevel5();
@@ -465,24 +646,31 @@ AppState.duplicates = (function() {
             // Phase 1: Synchronous optimistic update
             transaction(() => {
                 if (!_groupCache[5]) _groupCache[5] = [];
-                _groupCache[5].push({
+                const entry = {
                     group_hash: groupHash,
                     name: name,
-                    count: imageIds.length,
-                    image_ids: [...imageIds],
-                    best_image: null,  // Will be resolved on next load
-                });
+                    count: filterJson ? 0 : imageIds.length,
+                    image_ids: filterJson ? [] : [...imageIds],
+                    best_image: null,
+                };
+                if (filterJson) entry.filter_json = filterJson;
+                _groupCache[5].push(entry);
                 markDirty(domainRef);
             });
 
             // Phase 2: Async API call
             try {
-                await App.apiPost('/groups', {
+                const body = {
                     group_hash: groupHash,
                     name: name,
-                    image_ids: imageIds,
-                });
-                // Reload to get best_image from backend
+                };
+                if (filterJson) {
+                    body.filter_json = filterJson;
+                } else {
+                    body.image_ids = imageIds;
+                }
+                await App.apiPost('/groups', body);
+                // Reload to get best_image from backend (smart groups won't have one)
                 await this.loadLevel(5, true);
             } catch (err) {
                 _restoreLevel5(backup);
@@ -520,6 +708,80 @@ AppState.duplicates = (function() {
                 broadcastError(err.message || 'Failed to rename group');
                 throw err;
             }
+        },
+
+        /**
+         * Update the filter criteria of a smart group.
+         * Sends the new filter and name in a single PATCH request.
+         *
+         * @param {string} groupHash - The group identifier
+         * @param {string} name - Current or updated group name
+         * @param {Object} filterJson - New filter criteria object
+         * @returns {Promise<void>}
+         */
+        async updateGroupFilter(groupHash, name, filterJson) {
+            if (!App.requireOnline()) return;
+            const backup = _backupLevel5();
+
+            // Phase 1: Synchronous optimistic update
+            transaction(() => {
+                const groups = _groupCache[5] || [];
+                const group = groups.find(g => g.group_hash === groupHash);
+                if (group) {
+                    group.filter_json = filterJson;
+                    group.name = name;
+                }
+                markDirty(domainRef);
+            });
+
+            // Phase 2: Async API call
+            try {
+                await App.apiPatch(`/groups/${groupHash}`, {
+                    name,
+                    filter_json: filterJson,
+                });
+            } catch (err) {
+                _restoreLevel5(backup);
+                broadcastError(err.message || 'Failed to update smart group');
+                throw err;
+            }
+        },
+
+        /**
+         * Update only the preview thumbnail of a smart group.
+         * Optimistic update + fire-and-forget API call.
+         *
+         * @param {string} groupHash - The group identifier
+         * @param {string|null} imageId - Image ID for the thumbnail
+         * @returns {Promise<void>}
+         */
+        async updateGroupPreview(groupHash, imageId) {
+            const groups = _groupCache[5] || [];
+            const group = groups.find(g => g.group_hash === groupHash);
+            if (!group) return;
+
+            const img = imageId ? AppState.images.getById(imageId) : null;
+            transaction(() => {
+                group.best_image = img ? { id: img.id, basename: img.basename } : null;
+                markDirty(domainRef);
+            });
+
+            // Persist (fire-and-forget)
+            App.apiPost(`/groups/${groupHash}/preview`, { image_id: imageId }).catch(() => {});
+        },
+
+        /**
+         * Evaluate a smart group's filter and set its preview image.
+         * Called after creating or updating a smart group, and after
+         * image deletions that invalidate a smart group's thumbnail.
+         *
+         * @param {string} groupHash - The group identifier
+         * @param {Object|string} filterJson - Filter criteria
+         * @returns {Promise<void>}
+         */
+        async evaluateAndSetPreview(groupHash, filterJson) {
+            const imageId = await _evaluatePreview(filterJson);
+            await this.updateGroupPreview(groupHash, imageId);
         },
 
         /**

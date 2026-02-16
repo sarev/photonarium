@@ -1819,9 +1819,10 @@ class DuplicateManager:
         """
         conn = self._get_db()
         try:
-            # Get all custom groups (source_path IS NULL) with their names
+            # Get all custom groups (source_path IS NULL) with their names,
+            # optional filter_json (non-NULL for smart groups), and preview
             cursor = conn.execute("""
-                SELECT cg.group_hash, cg.name
+                SELECT cg.group_hash, cg.name, cg.filter_json, cg.preview_image_id
                 FROM custom_groups cg
                 WHERE cg.source_path IS NULL
                 ORDER BY cg.name COLLATE NOCASE ASC
@@ -1831,7 +1832,7 @@ class DuplicateManager:
             if not custom_group_rows:
                 return []
 
-            # Get best image per non-empty group
+            # Get best image per non-empty regular group (from duplicate_groups membership)
             best_images = {}
             cursor = conn.execute(
                 """
@@ -1863,21 +1864,46 @@ class DuplicateManager:
                     'basename': row['basename'],
                 }
 
+            # Resolve smart group preview images (stored as preview_image_id)
+            preview_ids = [row['preview_image_id'] for row in custom_group_rows if row['preview_image_id']]
+            preview_images: dict[str, dict] = {}
+            if preview_ids:
+                placeholders = ','.join('?' * len(preview_ids))
+                cursor = conn.execute(
+                    f'SELECT id, basename FROM images WHERE id IN ({placeholders}) AND deleted = 0',
+                    preview_ids,
+                )
+                for row in cursor.fetchall():
+                    preview_images[row['id']] = {
+                        'id': row['id'],
+                        'basename': row['basename'],
+                    }
+
             groups = []
             with self._cache_lock:
                 for row in custom_group_rows:
                     group_hash = row['group_hash']
                     image_ids = list(self._group_cache[LEVEL_CUSTOM].get(group_hash, set()))
+                    filter_json = row['filter_json']
 
-                    groups.append(
-                        {
-                            'group_hash': group_hash,
-                            'name': row['name'],
-                            'count': len(image_ids),
-                            'image_ids': image_ids,
-                            'best_image': best_images.get(group_hash),
-                        }
-                    )
+                    # Smart groups use preview_image_id; regular groups use ranked best
+                    if filter_json is not None:
+                        preview_id = row['preview_image_id']
+                        best_image = preview_images.get(preview_id) if preview_id else None
+                    else:
+                        best_image = best_images.get(group_hash)
+
+                    group_dict = {
+                        'group_hash': group_hash,
+                        'name': row['name'],
+                        'count': len(image_ids),
+                        'image_ids': image_ids,
+                        'best_image': best_image,
+                    }
+                    # Include filter_json only for smart groups (saves bandwidth)
+                    if filter_json is not None:
+                        group_dict['filter_json'] = filter_json
+                    groups.append(group_dict)
 
             return groups
         finally:
@@ -2271,40 +2297,60 @@ class DuplicateManager:
     # Custom Groups (Level 5 — Albums)
     # =========================================================================
 
-    def create_custom_group(self, group_hash: str, name: str, image_ids: list[str]) -> None:
-        """Create a custom group (album) with the given images.
+    def create_custom_group(
+        self,
+        group_hash: str,
+        name: str,
+        image_ids: list[str],
+        filter_json: str | None = None,
+        preview_image_id: str | None = None,
+    ) -> None:
+        """Create a custom group (album) or smart group with filter criteria.
 
-        Inserts into both custom_groups (metadata) and duplicate_groups (membership)
-        tables. Custom groups use level 5 in duplicate_groups.
+        For regular groups, inserts into both custom_groups (metadata) and
+        duplicate_groups (membership) tables.  For smart groups (filter_json
+        is not None), only inserts into custom_groups -- membership is virtual,
+        computed from the filter criteria each time the group is opened.
 
         Args:
             group_hash: Frontend-generated UUID for the group.
             name: Display name for the group.
             image_ids: Initial list of image IDs to include (may be empty).
+                       Ignored when filter_json is provided.
+            filter_json: JSON string of filter criteria for smart groups.
+                         When None, creates a regular static custom group.
+            preview_image_id: Representative image for smart group thumbnails.
         """
         now = datetime.now().isoformat()
         conn = self._get_db()
         try:
             conn.execute(
-                'INSERT INTO custom_groups (group_hash, name, created_at, updated_at) VALUES (?, ?, ?, ?)',
-                (group_hash, name, now, now),
+                'INSERT INTO custom_groups'
+                ' (group_hash, name, filter_json, preview_image_id, created_at, updated_at)'
+                ' VALUES (?, ?, ?, ?, ?, ?)',
+                (group_hash, name, filter_json, preview_image_id, now, now),
             )
-            for image_id in image_ids:
-                conn.execute(
-                    'INSERT OR IGNORE INTO duplicate_groups'
-                    ' (level, group_hash, image_id, updated_at)'
-                    ' VALUES (?, ?, ?, ?)',
-                    (LEVEL_CUSTOM, group_hash, image_id, now),
-                )
+            # Smart groups have no static membership rows
+            if filter_json is None:
+                for image_id in image_ids:
+                    conn.execute(
+                        'INSERT OR IGNORE INTO duplicate_groups'
+                        ' (level, group_hash, image_id, updated_at)'
+                        ' VALUES (?, ?, ?, ?)',
+                        (LEVEL_CUSTOM, group_hash, image_id, now),
+                    )
             conn.commit()
-            logger.info(f'Created custom group "{name}" ({group_hash}) with {len(image_ids)} images')
+            if filter_json:
+                logger.info(f'Created smart group "{name}" ({group_hash})')
+            else:
+                logger.info(f'Created custom group "{name}" ({group_hash}) with {len(image_ids)} images')
         finally:
             conn.close()
 
-        # Update cache
+        # Update cache (smart groups have an empty member set)
         self._ensure_cache_loaded()
         with self._cache_lock:
-            self._group_cache[LEVEL_CUSTOM][group_hash] = set(image_ids)
+            self._group_cache[LEVEL_CUSTOM][group_hash] = set() if filter_json else set(image_ids)
 
     def rename_custom_group(self, group_hash: str, name: str) -> None:
         """Rename a custom group.
@@ -2321,6 +2367,49 @@ class DuplicateManager:
             )
             conn.commit()
             logger.info(f'Renamed custom group {group_hash} to "{name}"')
+        finally:
+            conn.close()
+
+    def update_custom_group_filter(
+        self, group_hash: str, filter_json: str, preview_image_id: str | None = None
+    ) -> None:
+        """Update the filter criteria (and optionally preview) of a smart group.
+
+        Args:
+            group_hash: The group identifier.
+            filter_json: New JSON string of filter criteria.
+            preview_image_id: New representative image ID (or None to clear).
+        """
+        now = datetime.now().isoformat()
+        conn = self._get_db()
+        try:
+            conn.execute(
+                'UPDATE custom_groups SET filter_json = ?, preview_image_id = ?, updated_at = ? WHERE group_hash = ?',
+                (filter_json, preview_image_id, now, group_hash),
+            )
+            conn.commit()
+            logger.info(f'Updated filter for smart group {group_hash}')
+        finally:
+            conn.close()
+
+    def update_smart_group_preview(self, group_hash: str, preview_image_id: str | None) -> None:
+        """Update only the preview thumbnail of a smart group.
+
+        Called by the frontend after evaluating the filter to pick a
+        representative image, or to clear a stale preview after image deletion.
+
+        Args:
+            group_hash: The group identifier.
+            preview_image_id: Image ID for the thumbnail, or None to clear.
+        """
+        now = datetime.now().isoformat()
+        conn = self._get_db()
+        try:
+            conn.execute(
+                'UPDATE custom_groups SET preview_image_id = ?, updated_at = ? WHERE group_hash = ?',
+                (preview_image_id, now, group_hash),
+            )
+            conn.commit()
         finally:
             conn.close()
 

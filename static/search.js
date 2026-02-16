@@ -92,6 +92,21 @@ const Search = {
     _autoAddedPeopleIds: new Set(),
 
     /**
+     * When editing an existing smart group, holds the group's hash.
+     * Null when creating a new smart group.
+     * @type {string|null}
+     * @private
+     */
+    _editingSmartGroupHash: null,
+
+    /**
+     * Name of the smart group being edited, for comparison.
+     * @type {string|null}
+     * @private
+     */
+    _editingSmartGroupName: null,
+
+    /**
      * Selected metadata criteria for the filter.
      * Keys are metadata field names, values are filter strings.
      * @type {Object<string, string>}
@@ -143,6 +158,7 @@ const Search = {
             emojiBtn: App.$('btn-emoji-picker'),
             applyBtn: App.$('btn-apply-filter'),
             clearBtn: App.$('btn-clear-filter-action'),
+            saveSmartGroupBtn: App.$('btn-save-smart-group'),
             // People filter elements
             peopleGroup: App.$('filter-people-group'),
             peopleChips: App.$('filter-people-chips'),
@@ -183,6 +199,9 @@ const Search = {
         // Focus the text input for quick typing
         this._els.textInput.focus();
 
+        // Update the Save/Update button text based on editing state
+        this._updateSmartGroupButton();
+
         // Pre-load people cache so name extraction can work without delay
         AppState.people.load();
 
@@ -205,6 +224,11 @@ const Search = {
             document.removeEventListener('keydown', this._escapeHandler);
             this._escapeHandler = null;
         }
+
+        // Clear smart group editing state so returning later starts fresh
+        this._editingSmartGroupHash = null;
+        this._editingSmartGroupName = null;
+        this._updateSmartGroupButton();
     },
 
     /**
@@ -217,6 +241,11 @@ const Search = {
 
         // Clear filter button
         this._els.clearBtn.addEventListener('click', () => this._clearFilter());
+
+        // Save as Smart Group button
+        if (this._els.saveSmartGroupBtn) {
+            this._els.saveSmartGroupBtn.addEventListener('click', () => this._saveAsSmartGroup());
+        }
 
         // Similarity slider - update displayed value and sync with gallery slider
         this._els.similaritySlider.addEventListener('input', () => {
@@ -964,6 +993,124 @@ const Search = {
 
         // Set filter - gallery subscribes to filterChanged event
         App.setFilter(filter);
+    },
+
+    /**
+     * Updates the smart group button text based on editing state.
+     * @private
+     */
+    _updateSmartGroupButton() {
+        const btn = this._els.saveSmartGroupBtn;
+        if (!btn) return;
+
+        // Find the last text node (after the icon span) and update it
+        const textNodes = [...btn.childNodes].filter(n => n.nodeType === Node.TEXT_NODE);
+        const textNode = textNodes[textNodes.length - 1];
+        if (this._editingSmartGroupHash) {
+            if (textNode) textNode.textContent = ' Update Smart Group';
+            btn.title = 'Update the filter criteria for this Smart Group';
+        } else {
+            if (textNode) textNode.textContent = ' Save as Smart Group';
+            btn.title = 'Save current filter criteria as a Smart Group';
+        }
+    },
+
+    /**
+     * Saves the current filter criteria as a smart group, or updates an
+     * existing one if in editing mode.
+     * @private
+     */
+    async _saveAsSmartGroup() {
+        // Validate form
+        const validation = this._validate();
+        if (!validation.valid) {
+            this._showError(validation.message);
+            return;
+        }
+
+        // Final extraction pass for people names
+        this._extractPeopleFromText({ trailingRequired: false });
+
+        // Read form values
+        const form = this._readForm();
+        if (!form) {
+            this._showError('Enter at least one filter criterion before saving.');
+            return;
+        }
+
+        // Build clean filter JSON — only persist the user-visible criteria,
+        // not computed fields (imageIds, scores, metadataImageIds, type)
+        const filterJson = {};
+        if (form.text) filterJson.text = form.text;
+        if (form.dateStart) filterJson.dateStart = form.dateStart;
+        if (form.dateEnd) filterJson.dateEnd = form.dateEnd;
+        if (form.rating) filterJson.rating = form.rating;
+        if (form.people) filterJson.people = form.people.map(p => ({ id: p.id, name: p.name }));
+        if (form.metadata) filterJson.metadata = form.metadata;
+
+        // Include threshold from slider
+        const threshold = parseInt(this._els.similaritySlider.value, 10) / 100;
+        if (form.text) filterJson.threshold = threshold;
+
+        if (this._editingSmartGroupHash) {
+            // Update existing smart group
+            const groupHash = this._editingSmartGroupHash;
+            try {
+                await AppState.duplicates.updateGroupFilter(
+                    groupHash,
+                    this._editingSmartGroupName,
+                    filterJson,
+                );
+                App.showInfo('Smart Group updated');
+            } catch (err) {
+                this._showError('Failed to update Smart Group');
+                return;
+            }
+            // Re-evaluate preview in the background (filter changed, old preview may not match)
+            AppState.duplicates.evaluateAndSetPreview(groupHash, filterJson);
+        } else {
+            // Create new smart group — prompt for name
+            const name = await App.prompt('Smart Group', 'Enter a name for the Smart Group:');
+            if (!name) return;
+
+            let groupHash;
+            try {
+                groupHash = await AppState.duplicates.createGroup(name, [], filterJson);
+                App.showInfo('Smart Group created');
+            } catch (err) {
+                this._showError('Failed to create Smart Group');
+                return;
+            }
+            // Evaluate preview in the background
+            if (groupHash) {
+                AppState.duplicates.evaluateAndSetPreview(groupHash, filterJson);
+            }
+        }
+    },
+
+    /**
+     * Loads a smart group's filter criteria into the search form for editing.
+     * Called from the Groups screen when the edit badge is clicked.
+     *
+     * @param {Object} group - The smart group object (must have filter_json)
+     */
+    loadSmartGroupForEditing(group) {
+        if (!group?.filter_json) return;
+
+        // Parse filter_json (may be string from backend or already an object)
+        const filter = typeof group.filter_json === 'string'
+            ? JSON.parse(group.filter_json)
+            : { ...group.filter_json };
+
+        // Set editing state
+        this._editingSmartGroupHash = group.group_hash;
+        this._editingSmartGroupName = group.name;
+
+        // Set the filter silently so _populateForm() will read it on enter
+        App.setFilter(filter);
+
+        // Navigate to Search screen — onEnter() will populate form and update button
+        App.showSearch();
     },
 
     /**

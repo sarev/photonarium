@@ -1605,13 +1605,15 @@ def prune_duplicates():
 
 @app.route('/api/groups', methods=['POST'])
 def create_group():
-    """Create a custom group (album) with optional initial images.
+    """Create a custom group (album) or smart group with filter criteria.
 
     Request Body:
         JSON object with:
             - group_hash: Frontend-generated UUID for the group
             - name: Display name for the group (non-empty, max 255 chars)
             - image_ids: Optional array of image IDs to include initially
+            - filter_json: Optional dict of filter criteria (creates a smart group).
+                           When provided, image_ids is ignored.
 
     Returns:
         Success response on creation.
@@ -1632,9 +1634,19 @@ def create_group():
 
     image_ids = data.get('image_ids', [])
 
+    # Smart group: filter_json is a dict of filter criteria
+    filter_json_raw = data.get('filter_json')
+    filter_json = None
+    if filter_json_raw is not None:
+        if not isinstance(filter_json_raw, dict):
+            return error_response('filter_json must be an object')
+        filter_json = orjson.dumps(filter_json_raw).decode('utf-8')
+
+    preview_image_id = data.get('preview_image_id')
+
     try:
         db = get_db()
-        db.create_custom_group(group_hash, name, image_ids)
+        db.create_custom_group(group_hash, name, image_ids, filter_json=filter_json, preview_image_id=preview_image_id)
         # Broadcast for other clients
         db.event_queue.emit(EVENT_GROUPS_CHANGED, {'level': 5, 'invalidate': True})
         return success_response(message='Group created')
@@ -1644,15 +1656,16 @@ def create_group():
 
 
 @app.route('/api/groups/<group_hash>', methods=['PATCH'])
-def rename_group(group_hash):
-    """Rename a custom group.
+def update_group(group_hash):
+    """Update a custom group (rename and/or update smart filter).
 
     Request Body:
         JSON object with:
             - name: New display name (non-empty, max 255 chars)
+            - filter_json: Optional dict of filter criteria (for smart groups)
 
     Returns:
-        Success response on rename.
+        Success response on update.
     """
     data = request.get_json()
     if not data:
@@ -1667,12 +1680,22 @@ def rename_group(group_hash):
     try:
         db = get_db()
         db.rename_custom_group(group_hash, name)
+
+        # Update smart group filter if provided
+        filter_json_raw = data.get('filter_json')
+        if filter_json_raw is not None:
+            if not isinstance(filter_json_raw, dict):
+                return error_response('filter_json must be an object')
+            filter_json = orjson.dumps(filter_json_raw).decode('utf-8')
+            preview_image_id = data.get('preview_image_id')
+            db.update_custom_group_filter(group_hash, filter_json, preview_image_id)
+
         # Broadcast for other clients
         db.event_queue.emit(EVENT_GROUPS_CHANGED, {'level': 5, 'invalidate': True})
-        return success_response(message='Group renamed')
+        return success_response(message='Group updated')
     except Exception as e:
-        logger.exception('Failed to rename custom group')
-        return error_response(f'Failed to rename group: {e!s}', 500)
+        logger.exception('Failed to update custom group')
+        return error_response(f'Failed to update group: {e!s}', 500)
 
 
 @app.route('/api/groups/<group_hash>', methods=['DELETE'])
@@ -1693,6 +1716,36 @@ def delete_group(group_hash):
     except Exception as e:
         logger.exception('Failed to delete custom group')
         return error_response(f'Failed to delete group: {e!s}', 500)
+
+
+@app.route('/api/groups/<group_hash>/preview', methods=['POST'])
+def update_group_preview(group_hash):
+    """Update the preview thumbnail of a smart group.
+
+    Called by the frontend after evaluating the smart group's filter
+    criteria to select a representative image for the thumbnail.
+
+    Request Body:
+        JSON object with:
+            - image_id: Image ID for the thumbnail (or null to clear)
+
+    Returns:
+        Success response on update.
+    """
+    data = request.get_json()
+    if not data:
+        return error_response('Request body is required')
+
+    image_id = data.get('image_id')
+
+    try:
+        db = get_db()
+        db.update_smart_group_preview(group_hash, image_id)
+        db.event_queue.emit(EVENT_GROUPS_CHANGED, {'level': 5, 'invalidate': True})
+        return success_response(message='Preview updated')
+    except Exception as e:
+        logger.exception('Failed to update smart group preview')
+        return error_response(f'Failed to update preview: {e!s}', 500)
 
 
 @app.route('/api/groups/<group_hash>/images', methods=['POST'])

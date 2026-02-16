@@ -1385,9 +1385,10 @@ Duplicates._createStackElement = function(group, index, blobUrl) {
     if (!blobUrl) img.classList.add('placeholder-logo');
     stack.appendChild(img);
 
-    // Slideshow hover badges — top-right (play) and top-left (shuffle),
-    // matching the face-delete-btn / face-ignore-btn pattern
-    if (group.count > 1) {
+    const isSmart = !!group.filter_json;
+
+    // Slideshow hover badges — skip for smart groups (membership not pre-computed)
+    if (group.count > 1 && !isSmart) {
         const linearBtn = document.createElement('button');
         linearBtn.className = 'duplicate-stack-slideshow-btn linear';
         linearBtn.title = 'Slideshow';
@@ -1410,6 +1411,42 @@ Duplicates._createStackElement = function(group, index, blobUrl) {
         stack.appendChild(shuffleBtn);
     }
 
+    // Edit badge for smart groups (top-centre) — navigate to Search with saved criteria
+    if (isSmart) {
+        const editBtn = document.createElement('button');
+        editBtn.className = 'duplicate-stack-edit-btn';
+        editBtn.title = 'Edit Smart Group filter';
+        editBtn.innerHTML = App.icon('edit', '\u270F');
+        editBtn.addEventListener('click', (e) => {
+            e.stopPropagation();
+            Search.loadSmartGroupForEditing(group);
+        });
+        stack.appendChild(editBtn);
+    }
+
+    // Delete badge for custom groups (top-right, red) — confirms then deletes
+    if (this.state.currentLevel === 5) {
+        const deleteBtn = document.createElement('button');
+        deleteBtn.className = 'duplicate-stack-delete-btn';
+        deleteBtn.title = 'Delete group';
+        deleteBtn.innerHTML = App.icon('delete', '\u{1F5D1}');
+        deleteBtn.addEventListener('click', async (e) => {
+            e.stopPropagation();
+            const confirmed = await App.confirm(
+                'Delete Group',
+                `Are you sure you want to delete "${group.name || 'Untitled'}"? The images will not be affected.`,
+                { danger: true, okText: 'Delete' },
+            );
+            if (!confirmed) return;
+            try {
+                await AppState.duplicates.deleteGroup(group.group_hash);
+            } catch (err) {
+                App.showError('Failed to delete group: ' + err.message);
+            }
+        });
+        stack.appendChild(deleteBtn);
+    }
+
     if (this.state.currentLevel >= 4) {
         // Named groups: show name as primary label, count as subtitle
         const nameEl = document.createElement('div');
@@ -1426,7 +1463,12 @@ Duplicates._createStackElement = function(group, index, blobUrl) {
 
         const countEl = document.createElement('div');
         countEl.className = 'duplicate-stack-count-sub';
-        countEl.textContent = group.count === 1 ? '1 image' : `${group.count} images`;
+        if (isSmart) {
+            countEl.textContent = 'Smart Group';
+            countEl.classList.add('smart-group-label');
+        } else {
+            countEl.textContent = group.count === 1 ? '1 image' : `${group.count} images`;
+        }
         stack.appendChild(countEl);
     } else {
         // Auto levels: show count label
@@ -1448,6 +1490,7 @@ Duplicates._createStackElement = function(group, index, blobUrl) {
 /**
  * Opens a duplicate group in the gallery.
  * Called when a stack is activated (double-click or Enter key).
+ * For smart groups, evaluates the filter dynamically.
  * @param {string} hash - The group hash to open
  * @private
  */
@@ -1455,9 +1498,88 @@ Duplicates._openGroupInGallery = function(hash) {
     // Save scroll position before leaving
     this.state.scrollTop = this._els.grid.scrollTop;
 
-    // Use shared navigation logic
+    // Check if this is a smart group
+    const group = this.state.groups.find(g => g.group_hash === hash);
+    if (group?.filter_json) {
+        this._openSmartGroup(group);
+        return;
+    }
+
+    // Regular group — use shared navigation logic
     if (this.navigateToGroup(hash)) {
         App.showGallery();
+    }
+};
+
+/**
+ * Opens a smart group by evaluating its filter criteria dynamically.
+ * Runs the same async operations as Search._applyFilter() (semantic search,
+ * metadata search, people lookup) then sets a filter with the computed results.
+ *
+ * @param {Object} group - Smart group object with filter_json
+ * @private
+ */
+Duplicates._openSmartGroup = async function(group) {
+    // Parse the filter criteria
+    const criteria = typeof group.filter_json === 'string'
+        ? JSON.parse(group.filter_json)
+        : { ...group.filter_json };
+
+    // Update selection state for visual sync when returning
+    this.state.selectedGroups = [group.group_hash];
+
+    // Navigate to gallery and show loading
+    App.showGallery();
+    AppState.loading.show('smartGroup', 'Loading Smart Group\u2026');
+
+    try {
+        // Build the filter object from saved criteria
+        const filter = { ...criteria };
+
+        // Semantic search if text query is present
+        let searchText = filter.text || '';
+        if (searchText && filter.people?.length) {
+            // Strip people names from text for a CLIP-friendly query
+            const sorted = [...filter.people].sort((a, b) => b.name.length - a.name.length);
+            for (const person of sorted) {
+                const escaped = person.name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+                searchText = searchText.replace(new RegExp('\\b' + escaped + '\\b', 'gi'), '');
+            }
+            searchText = searchText.replace(/\s{2,}/g, ' ').trim();
+        }
+
+        if (searchText) {
+            const threshold = filter.threshold || 0.2;
+            const response = await AppState.search.execute(searchText, threshold, 10000);
+            if (response?.results) {
+                filter.type = 'semantic';
+                filter.imageIds = response.results.map(r => r.id);
+                filter.scores = {};
+                response.results.forEach(r => { filter.scores[r.id] = r.score; });
+            }
+        }
+
+        // Metadata search if criteria are present
+        if (filter.metadata) {
+            try {
+                const response = await App.apiPost('/metadata-search', {
+                    criteria: filter.metadata,
+                });
+                if (response?.data?.image_ids) {
+                    filter.metadataImageIds = new Set(response.data.image_ids);
+                }
+            } catch (err) {
+                console.error('[_openSmartGroup] Metadata search failed:', err);
+            }
+        }
+
+        // Add group context for navigation (prev/next group, back to Groups)
+        filter.groupHash = group.group_hash;
+        filter.sourceLevel = 5;
+
+        App.setFilter(filter);
+    } finally {
+        AppState.loading.hide('smartGroup');
     }
 };
 
@@ -1503,13 +1625,22 @@ Duplicates.getGroups = function() {
  * Navigates to a duplicate group by hash.
  * Sets up the filter to show only that group's images and selects the best image.
  * Also updates the Duplicates screen selection so returning shows the correct group.
+ * For smart groups, delegates to _openSmartGroup which evaluates the filter dynamically.
  * Used by both _openGroupInGallery and Gallery's prev/next navigation.
  * @param {string} hash - The group hash to navigate to
  * @returns {boolean} True if navigation successful
  */
 Duplicates.navigateToGroup = function(hash) {
     const group = this.state.groups.find(g => g.group_hash === hash);
-    if (!group?.image_ids?.length) return false;
+    if (!group) return false;
+
+    // Smart groups don't have static image_ids — evaluate filter dynamically
+    if (group.filter_json) {
+        this._openSmartGroup(group);
+        return true;
+    }
+
+    if (!group.image_ids?.length) return false;
 
     const imageIds = group.image_ids;
 
