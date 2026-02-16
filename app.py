@@ -1191,6 +1191,7 @@ def get_config():
             'quality_alpha': config.quality_alpha,
             'nima_enabled': config.nima_enabled,
             'on_this_day_enabled': config.on_this_day_enabled,
+            'slideshow_interval': config.slideshow_interval,
             'trash_dir': str(db.trash_dir),
         }
     )

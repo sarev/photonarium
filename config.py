@@ -439,6 +439,19 @@ CONFIG_SCHEMA: list[tuple[str, list[tuple[str, list[str]]]]] = [
         ],
     ),
     (
+        'Slideshow',
+        [
+            (
+                'slideshow_interval',
+                [
+                    'Seconds each image is displayed during a slideshow in the',
+                    'fullscreen viewer (e.g. 3.5 for three and a half seconds).',
+                    'Range: 1.0-60.0',
+                ],
+            ),
+        ],
+    ),
+    (
         'Trash Directory',
         [
             (
@@ -525,6 +538,7 @@ FIELD_CONSTRAINTS: dict[str, dict[str, int | float | bool]] = {
     'quality_weight_pixels': {'min': 0.0, 'max': 1.0, 'step': 0.01},
     'quality_weight_bpp': {'min': 0.0, 'max': 1.0, 'step': 0.01},
     'quality_alpha': {'min': 0.0, 'max': 1.0, 'step': 0.01},
+    'slideshow_interval': {'min': 1.0, 'max': 60.0, 'step': 0.5},
 }
 
 
@@ -575,6 +589,7 @@ class Config:
         quality_weight_pixels: Weight for pixel count component in quality sort.
         quality_weight_bpp: Weight for bits-per-pixel component in quality sort.
         quality_alpha: Blend ratio for NIMA vs LAION aesthetic scores (0-1).
+        slideshow_interval: Seconds each image is displayed during a slideshow (1.0-60.0).
         trash_dir: Path to trash directory for deleted images. Empty string means
             use the default (<data-dir>/trash/). Set to a custom path to move
             trashed images elsewhere.
@@ -650,6 +665,7 @@ class Config:
     quality_weight_bpp: float = 0.05
     quality_alpha: float = 0.60
     on_this_day_enabled: bool = True
+    slideshow_interval: float = 5.0
     trash_dir: str = ''
 
     def __post_init__(self) -> None:

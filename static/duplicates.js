@@ -1385,6 +1385,31 @@ Duplicates._createStackElement = function(group, index, blobUrl) {
     if (!blobUrl) img.classList.add('placeholder-logo');
     stack.appendChild(img);
 
+    // Slideshow hover badges — top-right (play) and top-left (shuffle),
+    // matching the face-delete-btn / face-ignore-btn pattern
+    if (group.count > 1) {
+        const linearBtn = document.createElement('button');
+        linearBtn.className = 'duplicate-stack-slideshow-btn linear';
+        linearBtn.title = 'Slideshow';
+        linearBtn.innerHTML = App.icon('play_arrow', '\u25B6');
+        linearBtn.addEventListener('click', (e) => {
+            e.stopPropagation(); // Don't open group
+            this._startGroupSlideshow(group, false);
+        });
+
+        const shuffleBtn = document.createElement('button');
+        shuffleBtn.className = 'duplicate-stack-slideshow-btn shuffle';
+        shuffleBtn.title = 'Shuffled slideshow';
+        shuffleBtn.innerHTML = App.icon('shuffle', '\u21C4');
+        shuffleBtn.addEventListener('click', (e) => {
+            e.stopPropagation();
+            this._startGroupSlideshow(group, true);
+        });
+
+        stack.appendChild(linearBtn);
+        stack.appendChild(shuffleBtn);
+    }
+
     if (this.state.currentLevel >= 4) {
         // Named groups: show name as primary label, count as subtitle
         const nameEl = document.createElement('div');
@@ -1434,6 +1459,33 @@ Duplicates._openGroupInGallery = function(hash) {
     if (this.navigateToGroup(hash)) {
         App.showGallery();
     }
+};
+
+/**
+ * Opens a group as a fullscreen slideshow.
+ * Builds an image list from the group's image_ids, opens fullscreen with the
+ * first image, then starts the slideshow after a short delay.
+ * @param {Object} group - The duplicate group (lightweight format with image_ids)
+ * @param {boolean} shuffle - True for shuffled slideshow
+ * @private
+ */
+Duplicates._startGroupSlideshow = function(group, shuffle) {
+    if (!group?.image_ids?.length) return;
+
+    // Build image list from group's image_ids by looking up full metadata
+    const images = group.image_ids
+        .map(id => AppState.images.getById(id))
+        .filter(Boolean);
+
+    if (images.length === 0) return;
+
+    // Open fullscreen with the group's image list
+    Fullscreen.open(images[0].id, { imageList: images });
+
+    // Start slideshow after fullscreen finishes opening
+    setTimeout(() => {
+        Fullscreen.startSlideshow(shuffle);
+    }, 100);
 };
 
 /**

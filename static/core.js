@@ -968,6 +968,8 @@ const App = {
             };
             // "On this day..." feature toggle
             this._onThisDayEnabled = data.on_this_day_enabled ?? true;
+            // Slideshow interval (seconds per image, read by Fullscreen module)
+            this._slideshowInterval = data.slideshow_interval ?? 5;
             // Quality scoring weights (used by AppState.images for Quality sort)
             this._qualityConfig = {
                 weightAesthetic: data.quality_weight_aesthetic ?? 0.60,
@@ -1006,6 +1008,14 @@ const App = {
      */
     isOnThisDayEnabled() {
         return this._onThisDayEnabled ?? true;
+    },
+
+    /**
+     * Gets the slideshow interval in seconds.
+     * @returns {number} Seconds per image (default 5)
+     */
+    getSlideshowInterval() {
+        return this._slideshowInterval ?? 5;
     },
 
     /* ----------------------------------------------------------------------

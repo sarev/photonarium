@@ -92,6 +92,72 @@ const Fullscreen = {
     _overlayTimeout: null,
 
     /**
+     * setTimeout ID for the next slideshow advance.
+     * @type {number|null}
+     * @private
+     */
+    _slideshowTimer: null,
+
+    /**
+     * Whether a slideshow is currently running.
+     * @type {boolean}
+     * @private
+     */
+    _slideshowActive: false,
+
+    /**
+     * Whether the current slideshow is in shuffle mode.
+     * @type {boolean}
+     * @private
+     */
+    _slideshowShuffled: false,
+
+    /**
+     * Pre-shuffled index order for shuffle mode (null for linear).
+     * @type {number[]|null}
+     * @private
+     */
+    _slideshowOrder: null,
+
+    /**
+     * Current position within _slideshowOrder (or imageList for linear).
+     * @type {number}
+     * @private
+     */
+    _slideshowPosition: -1,
+
+    /**
+     * Last significant mouse position during slideshow (pixel coordinates).
+     * Null until the first mouse event establishes a baseline.
+     * Subsequent moves must exceed MOUSE_DEADZONE_PX from this point to count.
+     * @type {{x: number, y: number}|null}
+     * @private
+     */
+    _lastMousePos: null,
+
+    /**
+     * Minimum pixel distance from the last significant mouse position before
+     * a movement is treated as intentional during slideshow.
+     * @type {number}
+     * @constant
+     */
+    MOUSE_DEADZONE_PX: 16,
+
+    /**
+     * Duration of each half of the slideshow cross-fade (fade-out + fade-in).
+     * @type {number}
+     * @constant
+     */
+    CROSSFADE_MS: 400,
+
+    /**
+     * Timer ID for an in-progress cross-fade transition.
+     * @type {number|null}
+     * @private
+     */
+    _crossFadeTimer: null,
+
+    /**
      * Whether overlays are currently visible (avoids redundant DOM work).
      * @type {boolean}
      * @private
@@ -132,11 +198,29 @@ const Fullscreen = {
             rotateRightBtn: App.$('fullscreen-rotate-right'),
             prevBtn: App.$('fullscreen-prev'),
             nextBtn: App.$('fullscreen-next'),
+            slideshowBtn: App.$('fullscreen-slideshow'),
+            shuffleBtn: App.$('fullscreen-shuffle'),
         };
 
         // Bind button clicks (permanent, not per-session)
         this._els.closeBtn.addEventListener('click', () => {
             this.close();
+        });
+
+        // Slideshow: clicking the active mode stops; clicking the other switches
+        this._els.slideshowBtn.addEventListener('click', () => {
+            if (this._slideshowActive && !this._slideshowShuffled) {
+                this.stopSlideshow();
+            } else {
+                this.startSlideshow(false);
+            }
+        });
+        this._els.shuffleBtn.addEventListener('click', () => {
+            if (this._slideshowActive && this._slideshowShuffled) {
+                this.stopSlideshow();
+            } else {
+                this.startSlideshow(true);
+            }
         });
         this._els.taggingBtn.addEventListener('click', () => {
             this._toggleFaceTagging();
@@ -280,6 +364,9 @@ const Fullscreen = {
      */
     close() {
         if (!this.state.isOpen) return;
+
+        // Stop slideshow if running
+        this.stopSlideshow();
 
         // Unbind event listeners
         this._unbindEvents();
@@ -511,6 +598,11 @@ const Fullscreen = {
      * @private
      */
     _showOverlays() {
+        // During slideshow auto-advance, suppress overlay display so the
+        // toolbar/filename don't flash on every image transition.  User
+        // interactions (mouse move, key press, etc.) still show overlays.
+        if (this._slideshowAdvancing) return;
+
         // Only do DOM work if overlays aren't already visible
         if (!this._overlaysVisible) {
             this._els.filename.classList.remove('hidden');
@@ -533,6 +625,11 @@ const Fullscreen = {
             this._overlaysVisible = false;
             this._overlayTimeout = null;
         }, this.FILENAME_DISPLAY_MS);
+
+        // Reset slideshow advance timer on user interaction (natural pause-on-interact)
+        if (this._slideshowActive) {
+            this._scheduleSlideshowAdvance();
+        }
     },
 
     /**
@@ -742,6 +839,24 @@ const Fullscreen = {
      * @private
      */
     _handleMouseMove(e) {
+        // During slideshow, ignore small mouse movements (trackpad jitter,
+        // bumped mouse) so the slideshow isn't paused by idle noise.  Only
+        // movements exceeding MOUSE_DEADZONE_PX from the last significant
+        // position count as intentional.
+        if (this._slideshowActive && !this.state.isPanning) {
+            if (!this._lastMousePos) {
+                // First movement after slideshow start — establish baseline
+                this._lastMousePos = { x: e.clientX, y: e.clientY };
+                return;
+            }
+            const dx = e.clientX - this._lastMousePos.x;
+            const dy = e.clientY - this._lastMousePos.y;
+            if (dx * dx + dy * dy < this.MOUSE_DEADZONE_PX * this.MOUSE_DEADZONE_PX) {
+                return;
+            }
+            this._lastMousePos = { x: e.clientX, y: e.clientY };
+        }
+
         // Show overlays on mouse movement
         this._showOverlays();
 
@@ -1096,7 +1211,17 @@ const Fullscreen = {
         switch (e.key) {
             case 'Escape':
                 e.preventDefault();
+                // During slideshow, Escape stops slideshow AND exits fullscreen
                 this._exit();
+                break;
+            case ' ':
+                // Space: toggle slideshow pause/resume (or start linear)
+                e.preventDefault();
+                if (this._slideshowActive) {
+                    this.stopSlideshow();
+                } else {
+                    this.startSlideshow(false);
+                }
                 break;
             case 'ArrowLeft':
                 e.preventDefault();
@@ -1126,8 +1251,20 @@ const Fullscreen = {
         const { imageList, currentIndex } = this.state;
         if (imageList.length <= 1) return;
 
+        // If a cross-fade is in progress, cancel it so we navigate immediately
+        // and re-show overlays (the earlier _showOverlays call was suppressed)
+        if (this._crossFadeTimer) {
+            this._cancelCrossFade();
+            this._showOverlays();
+        }
+
         const newIndex = (currentIndex - 1 + imageList.length) % imageList.length;
         this._navigateToIndex(newIndex);
+
+        // Sync slideshow position to match manual navigation
+        if (this._slideshowActive) {
+            this._syncSlideshowPosition(newIndex);
+        }
     },
 
     /**
@@ -1139,8 +1276,18 @@ const Fullscreen = {
         const { imageList, currentIndex } = this.state;
         if (imageList.length <= 1) return;
 
+        if (this._crossFadeTimer) {
+            this._cancelCrossFade();
+            this._showOverlays();
+        }
+
         const newIndex = (currentIndex + 1) % imageList.length;
         this._navigateToIndex(newIndex);
+
+        // Sync slideshow position to match manual navigation
+        if (this._slideshowActive) {
+            this._syncSlideshowPosition(newIndex);
+        }
     },
 
     /**
@@ -1349,6 +1496,196 @@ const Fullscreen = {
             App.showError('Failed to move image to trash');
             // Restore by reloading the display list
             this.state.imageList = AppState.images.getDisplayList();
+        }
+    },
+
+    /* ----------------------------------------------------------------------
+       SLIDESHOW
+
+       Auto-advancing image display with optional shuffle.
+       ---------------------------------------------------------------------- */
+
+    /**
+     * Starts (or switches) the slideshow.
+     * If face tagging mode is active, it is disabled first.
+     * @param {boolean} shuffle - True for shuffled order, false for linear
+     */
+    startSlideshow(shuffle = false) {
+        // Disable face tagging during slideshow
+        if (typeof Faces !== 'undefined' && Faces.isTaggingModeActive?.()) {
+            Faces.setTaggingMode(false);
+            this._updateTaggingButton();
+        }
+
+        // If already running, stop first (handles mode switch)
+        if (this._slideshowActive) {
+            this.stopSlideshow();
+        }
+
+        const { imageList, currentIndex } = this.state;
+        if (imageList.length <= 1) return;
+
+        this._slideshowActive = true;
+        this._slideshowShuffled = shuffle;
+        this._lastMousePos = null; // Reset deadzone baseline
+
+        if (shuffle) {
+            // Fisher-Yates shuffle of indices [0..length-1]
+            const order = Array.from({ length: imageList.length }, (_, i) => i);
+            for (let i = order.length - 1; i > 0; i--) {
+                const j = Math.floor(Math.random() * (i + 1));
+                [order[i], order[j]] = [order[j], order[i]];
+            }
+            this._slideshowOrder = order;
+            // Find current image's position in the shuffled order
+            this._slideshowPosition = order.indexOf(currentIndex);
+            if (this._slideshowPosition < 0) this._slideshowPosition = 0;
+        } else {
+            this._slideshowOrder = null;
+            this._slideshowPosition = currentIndex;
+        }
+
+        // Highlight the active button and ensure the toolbar is visible for
+        // a full 3 seconds so the user can see the highlighted state.  Without
+        // this, the overlays may disappear almost immediately if the mouse last
+        // moved a couple of seconds ago — making it look like nothing happened.
+        this._els.slideshowBtn.classList.toggle('slideshow-active', !shuffle);
+        this._els.shuffleBtn.classList.toggle('slideshow-active', shuffle);
+        this._showOverlays();
+
+        // Schedule the first advance
+        this._scheduleSlideshowAdvance();
+    },
+
+    /**
+     * Stops the slideshow and resets state.
+     */
+    stopSlideshow() {
+        if (this._slideshowTimer) {
+            clearTimeout(this._slideshowTimer);
+            this._slideshowTimer = null;
+        }
+        this._cancelCrossFade();
+
+        this._slideshowActive = false;
+        this._slideshowShuffled = false;
+        this._slideshowOrder = null;
+        this._slideshowPosition = -1;
+        this._lastMousePos = null;
+
+        // Remove active highlight from both buttons
+        this._els.slideshowBtn?.classList.remove('slideshow-active');
+        this._els.shuffleBtn?.classList.remove('slideshow-active');
+
+        // Show overlays so user sees the toolbar again
+        this._showOverlays();
+    },
+
+    /**
+     * Schedules the next slideshow advance after the configured interval.
+     * Clears any existing timer first so re-calling this resets the countdown.
+     * @private
+     */
+    _scheduleSlideshowAdvance() {
+        if (this._slideshowTimer) {
+            clearTimeout(this._slideshowTimer);
+        }
+        const ms = (App.getSlideshowInterval() || 5) * 1000;
+        this._slideshowTimer = setTimeout(() => this._slideshowAdvance(), ms);
+    },
+
+    /**
+     * Advances to the next image with a cross-fade transition.
+     * Fades out the current image, navigates while invisible, then fades in.
+     * The next advance is scheduled after the fade-in completes so the full
+     * image is visible for the entire configured interval.
+     * @private
+     */
+    _slideshowAdvance() {
+        const { imageList } = this.state;
+        if (!this._slideshowActive || imageList.length <= 1) return;
+
+        // Move to next position (wrap with modulo)
+        this._slideshowPosition = (this._slideshowPosition + 1) % imageList.length;
+
+        // Resolve the actual image index
+        const targetIndex = this._slideshowShuffled
+            ? this._slideshowOrder[this._slideshowPosition]
+            : this._slideshowPosition;
+
+        // Suppress overlay display for the duration of the cross-fade
+        this._slideshowAdvancing = true;
+        const img = this._els.image;
+        const ms = this.CROSSFADE_MS;
+
+        // Phase 1: fade out current image
+        img.style.transition = `opacity ${ms}ms ease`;
+        img.style.opacity = '0';
+
+        this._crossFadeTimer = setTimeout(() => {
+            // Bail if slideshow was stopped during fade-out
+            if (!this._slideshowActive) {
+                this._clearCrossFadeStyles();
+                return;
+            }
+
+            // Phase 2: navigate while invisible
+            this._navigateToIndex(targetIndex);
+
+            // Phase 3: fade in — wait one frame for the new src to take effect
+            requestAnimationFrame(() => {
+                img.style.opacity = '1';
+
+                this._crossFadeTimer = setTimeout(() => {
+                    this._crossFadeTimer = null;
+                    this._clearCrossFadeStyles();
+
+                    if (this._slideshowActive) {
+                        this._scheduleSlideshowAdvance();
+                    }
+                }, ms);
+            });
+        }, ms);
+    },
+
+    /**
+     * Removes inline cross-fade styles from the image and clears the
+     * advancing flag so normal overlay behaviour resumes.
+     * @private
+     */
+    _clearCrossFadeStyles() {
+        this._els.image.style.transition = '';
+        this._els.image.style.opacity = '';
+        this._slideshowAdvancing = false;
+    },
+
+    /**
+     * Cancels an in-progress cross-fade transition, restoring the image to
+     * full opacity immediately.  Safe to call when no fade is in progress.
+     * @private
+     */
+    _cancelCrossFade() {
+        if (!this._crossFadeTimer) return;
+        clearTimeout(this._crossFadeTimer);
+        this._crossFadeTimer = null;
+        this._clearCrossFadeStyles();
+    },
+
+    /**
+     * Syncs slideshow position to match a manually navigated image index.
+     * Called when user presses arrow keys or swipes during a slideshow.
+     * @param {number} imageIndex - The image list index that was navigated to
+     * @private
+     */
+    _syncSlideshowPosition(imageIndex) {
+        if (this._slideshowShuffled && this._slideshowOrder) {
+            // Find this image index in the shuffled order
+            const pos = this._slideshowOrder.indexOf(imageIndex);
+            if (pos >= 0) {
+                this._slideshowPosition = pos;
+            }
+        } else {
+            this._slideshowPosition = imageIndex;
         }
     },
 };
