@@ -183,8 +183,10 @@ const Search = {
         // Bind button events
         this._bindEvents();
 
-        // Subscribe to AppState.people for instant dialog updates
+        // Subscribe to AppState.people for deletions and dialog updates
         AppState.people.onChanged(() => {
+            this._pruneDeletedPeople();
+
             // Re-render people picker if dialog is open
             if (this._els.peopleDialog?.open) {
                 this._renderPeopleAvailable();
@@ -444,6 +446,40 @@ const Search = {
                     this._els.peoplePickerBtn.disabled = true;
                     this._els.peoplePickerBtn.title = 'Face detection is disabled in settings';
                 }
+            }
+        }
+    },
+
+    /**
+     * Removes people from the selection, auto-added set, and active filter
+     * when they no longer exist in AppState (deleted by another client).
+     * @private
+     */
+    _pruneDeletedPeople() {
+        if (!this._selectedPeople.length) return;
+
+        const before = this._selectedPeople.length;
+        this._selectedPeople = this._selectedPeople.filter(p => {
+            if (AppState.people.get(p.id)) return true;
+            // Person was deleted — also clean up auto-added tracking
+            this._autoAddedPeopleIds.delete(p.id);
+            return false;
+        });
+
+        if (this._selectedPeople.length === before) return;
+
+        // Re-render chips (safe even when not on Search screen — DOM is inert)
+        this._renderPeopleChips();
+
+        // Also prune the active filter so _populateForm() doesn't restore stale
+        // people when the user re-enters the Search screen
+        const filter = App.getFilter();
+        if (filter?.people?.length) {
+            const validIds = new Set(this._selectedPeople.map(p => p.id));
+            filter.people = filter.people.filter(p => validIds.has(p.id));
+            if (filter.autoAddedPeopleIds) {
+                filter.autoAddedPeopleIds = filter.autoAddedPeopleIds
+                    .filter(id => validIds.has(id));
             }
         }
     },
