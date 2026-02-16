@@ -53,7 +53,6 @@ import atexit
 import base64
 import io
 import logging
-import math
 import os
 import subprocess
 import sys
@@ -132,7 +131,7 @@ from thumbnails import (
     generate_thumbnail,
     get_thumbnail_cache_path,
 )
-from trash import compute_quality_scores
+from trash import compute_keep_trash_split
 
 # Configure logging - set root logger to WARNING, our modules to INFO
 logging.basicConfig(
@@ -1443,6 +1442,99 @@ def sort_duplicates_semantic():
         return error_response(f'Semantic sort failed: {e!s}', 500)
 
 
+@app.route('/api/groups/preview', methods=['POST'])
+def preview_groups():
+    """Preview which images would be kept/trashed by a quality-based filter.
+
+    Read-only endpoint that returns the keep/trash split without any
+    side effects.  Works for all group levels (0-5), including directory
+    and custom groups.
+
+    Request Body:
+        JSON object with:
+            - level: Group level (0-5)
+            - keep_count: Number of best images to keep per group (default: 1)
+            - keep_percent: Percentage of images to keep (overrides keep_count)
+            - trash_count: Number of worst images to trash per group
+            - trash_percent: Percentage of worst images to trash
+            - group_hashes: Optional array of specific group hashes to preview.
+                          If omitted, previews all groups at the level.
+            - explicit_groups: Optional array of {group_hash, image_ids} for
+                             groups whose membership is resolved by the frontend
+                             (e.g. smart groups with dynamic filter criteria).
+                             Quality fields are fetched from the DB.
+
+    Returns:
+        JSON object with:
+            - keep_ids: Array of image IDs in the keep set
+            - trash_ids: Array of image IDs in the trash set
+    """
+    data = request.get_json()
+    if not data:
+        return error_response('Request body is required')
+
+    level = data.get('level')
+    if level is None:
+        return error_response('level is required')
+    if not isinstance(level, int) or level < 0 or level > 5:
+        return error_response('level must be 0-5')
+
+    keep_count = data.get('keep_count')
+    keep_percent = data.get('keep_percent')
+    trash_count = data.get('trash_count')
+    trash_percent = data.get('trash_percent')
+    group_hashes = data.get('group_hashes')
+    explicit_groups = data.get('explicit_groups')
+
+    # Validate mutual exclusion: keep and trash params cannot both be provided
+    has_keep = keep_count is not None or keep_percent is not None
+    has_trash = trash_count is not None or trash_percent is not None
+    if has_keep and has_trash:
+        return error_response('Cannot specify both keep and trash parameters')
+
+    # Validate individual params
+    if keep_count is not None and (not isinstance(keep_count, int) or keep_count < 1):
+        return error_response('keep_count must be a positive integer')
+    if trash_count is not None and (not isinstance(trash_count, int) or trash_count < 1):
+        return error_response('trash_count must be a positive integer')
+
+    db = get_db()
+
+    try:
+        # Use min_size=1 so single-image groups are included (they go
+        # straight into the keep set since we always keep >= 1).
+        if group_hashes and isinstance(group_hashes, list):
+            groups = []
+            for gh in group_hashes:
+                groups.extend(db._duplicate_manager.get_group_images_ranked(level, gh, min_size=1))
+        else:
+            groups = db._duplicate_manager.get_group_images_ranked(level, min_size=1)
+    except Exception as e:
+        logger.exception('Failed to get groups for preview')
+        return error_response(f'Failed to load groups: {e!s}', 500)
+
+    # Merge explicit groups (smart groups whose image IDs were resolved
+    # on the frontend).  Fetch quality-scoring columns via DuplicateManager.
+    if explicit_groups and isinstance(explicit_groups, list):
+        groups.extend(db._duplicate_manager.get_explicit_groups_ranked(explicit_groups))
+
+    keep_ids, trash_ids = compute_keep_trash_split(
+        groups,
+        db.config,
+        keep_count=keep_count,
+        keep_percent=keep_percent,
+        trash_count=trash_count,
+        trash_percent=trash_percent,
+    )
+
+    return success_response(
+        {
+            'keep_ids': keep_ids,
+            'trash_ids': trash_ids,
+        }
+    )
+
+
 @app.route('/api/duplicates/prune', methods=['POST'])
 def prune_duplicates():
     """Prune duplicate groups by trashing lower-quality images.
@@ -1461,7 +1553,7 @@ def prune_duplicates():
 
     Request Body:
         JSON object with:
-            - level: Similarity level (0-3, auto-detected only)
+            - level: Similarity level (0-4, auto-detected and directory groups)
             - keep_count: Number of images to keep per group (default: 1)
             - keep_percent: Percentage of images to keep (overrides keep_count).
                           Rounded up so at least 1 image is always kept.
@@ -1485,8 +1577,8 @@ def prune_duplicates():
     level = data.get('level')
     if level is None:
         return error_response('level is required')
-    if not isinstance(level, int) or level < 0 or level > 3:
-        return error_response('level must be 0-3 (auto-detected duplicates only)')
+    if not isinstance(level, int) or level < 0 or level > 4:
+        return error_response('level must be 0-4 (custom groups cannot be pruned)')
 
     keep_count = data.get('keep_count')
     keep_percent = data.get('keep_percent')
@@ -1536,44 +1628,15 @@ def prune_duplicates():
             }
         )
 
-    # Determine which images to trash across all groups
-    all_trash_ids = []
-    pruned_group_count = 0
-
-    for group in groups:
-        images = group['images']
-        n = len(images)
-
-        # Determine how many to keep for this group.
-        # Trash mode: trash the worst N, keep the rest (always keep >= 1).
-        # Keep mode: keep the best N, trash the rest.
-        if trash_percent is not None:
-            group_trash = math.ceil(n * trash_percent / 100)
-            group_trash = max(0, min(group_trash, n - 1))
-            group_keep = n - group_trash
-        elif trash_count is not None:
-            group_trash = max(0, min(trash_count, n - 1))
-            group_keep = n - group_trash
-        elif keep_percent is not None:
-            group_keep = math.ceil(n * keep_percent / 100)
-        else:
-            group_keep = keep_count
-        # Always keep at least 1
-        group_keep = max(1, min(group_keep, n))
-
-        if group_keep >= n:
-            continue  # Nothing to trash in this group
-
-        # Score and rank images
-        scores = compute_quality_scores(images, db.config)
-
-        # Sort by score descending — best first
-        ranked = sorted(images, key=lambda img: scores.get(img['id'], 0), reverse=True)
-
-        # Keep top N, trash the rest
-        trash_ids = [img['id'] for img in ranked[group_keep:]]
-        all_trash_ids.extend(trash_ids)
-        pruned_group_count += 1
+    # Use the shared helper to split images into keep/trash sets
+    _keep_ids, all_trash_ids = compute_keep_trash_split(
+        groups,
+        db.config,
+        keep_count=keep_count,
+        keep_percent=keep_percent,
+        trash_count=trash_count,
+        trash_percent=trash_percent,
+    )
 
     if not all_trash_ids:
         return success_response(
@@ -1607,7 +1670,7 @@ def prune_duplicates():
     return success_response(
         {
             'trashed_count': len(result['enqueued']),
-            'group_count': pruned_group_count,
+            'group_count': len(groups),
             'errors': error_messages,
         }
     )

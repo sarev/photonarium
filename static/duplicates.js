@@ -190,7 +190,7 @@ const Duplicates = {
             btnSortPeople: App.$('btn-dup-sort-people'),
             semanticQuery: App.$('dup-semantic-query'),
             minGroupSize: App.$('dup-min-group-size'),
-            btnPrune: App.$('btn-dup-prune'),
+            btnRefine: App.$('btn-dup-refine'),
             // Custom group controls
             btnGroupNew: App.$('btn-group-new'),
             btnGroupRename: App.$('btn-group-rename'),
@@ -364,9 +364,9 @@ const Duplicates = {
         // Min group size dropdown
         this._els.minGroupSize.addEventListener('change', () => this._onMinGroupSizeChange());
 
-        // Prune button
-        if (this._els.btnPrune) {
-            this._els.btnPrune.addEventListener('click', () => this._onPruneGroups());
+        // Refine button
+        if (this._els.btnRefine) {
+            this._els.btnRefine.addEventListener('click', () => this._onRefineGroups());
         }
 
         // Custom group controls
@@ -1019,28 +1019,18 @@ Duplicates._onRenameGroup = async function() {
 };
 
 /**
- * Opens the prune dialog for the current duplicate level.
+ * Opens the refine dialog for the current group level.
  *
  * Selection-aware: if groups are selected, scopes to those groups only.
  * Otherwise scopes to all groups at the current level.
  *
- * The dialog lets the user choose how many images to keep per group
- * (best only, top N, or top N%), shows a live preview of the impact,
- * and requires explicit confirmation before proceeding.
+ * The dialog lets the user choose how many images to keep/trash per group
+ * (best only, top N, or top N%), shows a live summary, and offers two
+ * actions: View in Gallery (all levels) and Trash (levels 0-4 only).
  * @private
  */
-Duplicates._onPruneGroups = function() {
+Duplicates._onRefineGroups = function() {
     const level = this.state.currentLevel;
-    if (level > 3) return;
-
-    // Guard: trash must be enabled
-    if (!AppState.status.isTrashEnabled()) {
-        App.showError(
-            'Cannot prune: trash directory is misconfigured. '
-            + 'Check that it does not overlap an indexed folder.',
-        );
-        return;
-    }
 
     const allGroups = this.state.groups;
     if (allGroups.length === 0) return;
@@ -1054,64 +1044,98 @@ Duplicates._onPruneGroups = function() {
 
     if (targetGroups.length === 0) return;
 
-    const totalImages = targetGroups.reduce((sum, g) => sum + g.count, 0);
-
-    // Show the prune dialog
-    this._showPruneDialog(level, targetGroups, hasSelection, totalImages, selectedHashes);
+    this._showRefineDialog(level, targetGroups, hasSelection, selectedHashes);
 };
 
 /**
- * Displays the prune options dialog and handles its lifecycle.
+ * Displays the refine options dialog and handles its lifecycle.
  *
- * @param {number} level - Current duplicate level
- * @param {Array} targetGroups - Groups to prune
+ * Provides two actions:
+ * - **View in Gallery**: shows the focused subset (keep or trash) as a
+ *   filtered gallery view.  Available for all levels 0-5.
+ * - **Trash**: moves the non-kept images to trash.  Only available for
+ *   levels 0-4 when trash is enabled.
+ *
+ * For smart groups (those with ``filter_json``), the dialog opens
+ * immediately in a "resolving" state while their filters are evaluated
+ * asynchronously.  The resolved image IDs are cached on each group as
+ * ``_resolvedImageIds`` so that "View in Gallery" can pass them to the
+ * backend without re-evaluating.
+ *
+ * @param {number} level - Current group level
+ * @param {Array} targetGroups - Groups in scope
  * @param {boolean} hasSelection - Whether scope is from selection
- * @param {number} totalImages - Total images across target groups
  * @param {string[]} selectedHashes - Selected group hashes (if any)
  * @private
  */
-Duplicates._showPruneDialog = function(level, targetGroups, hasSelection, totalImages, selectedHashes) {
-    const dialog = document.getElementById('dialog-prune');
-    const scopeEl = document.getElementById('dialog-prune-scope');
-    const summaryEl = document.getElementById('dialog-prune-summary');
-    const okBtn = document.getElementById('dialog-prune-ok');
-    const cancelBtn = document.getElementById('dialog-prune-cancel');
-    const countInput = document.getElementById('dialog-prune-count');
-    const pctInput = document.getElementById('dialog-prune-percent');
-    const radios = dialog.querySelectorAll('input[name="prune-mode"]');
-    const toggleBtn = document.getElementById('dialog-prune-toggle');
-    const legendText = document.getElementById('dialog-prune-legend-text');
-    const labelBest = document.getElementById('dialog-prune-label-best');
-    const labelTopCount = document.getElementById('dialog-prune-label-top-count');
-    const labelTopPct = document.getElementById('dialog-prune-label-top-pct');
+Duplicates._showRefineDialog = function(level, targetGroups, hasSelection, selectedHashes) {
+    const dialog = document.getElementById('dialog-refine');
+    const scopeEl = document.getElementById('dialog-refine-scope');
+    const summaryEl = document.getElementById('dialog-refine-summary');
+    const viewBtn = document.getElementById('dialog-refine-view');
+    const trashBtn = document.getElementById('dialog-refine-trash');
+    const cancelBtn = document.getElementById('dialog-refine-cancel');
+    const countInput = document.getElementById('dialog-refine-count');
+    const pctInput = document.getElementById('dialog-refine-percent');
+    const radios = dialog.querySelectorAll('input[name="refine-mode"]');
+    const toggleBtn = document.getElementById('dialog-refine-toggle');
+    const legendText = document.getElementById('dialog-refine-legend-text');
+    const labelBest = document.getElementById('dialog-refine-label-best');
+    const labelTopCount = document.getElementById('dialog-refine-label-top-count');
+    const labelTopPct = document.getElementById('dialog-refine-label-top-pct');
+
+    // Trash button is only shown for levels 0-4 when trash is enabled
+    const canTrash = level <= 4 && AppState.status.isTrashEnabled();
+    trashBtn.hidden = !canTrash;
 
     // --- Mode state: keep (default) vs trash ---
     let trashMode = false;
 
+    // --- Smart group resolution state ---
+    // Smart groups have count=0 because their membership is dynamic.
+    // We resolve their filters asynchronously after the dialog opens.
+    const smartGroups = targetGroups.filter(g => g.filter_json);
+    let resolving = smartGroups.length > 0;
+    let resolveFailed = false;
+
+    /** Get the effective image count for a group. */
+    const groupImageCount = (g) =>
+        g._resolvedImageIds ? g._resolvedImageIds.length : g.count;
+
+    /** Total images across all target groups (updates after resolution). */
+    const getTotalImages = () =>
+        targetGroups.reduce((sum, g) => sum + groupImageCount(g), 0);
+
     // --- Populate scope description ---
     const groupCount = targetGroups.length;
-    if (hasSelection) {
-        scopeEl.textContent = groupCount === 1
-            ? `1 selected group (${totalImages} images)`
-            : `${groupCount} selected groups (${totalImages} images)`;
-    } else {
-        scopeEl.textContent = `All ${groupCount} groups (${totalImages} images)`;
-    }
+    const updateScope = () => {
+        const total = getTotalImages();
+        if (hasSelection) {
+            scopeEl.textContent = groupCount === 1
+                ? `1 selected group (${total} images)`
+                : `${groupCount} selected groups (${total} images)`;
+        } else {
+            scopeEl.textContent = `All ${groupCount} groups (${total} images)`;
+        }
+    };
+    updateScope();
 
     /**
-     * Compute how many images would be trashed for the current settings.
+     * Compute counts for the focused subset and trash target.
      *
-     * In keep mode: keep the best N, trash the rest.
-     * In trash mode: trash the worst N, keep the rest (always keep >= 1).
+     * In keep mode the focused subset is the best images; in trash mode
+     * it is the worst images.  The trash count is always the images that
+     * would be removed (non-kept).
      *
-     * @returns {number} Count of images that would be moved to trash
+     * @returns {{selected: number, trashCount: number}}
      */
-    const computeTrashCount = () => {
-        const mode = dialog.querySelector('input[name="prune-mode"]:checked')?.value || 'best';
+    const computeCounts = () => {
+        const mode = dialog.querySelector('input[name="refine-mode"]:checked')?.value || 'best';
+        const totalImages = getTotalImages();
         let trashTotal = 0;
 
         for (const group of targetGroups) {
-            const n = group.count;
+            const n = groupImageCount(group);
             let value;
             if (mode === 'best') {
                 value = 1;
@@ -1130,22 +1154,48 @@ Duplicates._showPruneDialog = function(level, targetGroups, hasSelection, totalI
                 trashTotal += n - keep;
             }
         }
-        return trashTotal;
+
+        // Focused subset depends on toggle mode
+        const selected = trashMode ? trashTotal : totalImages - trashTotal;
+        return { selected, trashCount: trashTotal };
     };
 
-    /** Update summary text and OK button state from current settings. */
+    /** Update summary text and button states from current settings. */
     const updateSummary = () => {
-        const toTrash = computeTrashCount();
-        if (toTrash <= 0) {
-            summaryEl.textContent = 'Nothing to trash with these settings.';
-            summaryEl.style.color = '';
-            okBtn.disabled = true;
-            okBtn.textContent = 'Trash';
-        } else {
-            summaryEl.textContent = `${toTrash} image${toTrash > 1 ? 's' : ''} will be moved to trash.`;
+        if (resolving) {
+            summaryEl.textContent = 'Evaluating smart group filters\u2026';
+            summaryEl.style.color = 'var(--color-text-secondary)';
+            viewBtn.disabled = true;
+            if (canTrash) {
+                trashBtn.disabled = true;
+                trashBtn.textContent = 'Trash';
+            }
+            return;
+        }
+        if (resolveFailed) {
+            summaryEl.textContent = 'Failed to evaluate smart group filters.';
             summaryEl.style.color = 'var(--color-danger)';
-            okBtn.disabled = false;
-            okBtn.textContent = `Trash ${toTrash} images`;
+            viewBtn.disabled = true;
+            if (canTrash) {
+                trashBtn.disabled = true;
+                trashBtn.textContent = 'Trash';
+            }
+            return;
+        }
+
+        const { selected, trashCount } = computeCounts();
+        const totalImages = getTotalImages();
+
+        summaryEl.textContent = `Selecting ${selected.toLocaleString()} of ${totalImages.toLocaleString()} images`;
+        summaryEl.style.color = '';
+
+        // View button: enabled when there are images in the focused subset
+        viewBtn.disabled = selected <= 0;
+
+        // Trash button: enabled when there are images to trash
+        if (canTrash) {
+            trashBtn.disabled = trashCount <= 0;
+            trashBtn.textContent = trashCount > 0 ? `Trash ${trashCount.toLocaleString()}` : 'Trash';
         }
     };
 
@@ -1163,39 +1213,38 @@ Duplicates._showPruneDialog = function(level, targetGroups, hasSelection, totalI
 
     /** Clicking a number input auto-selects its radio button. */
     const onCountFocus = () => {
-        dialog.querySelector('input[name="prune-mode"][value="count"]').checked = true;
+        dialog.querySelector('input[name="refine-mode"][value="count"]').checked = true;
         updateSummary();
     };
     const onPctFocus = () => {
-        dialog.querySelector('input[name="prune-mode"][value="percent"]').checked = true;
+        dialog.querySelector('input[name="refine-mode"][value="percent"]').checked = true;
         updateSummary();
     };
 
     const onInput = () => updateSummary();
 
+    let dialogClosed = false;
     const cleanup = () => {
+        dialogClosed = true;
         toggleBtn.removeEventListener('click', onToggle);
         radios.forEach(r => r.removeEventListener('change', onInput));
         countInput.removeEventListener('input', onInput);
         countInput.removeEventListener('focus', onCountFocus);
         pctInput.removeEventListener('input', onInput);
         pctInput.removeEventListener('focus', onPctFocus);
-        okBtn.removeEventListener('click', onOk);
+        viewBtn.removeEventListener('click', onView);
+        trashBtn.removeEventListener('click', onTrash);
         cancelBtn.removeEventListener('click', onCancel);
         dialog.removeEventListener('cancel', onCancel);
         dialog.removeEventListener('keydown', onKeyDown);
+        // Clean up temporary resolved image IDs from smart group evaluation
+        for (const g of targetGroups) delete g._resolvedImageIds;
         dialog.close();
     };
 
-    const onCancel = () => cleanup();
-
-    const onOk = async () => {
-        const toTrash = computeTrashCount();
-        if (toTrash <= 0) return;
-
-        // Build options from dialog state, sending keep or trash params
-        // based on the current toggle mode
-        const mode = dialog.querySelector('input[name="prune-mode"]:checked')?.value || 'best';
+    /** Build API options from the current dialog state. */
+    const buildOptions = () => {
+        const mode = dialog.querySelector('input[name="refine-mode"]:checked')?.value || 'best';
         const options = {};
         if (trashMode) {
             if (mode === 'best') options.trashCount = 1;
@@ -1209,11 +1258,57 @@ Duplicates._showPruneDialog = function(level, targetGroups, hasSelection, totalI
         if (hasSelection) {
             options.groupHashes = selectedHashes;
         }
+        // Pass cached smart group image IDs so previewGroups() can skip
+        // re-evaluating filters (the expensive part was already done).
+        const resolved = targetGroups
+            .filter(g => g._resolvedImageIds)
+            .map(g => ({ group_hash: g.group_hash, image_ids: g._resolvedImageIds }));
+        if (resolved.length > 0) {
+            options.resolvedGroups = resolved;
+        }
+        return options;
+    };
 
+    const onCancel = () => cleanup();
+
+    /** View in Gallery: show the focused subset as a filtered view. */
+    const onView = async () => {
+        const trashModeNow = trashMode;
+        const options = buildOptions();
         cleanup();
 
-        // Execute the prune — endpoint returns fast, file moves are async
-        AppState.loading.show('duplicates-prune', 'Computing quality rankings\u2026');
+        AppState.loading.show('refine-preview', 'Computing quality rankings\u2026');
+        try {
+            const result = await AppState.duplicates.previewGroups(level, options);
+            const imageIds = trashModeNow ? result.trashIds : result.keepIds;
+
+            if (imageIds.length === 0) {
+                App.showInfo('No images matched the criteria.');
+                return;
+            }
+
+            AppState.filter.set({
+                type: 'duplicates',
+                imageIds,
+                sourceLevel: level,
+            });
+            App.showGallery();
+        } catch (err) {
+            App.showError('Failed to preview: ' + (err.message || err));
+        } finally {
+            AppState.loading.hide('refine-preview');
+        }
+    };
+
+    /** Trash: move non-kept images to trash (same as the old prune). */
+    const onTrash = async () => {
+        const { trashCount } = computeCounts();
+        if (trashCount <= 0) return;
+
+        const options = buildOptions();
+        cleanup();
+
+        AppState.loading.show('duplicates-refine', 'Computing quality rankings\u2026');
         try {
             const result = await AppState.duplicates.pruneGroups(level, options);
             App.showInfo(
@@ -1222,7 +1317,7 @@ Duplicates._showPruneDialog = function(level, targetGroups, hasSelection, totalI
         } catch (err) {
             App.showError('Failed to prune groups: ' + (err.message || err));
         } finally {
-            AppState.loading.hide('duplicates-prune');
+            AppState.loading.hide('duplicates-refine');
         }
     };
 
@@ -1233,7 +1328,7 @@ Duplicates._showPruneDialog = function(level, targetGroups, hasSelection, totalI
             onCancel();
         } else if (e.key === 'Enter' && document.activeElement !== cancelBtn) {
             e.preventDefault();
-            if (!okBtn.disabled) onOk();
+            if (!viewBtn.disabled) onView();
         }
     };
 
@@ -1243,7 +1338,8 @@ Duplicates._showPruneDialog = function(level, targetGroups, hasSelection, totalI
     countInput.addEventListener('focus', onCountFocus);
     pctInput.addEventListener('input', onInput);
     pctInput.addEventListener('focus', onPctFocus);
-    okBtn.addEventListener('click', onOk);
+    viewBtn.addEventListener('click', onView);
+    trashBtn.addEventListener('click', onTrash);
     cancelBtn.addEventListener('click', onCancel);
     dialog.addEventListener('cancel', onCancel);
     dialog.addEventListener('keydown', onKeyDown);
@@ -1254,12 +1350,33 @@ Duplicates._showPruneDialog = function(level, targetGroups, hasSelection, totalI
     labelBest.textContent = 'Best';
     labelTopCount.textContent = 'Top';
     labelTopPct.textContent = 'Top';
-    dialog.querySelector('input[name="prune-mode"][value="best"]').checked = true;
+    dialog.querySelector('input[name="refine-mode"][value="best"]').checked = true;
     countInput.value = '2';
     pctInput.value = '33';
     updateSummary();
 
     dialog.showModal();
+
+    // --- Async smart group resolution (after dialog is visible) ---
+    if (smartGroups.length > 0) {
+        (async () => {
+            try {
+                for (const sg of smartGroups) {
+                    if (dialogClosed) return;
+                    sg._resolvedImageIds = await AppState.duplicates.evaluateSmartGroupFilter(sg.filter_json);
+                }
+                resolving = false;
+            } catch {
+                resolving = false;
+                resolveFailed = true;
+            }
+            // Dialog may have been closed while we were resolving
+            if (!dialogClosed) {
+                updateScope();
+                updateSummary();
+            }
+        })();
+    }
 };
 
 /**
@@ -1309,9 +1426,9 @@ Duplicates._renderGroups = function() {
     const sliderPos = this._levelToSlider(level);
     const levelLabel = this.SIMILARITY_LABELS[sliderPos].toLowerCase();
 
-    // Update prune button disabled state
-    if (this._els.btnPrune) {
-        this._els.btnPrune.disabled = this.state.groups.length === 0;
+    // Update refine button disabled state
+    if (this._els.btnRefine) {
+        this._els.btnRefine.disabled = this.state.groups.length === 0;
     }
 
     // Show empty/status state if no groups

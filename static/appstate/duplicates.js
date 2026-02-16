@@ -161,23 +161,23 @@ AppState.duplicates = (function() {
     }
 
     /**
-     * Evaluate a smart group's filter criteria to find the best preview image.
+     * Evaluate a smart group's filter criteria and return matching images.
      *
      * Applies date, rating, people, text (semantic search), and metadata
-     * filters, then picks the highest-aesthetic-scoring match.
+     * filters against all non-deleted images.
      *
      * @param {Object|string} filterJson - Filter criteria (object or JSON string)
-     * @returns {Promise<string|null>} Best image ID, or null if no matches
+     * @returns {Promise<Array>} Matching image objects (may be empty)
      * @private
      */
-    async function _evaluatePreview(filterJson) {
+    async function _evaluateFilter(filterJson) {
         const filter = typeof filterJson === 'string'
             ? JSON.parse(filterJson)
             : filterJson;
 
         // Start with all non-deleted images
         let candidates = AppState.images.getAll();
-        if (!candidates.length) return null;
+        if (!candidates.length) return [];
 
         // Date range filter
         if (filter.dateStart) {
@@ -211,7 +211,7 @@ AppState.duplicates = (function() {
                 const peopleImageIds = await AppState.images.getFilteredByPeople(peopleIds);
                 candidates = candidates.filter(img => peopleImageIds.has(String(img.id)));
             } catch (err) {
-                console.warn('[_evaluatePreview] People filter failed:', err);
+                console.warn('[_evaluateFilter] People filter failed:', err);
             }
         }
 
@@ -237,7 +237,7 @@ AppState.duplicates = (function() {
                     }
                 }
             } catch (err) {
-                console.warn('[_evaluatePreview] Semantic search failed:', err);
+                console.warn('[_evaluateFilter] Semantic search failed:', err);
             }
         }
 
@@ -252,10 +252,25 @@ AppState.duplicates = (function() {
                     candidates = candidates.filter(img => metaIds.has(img.id));
                 }
             } catch (err) {
-                console.warn('[_evaluatePreview] Metadata search failed:', err);
+                console.warn('[_evaluateFilter] Metadata search failed:', err);
             }
         }
 
+        return candidates;
+    }
+
+    /**
+     * Evaluate a smart group's filter to find the best preview image.
+     *
+     * Delegates to {@link _evaluateFilter} and picks the highest-aesthetic-
+     * scoring match.
+     *
+     * @param {Object|string} filterJson - Filter criteria (object or JSON string)
+     * @returns {Promise<string|null>} Best image ID, or null if no matches
+     * @private
+     */
+    async function _evaluatePreview(filterJson) {
+        const candidates = await _evaluateFilter(filterJson);
         if (candidates.length === 0) return null;
 
         // Pick the best by aesthetic score (same ranking as backend best_image)
@@ -854,6 +869,83 @@ AppState.duplicates = (function() {
         },
 
         /**
+         * Preview which images would be kept/trashed by a quality-based
+         * filter across groups.  Read-only — no side effects.
+         *
+         * Smart groups don't store memberships in the ``duplicate_groups``
+         * table, so their image IDs must be resolved on the frontend.
+         * Callers can pass pre-resolved IDs via ``options.resolvedGroups``
+         * (from the refine dialog's async evaluation) to avoid
+         * re-evaluating filters.  If not provided and smart groups are
+         * in scope, this method falls back to evaluating them here.
+         *
+         * @param {number} level - Group level (0-5)
+         * @param {Object} [options]
+         * @param {number} [options.keepCount] - Images to keep per group
+         * @param {number} [options.keepPercent] - Percentage to keep
+         * @param {number} [options.trashCount] - Images to trash per group
+         * @param {number} [options.trashPercent] - Percentage to trash
+         * @param {string[]} [options.groupHashes] - Specific groups to preview
+         * @param {Array<{group_hash: string, image_ids: string[]}>} [options.resolvedGroups]
+         *     Pre-resolved smart group image IDs (avoids re-evaluation)
+         * @returns {Promise<{keepIds: string[], trashIds: string[]}>}
+         */
+        async previewGroups(level, options = {}) {
+            // Use pre-resolved smart group IDs if the caller already
+            // evaluated them (e.g. the refine dialog).  Otherwise fall
+            // back to evaluating here for callers that don't pre-resolve.
+            let explicitGroups = options.resolvedGroups || undefined;
+
+            if (!explicitGroups && level === 5) {
+                const targetHashes = options.groupHashes
+                    ? new Set(options.groupHashes)
+                    : null;
+                const smartGroups = (_groupCache[5] || []).filter(g =>
+                    g.filter_json && (!targetHashes || targetHashes.has(g.group_hash)),
+                );
+                if (smartGroups.length > 0) {
+                    explicitGroups = [];
+                    for (const sg of smartGroups) {
+                        const matches = await _evaluateFilter(sg.filter_json);
+                        if (matches.length > 0) {
+                            explicitGroups.push({
+                                group_hash: sg.group_hash,
+                                image_ids: matches.map(img => img.id),
+                            });
+                        }
+                    }
+                }
+            }
+
+            const response = await App.apiPost('/groups/preview', {
+                level,
+                keep_count: options.keepCount,
+                keep_percent: options.keepPercent,
+                trash_count: options.trashCount,
+                trash_percent: options.trashPercent,
+                group_hashes: options.groupHashes,
+                explicit_groups: explicitGroups,
+            });
+            return {
+                keepIds: response.data?.keep_ids || [],
+                trashIds: response.data?.trash_ids || [],
+            };
+        },
+
+        /**
+         * Evaluate a smart group's filter criteria and return matching
+         * image IDs.  Used by the refine dialog to resolve dynamic group
+         * membership counts before displaying.
+         *
+         * @param {Object|string} filterJson - Filter criteria
+         * @returns {Promise<string[]>} Matching image IDs
+         */
+        async evaluateSmartGroupFilter(filterJson) {
+            const matches = await _evaluateFilter(filterJson);
+            return matches.map(img => img.id);
+        },
+
+        /**
          * Prune duplicate groups by trashing lower-quality images.
          *
          * The backend endpoint returns quickly after enqueueing (soft-delete
@@ -866,7 +958,7 @@ AppState.duplicates = (function() {
          * - **Keep mode** (default): keep the best N images, trash the rest.
          * - **Trash mode**: trash the worst N images, keep the rest.
          *
-         * @param {number} level - Similarity level (0-3)
+         * @param {number} level - Similarity level (0-4)
          * @param {Object} [options]
          * @param {number} [options.keepCount] - Images to keep per group
          * @param {number} [options.keepPercent] - Percentage to keep (overrides keepCount)

@@ -178,6 +178,84 @@ def _percentile_ranks(values: list[float]) -> list[float]:
     return ranks
 
 
+def compute_keep_trash_split(
+    groups: list[dict],
+    config,
+    keep_count: int | None = None,
+    keep_percent: int | None = None,
+    trash_count: int | None = None,
+    trash_percent: int | None = None,
+) -> tuple[list[str], list[str]]:
+    """Rank images in each group by quality and split into keep/trash.
+
+    Iterates groups, determines how many images to keep per group based
+    on the provided parameters, scores all images with
+    :func:`compute_quality_scores`, sorts by score descending, and
+    splits into keep and trash sets.  Always keeps at least 1 image per
+    group.  Groups where the keep count >= group size contribute all
+    their images to the keep set.
+
+    Exactly one of the four parameters (keep_count, keep_percent,
+    trash_count, trash_percent) should be provided, or none (defaults
+    to keep_count=1).
+
+    Args:
+        groups: From ``get_group_images_ranked()`` — list of dicts,
+            each with ``group_hash`` and ``images`` (list of dicts
+            with ``id``, ``aesthetic_laion``, ``aesthetic_nima``,
+            ``laplacian_var``, ``width``, ``height``, ``size``).
+        config: Config object with quality weight settings.
+        keep_count: Number of best images to keep per group.
+        keep_percent: Percentage of images to keep per group (rounded up).
+        trash_count: Number of worst images to trash per group.
+        trash_percent: Percentage of worst images to trash per group.
+
+    Returns:
+        Tuple of ``(keep_ids, trash_ids)`` — flat lists of image IDs,
+        quality-ranked within each group (best first in keep, worst
+        first in trash).
+    """
+    # Default to keep_count=1 when no mode specified
+    if keep_count is None and keep_percent is None and trash_count is None and trash_percent is None:
+        keep_count = 1
+
+    all_keep_ids = []
+    all_trash_ids = []
+
+    for group in groups:
+        images = group['images']
+        n = len(images)
+
+        # Determine how many to keep for this group.
+        # Trash mode: trash the worst N, keep the rest (always keep >= 1).
+        # Keep mode: keep the best N, trash the rest.
+        if trash_percent is not None:
+            group_trash = math.ceil(n * trash_percent / 100)
+            group_trash = max(0, min(group_trash, n - 1))
+            group_keep = n - group_trash
+        elif trash_count is not None:
+            group_trash = max(0, min(trash_count, n - 1))
+            group_keep = n - group_trash
+        elif keep_percent is not None:
+            group_keep = math.ceil(n * keep_percent / 100)
+        else:
+            group_keep = keep_count
+        # Always keep at least 1
+        group_keep = max(1, min(group_keep, n))
+
+        # Score and rank images
+        scores = compute_quality_scores(images, config)
+
+        # Sort by score descending — best first
+        ranked = sorted(images, key=lambda img: scores.get(img['id'], 0), reverse=True)
+
+        # Split: keep top N, trash the rest
+        all_keep_ids.extend(img['id'] for img in ranked[:group_keep])
+        all_trash_ids.extend(img['id'] for img in ranked[group_keep:])
+
+    return all_keep_ids, all_trash_ids
+
+
 def compute_quality_scores(
     images: list[dict],
     config,

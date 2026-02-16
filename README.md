@@ -48,7 +48,7 @@ Find out more about the motivations behind Photonarium in [`BACKGROUND.md`](BACK
 - **Quality scoring** - AI aesthetic scoring ranks your images by visual quality. Find your best shots instantly.
 - **Slideshow** mode in the full-screen viewer with smooth cross-fade transitions, linear or shuffled playback, and configurable timing
 - **Smart Groups** - saved searches that stay up to date automatically. Set your filter criteria once and matching images appear whenever you open the group, even photos added later.
-- **Duplicate detection** at four levels of similarity (identical, near-identical, similar, related) plus auto-generated **directory groups** and user-curated **custom groups** (albums), with one-click **prune** to keep the best image per group
+- **Duplicate detection** at four levels of similarity (identical, near-identical, similar, related) plus auto-generated **directory groups** and user-curated **custom groups** (albums), with **Refine Groups** to filter by quality and view the best (or worst) images in the Gallery, or prune duplicates to trash
 - **Camera RAW support** - native support for 20+ camera RAW formats alongside JPEG, PNG, and other standard image types. No conversion needed.
 - **Camera data** - full EXIF metadata extraction. Search and filter by camera, lens, ISO, aperture, shutter speed, and more.
 - **Ratings and descriptions** so you can build your own favourites system
@@ -369,7 +369,9 @@ Groups helps you clean up your library by finding duplicates and also lets you o
   - **Related**, **Similar**, **Near-identical**, **Identical**
 - Double click a stack (or press **Enter**) to open that group in the Gallery, automatically sorted by quality with the best image selected.
 - While viewing a group in the Gallery, use **Alt + Left / Right** to move between groups.
-- **Prune** all groups at once: click the prune button to keep only the best image per group and move the rest to the trash directory. Uses the same quality scoring as the Gallery Quality sort.
+- **Refine Groups**: click the refine button to filter groups by quality. Choose how many images to keep (or trash) per group - best only, top N, or top N%. Two actions are available:
+  - **View in Gallery** shows the selected subset (the best or worst images) as a filtered Gallery view, without changing anything. Works for all group levels including directories and custom groups.
+  - **Trash** moves the non-kept images to the trash directory (levels 0-4 only). Uses the same quality scoring as the Gallery Quality sort.
 
 ### Directory groups
 
@@ -758,7 +760,7 @@ Key settings:
 
 ## Trash directory
 
-When you delete images (from the Gallery, full-screen viewer, or the Groups prune button), the files are moved to a trash directory instead of being permanently deleted. By default, this is `<data-dir>/trash/`.
+When you delete images (from the Gallery, full-screen viewer, or the Groups refine dialog), the files are moved to a trash directory instead of being permanently deleted. By default, this is `<data-dir>/trash/`.
 
 * Files keep their original names; collisions get a counter suffix (`beach.jpg`, `beach (2).jpg`, etc.).
 * The trash directory must not overlap any indexed folder. If it does, Photonarium disables trash operations and shows a warning.

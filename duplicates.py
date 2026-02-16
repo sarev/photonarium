@@ -1671,6 +1671,7 @@ class DuplicateManager:
         self,
         level: int,
         group_hash: str | None = None,
+        min_size: int = 2,
     ) -> list[dict[str, Any]]:
         """Get groups with quality-scoring fields for each image.
 
@@ -1680,15 +1681,18 @@ class DuplicateManager:
         algorithm themselves.
 
         Args:
-            level: Similarity level (0-3 for auto-detected duplicates).
+            level: Similarity level (0-5).
             group_hash: If specified, return just this one group.
                 If None, return all groups at the level.
+            min_size: Minimum number of non-deleted images for a group
+                to be included.  Default 2 (standard for pruning).
+                Pass 1 to include single-image groups (for preview).
 
         Returns:
             List of dicts, each with ``group_hash`` and ``images`` (list
             of dicts with ``id``, ``aesthetic_laion``, ``aesthetic_nima``,
             ``laplacian_var``, ``width``, ``height``, ``size``).
-            Only groups with 2+ non-deleted images are included.
+            Only groups with ``min_size``+ non-deleted images are included.
         """
         conn = self._get_db()
         try:
@@ -1712,7 +1716,7 @@ class DuplicateManager:
                 )
                 images = [dict(row) for row in cursor.fetchall()]
 
-                if len(images) >= 2:
+                if len(images) >= min_size:
                     groups.append(
                         {
                             'group_hash': gh,
@@ -1720,6 +1724,58 @@ class DuplicateManager:
                         }
                     )
 
+            return groups
+        finally:
+            conn.close()
+
+    def get_explicit_groups_ranked(
+        self,
+        explicit_groups: list[dict[str, Any]],
+    ) -> list[dict[str, Any]]:
+        """Fetch quality-scoring fields for groups with explicit image IDs.
+
+        Used by the preview endpoint for smart groups whose membership is
+        resolved on the frontend (they have no entries in
+        ``duplicate_groups``).  Returns the same format as
+        :meth:`get_group_images_ranked` so callers can merge the results.
+
+        Args:
+            explicit_groups: List of dicts, each with ``group_hash`` (str)
+                and ``image_ids`` (list of image ID strings).
+
+        Returns:
+            List of dicts with ``group_hash`` and ``images`` (list of
+            dicts with quality-scoring columns).  Empty groups and groups
+            where all images are deleted are excluded.
+        """
+        if not explicit_groups:
+            return []
+
+        conn = self._get_db()
+        try:
+            groups = []
+            for eg in explicit_groups:
+                image_ids = eg.get('image_ids', [])
+                if not image_ids:
+                    continue
+                placeholders = ','.join('?' for _ in image_ids)
+                cursor = conn.execute(
+                    f"""
+                    SELECT id, aesthetic_laion, aesthetic_nima,
+                           laplacian_var, width, height, size
+                    FROM images
+                    WHERE id IN ({placeholders}) AND deleted = 0
+                    """,
+                    image_ids,
+                )
+                images = [dict(row) for row in cursor.fetchall()]
+                if images:
+                    groups.append(
+                        {
+                            'group_hash': eg.get('group_hash', ''),
+                            'images': images,
+                        }
+                    )
             return groups
         finally:
             conn.close()

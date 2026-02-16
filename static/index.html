@@ -208,9 +208,9 @@
                             <option value="100">100+</option>
                         </select>
                     </div>
-                    <div class="toolbar-separator auto-level-control"></div>
-                    <button id="btn-dup-prune" class="toolbar-btn auto-level-control" title="Prune groups: keep the best images, move the rest to trash">
-                        <span class="icon" data-icon="delete_sweep">&#x1F5D1;</span>
+                    <div class="toolbar-separator"></div>
+                    <button id="btn-dup-refine" class="toolbar-btn" title="Refine groups">
+                        <span class="icon" data-icon="filter_list">&#x25BC;</span>
                     </button>
                     <div class="toolbar-separator custom-group-control" hidden></div>
                     <button id="btn-group-new" class="toolbar-btn custom-group-control" title="Create new group" hidden>
@@ -771,43 +771,44 @@
             </div>
         </dialog>
 
-        <!-- Prune dialog (duplicate group pruning options + confirmation) -->
-        <dialog id="dialog-prune">
-            <div class="dialog-content dialog-prune-content">
-                <h3>Prune Groups</h3>
-                <p id="dialog-prune-scope" class="dialog-prune-scope"></p>
+        <!-- Refine dialog (group quality filtering, view in gallery, optional trash) -->
+        <dialog id="dialog-refine">
+            <div class="dialog-content dialog-refine-content">
+                <h3>Refine Groups</h3>
+                <p id="dialog-refine-scope" class="dialog-refine-scope"></p>
 
-                <fieldset class="dialog-prune-fieldset">
+                <fieldset class="dialog-refine-fieldset">
                     <legend>
-                        <button type="button" id="dialog-prune-toggle" class="prune-legend-toggle"
+                        <button type="button" id="dialog-refine-toggle" class="refine-legend-toggle"
                                 title="Click to switch between keeping best and trashing worst">
-                            <span id="dialog-prune-legend-text">Keep per group</span>
-                            <span class="icon prune-toggle-icon" data-icon="swap_vert">⇅</span>
+                            <span id="dialog-refine-legend-text">Keep per group</span>
+                            <span class="icon refine-toggle-icon" data-icon="swap_vert">&#x21C5;</span>
                         </button>
                     </legend>
-                    <label class="dialog-prune-option">
-                        <input type="radio" name="prune-mode" value="best" checked>
-                        <span id="dialog-prune-label-best">Best</span><span> image only</span>
+                    <label class="dialog-refine-option">
+                        <input type="radio" name="refine-mode" value="best" checked>
+                        <span id="dialog-refine-label-best">Best</span><span> image only</span>
                     </label>
-                    <label class="dialog-prune-option">
-                        <input type="radio" name="prune-mode" value="count">
-                        <span id="dialog-prune-label-top-count">Top</span>
-                        <input type="number" id="dialog-prune-count" class="dialog-prune-number" min="1" max="999" value="2">
+                    <label class="dialog-refine-option">
+                        <input type="radio" name="refine-mode" value="count">
+                        <span id="dialog-refine-label-top-count">Top</span>
+                        <input type="number" id="dialog-refine-count" class="dialog-refine-number" min="1" max="999" value="2">
                         <span>images</span>
                     </label>
-                    <label class="dialog-prune-option">
-                        <input type="radio" name="prune-mode" value="percent">
-                        <span id="dialog-prune-label-top-pct">Top</span>
-                        <input type="number" id="dialog-prune-percent" class="dialog-prune-number" min="1" max="99" value="33">
+                    <label class="dialog-refine-option">
+                        <input type="radio" name="refine-mode" value="percent">
+                        <span id="dialog-refine-label-top-pct">Top</span>
+                        <input type="number" id="dialog-refine-percent" class="dialog-refine-number" min="1" max="99" value="33">
                         <span>%</span>
                     </label>
                 </fieldset>
 
-                <p id="dialog-prune-summary" class="dialog-prune-summary"></p>
+                <p id="dialog-refine-summary" class="dialog-refine-summary"></p>
 
                 <div class="dialog-actions">
-                    <button id="dialog-prune-cancel" class="action-btn">Cancel</button>
-                    <button id="dialog-prune-ok" class="action-btn danger" disabled>Trash</button>
+                    <button id="dialog-refine-cancel" class="action-btn">Cancel</button>
+                    <button id="dialog-refine-view" class="action-btn primary" disabled>View in Gallery</button>
+                    <button id="dialog-refine-trash" class="action-btn danger" disabled>Trash</button>
                 </div>
             </div>
         </dialog>

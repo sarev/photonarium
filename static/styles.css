@@ -4027,25 +4027,25 @@ dialog::backdrop {
     font-size: 18px;
 }
 
-/* Prune dialog — duplicate group pruning options */
-.dialog-prune-content {
+/* Refine dialog — group quality filtering and preview */
+.dialog-refine-content {
     min-width: 360px;
     max-width: 420px;
 }
 
-.dialog-prune-scope {
+.dialog-refine-scope {
     font-size: 0.9rem;
     margin-bottom: 1rem;
 }
 
-.dialog-prune-fieldset {
+.dialog-refine-fieldset {
     border: 1px solid var(--color-border);
     border-radius: 6px;
     padding: 0.75rem 1rem;
     margin: 0 0 1rem 0;
 }
 
-.dialog-prune-fieldset legend {
+.dialog-refine-fieldset legend {
     font-size: 0.85rem;
     font-weight: 500;
     color: var(--color-text-secondary);
@@ -4053,7 +4053,7 @@ dialog::backdrop {
 }
 
 /* Toggle button inside legend — looks like a clickable label */
-.prune-legend-toggle {
+.refine-legend-toggle {
     display: inline-flex;
     align-items: center;
     gap: 0.3rem;
@@ -4069,25 +4069,25 @@ dialog::backdrop {
     border-radius: 3px;
 }
 
-.prune-legend-toggle:hover {
+.refine-legend-toggle:hover {
     color: var(--color-text-primary);
 }
 
-.prune-legend-toggle:focus-visible {
+.refine-legend-toggle:focus-visible {
     outline: 2px solid var(--color-action-primary);
     outline-offset: 2px;
 }
 
-.prune-toggle-icon {
+.refine-toggle-icon {
     font-size: 1rem;
     opacity: 0.6;
 }
 
-.prune-legend-toggle:hover .prune-toggle-icon {
+.refine-legend-toggle:hover .refine-toggle-icon {
     opacity: 1;
 }
 
-.dialog-prune-option {
+.dialog-refine-option {
     display: flex;
     align-items: center;
     gap: 0.5rem;
@@ -4096,12 +4096,12 @@ dialog::backdrop {
     font-size: 0.9rem;
 }
 
-.dialog-prune-option input[type="radio"] {
+.dialog-refine-option input[type="radio"] {
     margin: 0;
     accent-color: var(--color-accent);
 }
 
-.dialog-prune-number {
+.dialog-refine-number {
     width: 4rem;
     padding: 0.25rem 0.4rem;
     font-family: inherit;
@@ -4113,13 +4113,13 @@ dialog::backdrop {
     color: var(--color-text-primary);
 }
 
-.dialog-prune-number:focus {
+.dialog-refine-number:focus {
     outline: none;
     border-color: var(--color-action-primary);
     box-shadow: 0 0 0 2px var(--color-action-light);
 }
 
-.dialog-prune-summary {
+.dialog-refine-summary {
     font-weight: 500;
     margin-bottom: 1rem;
     min-height: 1.4em;
