@@ -9,10 +9,11 @@ My motivations for creating Photonarium were two-fold:
 1. Build my dream photo organiser.
 2. See if I could build it using an LLM, rather than me writing most of the code.
 
-The more practical motivation was born of looking at the pre-existing solutions and coming away feeling dissatisfied. Your options broadly divide into two camps:
+The more practical motivation was born of looking at the pre-existing solutions and coming away feeling dissatisfied. Your options broadly divide into three camps:
 
 1. Commercial
 2. Free
+3. NAS-bundled
 
 I was looking for some key features:
 
@@ -80,27 +81,51 @@ But it only exists within Apple's ecosystem - no Windows, no Linux. It's closed-
 
 Worth mentioning because it's genuinely free (no subscription required) and has excellent metadata/XMP management. It's a professional file browser with good RAW support via Camera Raw. But it has no face recognition, no duplicate detection, no semantic search, no Linux support, and collects Adobe telemetry. It's a file browser for Adobe users, not a photo catalogue.
 
+## NAS-Bundled Photo Management
+
+There is a third camp that does not fit neatly into either of the above: photo management apps that ship with network-attached storage (NAS) devices. You have already bought the hardware, so the software is "free" in a sense - but it is proprietary, closed-source, and locked to the vendor's ecosystem. You cannot run Synology Photos on a QNAP, or QuMagie on a Synology. If you outgrow the software or the vendor stops developing it, your only option is to start over with something else on the same box (most NAS devices can run Docker, so Immich and PhotoPrism are popular escape hatches).
+
+The privacy story is genuinely good, though - all processing happens on your NAS, your data stays on your network, and there is no cloud dependency for the AI features. And if you already own a compatible NAS, the barrier to entry is essentially zero.
+
+### [Synology Photos](https://www.synology.com/en-global/dsm/feature/photos)
+
+The most mature NAS photo solution, and it shows. Synology Photos is bundled with DSM 7 and provides a clean web UI, solid mobile apps for iOS and Android, and good multi-user support with separate Personal and Shared spaces. Face recognition and object/scene detection ("Subjects" albums) work well, and conditional (smart) albums are robust and multi-criteria. RAW support covers 23+ formats. All AI processing runs locally on the NAS hardware. It feels polished in a way that the competition does not.
+
+The big gap is semantic search - there is none. Search is purely attribute-based: date, camera, tag, person, location. You cannot type "dog on a beach" and get results. Face recognition and object detection are also restricted to specific NAS models (generally higher-end x86 units), so a large portion of Synology's own product line cannot use the headline AI features at all. Duplicate detection is limited to "Similar Stacks" using perceptual hashing within a 12-hour time window - there is no library-wide scan and no similarity levels. If criteria (a) and (c) matter to you, Synology Photos falls short.
+
+### [UGREEN Photos](https://nas.ugreen.com/)
+
+The most ambitious NAS photo offering on AI features, and the newest. UGREEN's iDX series (Intel Core Ultra 7 with NPU) provides genuine natural-language semantic search, OCR for text within images, and even user-trainable object categories - features neither Synology nor QNAP offer. The NPU hardware acceleration is a real differentiator for on-device ML. Privacy is excellent: everything runs locally, cloud services are entirely optional.
+
+The catch is maturity. UGOS Pro is significantly younger than DSM or QTS, and users report clunky translations, slow uploads, and a Photos app that feels disorganised. The full AI stack is locked to the expensive iDX hardware - cheaper UGREEN models get substantially less. Duplicate detection is mentioned in the marketing but poorly documented. It is the one to watch, but today it feels more like a promising beta than a finished product.
+
+### [QNAP QuMagie](https://www.qnap.com/en-us/software/qumagie)
+
+QNAP's answer to AI photo management, with semantic search added in April 2025 (v2.6.0). It has face recognition, object/scene detection ("Things" albums), and optional hardware AI accelerators (Google Coral TPU, QNAP's own M.2/USB modules) to speed up processing. Multi-user support with per-user and per-group permissions is well thought out. All processing is local via QNAP AI Core.
+
+The problems are significant. Face recognition is widely criticised for quality - faces fragment into many tiny clusters for the same person, and correcting mistakes does not trigger re-analysis of unmatched faces. Worse, all face tags live only in the database, not in image files. If QuMagie reindexes - which can happen after updates, reboots, or by accident - all your manual tagging work is lost. Users on QNAP's forums report losing tens of hours of careful face identification this way. Smart albums are present but buggy (tagged-people albums sometimes display as empty). HEIC support requires a separate paid licence, which feels miserly. And performance reportedly degrades badly around 90,000 images. Semantic search requires x86 hardware with at least 8GB RAM, excluding ARM-based models.
+
 ## Comparison Table
 
 The five key criteria from above: **(a)** semantic search, **(b)** face recognition, **(c)** duplicate/similarity detection, **(d)** data privacy, **(e)** free/affordable.
 
-| | Photonarium | digiKam | Immich | PhotoPrism | darktable | XnView MP | Google Photos | Apple Photos | Adobe Bridge |
-|---|---|---|---|---|---|---|---|---|---|
-| **License** | Apache-2.0 | GPL-2.0 | AGPL-3.0 | AGPL-3.0 (features paywalled) | GPL-3.0 | Freeware (closed) | Proprietary | Proprietary | Proprietary (free) |
-| **Platforms** | Win/Mac/Linux | Win/Mac/Linux | Server + web + mobile | Server + web (PWA) | Win/Mac/Linux | Win/Mac/Linux | Web + mobile | Apple only | Win/Mac |
-| **Fully offline** | Yes | Yes | Yes (self-hosted) | Yes (self-hosted) | Yes | Yes | No | Hybrid | Yes |
-| **(a) Semantic search** | Yes (CLIP) | Planned/partial | Yes (CLIP)\* | Yes (TF2 + optional LLM)\* | No | No | Yes (best-in-class)\* | Yes (on-device)\* | No |
-| **(b) Face recognition** | Yes | Yes | Yes | Yes | No | Basic | Yes | Yes (on-device) | No |
-| **(c) Duplicate detection** | Yes (4 levels) | Yes (perceptual hash) | Yes (ML-based) | Basic (checksums only) | Minimal | File-based | Basic | Yes | No |
-| **(d) Data stays local** | Yes | Yes [1] | Mostly [2] | Mostly [3] | Yes [4] | Mostly [5] | No | No | No |
-| **(e) Truly free** | Yes | Yes | Yes | Partially (paywalled features) | Yes | Personal use only | 15GB free tier | Bundled with hardware | Yes |
-| **Image captioning** | Yes (BLIP/BLIP-2) | No | No | Optional (external LLM) | No | No | Yes | Yes | No |
-| **Web-based UI** | Yes | No | Yes | Yes | No | No | Yes | Limited | No |
-| **Mobile app** | No | No | Yes | No | No | No | Yes | Yes | No |
-| **Multi-user** | No | No | Yes | Paid tier | No | No | Yes | Yes (Family) | No |
-| **Install complexity** | Low (Python + pip) | Medium (KDE) | Medium-high (Docker) | Medium-high (Docker) | Low-medium | Low | None (cloud) | None (bundled) | Low |
-| **RAW support** | Good | Excellent | Good | Good | Excellent | Excellent | Good | Good | Excellent |
-| **Non-destructive editing** | No | Yes | Basic | Yes | No | No | Yes | Yes | No |
+| | Photonarium | digiKam | Immich | PhotoPrism | darktable | XnView MP | Google Photos | Apple Photos | Adobe Bridge | Synology Photos | UGREEN Photos | QNAP QuMagie |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| **License** | Apache-2.0 | GPL-2.0 | AGPL-3.0 | AGPL-3.0 (features paywalled) | GPL-3.0 | Freeware (closed) | Proprietary | Proprietary | Proprietary (free) | Proprietary (bundled) | Proprietary (bundled) | Proprietary (bundled) |
+| **Platforms** | Win/Mac/Linux | Win/Mac/Linux | Server + web + mobile | Server + web (PWA) | Win/Mac/Linux | Win/Mac/Linux | Web + mobile | Apple only | Win/Mac | NAS + web + mobile | NAS + web + mobile | NAS + web + mobile |
+| **Fully offline** | Yes | Yes | Yes (self-hosted) | Yes (self-hosted) | Yes | Yes | No | Hybrid | Yes | Yes | Yes | Yes |
+| **(a) Semantic search** | Yes (CLIP) | Planned/partial | Yes (CLIP)\* | Yes (TF2 + optional LLM)\* | No | No | Yes (best-in-class)\* | Yes (on-device)\* | No | No | Yes (iDX only)\* | Yes (x86 + 8GB)\* |
+| **(b) Face recognition** | Yes | Yes | Yes | Yes | No | Basic | Yes | Yes (on-device) | No | Yes (model-restricted) | Yes (iDX only) | Yes (fragile) |
+| **(c) Duplicate detection** | Yes (4 levels) | Yes (perceptual hash) | Yes (ML-based) | Basic (checksums only) | Minimal | File-based | Basic | Yes | No | Basic (time-windowed) | Basic | Basic (no workflow) |
+| **(d) Data stays local** | Yes | Yes [1] | Mostly [2] | Mostly [3] | Yes [4] | Mostly [5] | No | No | No | Yes | Yes | Yes |
+| **(e) Truly free** | Yes | Yes | Yes | Partially (paywalled features) | Yes | Personal use only | 15GB free tier | Bundled with hardware | Yes | Bundled with NAS | Bundled with NAS | Mostly (HEIC paywalled) |
+| **Image captioning** | Yes (BLIP/BLIP-2) | No | No | Optional (external LLM) | No | No | Yes | Yes | No | No | No | No |
+| **Web-based UI** | Yes | No | Yes | Yes | No | No | Yes | Limited | No | Yes | Yes | Yes |
+| **Phone backup** | No | No | Yes | No | No | No | Yes | Yes | No | Yes | Yes | Yes |
+| **Multi-user** | No | No | Yes | Paid tier | No | No | Yes | Yes (Family) | No | Yes | Yes | Yes |
+| **Install complexity** | Low (Python + pip) | Medium (KDE) | Medium-high (Docker) | Medium-high (Docker) | Low-medium | Low | None (cloud) | None (bundled) | Low | None (bundled) | None (bundled) | None (bundled) |
+| **RAW support** | Good | Excellent | Good | Good | Excellent | Excellent | Good | Good | Excellent | Good | Good | Good |
+| **Non-destructive editing** | No | Yes | Basic | Yes | No | No | Yes | Yes | No | No | No | No |
 
 \* These apps offer semantic search but do not support negative terms (e.g. "beach -sunset") to exclude concepts from results. Photonarium does.
 
@@ -116,9 +141,11 @@ The five key criteria from above: **(a)** semantic search, **(b)** face recognit
 
 ### Where Photonarium Fits
 
-Photonarium occupies a niche that none of the above quite covers: a lightweight, fully offline desktop tool that combines CLIP semantic search, face detection and recognition, multi-level duplicate detection, and BLIP image captioning - all accessible via a browser-based UI, without requiring Docker infrastructure, a database server, KDE frameworks, or a cloud account. It's the simplest install of any AI-powered option (just Python and pip), and it runs on Windows, Mac, and Linux with zero telemetry under a permissive Apache-2.0 license.
+Photonarium occupies a niche that none of the above quite covers: a lightweight, fully offline desktop tool that combines CLIP semantic search, face detection and recognition, multi-level duplicate detection, and BLIP image captioning - all accessible via a browser-based UI, without requiring Docker infrastructure, a database server, KDE frameworks, a cloud account, or specific NAS hardware. It is the simplest install of any AI-powered option (just Python and pip), and it runs on Windows, Mac, and Linux with zero telemetry under a permissive Apache-2.0 license.
 
-The trade-offs are: no mobile apps or phone backup, no multi-user support, and no non-destructive editing. It's also new so has a much smaller community than the established projects! But if what you want is to point a tool at your photo folders and immediately start searching them semantically, finding duplicates, and tagging faces - all without sending a single byte off your machine - Photonarium is designed for exactly that.
+The NAS-bundled tools are worth a special mention because they get the privacy story right and the barrier to entry is low if you already own the hardware. But their AI features are typically restricted to specific (expensive) models, their duplicate detection is shallow, none of them offer image captioning or quality scoring, and you are locked into a single vendor's closed ecosystem with no ability to fix or extend anything. If the vendor decides your NAS model is end-of-life, the software stops improving.
+
+The trade-offs are: no automatic phone backup (the web UI works fine on mobile browsers, but it cannot sync your camera roll in the background the way a native app from Google, Apple, Immich, or a NAS vendor can), no multi-user support, and no non-destructive editing. It is also new so has a much smaller community than the established projects! But if what you want is to point a tool at your photo folders and immediately start searching them semantically, finding duplicates, and tagging faces - all without sending a single byte off your machine - Photonarium is designed for exactly that.
 
 ## The Great 'AI' Debate
 
