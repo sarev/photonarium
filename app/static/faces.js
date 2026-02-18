@@ -4918,8 +4918,13 @@
         loadingEl.textContent = 'Searching\u2026';
         card.appendChild(loadingEl);
 
-        // Show card immediately (matches will appear when ready)
+        // Show card immediately (matches will appear when ready).
+        // Force a layout reflow before positioning so getBoundingClientRect
+        // returns the real dimensions (without this, ~25% of the time the
+        // browser hasn't laid out the card yet and width comes back as 0,
+        // causing the card to jump to the left edge of the viewport).
         App.$('app').appendChild(card);
+        card.offsetWidth; // Force layout reflow before positioning
         positionQuickMatchCard(card, anchor);
         requestAnimationFrame(() => {
             card.classList.add('visible');
@@ -4951,8 +4956,8 @@
                 item.className = 'quick-match-item';
 
                 const img = document.createElement('img');
-                // Use person's preferred face thumbnail, not the matched face
-                img.src = `/api/people/${match.person_id}/thumbnail`;
+                // Use person's preferred face thumbnail (with cache-busting)
+                img.src = AppState.people.getThumbnailUrl(match.person_id);
                 img.alt = match.person_name;
                 item.appendChild(img);
 
@@ -5001,6 +5006,12 @@
      * @param {HTMLElement} anchor - The anchor element
      */
     function positionQuickMatchCard(card, anchor) {
+        // If the anchor was detached by a grid refresh (e.g. face reassessment
+        // event during the async match fetch), getBoundingClientRect returns
+        // all zeros, which would jump the card to the top-left corner.
+        // Keep the card where it is — the initial position was correct.
+        if (!anchor.isConnected) return;
+
         const anchorRect = anchor.getBoundingClientRect();
         const cardRect = card.getBoundingClientRect();
 
