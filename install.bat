@@ -322,9 +322,9 @@ echo   Step 3/4: Initialising configuration
 echo ============================================================
 
 if "!DATA_DIR_FLAG!"=="" (
-    "%VENV_PYTHON%" app.py --init-config "."
+    "%VENV_PYTHON%" app\app.py --init-config "."
 ) else (
-    "%VENV_PYTHON%" app.py --init-config "!DATA_DIR!"
+    "%VENV_PYTHON%" app\app.py --init-config "!DATA_DIR!"
 )
 if !errorlevel! neq 0 goto :error
 echo Configuration file created.
@@ -376,11 +376,11 @@ echo   To start Photonarium, open a terminal in this folder and run:
 echo.
 echo     Command Prompt:
 echo       %VENV_DIR%\Scripts\activate.bat
-echo       python app.py
+echo       python app\app.py
 echo.
 echo     PowerShell:
 echo       %VENV_DIR%\Scripts\Activate.ps1
-echo       python app.py
+echo       python app\app.py
 echo.
 echo     If PowerShell blocks the script, run this first:
 echo       Set-ExecutionPolicy -Scope CurrentUser RemoteSigned

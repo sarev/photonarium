@@ -1,6 +1,6 @@
 # Photonarium
 
-![Photonarium Logo](logo.png)
+![Photonarium Logo](www/images/logo.png)
 
 This application is free, Open Source software and we hope you enjoy Photonarium and find it valuable.
 
@@ -8,7 +8,7 @@ This application is free, Open Source software and we hope you enjoy Photonarium
 
 If you'd like to show your support, please use one of the links below:
 
-![Payment links](support.png)
+![Payment links](www/images/support.png)
 
 - [USD ($) contribution](https://buy.stripe.com/fZu3cv4WOdN0b0N8Jaebu01)
 - [GBP contribution](https://buy.stripe.com/14A14nexodN00m94sUebu00)

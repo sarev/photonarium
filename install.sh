@@ -399,9 +399,9 @@ echo "  Step 3/4: Initialising configuration"
 echo "============================================================"
 
 if [ -n "$DATA_DIR_FLAG" ]; then
-    "$VENV_PYTHON" app.py --init-config "$DATA_DIR"
+    "$VENV_PYTHON" app/app.py --init-config "$DATA_DIR"
 else
-    "$VENV_PYTHON" app.py --init-config "."
+    "$VENV_PYTHON" app/app.py --init-config "."
 fi
 
 echo "Configuration file created."
@@ -455,7 +455,7 @@ echo ""
 echo "  To start Photonarium:"
 echo ""
 echo "    source $VENV_DIR/bin/activate"
-echo "    python app.py"
+echo "    python app/app.py"
 echo ""
 echo "  Then open http://localhost:5000 in your browser."
 echo ""

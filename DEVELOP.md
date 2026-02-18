@@ -6,9 +6,9 @@ on the codebase.
 
 ---
 
-## Backend (Python)
+## Backend (Python, `app/`)
 
-### `app.py` - Flask REST API
+### `app/app.py` - Flask REST API
 
 The HTTP layer. Receives requests from the frontend and delegates to the
 backend modules for database operations and image processing. Uses the waitress
@@ -38,7 +38,7 @@ WSGI server in production.
 | `/api/faces/:id/thumbnail` | Cropped face thumbnail |
 | `/api/events` | Backend event polling (faces_reassessed, etc.) |
 
-### `imagedb.py` - Image Database Engine
+### `app/imagedb.py` - Image Database Engine
 
 The core backend module. Maintains a SQLite database of image files and their
 metadata, discovers images by scanning user-registered folders, computes derived
@@ -91,7 +91,7 @@ connection is shared and protected by `threading.RLock`. Embedding and face
 detection threads yield the GIL periodically (10ms sleep between batches) to
 prevent blocking Flask request handling.
 
-### `faces.py` - Face Detection and Recognition
+### `app/faces.py` - Face Detection and Recognition
 
 Face detection using MTCNN and face embeddings using InceptionResnetV1 from
 facenet-pytorch.
@@ -113,7 +113,7 @@ optional phase after OpenCLIP embedding generation. Background reassessment and
 grouping run asynchronously and use optimistic locking (`updated_at`) to avoid
 overwriting concurrent user edits.
 
-### `thumbnails.py` - Thumbnail Generation and Caching
+### `app/thumbnails.py` - Thumbnail Generation and Caching
 
 Generates, caches, and manages image thumbnails. Also includes image rotation
 utilities (which invalidate thumbnails).
@@ -131,7 +131,7 @@ Only two canonical sizes are stored on disk: **200px** and **400px**. The
 frontend uses CSS to scale to the exact display size. Cache structure:
 `<thumbnail_dir>/<size>/<first2chars>/<checksum>.jpg`.
 
-### `duplicates.py` - Duplicate Detection
+### `app/duplicates.py` - Duplicate Detection
 
 Finds and groups duplicate or similar images across 6 levels (4 auto-detected
 plus 2 named group types):
@@ -150,7 +150,7 @@ O(n^2) comparisons, chunked matrix multiplication for Levels 2-3 to manage
 memory, union-find with path compression for efficient clustering, and
 incremental updates for small batches of new/modified images.
 
-### `caption.py` - Image Captioning
+### `app/caption.py` - Image Captioning
 
 Automatic image description generation using BLIP/BLIP-2 models from
 HuggingFace transformers.
@@ -166,7 +166,7 @@ The model is loaded lazily on first use to avoid startup delays. Runs in
 offline mode (`HF_HUB_OFFLINE=1`); models must be pre-downloaded via
 `download_models.py`.
 
-### `config.py` - Configuration
+### `app/config.py` - Configuration
 
 Loads, saves, and validates configuration from `photonarium.yml` stored at the
 OS-appropriate location (Windows: `%LOCALAPPDATA%\Photonarium\`, macOS:
@@ -175,7 +175,7 @@ If no config exists on first run, auto-migrates a legacy `.photonarium.yml` from
 the working directory if found, otherwise creates a default with full comments.
 The `data_dir` field tells the app where to find its database and thumbnails.
 
-### `metadata.py` - EXIF Metadata and Timestamp Extraction
+### `app/metadata.py` - EXIF Metadata and Timestamp Extraction
 
 Extracts EXIF metadata and derives timestamps from images. A single-pass EXIF
 read produces normalised, human-readable key-value pairs (e.g. "Camera":
@@ -189,7 +189,7 @@ Timestamp priority order:
 3. Parsed from filename/path (more reliable than filesystem dates)
 4. Filesystem creation/modification time
 
-### `rawimage.py` - Camera RAW Image Loading
+### `app/rawimage.py` - Camera RAW Image Loading
 
 Unified interface for loading both standard image formats (via Pillow) and
 camera RAW formats (via rawpy/LibRaw). All image loading goes through
@@ -200,17 +200,17 @@ no longer need `ImageOps.exif_transpose()`. Also provides
 demosaicing, and `extract_raw_exif()` using the pure-Python `exifread` library
 for RAW EXIF timestamps.
 
-### `trash.py` - Trash and Quality Scoring Utilities
+### `app/trash.py` - Trash and Quality Scoring Utilities
 
 Pure utility functions for the trash-based deletion workflow and the composite
 quality scoring algorithm used by duplicate pruning. Has no dependency on
 ImageDatabase, no threading, and no direct database access - callers pass in
 paths and data as arguments. The quality scoring algorithm is a Python port of
-the frontend `_computeQualityScores()` in `static/appstate/images.js`, ensuring
+the frontend `_computeQualityScores()` in `app/static/appstate/images.js`, ensuring
 that the backend prune endpoint ranks images identically to the frontend Quality
 sort.
 
-### `nima.py` - NIMA Aesthetic Scoring
+### `app/nima.py` - NIMA Aesthetic Scoring
 
 MobileNetV2-based NIMA (Neural IMage Assessment) model from Talebi & Milanfar
 (2018). Predicts a probability distribution over aesthetic ratings 1-10; the
@@ -222,15 +222,15 @@ both GPU and CPU. Standalone implementation using only torch and torchvision
 
 ### `download_models.py` - Model Downloader
 
-Standalone script that queries `app.py --list-models` for the current
+Standalone script that queries `app/app.py --list-models` for the current
 configuration, then downloads the required OpenCLIP and BLIP/BLIP-2 models from
 HuggingFace. Run before first use or after changing model settings.
 
 ---
 
-## Frontend - Screen Modules (`static/`)
+## Frontend - Screen Modules (`app/static/`)
 
-All frontend files live in the `static/` folder. The application is a
+All frontend files live in the `app/static/` folder. The application is a
 single-page app (`index.html`) with screen modules that register with a global
 `App` object.
 
@@ -432,7 +432,7 @@ coffee rings, ring binder) and does not follow the light/dark theme toggle.
 
 ---
 
-## Frontend - State Management (`static/appstate/`)
+## Frontend - State Management (`app/static/appstate/`)
 
 Central state management split into domain files. All domains attach to the
 global `AppState` object created by `core.js`. GUI modules read from AppState,
@@ -473,7 +473,7 @@ loading.js -> events.js -> index.js
 
 ### Domain Files
 
-Business logic and core application state in the frontend is handled by `static/appstate`. This performs an 'optimistic cacheing' strategy to maintain RAM-based copies of state which may be rolled-back if something goes wrong in the backend that invalidates any optimistic assumptions. It provides mechanisms for subscribers (across the frontend) to be notified via events when key state domains are updated, so (for example) they can refresh.
+Business logic and core application state in the frontend is handled by `app/static/appstate`. This performs an 'optimistic cacheing' strategy to maintain RAM-based copies of state which may be rolled-back if something goes wrong in the backend that invalidates any optimistic assumptions. It provides mechanisms for subscribers (across the frontend) to be notified via events when key state domains are updated, so (for example) they can refresh.
 
 | File | Domain(s) | Persistence | Description |
 |------|-----------|-------------|-------------|
@@ -500,25 +500,25 @@ Automated linting, formatting, and static analysis for both Python and JavaScrip
 
 | Language | Tool | Config | Purpose |
 |----------|------|--------|---------|
-| Python | [ruff](https://docs.astral.sh/ruff/) | `ruff.toml` | Linting + formatting |
-| JS | [ESLint 9](https://eslint.org/) + [@stylistic](https://eslint.style/) | `eslint.config.mjs` | Linting + formatting |
-| JS | [TypeScript](https://www.typescriptlang.org/) `checkJs` | `jsconfig.json` | Type inference on plain JS via JSDoc (IDE support) |
+| Python | [ruff](https://docs.astral.sh/ruff/) | `tools/ruff.toml` | Linting + formatting |
+| JS | [ESLint 9](https://eslint.org/) + [@stylistic](https://eslint.style/) | `tools/eslint.config.mjs` | Linting + formatting |
+| JS | [TypeScript](https://www.typescriptlang.org/) `checkJs` | `tools/jsconfig.json` | Type inference on plain JS via JSDoc (IDE support) |
 
 ### Quick Reference
 
 ```bash
 # Python -- lint and format
-ruff check .              # Check for errors
-ruff check --fix .        # Auto-fix safe issues
-ruff format .             # Format all Python files
-ruff format --check .     # Verify formatting (no changes)
+ruff check --config tools/ruff.toml app/              # Check for errors
+ruff check --config tools/ruff.toml --fix app/        # Auto-fix safe issues
+ruff format --config tools/ruff.toml app/             # Format all Python files
+ruff format --config tools/ruff.toml --check app/     # Verify formatting (no changes)
 
 # JavaScript -- lint and format
-npx eslint static/        # Check for errors
-npx eslint --fix static/  # Auto-fix safe issues
+npx --prefix tools eslint --config tools/eslint.config.mjs app/static/        # Check for errors
+npx --prefix tools eslint --config tools/eslint.config.mjs --fix app/static/  # Auto-fix safe issues
 
 # TypeScript -- type checking (informational, not enforced)
-npx tsc --project jsconfig.json --noEmit
+npx --prefix tools tsc --project tools/jsconfig.json --noEmit
 ```
 
 ### Python Rules (ruff)
@@ -537,7 +537,7 @@ The linter runs a curated set of rules beyond basic style:
 | `PLE` | pylint errors: real bugs only |
 | `RUF` | ruff-specific: catch-all for Python anti-patterns |
 
-Per-file ignores (in `ruff.toml`) suppress S608 (hardcoded SQL) in database modules
+Per-file ignores (in `tools/ruff.toml`) suppress S608 (hardcoded SQL) in database modules
 where string-formatted SQL is used for schema names with parameterised value binding.
 
 ### JavaScript Rules (ESLint)
@@ -558,7 +558,7 @@ lint or formatting errors. It prints fix commands on failure.
 # Python: suppress a specific rule on one line
 x = eval(expr)  # noqa: S307
 
-# Python: suppress in ruff.toml for an entire file
+# Python: suppress in tools/ruff.toml for an entire file
 [lint.per-file-ignores]
 "tests/*.py" = ["S101"]
 ```

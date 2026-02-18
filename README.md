@@ -1,6 +1,6 @@
 # Photonarium
 
-![Photonarium Logo](logo.png)
+![Photonarium Logo](www/images/logo.png)
 
 [Photonarium](http://photonarium.org/) is a photo catalogue that stays on your computer. It's for people who want the convenience of modern search and face grouping, without uploading their life to someone else's servers.
 
@@ -78,7 +78,7 @@ It also works over a local network: you can run the backend on one machine (say,
 
 - **Performance** it may be a little slower, for two reasons: 1) the backend machine needs some grunt, ideally a decent GPU, especially during image ingestion, and 2) quite a bit of data between the backend and UI needs to go over your local network. 
 - **Reveal in folder** opens a file-manager window on the machine running the *backend*, which is only useful if that's also the machine you're sitting at. On a headless server this will either silently fail or pop a window nobody sees.
-- **The folder picker** (for adding image directories) likewise opens on the backend machine. If you're accessing Photonarium remotely, use the CLI instead: `python app.py --add-folder /path/to/photos`.
+- **The folder picker** (for adding image directories) likewise opens on the backend machine. If you're accessing Photonarium remotely, use the CLI instead: `python app/app.py --add-folder /path/to/photos`.
 
 ### Mobile devices
 
@@ -664,7 +664,7 @@ If you prefer to install manually, or the installer script doesn't suit your set
 
   ```bash
   # Create the config file at the OS default location and exit
-  python app.py --init-config .
+  python app/app.py --init-config .
   ```
 
   This will create a `photonarium.yml` configuration file at the OS-appropriate location (see [Configuration](#configuration) below). You can change settings later via the in-app **Edit Settings** button on the Database screen, or by editing the YAML file directly in a text editor.
@@ -686,7 +686,7 @@ If you prefer to install manually, or the installer script doesn't suit your set
 ## Running Photonarium
 
   ```bash
-  python app.py
+  python app/app.py
   ```
 
   Then open `http://localhost:5000`
@@ -702,17 +702,17 @@ If you prefer to install manually, or the installer script doesn't suit your set
 ### Command line options
 
 ```bash
-python app.py --port 8080              # Use a different port
-python app.py --data-dir /path/to/data # Override data directory for this session
-python app.py --config /path/to/yml    # Use a specific config file
-python app.py --init-config /data/dir  # Create config with data_dir set, then exit
-python app.py --generate-thumbnails    # Pre-generate thumbnails for all images
-python app.py --scan                   # Run folder scan on startup
-python app.py --detect-faces           # Run face detection on startup
-python app.py --group-faces            # Run unknown face grouping on startup
-python app.py --scan --detect-faces    # Combine flags as needed
-python app.py --extract-exif           # Extract EXIF metadata for all images and exit
-python app.py --list-models            # Output required models as JSON (for scripting)
+python app/app.py --port 8080              # Use a different port
+python app/app.py --data-dir /path/to/data # Override data directory for this session
+python app/app.py --config /path/to/yml    # Use a specific config file
+python app/app.py --init-config /data/dir  # Create config with data_dir set, then exit
+python app/app.py --generate-thumbnails    # Pre-generate thumbnails for all images
+python app/app.py --scan                   # Run folder scan on startup
+python app/app.py --detect-faces           # Run face detection on startup
+python app/app.py --group-faces            # Run unknown face grouping on startup
+python app/app.py --scan --detect-faces    # Combine flags as needed
+python app/app.py --extract-exif           # Extract EXIF metadata for all images and exit
+python app/app.py --list-models            # Output required models as JSON (for scripting)
 ```
 
 By default, no processing runs at startup. Add flags to opt in to the phases you want.
@@ -798,7 +798,7 @@ Finally, thanks to [Anthropic](https://www.anthropic.com) and [Claude Code](http
 
 We hope you enjoy Photonarium and find it valuable. If you'd like to show your support, please use one of the links below:
 
-![Payment links](support.png)
+![Payment links](www/images/support.png)
 
 - [USD ($) contribution](https://buy.stripe.com/fZu3cv4WOdN0b0N8Jaebu01)
 - [GBP contribution](https://buy.stripe.com/14A14nexodN00m94sUebu00)

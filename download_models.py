@@ -36,7 +36,8 @@ def get_required_models(
             actual runtime directory.
         config_path: Optional config file path to forward to app.py.
     """
-    cmd = [sys.executable, 'app.py', '--list-models']
+    app_py = os.path.join(os.path.dirname(__file__), 'app', 'app.py')
+    cmd = [sys.executable, app_py, '--list-models']
     if config_path is not None:
         cmd.extend(['--config', config_path])
     if data_dir is not None:
@@ -263,7 +264,7 @@ def main():
     print('=' * 60)
     if success:
         print('All models downloaded successfully!')
-        print('You can now run: python app.py')
+        print('You can now run: python app/app.py')
     else:
         print('Some models failed to download. Check errors above.')
         sys.exit(1)
