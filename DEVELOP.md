@@ -571,6 +571,93 @@ const x = legacyGlobal;
 
 ---
 
+## Tutorial Generation (`tools/mktutorial/`)
+
+The interactive tutorial on the Photonarium website is generated from a
+Playwright-automated script that drives a real instance of the app, capturing
+screenshots at each step. This makes it a useful end-to-end smoke test of the
+entire system - backend processing, frontend rendering, and face recognition
+all have to work correctly for the tutorial to complete.
+
+### Prerequisites
+
+- A working Photonarium install (venv with all dependencies)
+- Playwright for Python: `pip install playwright && playwright install chromium`
+- A GPU is strongly recommended (the 499-image demo set takes a long time on CPU)
+- The `tools/mktutorial/examples/` folder with the demo image set
+
+### Two-phase workflow
+
+**Phase 1 - Setup** (run once, or when the demo data changes):
+
+```bash
+python tools/mktutorial/tutorial.py --setup
+```
+
+This initialises the tutorial data directory (`tools/mktutorial/`):
+
+1. Creates a `photonarium.yml` config pointing at the mktutorial directory
+2. Downloads ML model weights (LAION aesthetic head, NIMA) into the directory
+3. Starts a server against an empty database on port 5111
+4. Captures the Getting Started screenshots (light/dark theme, folder picker
+   composite, indexing, processing) into `tools/mktutorial/setup-cache/`
+5. Adds the demo image folder and waits for the full processing pipeline
+   (indexing, CLIP embeddings, face detection, NIMA scoring) to complete
+6. Stops the server
+
+The generated artifacts (DB, thumbnails, model files, setup screenshots) are
+gitignored - they are large and machine-specific.
+
+**Phase 2 - Capture** (run to regenerate tutorial screenshots):
+
+```bash
+python tools/mktutorial/tutorial.py
+```
+
+This starts a fresh server from the setup data, opens a headless Chromium
+browser, and walks through every tutorial step - navigating screens, clicking
+buttons, typing text, identifying faces - capturing a screenshot after each
+action. Output goes to `generated/` at the project root:
+
+- `generated/screenshots/` - all captured screenshots (0-1.png through 9-2.png)
+- `generated/manual/` - mobile screenshots (copied, not captured)
+- `generated/index.html` - the tutorial HTML page with embedded step text
+
+Useful flags:
+
+```bash
+# Capture only specific sections (0-indexed)
+python tools/mktutorial/tutorial.py --from-section 6 --to-section 6
+
+# Continue from a specific section (skips earlier ones)
+python tools/mktutorial/tutorial.py --from-section 4
+```
+
+### Publishing to the website
+
+After a successful capture, copy the output into the website directory:
+
+```bash
+# Copy screenshots (replaces existing ones)
+cp -r generated/screenshots/* www/tutorial/screenshots/
+
+# Copy the tutorial page
+cp generated/index.html www/tutorial/index.html
+```
+
+The `www/tutorial/manual/` directory contains mobile screenshots that are taken
+by hand (not automated). These only need updating if the mobile UI changes.
+
+### Deterministic face identification
+
+The face tutorial section (section 6) uses deterministic helpers that identify
+faces by their source image filename and bounding box position (left/right)
+rather than grid position. This makes the tutorial resilient to changes in
+ingestion order. The expected face detections are defined in `_FACE_IMAGES` at
+the top of the step definitions.
+
+---
+
 ## Key Principles For Developing Photonarium
 
 The following rules apply to all submissions to the Photonarium codebase:

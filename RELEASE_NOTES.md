@@ -23,6 +23,27 @@ The Gallery toolbar now has slideshow (play) and shuffle buttons, in addition to
 
 PyTorch device selection now detects Apple Silicon GPU acceleration (MPS) in addition to NVIDIA CUDA. All four ML model sites (OpenCLIP embeddings, NIMA aesthetic scoring, face detection, and image captioning) use the priority order CUDA > MPS > CPU. The BLIP/BLIP-2 captioning models also use float16 precision on MPS (previously only on CUDA), improving performance on Apple Silicon.
 
+### Repository Restructure
+
+The project source tree has been reorganized into two top-level directories for cleaner separation of application code and development tooling:
+
+- **`app/`**: Python backend (app.py, imagedb.py, faces.py, etc.) and the frontend (`app/static/`).
+- **`tools/`**: Development and CI/CD tooling (ruff.toml, eslint.config.mjs, jsconfig.json, package.json, compat-test/, mktutorial/).
+
+The application is now launched with `python app/app.py` instead of `python app.py`. Data files (database, thumbnails, models, trash) continue to live in the OS data directory, not the repository root. The installer scripts have been updated accordingly.
+
+### Tutorial Automation
+
+The tutorial generator (`tools/mktutorial/tutorial.py`) now supports a `--setup` mode that automates the initial data preparation -- replacing manual steps that previously had to be done before tutorial generation:
+
+- **Automated setup:** `--setup` creates the tutorial config, downloads ML models, starts the server against an empty database, captures the Getting Started screenshots via Playwright, adds the example image folder, and waits for all image processing (indexing, embeddings, faces, duplicates, NIMA scoring) to complete.
+- **Composite screenshots:** The OS folder picker dialog (which cannot be automated as a native widget) is composited from a manually-provided overlay onto an automatically-captured background screenshot using Pillow.
+- **Deterministic face identification:** Section 6 (Faces) now uses stable selectors based on image filenames and face bounding-box positions rather than DOM order, making the face identification steps reproducible across different processing orders.
+
+### Bug Fixes
+
+- **People disappearing from Known People section:** When the originating client received its own mutation events back via event polling, `handleFacesChanged` called `people.invalidate()` which triggered a full cache reload - wiping the optimistic face counts that had just been set. Additionally, `autoUpsert` in the people handler overwrote the optimistic `face_count` with a stale backend snapshot (captured at person creation time, before faces were assigned). Fixed by replacing cache invalidation with incremental reconciliation and stripping the derived `face_count` field from backend event payloads.
+
 ## v1.0.8-beta.8
 
 ### Slideshow Mode
