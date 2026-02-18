@@ -2450,15 +2450,37 @@ def get_person_thumbnail(person_id):
     if person is None:
         return error_response('Person not found', 404)
 
-    # Get preferred face or first face
+    # Get preferred face, falling back to first available face.
+    # Self-heals stale preferred_face_id (e.g. after the preferred face's
+    # image was trashed before the cleanup fix was in place).
     face_id = person.get('preferred_face_id')
     fallback_used = False
+    if face_id:
+        # Verify the preferred face still exists AND its image isn't deleted.
+        # Orphaned face records (image trashed before cleanup fix) pass
+        # get_face() but can't produce a thumbnail.
+        preferred_face = get_face(db.conn, face_id)
+        if not preferred_face:
+            face_id = None  # Face record gone, fall back below
+        else:
+            image = db.get_image(preferred_face['image_id'])
+            if not image or image.get('deleted'):
+                face_id = None  # Image trashed, fall back below
+
     if not face_id:
         faces = get_faces_for_person(db.conn, person_id)
         if not faces:
             return error_response('Person has no faces', 404)
-        face_id = faces[0]['id']
+        face_id = faces[-1]['id']  # Most recent photo by timestamp
         fallback_used = True
+        # Auto-repair: persist the new preferred so this doesn't repeat
+        with db._db_lock:
+            db.conn.execute(
+                "UPDATE people SET preferred_face_id = ?, updated_at = datetime('now') WHERE id = ?",
+                (face_id, person_id),
+            )
+            db.conn.commit()
+        logger.info(f'Auto-repaired preferred_face_id for person {person_id[:8]}... -> {face_id[:8]}...')
 
     # Get face thumbnail
     thumb_path = get_face_thumbnail_path(face_id, db.thumbnail_dir)
@@ -2474,7 +2496,41 @@ def get_person_thumbnail(person_id):
     )
 
     if not thumb_exists:
-        return error_response('Face thumbnail not found', 404)
+        # Lazy regeneration: face thumbnail may be missing after data-dir
+        # migration or interrupted processing. Regenerate from source image
+        # using the same concurrency-safe pattern as get_face_thumbnail().
+        face = get_face(db.conn, face_id)
+        if face:
+            should_regenerate = False
+            with _face_thumb_regen_lock:
+                if face_id not in _face_thumb_regenerating:
+                    _face_thumb_regenerating.add(face_id)
+                    should_regenerate = True
+
+            if should_regenerate:
+                try:
+                    image = db.get_image(face['image_id'])
+                    if image and Path(image['path']).exists():
+                        generate_face_thumbnail(
+                            source_path=image['path'],
+                            dest_path=thumb_path,
+                            box_x=face['box_x'],
+                            box_y=face['box_y'],
+                            box_w=face['box_w'],
+                            box_h=face['box_h'],
+                        )
+                finally:
+                    with _face_thumb_regen_lock:
+                        _face_thumb_regenerating.discard(face_id)
+            else:
+                # Another request is handling it - wait for file to appear
+                for _ in range(20):  # Wait up to 2s
+                    time.sleep(0.1)
+                    if thumb_path.exists():
+                        break
+
+        if not thumb_path.exists():
+            return error_response('Face thumbnail not found', 404)
 
     return send_file(
         thumb_path,

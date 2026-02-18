@@ -1399,7 +1399,12 @@ def get_faces_without_semantic_embedding(
     Returns:
         List of face IDs.
     """
-    cursor = conn.execute('SELECT id FROM faces WHERE semantic_embedding IS NULL AND suppressed = 0')
+    cursor = conn.execute(
+        """SELECT f.id FROM faces f
+           JOIN images i ON f.image_id = i.id
+           WHERE f.semantic_embedding IS NULL AND f.suppressed = 0
+             AND i.deleted = 0"""
+    )
     return [row['id'] for row in cursor.fetchall()]
 
 
@@ -1530,7 +1535,7 @@ def get_faces_for_person(
            FROM faces f
            JOIN images i ON f.image_id = i.id
            JOIN people p ON f.person_id = p.id
-           WHERE f.person_id = ? AND f.suppressed = 0
+           WHERE f.person_id = ? AND f.suppressed = 0 AND i.deleted = 0
            ORDER BY i.timestamp""",
         (person_id,),
     )
@@ -1576,7 +1581,7 @@ def get_all_faces(
                            ELSE COUNT(*) OVER (PARTITION BY f.unknown_group_id) END as group_size
                FROM faces f
                JOIN images i ON f.image_id = i.id
-               WHERE f.suppressed = 0 AND f.person_id IS NULL
+               WHERE f.suppressed = 0 AND f.person_id IS NULL AND i.deleted = 0
                ORDER BY
                    CASE WHEN f.unknown_group_id IS NULL THEN 0 ELSE
                        COUNT(*) OVER (PARTITION BY f.unknown_group_id) END DESC,
@@ -1598,7 +1603,7 @@ def get_all_faces(
                FROM faces f
                LEFT JOIN people p ON f.person_id = p.id
                JOIN images i ON f.image_id = i.id
-               WHERE f.suppressed = 0
+               WHERE f.suppressed = 0 AND i.deleted = 0
                ORDER BY
                    CASE WHEN f.person_id IS NULL THEN 1 ELSE 0 END,
                    p.name COLLATE NOCASE,
@@ -1633,9 +1638,11 @@ def get_all_known_face_embeddings(
         List of (face_id, person_id, embedding) tuples.
     """
     cursor = conn.execute(
-        """SELECT id, person_id, embedding
-           FROM faces
-           WHERE person_id IS NOT NULL AND suppressed = 0 AND manually_tagged = 1"""
+        """SELECT f.id, f.person_id, f.embedding
+           FROM faces f
+           JOIN images i ON f.image_id = i.id
+           WHERE f.person_id IS NOT NULL AND f.suppressed = 0
+             AND f.manually_tagged = 1 AND i.deleted = 0"""
     )
 
     results = []
@@ -1680,8 +1687,9 @@ def get_face_matches(
         """SELECT f.id, f.person_id, f.embedding, p.name as person_name
            FROM faces f
            JOIN people p ON f.person_id = p.id
+           JOIN images i ON f.image_id = i.id
            WHERE f.suppressed = 0 AND f.manually_tagged = 1
-             AND p.name != '-' """
+             AND p.name != '-' AND i.deleted = 0"""
     )
 
     # Build list of (face_id, person_id, person_name, embedding)
@@ -2258,9 +2266,10 @@ def reassess_unknown_faces(
     if person_id:
         # Only get embeddings for the specified person
         cursor = conn.execute(
-            """SELECT id, person_id, embedding
-               FROM faces
-               WHERE person_id = ? AND suppressed = 0""",
+            """SELECT f.id, f.person_id, f.embedding
+               FROM faces f
+               JOIN images i ON f.image_id = i.id
+               WHERE f.person_id = ? AND f.suppressed = 0 AND i.deleted = 0""",
             (person_id,),
         )
         known_embeddings = []
@@ -2273,10 +2282,12 @@ def reassess_unknown_faces(
     # Get candidate embeddings: unknown faces AND unlocked faces
     # This allows faces to be reassigned to better-matching people
     cursor = conn.execute(
-        """SELECT id, embedding, person_id
-           FROM faces
-           WHERE (person_id IS NULL OR manually_tagged = 0)
-             AND suppressed = 0 AND embedding IS NOT NULL"""
+        """SELECT f.id, f.embedding, f.person_id
+           FROM faces f
+           JOIN images i ON f.image_id = i.id
+           WHERE (f.person_id IS NULL OR f.manually_tagged = 0)
+             AND f.suppressed = 0 AND f.embedding IS NOT NULL
+             AND i.deleted = 0"""
     )
     candidate_embeddings = []
     candidate_person_ids: dict[str, str | None] = {}  # face_id -> current person_id
@@ -2568,6 +2579,7 @@ def search_unknown_faces_semantic(
         WHERE f.person_id IS NULL
           AND f.suppressed = 0
           AND f.semantic_embedding IS NOT NULL
+          AND i.deleted = 0
     """)
 
     faces = []
@@ -2673,9 +2685,11 @@ def reassess_unknown_faces_async(
                 # Get known embeddings
                 if person_id:
                     cursor = db.conn.execute(
-                        """SELECT id, person_id, embedding
-                           FROM faces
-                           WHERE person_id = ? AND suppressed = 0""",
+                        """SELECT f.id, f.person_id, f.embedding
+                           FROM faces f
+                           JOIN images i ON f.image_id = i.id
+                           WHERE f.person_id = ? AND f.suppressed = 0
+                             AND i.deleted = 0""",
                         (person_id,),
                     )
                     known_embeddings = []
@@ -2695,10 +2709,12 @@ def reassess_unknown_faces_async(
                 # match better. Locked faces (manually_tagged = 1) are never candidates.
                 if person_id:
                     cursor = db.conn.execute(
-                        """SELECT id, embedding, updated_at, person_id
-                           FROM faces
-                           WHERE (person_id IS NULL OR (person_id != ? AND manually_tagged = 0))
-                             AND suppressed = 0 AND embedding IS NOT NULL""",
+                        """SELECT f.id, f.embedding, f.updated_at, f.person_id
+                           FROM faces f
+                           JOIN images i ON f.image_id = i.id
+                           WHERE (f.person_id IS NULL OR (f.person_id != ? AND f.manually_tagged = 0))
+                             AND f.suppressed = 0 AND f.embedding IS NOT NULL
+                             AND i.deleted = 0""",
                         (person_id,),
                     )
                 else:
@@ -2706,10 +2722,12 @@ def reassess_unknown_faces_async(
                     # This allows faces to be reassigned to better-matching people
                     # or ejected to unknown if they no longer meet any threshold
                     cursor = db.conn.execute(
-                        """SELECT id, embedding, updated_at, person_id
-                           FROM faces
-                           WHERE (person_id IS NULL OR manually_tagged = 0)
-                             AND suppressed = 0 AND embedding IS NOT NULL"""
+                        """SELECT f.id, f.embedding, f.updated_at, f.person_id
+                           FROM faces f
+                           JOIN images i ON f.image_id = i.id
+                           WHERE (f.person_id IS NULL OR f.manually_tagged = 0)
+                             AND f.suppressed = 0 AND f.embedding IS NOT NULL
+                             AND i.deleted = 0"""
                     )
                 candidate_embeddings = []
                 face_timestamps: dict[str, str | None] = {}  # face_id -> updated_at

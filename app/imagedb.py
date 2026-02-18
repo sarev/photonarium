@@ -5400,6 +5400,43 @@ class ImageDatabase:
         with self._trash_progress_lock:
             return dict(self._trash_progress) if self._trash_progress else None
 
+    @staticmethod
+    def _find_closest_face(
+        old_preferred_id: str,
+        removed_embeddings: dict[str, bytes],
+        remaining_faces: list[sqlite3.Row],
+    ) -> str:
+        """Find the remaining face most similar to the old preferred face.
+
+        When a person's preferred face is trashed, this picks the best
+        replacement by cosine similarity to the old embedding. Falls back
+        to the first remaining face if the old embedding is unavailable.
+
+        Args:
+            old_preferred_id: Face ID of the removed preferred face.
+            removed_embeddings: Map of removed face_id -> raw embedding bytes.
+            remaining_faces: Rows with 'id' and 'embedding' columns.
+
+        Returns:
+            Face ID of the best replacement.
+        """
+        old_emb_bytes = removed_embeddings.get(old_preferred_id)
+        if not old_emb_bytes or len(remaining_faces) == 1:
+            return remaining_faces[0]['id']
+
+        old_emb = np.frombuffer(old_emb_bytes, dtype=np.float32)
+        best_id = remaining_faces[0]['id']
+        best_sim = -1.0
+        for row in remaining_faces:
+            if not row['embedding']:
+                continue
+            emb = np.frombuffer(row['embedding'], dtype=np.float32)
+            sim = float(np.dot(old_emb, emb))
+            if sim > best_sim:
+                best_sim = sim
+                best_id = row['id']
+        return best_id
+
     def enqueue_trash(self, image_ids: list[str]) -> dict[str, Any]:
         """Enqueue images for background trashing.
 
@@ -5446,14 +5483,92 @@ class ImageDatabase:
             return {'enqueued': [], 'errors': errors}
 
         # Soft-delete in DB immediately (images vanish from queries at once)
+        # Also clean up associated face records and person references.
         now = datetime.now().isoformat()
+        removed_face_ids = []
+        affected_person_ids = set()
         with self._db_lock:
             placeholders = ','.join('?' for _ in enqueued)
+
+            # Collect faces belonging to these images BEFORE soft-delete,
+            # so we can clean up person references and face thumbnails.
+            # Also grab embeddings for preferred faces that are being removed,
+            # so we can pick the most visually similar replacement.
+            cursor = self.conn.execute(
+                f'SELECT id, person_id, embedding FROM faces WHERE image_id IN ({placeholders})',
+                enqueued,
+            )
+            removed_face_embeddings = {}  # face_id -> embedding bytes
+            for row in cursor.fetchall():
+                removed_face_ids.append(row['id'])
+                if row['person_id']:
+                    affected_person_ids.add(row['person_id'])
+                if row['embedding']:
+                    removed_face_embeddings[row['id']] = row['embedding']
+
+            # Soft-delete the images
             self.conn.execute(
                 f'UPDATE images SET deleted = 1, updated_at = ? WHERE id IN ({placeholders})',
                 [now] + enqueued,
             )
+
+            # Hard-delete orphaned face records (CASCADE won't fire on UPDATE)
+            if removed_face_ids:
+                face_placeholders = ','.join('?' for _ in removed_face_ids)
+                self.conn.execute(
+                    f'DELETE FROM faces WHERE id IN ({face_placeholders})',
+                    removed_face_ids,
+                )
+
+            # Fix preferred_face_id for affected people and remove empty people
+            removed_set = set(removed_face_ids)
+            for person_id in affected_person_ids:
+                remaining = self.conn.execute(
+                    'SELECT id, embedding FROM faces WHERE person_id = ? AND suppressed = 0',
+                    (person_id,),
+                ).fetchall()
+                if not remaining:
+                    # Person has no more faces - delete them
+                    self.conn.execute('DELETE FROM people WHERE id = ?', (person_id,))
+                else:
+                    # Check if preferred face was among the removed
+                    preferred = self.conn.execute(
+                        'SELECT preferred_face_id FROM people WHERE id = ?',
+                        (person_id,),
+                    ).fetchone()
+                    old_preferred_id = preferred['preferred_face_id'] if preferred else None
+                    if old_preferred_id and old_preferred_id in removed_set:
+                        new_preferred_id = self._find_closest_face(
+                            old_preferred_id,
+                            removed_face_embeddings,
+                            remaining,
+                        )
+                        self.conn.execute(
+                            "UPDATE people SET preferred_face_id = ?, updated_at = datetime('now') WHERE id = ?",
+                            (new_preferred_id, person_id),
+                        )
+
+            # Collect person event data while we still hold the lock
+            deleted_person_ids = []
+            updated_people = []
+            for pid in affected_person_ids:
+                row = self.conn.execute('SELECT * FROM people WHERE id = ?', (pid,)).fetchone()
+                if row:
+                    updated_people.append(dict(row))
+                else:
+                    deleted_person_ids.append(pid)
+
             self.conn.commit()
+
+        # Delete orphaned face thumbnail files (outside DB lock)
+        for face_id in removed_face_ids:
+            delete_face_thumbnail(face_id, self.thumbnail_dir)
+
+        # Invalidate the known-embedding cache since faces were removed
+        if affected_person_ids:
+            from faces import invalidate_embedding_cache
+
+            invalidate_embedding_cache()
 
         # Update trashed count and invalidate caches
         self._trashed_count += len(enqueued)
@@ -5483,6 +5598,20 @@ class ImageDatabase:
 
         # Emit event for other clients (and the current client's image cache)
         self.event_queue.emit(EVENT_IMAGES_CHANGED, {'removed_ids': enqueued})
+
+        # Notify other clients that faces/people changed due to trashed images
+        if removed_face_ids:
+            self.event_queue.emit(
+                EVENT_FACES_CHANGED,
+                {'removed': removed_face_ids},
+            )
+        if deleted_person_ids or updated_people:
+            event_data = {}
+            if deleted_person_ids:
+                event_data['removed'] = deleted_person_ids
+            if updated_people:
+                event_data['upserted'] = updated_people
+            self.event_queue.emit(EVENT_PEOPLE_CHANGED, event_data)
 
         # Notify other clients that groups were affected at each level where
         # images were removed (counts may have changed, groups may be dissolved)
@@ -6002,7 +6131,11 @@ class ImageDatabase:
         cursor = self.conn.execute('SELECT COUNT(*) as count FROM people')
         total_people = cursor.fetchone()['count']
 
-        cursor = self.conn.execute('SELECT COUNT(*) as count FROM faces WHERE suppressed = 0')
+        cursor = self.conn.execute(
+            """SELECT COUNT(*) as count FROM faces f
+               JOIN images i ON f.image_id = i.id
+               WHERE f.suppressed = 0 AND i.deleted = 0"""
+        )
         total_faces = cursor.fetchone()['count']
 
         return {
@@ -6062,7 +6195,11 @@ class ImageDatabase:
         cursor = self.conn.execute('SELECT COUNT(*) as count FROM people')
         total_people = cursor.fetchone()['count']
 
-        cursor = self.conn.execute('SELECT COUNT(*) as count FROM faces WHERE suppressed = 0')
+        cursor = self.conn.execute(
+            """SELECT COUNT(*) as count FROM faces f
+               JOIN images i ON f.image_id = i.id
+               WHERE f.suppressed = 0 AND i.deleted = 0"""
+        )
         total_faces = cursor.fetchone()['count']
 
         # Build response - only include Phase 4 statuses if they're active
