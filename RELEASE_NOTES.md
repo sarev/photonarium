@@ -2,6 +2,19 @@
 
 ## v1.0.9-beta.9
 
+### Import into Catalogue
+
+A new Import feature lets you copy images from external sources (SD cards, phone uploads, downloads) into a Photonarium-managed catalogue directory, organised by date. Set `catalogue_dir` in settings to enable it.
+
+- **Date-based organisation:** Imported files are stored as `catalogue_dir/YYYY/YYYY-MM-DD/filename.jpg` using the EXIF timestamp (or file modification time as a fallback).
+- **Desktop import:** Drag and drop files or folders onto the import drop zone on the Database screen, or use the Pick Folder / Pick Photos buttons. When dropping a folder, a choice dialog lets you reference it in place (Add Folder) or copy its contents into the catalogue (Import).
+- **Mobile import:** Pick Photos opens the system photo picker (iOS Camera Roll, Android Files). On Android, a Pick Folder button is also available via the `webkitdirectory` API.
+- **Preflight dedup:** Before uploading from a browser, SHA-256 checksums are computed client-side and checked against the backend. Only new files are transferred, saving bandwidth when re-importing folders that partially overlap with the existing library.
+- **Backend dedup:** The ImportWorker also checks checksums server-side (for the desktop path and as a safety net for uploads), skipping files already in the library.
+- **ImportWorker:** Modeled on TrashWorker -- daemon thread, queue-fed with `ThreadPoolExecutor` for parallel file copying (`import_threads` setting, 1-16, default 4). Progress is shown on the Database screen. Unfinished items are persisted to `.pending_import.json` on shutdown and recovered on restart.
+- **Auto-registration:** The catalogue directory is automatically registered as a watched folder. It is shown with a catalogue badge and cannot be removed from the folder list.
+- **No new dependencies:** Uses stdlib `shutil.copy2` and existing `hashlib`.
+
 ### Refine Groups
 
 The old Prune feature (levels 0-3 only, trash-only) has been replaced by a general-purpose Refine Groups tool available at all 6 group levels (including directories and custom groups).

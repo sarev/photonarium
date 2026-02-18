@@ -449,7 +449,7 @@ AppState.images = (function() {
                 }
 
                 _markDisplayListDirty();
-                broadcast({ type: 'changed' });
+                broadcast({ type: 'changed', reload: forceFullReload });
 
             } catch (err) {
                 console.error('[AppState.images.load] Error:', err);
@@ -622,6 +622,9 @@ AppState.images = (function() {
 
                 try {
                     await App.apiPost('/images/trash', { image_ids: ids });
+                    // Refresh folder counts so Database screen reflects the change
+                    AppState.folders.load();
+                    AppState.folders.loadStats();
                 } catch (err) {
                     console.error('[AppState.images.delete] Persist failed:', err);
                     broadcastError(err.message || 'Failed to move images to trash');

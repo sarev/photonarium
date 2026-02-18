@@ -13,6 +13,7 @@
  * - `faces_reassessed` - Async face matching completed
  * - `folder_added` / `folder_removed` - Folder registration changes
  * - `processing_complete` - Full processing cycle finished
+ * - `images_indexed` - Images ingested and embedded (before face detection/grouping)
  * - `image_ingested` - New image added to database
  * - `images_modified` - Images rotated/rescanned
  * - `nima_complete` - NIMA aesthetic scoring finished
@@ -111,9 +112,46 @@ AppState.events = (function() {
                 AppState.images.load();
                 break;
 
-                // -----------------------------------------------------------------
-                // Multi-client mutation events
-                // -----------------------------------------------------------------
+            case 'images_indexed':
+                // New images have been ingested and embedded — ready for display.
+                // This fires well before processing_complete (which waits for
+                // face detection, duplicate grouping, etc.) so the Gallery shows
+                // newly imported images within seconds, not minutes.
+                AppState.images.reload();
+                if (AppState.folders?.load) {
+                    AppState.folders.load();
+                }
+                if (AppState.folders?.loadStats) {
+                    AppState.folders.loadStats();
+                }
+                break;
+
+            case 'import_complete': {
+                // Image import batch finished — files copied into catalogue dir.
+                // A folder rescan is triggered server-side; processing_complete
+                // will follow once the ingestion pipeline finishes.
+                // data: { imported, skipped, catalogue_dir }
+                console.log('[AppState.events] Import complete:', data);
+                const imported = data?.imported || 0;
+                const skipped = data?.skipped || 0;
+
+                // Optimistically bump the catalogue folder's cached count so
+                // the Database screen updates immediately.  The real count is
+                // reconciled when processing_complete triggers folders.load().
+                if (imported > 0 && data?.catalogue_dir) {
+                    AppState.folders.adjustCount(data.catalogue_dir, imported);
+                }
+
+                const parts = [];
+                if (imported > 0) parts.push(`${imported} new image${imported !== 1 ? 's' : ''} imported`);
+                if (skipped > 0) parts.push(`${skipped} already present`);
+                if (parts.length > 0) App.showInfo(`Import complete: ${parts.join(', ')}.`);
+                break;
+            }
+
+            // -----------------------------------------------------------------
+            // Multi-client mutation events
+            // -----------------------------------------------------------------
 
             case 'faces_changed':
                 // data: { updated?: [{id, person_id?, ...}], removed?: [id] }
@@ -229,7 +267,13 @@ AppState.events = (function() {
             AppState.status.load();
         }
 
-        // Reload folder stats (total image count changed)
+        // Reload folders (per-folder counts) and global stats.
+        // This reconciles any optimistic count adjustments (e.g. from
+        // import_complete) with the real DB counts now that indexing
+        // has finished.
+        if (AppState.folders?.load) {
+            AppState.folders.load();
+        }
         if (AppState.folders?.loadStats) {
             AppState.folders.loadStats();
         }
@@ -414,11 +458,16 @@ AppState.events = (function() {
     /**
      * Handle images_changed event from another client.
      * Removes trashed images from cache and refreshes updated ones.
+     * Also reloads folder stats when images are removed so per-folder
+     * counts update on the Database screen.
      * @param {Object} data - {updated_ids?: [id], removed_ids?: [id]}
      */
     async function handleImagesChanged(data) {
         if (data?.removed_ids?.length) {
             AppState.images.autoRemove(data.removed_ids);
+            // Per-folder counts changed — refresh so Database screen updates
+            AppState.folders.load();
+            AppState.folders.loadStats();
         }
         if (data?.updated_ids?.length) {
             await AppState.images.refreshByIds(data.updated_ids);
@@ -455,6 +504,13 @@ AppState.events = (function() {
         if (_polling) return;
         _polling = true;
 
+        // The initial poll (cursor = 0) returns ALL buffered events.
+        // These are historical — the page already loads fresh state
+        // during initialisation.  Processing them would replay stale
+        // toasts and trigger redundant reloads.  We just advance the
+        // cursor to "now" so subsequent polls only get new events.
+        const isInitialPoll = _lastServerTime === 0;
+
         try {
             const response = await App.apiGet(`/events?since=${_lastServerTime}`);
             const data = response?.data;
@@ -466,6 +522,9 @@ AppState.events = (function() {
             if (data?.server_time) {
                 _lastServerTime = data.server_time;
             }
+
+            // Initial poll: just set cursor, skip event processing
+            if (isInitialPoll) return;
 
             // If client has fallen behind the event buffer, do a full reload
             // instead of trying to process individual events

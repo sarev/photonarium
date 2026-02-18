@@ -1996,16 +1996,31 @@ def find_best_match(
     embedding: np.ndarray,
     known_embeddings: list[tuple[str, str, np.ndarray]],
     threshold: float = 0.65,
+    person_thresholds: dict[str, float | None] | None = None,
+    ignored_person_ids: set[str] | None = None,
 ) -> tuple[str, str, float] | None:
     """Find the best matching person for a face embedding.
 
-    Compares the embedding against all known face embeddings and returns
-    the best match above the threshold.
+    Compares the embedding against all known face embeddings, groups by
+    person (keeping the best face per person), and returns the first
+    person whose per-person threshold is met.  This ensures that a person
+    with a low custom threshold can match even if a different person has
+    a slightly higher raw similarity but a stricter threshold.
+
+    Named people are always tried before ignored people (name == '-').
+    The '-' person is a holding pen for unsorted faces and may contain
+    faces of multiple real people, so a named match is always preferred.
+    Ignored people are only matched as a fallback when no named person
+    meets their threshold.
 
     Args:
         embedding: 512D face embedding to match.
         known_embeddings: List of (face_id, person_id, embedding) tuples.
-        threshold: Minimum cosine similarity for a match.
+        threshold: Default minimum cosine similarity for a match.
+        person_thresholds: Optional dict mapping person_id to their custom
+            recognition threshold.  ``None`` values mean use the default.
+        ignored_person_ids: Optional set of person IDs whose name is '-'.
+            These are tried only after all named people fail to match.
 
     Returns:
         Tuple of (face_id, person_id, similarity) for best match,
@@ -2021,8 +2036,9 @@ def find_best_match(
     if not np.isclose(emb_norm, 1.0, atol=0.01):
         embedding = embedding / emb_norm
 
-    best_match = None
-    best_similarity = threshold
+    # Compute similarity to each known face, group by person keeping best
+    person_best: dict[str, tuple[str, float]] = {}  # person_id -> (face_id, similarity)
+    max_similarity = -1.0
 
     for face_id, person_id, known_embedding in known_embeddings:
         # Ensure known embedding is normalized (skip zero-norm)
@@ -2032,14 +2048,50 @@ def find_best_match(
         if not np.isclose(known_norm, 1.0, atol=0.01):
             known_embedding = known_embedding / known_norm
 
-        # Cosine similarity (embeddings are L2-normalized)
         similarity = float(np.dot(embedding, known_embedding))
 
-        if similarity > best_similarity:
-            best_similarity = similarity
-            best_match = (face_id, person_id, similarity)
+        if similarity > max_similarity:
+            max_similarity = similarity
+        if person_id not in person_best or similarity > person_best[person_id][1]:
+            person_best[person_id] = (face_id, similarity)
 
-    return best_match
+    if not person_best:
+        return None
+
+    # Sort persons by similarity descending
+    sorted_persons = sorted(person_best.items(), key=lambda x: x[1][1], reverse=True)
+
+    # Partition into named and ignored — named people are always tried
+    # first so that a real person match takes priority over the '-'
+    # holding pen, even if '-' has a slightly higher raw similarity.
+    _ignored = ignored_person_ids or set()
+    named = [(pid, data) for pid, data in sorted_persons if pid not in _ignored]
+    ignored = [(pid, data) for pid, data in sorted_persons if pid in _ignored]
+
+    for person_id, (face_id, similarity) in named + ignored:
+        eff_threshold = threshold
+        if person_thresholds:
+            pt = person_thresholds.get(person_id)
+            if pt is not None:
+                eff_threshold = pt
+        if similarity >= eff_threshold:
+            return (face_id, person_id, similarity)
+
+    # No match — log the best similarity for diagnostics
+    if max_similarity > -1.0:
+        best_pid = sorted_persons[0][0]
+        best_sim = sorted_persons[0][1][1]
+        eff = threshold
+        if person_thresholds:
+            pt = person_thresholds.get(best_pid)
+            if pt is not None:
+                eff = pt
+        logger.debug(
+            f'No face match (best person similarity: {best_sim:.3f}, '
+            f'effective threshold: {eff:.3f}, gap: {eff - best_sim:.3f})'
+        )
+
+    return None
 
 
 # =============================================================================
@@ -2220,11 +2272,14 @@ def reassess_unknown_faces(
     """
     logger.debug(f'Reassessing unknown faces with default threshold={threshold:.3f}, person_id={person_id}')
 
-    # Load per-person thresholds (person_id -> threshold, None means use default)
+    # Load per-person thresholds and identify ignored people (name == '-')
     person_thresholds: dict[str, float | None] = {}
-    cursor = conn.execute('SELECT id, recognition_threshold FROM people')
+    ignored_person_ids: set[str] = set()
+    cursor = conn.execute('SELECT id, name, recognition_threshold FROM people')
     for row in cursor.fetchall():
         person_thresholds[row['id']] = row['recognition_threshold']
+        if row['name'] == '-':
+            ignored_person_ids.add(row['id'])
 
     # Diagnostic: check embedding health (DEBUG level)
     def diagnose_embeddings(name, embeddings_list):
@@ -2335,28 +2390,63 @@ def reassess_unknown_faces(
     # Embeddings are L2-normalized, so dot product = cosine similarity
     similarities = candidate_matrix @ known_matrix.T
 
-    # Find best match for each candidate face
+    # Pre-compute person -> known face indices for efficient per-person grouping
+    person_face_indices: dict[str, list[int]] = {}
+    for j, (_, pid) in enumerate(known_ids):
+        person_face_indices.setdefault(pid, []).append(j)
+
+    # Minimum possible threshold across all persons (for early termination)
+    custom_thresholds = [pt for pt in person_thresholds.values() if pt is not None]
+    min_threshold = min(custom_thresholds) if custom_thresholds else threshold
+    min_threshold = min(min_threshold, threshold)
+
+    # Find best match for each candidate face.
+    # For each candidate, group similarities by person and try each person
+    # in descending order until one meets its per-person threshold.  This
+    # prevents a high-threshold person from "blocking" a lower-threshold
+    # person who would have matched.
+    #
+    # Named people are always tried before ignored people (name == '-').
+    # The '-' person is a holding pen for unsorted faces, so a real named
+    # match is always preferred.  Ignored people are only matched as a
+    # fallback when no named person meets their threshold.
     matched = []
     unmatched = []  # Faces that need to be unassigned (below all thresholds)
     for i, candidate_face_id in enumerate(candidate_ids):
-        best_idx = np.argmax(similarities[i])
-        best_similarity = similarities[i, best_idx]
-
-        _, matched_person_id = known_ids[best_idx]
         current_person_id = candidate_person_ids.get(candidate_face_id)
+        row = similarities[i]
 
-        # Use per-person threshold if set, otherwise use global default
-        person_threshold = person_thresholds.get(matched_person_id)
-        effective_threshold = person_threshold if person_threshold is not None else threshold
+        # Get best similarity per person
+        named_best: list[tuple[str, float]] = []
+        ignored_best: list[tuple[str, float]] = []
+        for pid, indices in person_face_indices.items():
+            best_sim = float(np.max(row[indices]))
+            if best_sim >= min_threshold:
+                if pid in ignored_person_ids:
+                    ignored_best.append((pid, best_sim))
+                else:
+                    named_best.append((pid, best_sim))
 
-        if best_similarity >= effective_threshold:
-            # Skip if already assigned to this person (no change needed)
-            if current_person_id != matched_person_id:
-                matched.append((candidate_face_id, matched_person_id, float(best_similarity)))
-        else:
-            # Face doesn't meet any threshold - unassign if currently assigned
-            if current_person_id is not None:
-                unmatched.append(candidate_face_id)
+        # Sort each group by similarity descending, named first
+        named_best.sort(key=lambda x: x[1], reverse=True)
+        ignored_best.sort(key=lambda x: x[1], reverse=True)
+
+        # Try named people first, then ignored as fallback
+        matched_this = False
+        for pid, best_sim in named_best + ignored_best:
+            pt = person_thresholds.get(pid)
+            eff_threshold = pt if pt is not None else threshold
+            if best_sim >= eff_threshold:
+                if current_person_id != pid:
+                    matched.append((candidate_face_id, pid, best_sim))
+                matched_this = True
+                break
+
+        if not matched_this and current_person_id is not None:
+            unmatched.append(candidate_face_id)
+
+    # Compute overall max similarity for diagnostics (useful when no matches)
+    overall_max_similarity = float(np.max(similarities)) if similarities.size > 0 else 0.0
 
     # Log summary (single INFO line)
     if matched or unmatched:
@@ -2370,7 +2460,11 @@ def reassess_unknown_faces(
             f'Face reassessment: {", ".join(log_parts)} of {len(candidate_ids)} candidates (threshold={threshold:.2f})'
         )
     else:
-        logger.debug(f'Face reassessment: no changes from {len(candidate_ids)} candidate faces')
+        logger.info(
+            f'Face reassessment: no matches from {len(candidate_ids)} candidates '
+            f'against {len(known_ids)} known faces '
+            f'(best similarity: {overall_max_similarity:.3f}, threshold: {threshold:.2f})'
+        )
 
     # Apply matches (auto-matched, not manually tagged)
     for face_id, matched_person_id, similarity in matched:

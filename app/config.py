@@ -465,6 +465,26 @@ CONFIG_SCHEMA: list[tuple[str, list[tuple[str, list[str]]]]] = [
             ),
         ],
     ),
+    (
+        'Import',
+        [
+            (
+                'catalogue_dir',
+                [
+                    'Path to a managed catalogue directory for imported images.',
+                    'Images imported via the UI are copied here, organised by date.',
+                    'Leave empty to use the default (<data-dir>/catalogue/).',
+                    '[!] Changing this does not move previously imported files.',
+                ],
+            ),
+            (
+                'import_threads',
+                [
+                    'Number of parallel threads for copying files during import (1-16).',
+                ],
+            ),
+        ],
+    ),
 ]
 
 # Ordered list of image extensions for the YAML file (matches the original
@@ -539,6 +559,7 @@ FIELD_CONSTRAINTS: dict[str, dict[str, int | float | bool]] = {
     'quality_weight_bpp': {'min': 0.0, 'max': 1.0, 'step': 0.01},
     'quality_alpha': {'min': 0.0, 'max': 1.0, 'step': 0.01},
     'slideshow_interval': {'min': 1.0, 'max': 60.0, 'step': 0.5},
+    'import_threads': {'min': 1, 'max': 16, 'step': 1},
 }
 
 
@@ -593,6 +614,9 @@ class Config:
         trash_dir: Path to trash directory for deleted images. Empty string means
             use the default (<data-dir>/trash/). Set to a custom path to move
             trashed images elsewhere.
+        catalogue_dir: Path to managed catalogue directory for imported images.
+            Empty string means use the default (<data-dir>/catalogue/).
+        import_threads: Number of parallel threads for file copying during import (1-16).
     """
 
     data_dir: str = ''
@@ -650,7 +674,7 @@ class Config:
     face_detection_enabled: bool = True
     face_detection_min_confidence: float = 0.95
     face_detection_min_size: int = 40
-    face_recognition_threshold: float = 0.65
+    face_recognition_threshold: float = 0.70
     face_detection_batch_size: int = 32
     caption_model: str = 'Salesforce/blip-image-captioning-large'
     caption_max_length: int = 50
@@ -667,6 +691,8 @@ class Config:
     on_this_day_enabled: bool = True
     slideshow_interval: float = 5.0
     trash_dir: str = ''
+    catalogue_dir: str = ''
+    import_threads: int = 4
 
     def __post_init__(self) -> None:
         """Validate configuration values after initialisation."""
@@ -685,6 +711,8 @@ class Config:
         # --- String fields: must be non-empty ---
         if not isinstance(self.data_dir, str):
             raise ValueError('data_dir must be a string')
+        if not isinstance(self.catalogue_dir, str):
+            raise ValueError('catalogue_dir must be a string')
         if not isinstance(self.server_host, str) or not self.server_host:
             raise ValueError('server_host must be a non-empty string')
         if not self.openclip_model or not isinstance(self.openclip_model, str):
@@ -751,7 +779,7 @@ _TEMPLATE_OVERRIDES: dict[str, Any] = {
     'indexing_threads': 8,
     'similarity_threshold_level2': 0.93,
     'face_detection_min_size': 60,
-    'face_recognition_threshold': 0.90,
+    'face_recognition_threshold': 0.70,
 }
 
 

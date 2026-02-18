@@ -1124,10 +1124,162 @@ def remove_folder(folder_path):
     if not folder_path.startswith('/') and ':' not in folder_path:
         folder_path = '/' + folder_path
 
-    success = get_db().remove_folder(folder_path)
+    # Prevent removal of the catalogue directory
+    db = get_db()
+    if db.is_import_enabled():
+        catalogue_norm = os.path.normpath(str(db.catalogue_dir))
+        folder_norm = os.path.normpath(folder_path)
+        if folder_norm == catalogue_norm:
+            return error_response('Cannot remove the catalogue directory', 400)
+
+    success = db.remove_folder(folder_path)
     if not success:
         return error_response('Folder not found', 404)
     return success_response(message='Folder removed')
+
+
+# =============================================================================
+# Import Endpoints
+# =============================================================================
+
+
+@app.route('/api/import', methods=['POST'])
+def import_images():
+    """Import images from local paths into the catalogue directory.
+
+    Accepts a list of file or directory paths. Files are copied into the
+    catalogue directory organised by date (``YYYY/YYYY-MM-DD/filename``).
+    Duplicate files (matching SHA-256 checksum) are skipped automatically.
+
+    Request body:
+        ``{"paths": ["/path/to/folder", "/path/to/image.jpg"]}``
+
+    Returns:
+        Success response with ``queued`` count, or error if import is disabled.
+    """
+    db = get_db()
+    if not db.is_import_enabled():
+        return error_response('Import is disabled. Set catalogue_dir in settings to enable.', 400)
+
+    data = request.get_json()
+    paths = data.get('paths', [])
+    if not paths:
+        return error_response('No paths provided', 400)
+
+    # Validate paths exist
+    valid_paths = []
+    for p in paths:
+        if os.path.exists(p):
+            valid_paths.append(p)
+        else:
+            logger.warning(f'Import: path not found, skipping: {p}')
+
+    if not valid_paths:
+        return error_response('None of the provided paths exist', 400)
+
+    queued = db.enqueue_import(valid_paths)
+    return success_response({'queued': queued})
+
+
+@app.route('/api/import/preflight', methods=['POST'])
+def import_preflight():
+    """Check which files need uploading by comparing name + size.
+
+    The frontend sends (name, size) pairs for the files the user picked.
+    The backend checks each against:
+      1. ``import_name`` + ``size`` - matches previously imported files even
+         if their on-disk name was changed by collision renaming.
+      2. ``basename`` + ``size`` - matches files already in watched folders.
+
+    This is instant on the client (no file reading or crypto needed) and
+    works on plain HTTP.  The backend's SHA-256 dedup in ImportWorker
+    catches any edge cases that slip through (e.g. renamed originals).
+
+    Request body:
+        ``{"files": [{"name": "IMG_1234.jpg", "size": 4567890}, ...]}``
+
+    Returns:
+        ``{"known": [true, false, ...]}`` - parallel array of booleans.
+    """
+    db = get_db()
+    data = request.get_json()
+    files = data.get('files', [])
+
+    if not files:
+        return success_response({'known': []})
+
+    # Build two sets for fast lookup: one keyed by import_name (original
+    # filename at time of import) and one by basename (on-disk filename).
+    with db._db_lock:
+        cursor = db.conn.execute(
+            'SELECT basename, size, import_name FROM images WHERE deleted = 0',
+        )
+        basename_size = set()
+        import_name_size = set()
+        for row in cursor:
+            basename_size.add((row[0], row[1]))
+            if row[2]:
+                import_name_size.add((row[2], row[1]))
+
+    results = [
+        (f.get('name', ''), f.get('size', -1)) in import_name_size
+        or (f.get('name', ''), f.get('size', -1)) in basename_size
+        for f in files
+    ]
+    return success_response({'known': results})
+
+
+@app.route('/api/import/upload', methods=['POST'])
+def import_upload():
+    """Import uploaded image files into the catalogue directory.
+
+    Accepts multipart file uploads. Files are saved to a staging directory
+    and then queued for the ImportWorker which handles date-based
+    organisation and deduplication.
+
+    Returns:
+        Success response with ``queued`` count, or error if import is disabled.
+    """
+    db = get_db()
+    if not db.is_import_enabled():
+        return error_response('Import is disabled. Set catalogue_dir in settings to enable.', 400)
+
+    files = request.files.getlist('files')
+    if not files:
+        return error_response('No files uploaded', 400)
+
+    # Save uploaded files to a staging directory under the catalogue dir
+    staging_dir = db.catalogue_dir / '.import-staging'
+    staging_dir.mkdir(parents=True, exist_ok=True)
+
+    # Use a unique subdirectory per upload to avoid collisions
+    import uuid as _uuid
+
+    batch_dir = staging_dir / _uuid.uuid4().hex
+    batch_dir.mkdir(parents=True, exist_ok=True)
+
+    saved_paths = []
+    for f in files:
+        if not f.filename:
+            continue
+        # Sanitise filename — keep only the basename to prevent path traversal
+        safe_name = Path(f.filename).name
+        dest = batch_dir / safe_name
+        # Handle name collisions within the same upload batch
+        counter = 1
+        while dest.exists():
+            stem = Path(safe_name).stem
+            suffix = Path(safe_name).suffix
+            dest = batch_dir / f'{stem}_{counter}{suffix}'
+            counter += 1
+        f.save(str(dest))
+        saved_paths.append(str(dest))
+
+    if not saved_paths:
+        return error_response('No valid files in upload', 400)
+
+    queued = db.enqueue_import(saved_paths)
+    return success_response({'queued': queued})
 
 
 # =============================================================================
@@ -1174,6 +1326,12 @@ def get_status():
     if trash_progress:
         status['trash_progress'] = trash_progress
 
+    # Add import status
+    status['import_enabled'] = db.is_import_enabled()
+    import_progress = db.get_import_progress()
+    if import_progress:
+        status['import_progress'] = import_progress
+
     return success_response(status)
 
 
@@ -1207,6 +1365,8 @@ def get_config():
             'on_this_day_enabled': config.on_this_day_enabled,
             'slideshow_interval': config.slideshow_interval,
             'trash_dir': str(db.trash_dir),
+            'catalogue_dir': str(db.catalogue_dir),
+            'image_extensions': sorted(config.image_extensions),
         }
     )
 

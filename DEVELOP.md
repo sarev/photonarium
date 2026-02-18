@@ -14,29 +14,155 @@ The HTTP layer. Receives requests from the frontend and delegates to the
 backend modules for database operations and image processing. Uses the waitress
 WSGI server in production.
 
-**Routes:**
+**Routes (74):**
 
-| Prefix | Purpose |
-|--------|---------|
-| `/api/images` | Image listing, metadata updates, trash-based deletion |
-| `/api/images/:id/thumbnail` | Thumbnail retrieval (snapped to 200 or 400px) |
-| `/api/images/:id/full` | Full-resolution image serving |
-| `/api/folders` | Folder registration and removal |
-| `/api/status` | Processing status (indexing, embedding, face queues) |
-| `/api/rescan` | Trigger folder rescan |
-| `/api/duplicates` | Duplicate group retrieval and pruning by similarity level |
-| `/api/groups` | Group CRUD (create, rename, delete, add/remove images) |
-| `/api/search` | Semantic search via OpenCLIP similarity |
-| `/api/similar` | Visual similarity (find images similar to a given image) |
-| `/api/metadata-*` | EXIF metadata search, keys, and value autocomplete |
-| `/api/config` | Configuration read/write/schema |
-| `/api/reveal` | Reveal file or folder in OS file explorer |
-| `/api/stats` | Database and cache statistics |
-| `/api/people` | People CRUD, merge, dissolve |
-| `/api/people/:id/thumbnail` | Preferred face thumbnail for a person |
-| `/api/faces` | Face listing, batch assign/unassign/suppress |
-| `/api/faces/:id/thumbnail` | Cropped face thumbnail |
-| `/api/events` | Backend event polling (faces_reassessed, etc.) |
+Mutation endpoints prefer batch format (arrays, not single items).
+
+**API Design Principles:**
+- Frontend generates all IDs using `crypto.randomUUID()`
+- Requests send exact state to persist (not "find or create")
+- Responses return success/error only (not computed state)
+- Backend validates and stores, doesn't compute application logic
+- Derived values (face_count) computed via SQL JOIN, not stored
+
+#### Images (11 routes)
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| GET | `/api/images` | List all images with metadata |
+| GET | `/api/images/:id` | Get single image metadata |
+| POST | `/api/images/:id` | Update image (description, rating) |
+| GET | `/api/images/:id/exif` | Get EXIF metadata for an image |
+| POST | `/api/images/trash` | Move images to trash `{image_ids: []}` |
+| GET | `/api/images/:id/thumbnail?size=N` | Get thumbnail (snapped to 200 or 400px) |
+| GET | `/api/images/:id/full` | Get full-resolution image |
+| GET | `/api/images/:id/histogram` | Get image histogram data |
+| POST | `/api/images/:id/generate-caption` | Generate BLIP caption for image |
+| POST | `/api/images/rotate` | Rotate images `{image_ids: [], direction}` |
+| GET | `/api/images/people-names` | Get people names appearing in images |
+
+#### Folders (4 routes)
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| GET | `/api/folders` | List registered folders with image counts |
+| POST | `/api/folders` | Add folder `{path: string}` |
+| DELETE | `/api/folders/:path` | Remove folder and its images |
+| POST | `/api/pick-folder` | Open native folder picker dialog |
+
+#### Search & Similarity (2 routes)
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| POST | `/api/search` | Semantic search `{text, threshold}` |
+| GET | `/api/similar/:id` | Get images similar to a given image |
+
+#### Metadata (3 routes)
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| POST | `/api/metadata-search` | Subsequence search on EXIF metadata `{criteria: {key: query}}` |
+| GET | `/api/metadata-keys` | All distinct metadata keys in the database |
+| GET | `/api/metadata-values?key=X` | Distinct values for a key (autocomplete) |
+
+#### Status & Config (5 routes)
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| GET | `/api/status` | Processing status `{status, indexing_queue, embedding_queue}` |
+| POST | `/api/rescan` | Queue all folders for re-indexing |
+| GET | `/api/config` | Get frontend-relevant configuration values |
+| GET | `/api/config/schema` | Full config schema for the settings editor |
+| POST | `/api/config/save` | Save config values `{values: {key: value}}` |
+
+#### Duplicates (3 routes)
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| GET | `/api/duplicates?level=N` | Get duplicate groups at level 0-5 |
+| POST | `/api/duplicates/sort-semantic` | Sort duplicate groups by semantic similarity |
+| POST | `/api/duplicates/prune` | Prune groups: keep best, trash rest `{level, keep_count}` |
+
+#### Groups (7 routes)
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| POST | `/api/groups/preview` | Preview keep/trash split for all groups at a level |
+| POST | `/api/groups` | Create custom group `{group_hash, name, image_ids}` |
+| PATCH | `/api/groups/:hash` | Rename custom group `{name}` |
+| DELETE | `/api/groups/:hash` | Delete custom group |
+| POST | `/api/groups/:hash/preview` | Preview smart-group membership changes |
+| POST | `/api/groups/:hash/images` | Add images to group `{image_ids}` |
+| POST | `/api/groups/:hash/images/remove` | Remove images from group `{image_ids}` |
+
+#### Import (3 routes)
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| POST | `/api/import` | Import from local paths `{paths: []}` |
+| POST | `/api/import/preflight` | Check which files are new `{checksums: []}` |
+| POST | `/api/import/upload` | Import via multipart file upload |
+
+#### Stats (2 routes)
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| GET | `/api/stats` | Get `{totalImages, totalFolders}` |
+| GET | `/api/stats/cache` | Get thumbnail cache statistics |
+
+#### Events (2 routes)
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| GET | `/api/events` | Fetch and clear pending events |
+| GET | `/api/events/count` | Get count of pending events (lightweight) |
+
+#### Utility (1 route)
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| POST | `/api/reveal` | Reveal a file or folder in the OS file explorer `{path}` |
+
+#### People (10 routes)
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| GET | `/api/people` | List all people (face_count via JOIN) |
+| POST | `/api/people` | Create person `{id, name}` |
+| GET | `/api/people/:id` | Get person details |
+| PATCH | `/api/people/:id` | Update person `{name, preferred_face_id, threshold}` |
+| DELETE | `/api/people/:id` | Delete person (faces become untagged) |
+| POST | `/api/people/:id/merge` | Merge into another person `{into: target_id}` |
+| POST | `/api/people/:id/dissolve` | Unidentify all faces and delete person |
+| POST | `/api/people/:id/set-preferred` | Set preferred face for person |
+| GET | `/api/people/:id/faces` | Get all faces for a person |
+| GET | `/api/people/:id/thumbnail` | Get preferred face thumbnail |
+
+#### Faces (21 routes)
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| GET | `/api/faces` | List all faces |
+| GET | `/api/faces/:id` | Get single face details |
+| GET | `/api/faces/:id/thumbnail` | Get cropped face thumbnail |
+| GET | `/api/faces/:id/matches` | Get closest matching people for a face |
+| GET | `/api/images/:id/faces` | Get faces detected in an image |
+| POST | `/api/faces/assign` | Assign faces to person `{face_ids: [], person_id}` |
+| POST | `/api/faces/unassign` | Unassign single face |
+| POST | `/api/faces/unassign-batch` | Unassign faces `{face_ids: []}` |
+| POST | `/api/faces/:id/unassign` | Unassign a specific face |
+| POST | `/api/faces/suppress` | Mark as false positives `{face_ids: []}` |
+| POST | `/api/faces/:id/suppress` | Suppress a specific face |
+| PATCH | `/api/faces` | Batch update properties `{face_ids: [], locked: bool}` |
+| POST | `/api/faces/:id/identify` | Identify a specific face |
+| POST | `/api/faces/identify-batch` | Batch identify faces |
+| POST | `/api/faces/:id/unidentify` | Unidentify a specific face |
+| POST | `/api/faces/:id/toggle-manual` | Toggle manual tagging flag |
+| DELETE | `/api/faces/:id` | Delete a face detection |
+| POST | `/api/faces/reassess` | Trigger background face reassessment |
+| GET | `/api/faces/reassess-status` | Get reassessment progress |
+| POST | `/api/faces/reassess-ack` | Acknowledge reassessment completion |
+| GET | `/api/faces/group-status` | Get face grouping status |
 
 ### `app/imagedb.py` - Image Database Engine
 
@@ -82,14 +208,15 @@ background processing in threads.
 7. Semantic search
 8. Thumbnail generation stubs
 9. Event queue (cursor-based, multi-client)
-10. `ImageDatabase` public API wrapper
-11. Graceful shutdown helpers
+10. Import worker (copies files into catalogue directory, organised by date)
+11. `ImageDatabase` public API wrapper
+12. Graceful shutdown helpers
 
-**Threading:** Three worker threads run by default (ingestion, embedding, face
-detection). Work is coordinated through `queue.Queue` instances. The database
-connection is shared and protected by `threading.RLock`. Embedding and face
-detection threads yield the GIL periodically (10ms sleep between batches) to
-prevent blocking Flask request handling.
+**Threading:** Four worker threads run by default (ingestion, embedding, face
+detection, import). Work is coordinated through `queue.Queue` instances. The
+database connection is shared and protected by `threading.RLock`. Embedding and
+face detection threads yield the GIL periodically (10ms sleep between batches)
+to prevent blocking Flask request handling.
 
 ### `app/faces.py` - Face Detection and Recognition
 
@@ -342,13 +469,19 @@ part of the screen navigation system - it floats over whatever screen is active.
 
 ### `database.js` - Database Management Screen
 
-Manage image source folders and monitor processing status. Shown by default
-when the database is empty.
+Manage image source folders, import images, and monitor processing status.
+Shown by default when the database is empty.
 
 - **Folder management** - List registered folders with image counts, add via
-  native folder picker, remove with confirmation.
-- **Processing status** - Polls backend for indexing, embedding, and face
-  detection queue sizes.
+  native folder picker, remove with confirmation. The catalogue folder (if
+  configured) is shown with a badge and cannot be removed.
+- **Image import** - Drop zone for drag-and-drop import (desktop), file/folder
+  picker buttons. Desktop imports send local paths to the backend; mobile
+  imports use file upload with preflight SHA-256 dedup to avoid transferring
+  files the backend already has. A choice dialog lets desktop users choose
+  between "Add Folder" (reference in place) and "Import" (copy into catalogue).
+- **Processing status** - Polls backend for indexing, embedding, face
+  detection, and import queue sizes.
 - **Statistics** - Displays total image count.
 
 ### `settings.js` - In-App Configuration Editor
@@ -488,7 +621,7 @@ Business logic and core application state in the frontend is handled by `app/sta
 | `identity.js` | faces, people | Backend | Face cache (full or partial), person identities, identification, assignment, merge, dissolve, revalidation |
 | `images.js` | images | Backend | Image metadata cache with delta sync (epoch-based), display list (lazily recomputed from images + sort + filter) |
 | `loading.js` | loading | Memory | Loading overlay with ownership tracking (only the current owner can hide it) |
-| `events.js` | events | N/A | Cursor-based polling of `/api/events` every 2s with stale detection. Dispatches backend events (`faces_reassessed`, `folder_added/removed`, `processing_complete`, `image_ingested`, `nima_complete`, `images_modified`, `error`) and multi-client mutation events (`faces_changed`, `people_changed`, `images_changed`, `groups_changed`) to relevant domains via incremental cache updates |
+| `events.js` | events | N/A | Cursor-based polling of `/api/events` every 2s with stale detection. Dispatches backend events (`faces_reassessed`, `folder_added/removed`, `processing_complete`, `image_ingested`, `nima_complete`, `images_modified`, `import_complete`, `error`) and multi-client mutation events (`faces_changed`, `people_changed`, `images_changed`, `groups_changed`) to relevant domains via incremental cache updates |
 
 ---
 

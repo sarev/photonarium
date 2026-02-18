@@ -320,6 +320,8 @@ _SQL_MIGRATIONS = [
     'ALTER TABLE custom_groups ADD COLUMN preview_image_id TEXT',
     # → No backfill needed (0 = healthy, 1 = references deleted person)
     'ALTER TABLE custom_groups ADD COLUMN damaged INTEGER DEFAULT 0',
+    # → No backfill needed (NULL for non-imported images, set by ImportWorker)
+    'ALTER TABLE images ADD COLUMN import_name TEXT',
 ]
 
 # SQL schema for the image_metadata table (indexed EXIF key-value pairs for search)
@@ -452,10 +454,15 @@ def init_database(db_path: Path | str) -> sqlite3.Connection:
     # Create face recognition tables
     init_face_tables(conn)
 
-    # Run migrations for existing databases (must run BEFORE indexes)
+    # Run migrations for existing databases (must run BEFORE indexes).
+    # Log before executing so that if something goes wrong the user can
+    # see which migration was being attempted.
     for migration_sql in _SQL_MIGRATIONS:
+        trimmed = migration_sql.strip()
         try:
+            logger.debug(f'    Checking migration: {trimmed}')
             conn.execute(migration_sql)
+            logger.info(f'    Schema migration applied: {trimmed}')
         except sqlite3.OperationalError:
             # Column/table already exists, ignore
             pass
@@ -753,10 +760,16 @@ def find_images_in_folder(
     for root, dirs, files in os.walk(folder):
         root_path = Path(root)
 
-        # Skip subdirectories that are separately registered (optimisation)
-        # Modify dirs in-place to prevent os.walk from descending
+        # Skip hidden directories (starting with '.') — these are system
+        # or application dirs like .import-staging, .git, .thumbnails that
+        # should never be indexed.  Also skip subdirectories that are
+        # separately registered (optimisation).
+        # Modify dirs in-place to prevent os.walk from descending.
         dirs_to_remove = []
         for d in dirs:
+            if d.startswith('.'):
+                dirs_to_remove.append(d)
+                continue
             subdir = str(root_path / d)
             if subdir in other_folders:
                 dirs_to_remove.append(d)
@@ -1085,6 +1098,7 @@ def create_image(
     description: str = '',
     rating: str = '',
     exif_data: dict[str, str] | None = None,
+    import_name: str | None = None,
 ) -> dict[str, Any]:
     """Create a new image record in the database.
 
@@ -1106,6 +1120,10 @@ def create_image(
         rating: User rating emoji string (default empty).
         exif_data: Normalised EXIF key-value pairs (stored as JSON blob and
             indexed in image_metadata table for search).
+        import_name: Original filename at time of import (before collision
+            renaming).  NULL for non-imported images.  Used by the preflight
+            dedup endpoint so clients can match files by their original name
+            even when the catalogue copy was renamed to avoid a collision.
 
     Returns:
         Dictionary with the created image record.
@@ -1126,8 +1144,8 @@ def create_image(
             id, path, basename, size, width, height, timestamp, timestamp_confidence,
             checksum, perceptual_hash, laplacian_var, lossless, mtime,
             description, rating, embedding, deleted, created_at, updated_at,
-            exif_data
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, 0, ?, ?, ?)
+            exif_data, import_name
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, 0, ?, ?, ?, ?)
     """,
         (
             image_id,
@@ -1148,6 +1166,7 @@ def create_image(
             now,
             now,
             exif_json,
+            import_name,
         ),
     )
 
@@ -1852,6 +1871,8 @@ class IngestionThread(threading.Thread):
         num_threads: int = 4,
         max_image_dimension: int = 0,
         nima_queue: queue.Queue[str] | None = None,
+        import_names: dict[str, str] | None = None,
+        import_names_lock: threading.Lock | None = None,
     ):
         """Initialise the ingestion thread.
 
@@ -1868,6 +1889,9 @@ class IngestionThread(threading.Thread):
             num_threads: Number of worker threads for parallel metadata extraction.
             max_image_dimension: Max dimension for image processing (0 to disable).
             nima_queue: Optional queue for NIMA aesthetic scoring.
+            import_names: Shared dict mapping catalogue dest path to original
+                filename (populated by ImportWorker, consumed here).
+            import_names_lock: Lock protecting the import_names dict.
         """
         super().__init__(name='IngestionThread', daemon=True)
         self.conn = conn
@@ -1884,6 +1908,8 @@ class IngestionThread(threading.Thread):
         self._checksum_cache_lock = checksum_cache_lock  # Shared lock from ImageDatabase
         self._generate_thumbnails = generate_thumbnails  # Callback from ImageDatabase
         self._nima_queue = nima_queue  # Optional NIMA scoring queue
+        self._import_names = import_names or {}  # Shared import name mapping
+        self._import_names_lock = import_names_lock or threading.Lock()
         self._pending_count = 0  # Number of items being processed (not just in queue)
         self._pending_lock = threading.Lock()
 
@@ -2146,6 +2172,13 @@ class IngestionThread(threading.Thread):
             # scanning, which frontend cannot pre-generate IDs for (see design-audit.md 1.11)
             image_id = str(uuid.uuid4())
 
+            # Check if this file was placed by ImportWorker (has an original
+            # import name that may differ from the on-disk basename due to
+            # collision renaming).
+            path_str_canon = str(canonicalise_path(path))
+            with self._import_names_lock:
+                import_name = self._import_names.pop(path_str_canon, None)
+
             # Insert new record (lock needed - DB write)
             with self._db_lock:
                 create_image(
@@ -2163,6 +2196,7 @@ class IngestionThread(threading.Thread):
                     lossless=metadata.lossless,
                     mtime=metadata.mtime,
                     exif_data=metadata.exif_data,
+                    import_name=import_name,
                 )
 
             # Add to checksum cache
@@ -3117,9 +3151,23 @@ class FaceDetectionThread(threading.Thread):
         # Run GPU face detection on pre-loaded images
         results = self.face_detector.detect_faces_from_preloaded(loaded_images, stop_event=self.stop_event)
 
-        # Get known face embeddings for auto-recognition
+        # Get known face embeddings, per-person thresholds, and ignored
+        # person IDs for auto-recognition.  Ignored people (name == '-')
+        # are only matched as a fallback after all named people are tried.
         with self._db_lock:
             known_embeddings = get_all_known_face_embeddings(self.conn)
+            cursor = self.conn.execute('SELECT id, name, recognition_threshold FROM people')
+            per_person_thresholds: dict[str, float | None] = {}
+            ignored_person_ids: set[str] = set()
+            for row in cursor.fetchall():
+                per_person_thresholds[row['id']] = row['recognition_threshold']
+                if row['name'] == '-':
+                    ignored_person_ids.add(row['id'])
+
+        # Track auto-match statistics for batch summary
+        batch_faces_total = 0
+        batch_matched = 0
+        batch_best_unmatched = -1.0  # Highest similarity that didn't meet threshold
 
         # Process results for each image
         for path, detected_faces in results.items():
@@ -3136,18 +3184,34 @@ class FaceDetectionThread(threading.Thread):
                 continue
 
             for face in detected_faces:
-                # Try to auto-match against known faces
+                batch_faces_total += 1
+
+                # Try to auto-match against known faces (respects per-person thresholds)
                 person_id = None
                 match = find_best_match(
                     face.embedding,
                     known_embeddings,
                     threshold=self.config.face_recognition_threshold,
+                    person_thresholds=per_person_thresholds,
+                    ignored_person_ids=ignored_person_ids,
                 )
                 if match:
                     _, person_id, similarity = match
+                    batch_matched += 1
                     logger.debug(
                         f'Auto-matched face in {path.name} to person {person_id} (similarity: {similarity:.3f})'
                     )
+                elif known_embeddings:
+                    # Track best unmatched similarity for diagnostics
+                    emb = face.embedding
+                    emb_norm = np.linalg.norm(emb)
+                    if emb_norm > 0:
+                        if not np.isclose(emb_norm, 1.0, atol=0.01):
+                            emb = emb / emb_norm
+                        for _, _, known_emb in known_embeddings:
+                            sim = float(np.dot(emb, known_emb))
+                            if sim > batch_best_unmatched:
+                                batch_best_unmatched = sim
 
                 # Generate face thumbnail first (needed for semantic embedding)
                 face_id = str(uuid.uuid4())
@@ -3188,6 +3252,18 @@ class FaceDetectionThread(threading.Thread):
 
             self._processed_count += 1
             logger.debug(f'Detected {len(detected_faces)} faces in {path.name}')
+
+        # Log batch auto-match summary at INFO level for diagnostics
+        if batch_faces_total > 0:
+            threshold = self.config.face_recognition_threshold
+            parts = [
+                f'{batch_faces_total} faces detected',
+                f'{len(known_embeddings)} known references',
+                f'{batch_matched} auto-matched',
+            ]
+            if batch_faces_total > batch_matched and batch_best_unmatched > -1.0:
+                parts.append(f'best unmatched similarity: {batch_best_unmatched:.3f}/{threshold:.2f}')
+            logger.info(f'Face auto-match: {", ".join(parts)}')
 
     def _check_completion(self) -> None:
         """Check if all processing is complete and trigger completion callback.
@@ -3731,6 +3807,7 @@ EVENT_FACES_CHANGED = 'faces_changed'
 EVENT_PEOPLE_CHANGED = 'people_changed'
 EVENT_IMAGES_CHANGED = 'images_changed'
 EVENT_GROUPS_CHANGED = 'groups_changed'
+EVENT_IMPORT_COMPLETE = 'import_complete'
 
 
 @dataclass
@@ -3921,63 +3998,88 @@ class TrashWorker(threading.Thread):
         self._progress_lock = progress_lock
 
     def run(self) -> None:
-        """Main loop — drain queue items and move files in parallel."""
+        """Main loop -- drain queue items and move files in parallel.
+
+        Creates a single :class:`ThreadPoolExecutor` that lives for the
+        entire thread lifetime.  This avoids per-batch ``shutdown(wait=True)``
+        calls which can hang on Windows (same pattern as :class:`ImportWorker`).
+        """
         logger.info('Trash worker thread started')
 
-        while not self._stop_event.is_set():
-            # Block briefly for the first item
-            batch: list[tuple[str, str]] = []
-            try:
-                item = self._queue.get(timeout=0.2)
-                batch.append(item)
-                # Drain up to 200 more without blocking (batched I/O)
-                while len(batch) < 200:
-                    try:
-                        batch.append(self._queue.get_nowait())
-                    except queue.Empty:
-                        break
-            except queue.Empty:
-                continue
+        executor = ThreadPoolExecutor(
+            max_workers=self._max_workers,
+            thread_name_prefix='trash-move',
+        )
 
-            # Move files in parallel
-            self._process_batch(batch)
+        try:
+            while not self._stop_event.is_set():
+                # Block briefly for the first item
+                batch: list[tuple[str, str]] = []
+                try:
+                    item = self._queue.get(timeout=0.2)
+                    batch.append(item)
+                    # Drain up to 200 more without blocking (batched I/O)
+                    while len(batch) < 200:
+                        try:
+                            batch.append(self._queue.get_nowait())
+                        except queue.Empty:
+                            break
+                except queue.Empty:
+                    continue
 
-            # Yield GIL briefly
-            time.sleep(0.01)
+                # Move files in parallel
+                self._process_batch(batch, executor)
 
-        # On shutdown, drain remaining items and persist for recovery
-        remaining = self._drain_remaining()
-        if remaining:
-            self._persist_pending(remaining)
+                # Yield GIL briefly
+                time.sleep(0.01)
+
+            # On shutdown, drain remaining items and persist for recovery
+            remaining = self._drain_remaining()
+            if remaining:
+                self._persist_pending(remaining)
+        finally:
+            executor.shutdown(wait=False, cancel_futures=True)
 
         logger.info('Trash worker thread stopped')
 
-    def _process_batch(self, batch: list[tuple[str, str]]) -> None:
+    def _process_batch(
+        self,
+        batch: list[tuple[str, str]],
+        executor: ThreadPoolExecutor,
+    ) -> None:
         """Move a batch of files to trash using a thread pool.
 
         Args:
             batch: List of ``(image_id, file_path)`` tuples.
+            executor: Long-lived thread pool for parallel file moves.
         """
-
-        def move_one(item: tuple[str, str]) -> None:
-            _image_id, file_path = item
+        futures = [executor.submit(self._move_one, item) for item in batch]
+        # Wait for all moves in this batch to complete
+        for future in futures:
+            if self._stop_event.is_set():
+                for f in futures:
+                    f.cancel()
+                break
             try:
-                move_to_trash(Path(file_path), self._trash_dir)
+                future.result()
             except Exception as e:
-                logger.error(f'TrashWorker: failed to move {file_path}: {e}')
-            finally:
-                with self._progress_lock:
-                    if self._progress is not None:
-                        self._progress['done'] += 1
+                logger.error(f'TrashWorker: executor error: {e}')
 
-        with ThreadPoolExecutor(max_workers=self._max_workers) as executor:
-            futures = [executor.submit(move_one, item) for item in batch]
-            # Wait for all moves in this batch to complete
-            for future in futures:
-                try:
-                    future.result()
-                except Exception as e:
-                    logger.error(f'TrashWorker: executor error: {e}')
+    def _move_one(self, item: tuple[str, str]) -> None:
+        """Move a single file to the trash directory.
+
+        Args:
+            item: ``(image_id, file_path)`` tuple.
+        """
+        _image_id, file_path = item
+        try:
+            move_to_trash(Path(file_path), self._trash_dir)
+        except Exception as e:
+            logger.error(f'TrashWorker: failed to move {file_path}: {e}')
+        finally:
+            with self._progress_lock:
+                if self._progress is not None:
+                    self._progress['done'] += 1
 
     def _drain_remaining(self) -> list[tuple[str, str]]:
         """Drain any items left in the queue after stop_event is set.
@@ -4008,6 +4110,408 @@ class TrashWorker(threading.Thread):
             logger.info(f'Persisted {len(items)} pending trash items to {pending_path}')
         except Exception as e:
             logger.error(f'Failed to persist pending trash items: {e}')
+
+
+# =============================================================================
+# IMPORT WORKER
+# =============================================================================
+
+
+class ImportWorker(threading.Thread):
+    """Background thread for importing (copying) images into the catalogue directory.
+
+    Reads source file paths from a queue and copies them into a date-based
+    directory structure inside the catalogue dir (``YYYY/YYYY-MM-DD/filename``).
+    Duplicate files (matching SHA-256 checksum) are skipped.
+
+    Uses a ``ThreadPoolExecutor`` for I/O parallelism.  Progress is tracked
+    via ``_import_progress`` on the owning ``ImageDatabase`` so ``/api/status``
+    can report live numbers.
+
+    On graceful shutdown, remaining queue items are persisted to
+    ``<catalogue_dir>/.pending_import.json`` for recovery on next startup.
+
+    Follows the same daemon-thread pattern as :class:`TrashWorker`.
+    """
+
+    def __init__(
+        self,
+        import_queue: queue.Queue[str],
+        stop_event: threading.Event,
+        catalogue_dir: Path,
+        max_workers: int,
+        progress: dict | None,
+        progress_lock: threading.Lock,
+        checksum_cache: dict[str, str],
+        checksum_cache_lock: threading.Lock,
+        image_extensions: set[str],
+        import_names: dict[str, str],
+        import_names_lock: threading.Lock,
+        on_complete: Callable[[dict], None] | None = None,
+    ):
+        """Initialise the import worker thread.
+
+        Args:
+            import_queue: Queue of source file paths to import.
+            stop_event: Event to signal thread should stop.
+            catalogue_dir: Destination catalogue directory.
+            max_workers: Number of threads in the file-copy pool.
+            progress: Shared ``_import_progress`` dict reference (may be None).
+            progress_lock: Lock protecting ``_import_progress`` mutations.
+            checksum_cache: Shared image_id -> checksum cache for dedup.
+            checksum_cache_lock: Lock protecting checksum cache reads.
+            image_extensions: Set of supported image file extensions.
+            import_names: Shared dict mapping catalogue dest path to original
+                filename, consumed by ``_process_image()`` during ingestion.
+            import_names_lock: Lock protecting the import_names dict.
+            on_complete: Callback invoked when all queued files have been
+                processed (``done >= total``).  Receives the final progress
+                snapshot dict.  Called from the ImportWorker thread.
+        """
+        super().__init__(name='ImportWorker', daemon=True)
+        self._queue = import_queue
+        self._stop_event = stop_event
+        self._catalogue_dir = catalogue_dir
+        self._max_workers = max_workers
+        self._progress = progress
+        self._progress_lock = progress_lock
+        self._checksum_cache = checksum_cache
+        self._checksum_cache_lock = checksum_cache_lock
+        self._image_extensions = image_extensions
+        self._on_complete = on_complete
+        self._import_names = import_names
+        self._import_names_lock = import_names_lock
+
+    def run(self) -> None:
+        """Main loop - drain queue items and copy files in parallel.
+
+        Creates a single :class:`ThreadPoolExecutor` that lives for the
+        entire thread lifetime (matching the :class:`IngestionThread`
+        pattern).  Creating a fresh executor per batch caused hangs on
+        Windows where ``shutdown(wait=True)`` would occasionally block
+        indefinitely even after all futures had completed.
+        """
+        logger.info('Import worker thread started')
+
+        # A long-lived executor avoids per-batch shutdown overhead and
+        # the Windows hang observed with per-batch executor lifecycle.
+        executor = ThreadPoolExecutor(
+            max_workers=self._max_workers,
+            thread_name_prefix='import-copy',
+        )
+
+        try:
+            while not self._stop_event.is_set():
+                # Block briefly for the first item
+                batch: list[str] = []
+                try:
+                    item = self._queue.get(timeout=0.2)
+                    batch.append(item)
+                    # Drain up to 200 more without blocking (batched I/O)
+                    while len(batch) < 200:
+                        try:
+                            batch.append(self._queue.get_nowait())
+                        except queue.Empty:
+                            break
+                except queue.Empty:
+                    continue
+
+                # Copy files in parallel
+                logger.info(f'ImportWorker: processing batch of {len(batch)} file(s)')
+                self._process_batch(batch, executor)
+
+                # Check if all queued files have been processed.
+                # This is the definitive completion check — it runs in the
+                # ImportWorker thread immediately after the last file is
+                # processed, rather than depending on external status polling.
+                self._check_completion()
+
+                # Yield GIL briefly
+                time.sleep(0.01)
+
+            # On shutdown, drain remaining items and persist for recovery
+            remaining = self._drain_remaining()
+            if remaining:
+                self._persist_pending(remaining)
+
+        except Exception:
+            logger.exception('ImportWorker: thread crashed')
+        finally:
+            # Shut down the executor without blocking.  Worker threads
+            # exit on their own via the sentinel chain and Python's atexit
+            # handler joins them if needed.
+            executor.shutdown(wait=False, cancel_futures=True)
+
+        logger.info('Import worker thread stopped')
+
+    def _process_batch(self, batch: list[str], executor: ThreadPoolExecutor) -> None:
+        """Copy a batch of source files into the catalogue directory.
+
+        Args:
+            batch: List of source file paths.
+            executor: Long-lived thread pool for parallel file copies.
+        """
+        # Snapshot known checksums once per batch to avoid O(M*N) set
+        # creation inside the per-file loop.  The set may go slightly
+        # stale within a batch, but that's fine - worst case a file is
+        # re-imported and the ingestion pipeline deduplicates on checksum.
+        with self._checksum_cache_lock:
+            known_checksums = set(self._checksum_cache.values())
+
+        futures = [executor.submit(self._copy_one, path, known_checksums) for path in batch]
+        for future in futures:
+            # Check stop event between futures so large batches can be
+            # interrupted without waiting for all copies to finish.
+            if self._stop_event.is_set():
+                for f in futures:
+                    f.cancel()
+                break
+            try:
+                future.result()
+            except Exception as e:
+                logger.error(f'ImportWorker: executor error: {e}')
+
+    def _is_staging_file(self, path: Path) -> bool:
+        """Check if a file is inside the upload staging directory.
+
+        Staging files are temporary copies created by the upload route
+        (``/api/import/upload``) and should be deleted after the
+        ImportWorker has processed them (copied or skipped).  Files
+        from desktop imports (local paths) must NOT be deleted.
+
+        Args:
+            path: Path to check.
+
+        Returns:
+            True if the file is inside ``.import-staging/`` under the
+            catalogue directory.
+        """
+        staging_dir = self._catalogue_dir / '.import-staging'
+        try:
+            path.resolve().relative_to(staging_dir.resolve())
+            return True
+        except ValueError:
+            return False
+
+    def _cleanup_staging_file(self, src: Path) -> None:
+        """Delete a staging file and its empty parent batch directory.
+
+        Only deletes files under ``.import-staging/``.  Silently ignores
+        errors (the file may already be gone or locked).
+
+        Args:
+            src: Path to the staging file.
+        """
+        if not self._is_staging_file(src):
+            return
+        try:
+            src.unlink(missing_ok=True)
+            # Remove the per-upload batch directory if now empty
+            batch_dir = src.parent
+            staging_dir = self._catalogue_dir / '.import-staging'
+            if batch_dir != staging_dir:
+                try:
+                    batch_dir.rmdir()  # Only succeeds if empty
+                except OSError:
+                    pass
+        except Exception as e:
+            logger.debug(f'ImportWorker: staging cleanup for {src.name}: {e}')
+
+    def _copy_one(self, source_path: str, known_checksums: set[str]) -> None:
+        """Copy a single source image into the catalogue directory.
+
+        Validates the source file, checks for duplicates via SHA-256
+        checksum, derives a date-based subdirectory from EXIF or mtime,
+        handles filename collisions, and records the original name for
+        the ingestion pipeline's ``import_name`` column.
+
+        If the source is a staging file (from the upload route), it is
+        deleted after processing regardless of outcome.
+
+        Args:
+            source_path: Absolute path to the source image file.
+            known_checksums: Snapshot of checksums already in the database.
+        """
+        import shutil
+
+        try:
+            src = Path(source_path)
+            if not src.is_file():
+                logger.warning(f'ImportWorker: source not found: {source_path}')
+                with self._progress_lock:
+                    if self._progress is not None:
+                        self._progress['skipped'] += 1
+                        self._progress['done'] += 1
+                return
+
+            # Validate it's a supported image extension
+            if src.suffix.lower() not in self._image_extensions:
+                logger.debug(f'ImportWorker: skipping unsupported extension: {src.suffix}')
+                with self._progress_lock:
+                    if self._progress is not None:
+                        self._progress['skipped'] += 1
+                        self._progress['done'] += 1
+                self._cleanup_staging_file(src)
+                return
+
+            # Compute SHA-256 checksum of source file
+            sha256 = hashlib.sha256()
+            with open(src, 'rb') as f:
+                for chunk in iter(lambda: f.read(65536), b''):
+                    sha256.update(chunk)
+            src_checksum = sha256.hexdigest()
+
+            # Check if this checksum already exists in the database
+            if src_checksum in known_checksums:
+                logger.info(f'ImportWorker: duplicate checksum, skipping: {src.name}')
+                with self._progress_lock:
+                    if self._progress is not None:
+                        self._progress['skipped'] += 1
+                        self._progress['done'] += 1
+                self._cleanup_staging_file(src)
+                return
+
+            # Derive date for subdirectory from file metadata or mtime
+            file_date = self._get_file_date(src)
+            year_dir = file_date.strftime('%Y')
+            date_dir = file_date.strftime('%Y-%m-%d')
+            dest_dir = self._catalogue_dir / year_dir / date_dir
+            dest_dir.mkdir(parents=True, exist_ok=True)
+
+            # Build destination path, handling name collisions
+            dest = dest_dir / src.name
+            if dest.exists():
+                # Check if the existing file has the same checksum
+                existing_sha256 = hashlib.sha256()
+                with open(dest, 'rb') as f:
+                    for chunk in iter(lambda: f.read(65536), b''):
+                        existing_sha256.update(chunk)
+                if existing_sha256.hexdigest() == src_checksum:
+                    logger.info(f'ImportWorker: identical file at dest, skipping: {src.name}')
+                    with self._progress_lock:
+                        if self._progress is not None:
+                            self._progress['skipped'] += 1
+                            self._progress['done'] += 1
+                    self._cleanup_staging_file(src)
+                    return
+                # Different file with same name - append counter
+                stem = src.stem
+                suffix = src.suffix
+                counter = 1
+                while dest.exists():
+                    dest = dest_dir / f'{stem}_{counter}{suffix}'
+                    counter += 1
+
+            # Copy file preserving timestamps
+            shutil.copy2(str(src), str(dest))
+            logger.info(f'ImportWorker: copied {src.name} -> {dest}')
+
+            # Clean up the staging copy now that we've successfully copied
+            self._cleanup_staging_file(src)
+
+            # Record the original filename so the ingestion pipeline can
+            # set import_name on the image record.  This allows preflight
+            # dedup to match by original name even if the catalogue copy
+            # was renamed to avoid a collision (e.g. IMG_1234_1.jpg).
+            canon_dest = str(canonicalise_path(dest))
+            with self._import_names_lock:
+                self._import_names[canon_dest] = src.name
+
+            with self._progress_lock:
+                if self._progress is not None:
+                    self._progress['done'] += 1
+
+        except Exception as e:
+            logger.error(f'ImportWorker: failed to import {source_path}: {e}')
+            # Still try to clean up staging even on failure
+            try:
+                self._cleanup_staging_file(Path(source_path))
+            except Exception:
+                pass
+            with self._progress_lock:
+                if self._progress is not None:
+                    self._progress['done'] += 1
+
+    def _check_completion(self) -> None:
+        """Check if all queued import files have been processed.
+
+        Called after each batch.  When ``done >= total`` in the progress
+        dict, fires the ``on_complete`` callback with a snapshot of the
+        final progress and clears the progress reference so the callback
+        fires exactly once per import operation.
+        """
+        with self._progress_lock:
+            if self._progress is None:
+                return
+            done = self._progress.get('done', 0)
+            total = self._progress.get('total', 0)
+            if total <= 0 or done < total:
+                return
+            # Snapshot and clear so the callback fires exactly once
+            final_progress = dict(self._progress)
+            self._progress = None
+
+        # Fire callback outside the lock
+        if self._on_complete:
+            try:
+                self._on_complete(final_progress)
+            except Exception:
+                logger.exception('ImportWorker: on_complete callback failed')
+
+    @staticmethod
+    def _get_file_date(path: Path) -> datetime:
+        """Get the best date for organizing the file into date-based directories.
+
+        Tries EXIF DateTimeOriginal first, then falls back to the file's
+        modification time. This determines which ``YYYY/YYYY-MM-DD/`` subdirectory
+        the file lands in.
+
+        Args:
+            path: Path to the image file.
+
+        Returns:
+            datetime for the file's date.
+        """
+        try:
+            from metadata import derive_timestamp
+
+            ts = derive_timestamp(path)
+            if ts is not None:
+                return ts
+        except Exception:
+            pass
+        # Fallback to file modification time
+        return datetime.fromtimestamp(path.stat().st_mtime)
+
+    def _drain_remaining(self) -> list[str]:
+        """Drain any items left in the queue after stop_event is set.
+
+        Returns:
+            List of un-processed source file paths.
+        """
+        remaining: list[str] = []
+        while True:
+            try:
+                remaining.append(self._queue.get_nowait())
+            except queue.Empty:
+                break
+        return remaining
+
+    def _persist_pending(self, items: list[str]) -> None:
+        """Write un-processed items to disk for crash recovery.
+
+        Args:
+            items: List of source file paths to persist.
+        """
+        pending_path = self._catalogue_dir / '.pending_import.json'
+        try:
+            pending_path.write_text(
+                json.dumps(items),
+                encoding='utf-8',
+            )
+            logger.info(f'Persisted {len(items)} pending import items to {pending_path}')
+        except Exception as e:
+            logger.error(f'Failed to persist pending import items: {e}')
 
 
 # =============================================================================
@@ -4114,12 +4618,22 @@ class ImageDatabase:
         self._trash_progress: dict | None = None  # {total, done, started_at} during trash ops
         self._trash_progress_lock = threading.Lock()  # Protects _trash_progress mutations
 
+        # Import directory state — resolved in startup() after folders are verified
+        self._import_progress: dict | None = None  # {total, done, skipped, started_at}
+        self._import_progress_lock = threading.Lock()  # Protects _import_progress mutations
+        # Maps catalogue destination path → original import filename, so the
+        # ingestion pipeline can set import_name when the file is first indexed.
+        # Populated by ImportWorker, consumed by _process_image().
+        self._import_names: dict[str, str] = {}
+        self._import_names_lock = threading.Lock()
+
         # Create queues
         self._ingestion_queue: queue.Queue[Path] = queue.Queue()
         self._embedding_queue: queue.Queue[str] = queue.Queue()
         self._face_queue: queue.Queue[str] = queue.Queue()
         self._nima_queue: queue.Queue[str] = queue.Queue()
         self._trash_queue: queue.Queue[tuple[str, str]] = queue.Queue()  # (image_id, file_path)
+        self._import_queue: queue.Queue[str] = queue.Queue()  # source file paths
 
         # Thread references (created when started)
         self._ingestion_thread: IngestionThread | None = None
@@ -4127,6 +4641,7 @@ class ImageDatabase:
         self._face_thread: FaceDetectionThread | None = None
         self._nima_thread: NimaThread | None = None
         self._trash_thread: TrashWorker | None = None
+        self._import_thread: ImportWorker | None = None
 
         # Phase 4 status tracking (post-processing after queues empty)
         self._phase4_status_lock = threading.Lock()
@@ -4167,6 +4682,9 @@ class ImageDatabase:
 
         # Initialise trash directory (after folders are verified)
         self._init_trash_dir()
+
+        # Initialise import/catalogue directory
+        self._init_import_dir()
 
         # Step 4: Optionally scan folders and queue processing
         if self._run_scan:
@@ -4836,23 +5354,35 @@ class ImageDatabase:
                 logger.info('Skipping grouping phase (use --group-faces or GUI Rescan)')
                 emit_processing_complete(self.event_queue)
                 return
-            # Clean up people with no faces
-            with self._db_lock:
-                delete_people_without_faces(self.conn)
+
+            # --- Face reassessment FIRST (user-visible, latency-sensitive) ---
+            # Match unknown faces against known people before the slower
+            # duplicate/grouping calculations so that newly imported faces
+            # get identified as quickly as possible.
+            if self.config.face_detection_enabled:
+                # Clean up people with no faces
+                with self._db_lock:
+                    delete_people_without_faces(self.conn)
+                # Match unknown faces against known people (locked faces)
+                self._reassess_faces_with_status()
+
+            # --- Duplicate and face grouping (slower, less urgent) ---
             self._compute_duplicates_with_status()
-            # Compute unknown face groups (similar to duplicate grouping)
             if self.config.face_detection_enabled:
                 with self._db_lock:
                     compute_unknown_face_groups(self.conn, threshold=self.config.face_recognition_threshold)
                 # Backfill semantic embeddings for faces that don't have them
                 # (e.g., faces added before this feature existed)
                 self.backfill_face_semantic_embeddings()
-                # Match unknown faces against known people (locked faces)
-                self._reassess_faces_with_status()
             emit_processing_complete(self.event_queue)
 
         # Callback when embedding completes - queue images for face detection
         def on_embedding_complete():
+            # Notify frontend that new images are indexed and ready for display.
+            # This fires well before processing_complete, which waits for face
+            # detection, reassessment, and duplicate grouping (can take minutes).
+            self.event_queue.emit('images_indexed', {})
+
             if not self._run_face_detection:
                 logger.info('Skipping face detection (use --detect-faces or GUI Rescan)')
                 return
@@ -4874,6 +5404,8 @@ class ImageDatabase:
             num_threads=self.config.indexing_threads,
             max_image_dimension=self.config.max_image_dimension,
             nima_queue=self._nima_queue,
+            import_names=self._import_names,
+            import_names_lock=self._import_names_lock,
         )
         self._ingestion_thread.start()
 
@@ -4930,6 +5462,24 @@ class ImageDatabase:
             )
             self._trash_thread.start()
 
+        # Start import worker thread (copies files into catalogue)
+        if getattr(self, '_import_enabled', False):
+            self._import_thread = ImportWorker(
+                import_queue=self._import_queue,
+                stop_event=self._stop_event,
+                catalogue_dir=self.catalogue_dir,
+                max_workers=self.config.import_threads,
+                progress=self._import_progress,
+                progress_lock=self._import_progress_lock,
+                checksum_cache=self._checksum_cache,
+                checksum_cache_lock=self._checksum_cache_lock,
+                image_extensions=self.config.image_extensions,
+                import_names=self._import_names,
+                import_names_lock=self._import_names_lock,
+                on_complete=self._on_import_complete,
+            )
+            self._import_thread.start()
+
         logger.info('Background threads started')
 
     def stop_threads(self, timeout: float = 5.0) -> None:
@@ -4965,6 +5515,11 @@ class ImageDatabase:
             self._trash_thread.join(timeout=timeout)
             if self._trash_thread.is_alive():
                 logger.warning('Trash worker thread did not stop in time')
+
+        if self._import_thread is not None:
+            self._import_thread.join(timeout=timeout)
+            if self._import_thread.is_alive():
+                logger.warning('Import worker thread did not stop in time')
 
         logger.info('Background threads stopped')
 
@@ -5399,6 +5954,205 @@ class ImageDatabase:
         """
         with self._trash_progress_lock:
             return dict(self._trash_progress) if self._trash_progress else None
+
+    # ------------------------------------------------------------------
+    # Import / Catalogue directory
+    # ------------------------------------------------------------------
+
+    def _init_import_dir(self) -> None:
+        """Initialise the catalogue/import directory from config.
+
+        If ``catalogue_dir`` is set, creates it if needed and auto-registers
+        it as a watched folder. Also recovers any pending imports from a
+        previous interrupted shutdown.
+        """
+        self._import_enabled = False
+
+        # Resolve catalogue path: custom from config, or default <data-dir>/catalogue
+        if self.config.catalogue_dir:
+            self.catalogue_dir = Path(self.config.catalogue_dir)
+        else:
+            self.catalogue_dir = self.db_path.parent / 'catalogue'
+
+        # Create directory if it does not exist
+        already_exists = self.catalogue_dir.is_dir()
+        try:
+            self.catalogue_dir.mkdir(parents=True, exist_ok=True)
+        except OSError as e:
+            logger.error(f'Import disabled: failed to create catalogue directory {self.catalogue_dir}: {e}')
+            return
+
+        self._import_enabled = True
+        if already_exists:
+            logger.info(f'        Catalogue directory: {self.catalogue_dir}')
+        else:
+            logger.info(f'        Catalogue directory (created): {self.catalogue_dir}')
+
+        # Auto-register catalogue dir as a watched folder if not already
+        existing = {f['path'] for f in get_folders(self.conn)}
+        canon = str(canonicalise_path(self.catalogue_dir))
+        if canon not in existing:
+            logger.info('        Auto-registered catalogue as watched folder')
+            with self._db_lock:
+                add_folder(self.conn, canon)
+
+        # Crash recovery: re-enqueue items from previous shutdown
+        self._recover_pending_import()
+
+    def _recover_pending_import(self) -> None:
+        """Re-enqueue import items saved from a previous interrupted shutdown.
+
+        Reads ``.pending_import.json`` from the catalogue directory.  If found,
+        queues the items for the ImportWorker and deletes the file.
+        """
+        pending_path = self.catalogue_dir / '.pending_import.json'
+        if not pending_path.exists():
+            return
+
+        try:
+            data = json.loads(pending_path.read_text(encoding='utf-8'))
+            if not isinstance(data, list):
+                logger.warning(f'Invalid pending import file format, ignoring: {pending_path}')
+                pending_path.unlink(missing_ok=True)
+                return
+
+            count = 0
+            for item in data:
+                if isinstance(item, str) and item:
+                    self._import_queue.put(item)
+                    count += 1
+
+            pending_path.unlink(missing_ok=True)
+            if count:
+                self._import_progress = {
+                    'total': count,
+                    'done': 0,
+                    'skipped': 0,
+                    'started_at': time.time(),
+                }
+                logger.info(f'Re-enqueued {count} pending import items from previous shutdown')
+        except Exception as e:
+            logger.error(f'Failed to load pending import items: {e}')
+
+    def is_import_enabled(self) -> bool:
+        """Check whether the import/catalogue directory is configured.
+
+        Returns:
+            True if images can be imported into the catalogue, False otherwise.
+        """
+        return getattr(self, '_import_enabled', False)
+
+    def get_import_progress(self) -> dict | None:
+        """Get progress of the current import operation, if any.
+
+        Returns:
+            Dict with ``total``, ``done``, ``skipped``, and ``started_at``
+            keys while an import is running, or None when idle.
+        """
+        with self._import_progress_lock:
+            return dict(self._import_progress) if self._import_progress else None
+
+    def enqueue_import(self, paths: list[str]) -> int:
+        """Enqueue files/directories for import into the catalogue directory.
+
+        Walks directories recursively, filtering by supported image extensions.
+        Sets up progress tracking and queues each file for the ImportWorker.
+
+        Args:
+            paths: List of file or directory paths to import.
+
+        Returns:
+            Number of files queued for import.
+
+        Raises:
+            ValueError: If import is disabled (catalogue_dir not configured).
+        """
+        if not self._import_enabled:
+            raise ValueError('Import is disabled. Set catalogue_dir in config to enable.')
+
+        # Collect all image files from the provided paths
+        files: list[str] = []
+        for p in paths:
+            path = Path(p)
+            if path.is_file():
+                if path.suffix.lower() in self.config.image_extensions:
+                    files.append(str(path))
+            elif path.is_dir():
+                for child in find_images_in_folder(str(path), self.config.image_extensions):
+                    files.append(str(child))
+
+        if not files:
+            return 0
+
+        # Set up progress tracking
+        with self._import_progress_lock:
+            if self._import_progress is not None:
+                # Append to existing import operation
+                self._import_progress['total'] += len(files)
+            else:
+                self._import_progress = {
+                    'total': len(files),
+                    'done': 0,
+                    'skipped': 0,
+                    'started_at': time.time(),
+                }
+            # Update the worker's progress reference
+            if self._import_thread is not None:
+                self._import_thread._progress = self._import_progress
+
+        # Queue each file for the ImportWorker
+        for f in files:
+            self._import_queue.put(f)
+
+        logger.info(f'Queued {len(files)} file(s) for import into catalogue')
+        return len(files)
+
+    def _on_import_complete(self, progress: dict) -> None:
+        """Called after all import items in a batch have been processed.
+
+        Invoked by the :class:`ImportWorker`'s ``_check_completion()``
+        callback when ``done >= total``.  Clears the shared progress state,
+        emits an ``import_complete`` event, and triggers a rescan so the
+        newly copied files get ingested by the existing pipeline.
+
+        Args:
+            progress: Final progress snapshot (``total``, ``done``, ``skipped``).
+                Passed by the caller since the worker's ``_progress`` reference
+                has already been cleared to fire exactly once.
+        """
+        # Clear ImageDatabase's _import_progress so get_processing_status()
+        # stops reporting stale progress.  The ImportWorker already cleared
+        # its own _progress reference in _check_completion().
+        with self._import_progress_lock:
+            self._import_progress = None
+
+        imported = progress.get('done', 0) - progress.get('skipped', 0)
+        skipped = progress.get('skipped', 0)
+
+        logger.info(f'Import batch complete: {imported} imported, {skipped} skipped')
+
+        # Emit event for frontend (include catalogue_dir so clients can
+        # optimistically bump the per-folder count before indexing completes)
+        self.event_queue.emit(
+            EVENT_IMPORT_COMPLETE,
+            {
+                'imported': imported,
+                'skipped': skipped,
+                'catalogue_dir': str(self.catalogue_dir),
+            },
+        )
+
+        # Trigger a rescan so the newly imported files get picked up by
+        # the existing ingestion pipeline. Enable full processing chain.
+        self._run_face_detection = True
+        self._run_face_grouping = True
+        scan_thread = threading.Thread(
+            target=self._scan_and_queue_folder,
+            args=(str(self.catalogue_dir),),
+            daemon=True,
+            name='import-rescan',
+        )
+        scan_thread.start()
 
     @staticmethod
     def _find_closest_face(
@@ -6157,6 +6911,7 @@ class ImageDatabase:
         face_count = self._face_queue.qsize()
         nima_count = self._nima_queue.qsize() if self._nima_queue else 0
         trash_count = self._trash_queue.qsize()
+        import_count = self._import_queue.qsize()
 
         # Auto-clear trash progress when queue has drained
         if trash_count == 0:
@@ -6165,6 +6920,14 @@ class ImageDatabase:
                     self._trash_progress = None
                     if self._trash_thread is not None:
                         self._trash_thread._progress = None
+
+        # Import progress is NOT auto-cleared here — the ImportWorker's
+        # _check_completion() callback fires _on_import_complete() which
+        # clears _import_progress when all files are done.  This avoids
+        # double-fire (polling + worker both detecting completion).
+        # Snapshot the progress under lock for the response.
+        with self._import_progress_lock:
+            import_progress = dict(self._import_progress) if self._import_progress else None
 
         # Get Phase 4 statuses
         duplicate_status = self._duplicate_manager.get_status()
@@ -6179,9 +6942,18 @@ class ImageDatabase:
         face_embedding_computing = face_embedding_status.get('status') == 'computing'
         face_reassess_computing = face_reassess_status is not None and face_reassess_status.get('status') == 'computing'
 
-        # Determine overall status (NIMA + trash queues also contribute to 'updating')
+        # Determine overall status (NIMA + trash + import queues also contribute to 'updating').
+        # Import progress is checked in addition to import_count because
+        # the ImportWorker dequeues items before copying — qsize() can be 0
+        # while files are still being processed.
         queues_empty = (
-            indexing_count == 0 and embedding_count == 0 and face_count == 0 and nima_count == 0 and trash_count == 0
+            indexing_count == 0
+            and embedding_count == 0
+            and face_count == 0
+            and nima_count == 0
+            and trash_count == 0
+            and import_count == 0
+            and import_progress is None
         )
         phase4_idle = not (
             duplicates_computing or face_grouping_computing or face_embedding_computing or face_reassess_computing
@@ -6214,9 +6986,14 @@ class ImageDatabase:
             'total_faces': total_faces,
             'trash_queue': trash_count,
             'trashed_count': self._trashed_count,
+            'import_queue': import_count,
             'face_detection_enabled': self.config.face_detection_enabled,
             'nima_enabled': self.config.nima_enabled,
         }
+
+        # Include import progress if active (total, done, skipped)
+        if import_progress is not None:
+            result['import_progress'] = import_progress
 
         # Include duplicate status if computing
         if duplicates_computing:

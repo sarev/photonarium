@@ -264,8 +264,8 @@
                         <span class="icon" data-icon="photo_library">🏞️</span>
                     </button>
                 </div>
-                <button id="btn-database" class="toolbar-btn" title="Manage database (Ctrl+M)">
-                    <span class="icon" data-icon="database">🖥️</span>
+                <button id="btn-database" class="toolbar-btn" title="Import and manage (Ctrl+M)">
+                    <span class="icon" data-icon="cloud_upload">📥</span>
                 </button>
                 <button id="btn-duplicates" class="toolbar-btn" title="Groups (Ctrl+D)">
                     <span class="icon" data-icon="copy_all">⧉</span>
@@ -452,10 +452,40 @@
              ============================================================ -->
         <main id="screen-database" class="screen">
             <div class="database-container">
+                <!-- Import section — visible only when catalogue_dir is configured -->
+                <section id="import-section" class="database-section" hidden>
+                    <h2>Import Images</h2>
+                    <div id="import-drop-zone" class="import-drop-zone" title="Drag photos or folders here to copy them into your catalogue">
+                        <span class="icon import-drop-icon" data-icon="cloud_upload">⬆</span>
+                        <p class="import-drop-text desktop-only">Drag and drop images or folders here to import</p>
+                        <p class="import-hint desktop-only">or</p>
+                        <div class="import-buttons">
+                            <button id="btn-import-folder" class="action-btn desktop-only" title="Pick a folder to import images from">
+                                <span class="icon" data-icon="folder_open">📂</span>
+                                Pick Folder
+                            </button>
+                            <button id="btn-import-files" class="action-btn" title="Select individual photos to import">
+                                <span class="icon" data-icon="photo_library">🖼</span>
+                                Pick Photos
+                            </button>
+                            <button id="btn-import-dir" class="action-btn" hidden title="Pick an entire folder of photos to import">
+                                <span class="icon" data-icon="folder_open">📂</span>
+                                Pick Folder
+                            </button>
+                        </div>
+                        <!-- multiple: user can multi-select (100s at a time, "Select All" on iOS).
+                             accept is set dynamically from config image_extensions -->
+                        <input type="file" id="import-file-input" multiple hidden>
+                        <!-- webkitdirectory: picks entire folder (Android Chrome) -->
+                        <input type="file" id="import-dir-input" webkitdirectory hidden>
+                    </div>
+                    <p id="import-status-text" class="import-status-text" hidden></p>
+                </section>
+
                 <section class="database-section">
                     <h2>Image Source Folders</h2>
                     <div class="folder-controls">
-                        <button id="btn-add-folder" class="action-btn">
+                        <button id="btn-add-folder" class="action-btn desktop-only">
                             <span class="icon" data-icon="create_new_folder">📁</span>
                             Add Folder
                         </button>
@@ -496,6 +526,7 @@
                             <p id="face-queue-row" hidden><span class="queue-label">Face Detection:</span> <span id="face-count">0</span> remaining<span id="face-eta" class="queue-eta"></span></p>
                             <p id="nima-queue-row" hidden><span class="queue-label">Aesthetic:</span> <span id="nima-count">0</span> remaining<span id="nima-eta" class="queue-eta"></span></p>
                             <p id="trash-queue-row" hidden><span class="queue-label">Trashing:</span> <span id="trash-queue-count">0</span> remaining</p>
+                            <p id="import-queue-row" hidden><span class="queue-label">Importing:</span> <span id="import-queue-count">0</span> remaining (<span id="import-skipped-count">0</span> skipped)</p>
                             <p id="duplicates-row" hidden><span class="queue-label">Finding Duplicates:</span> <span id="duplicates-status">level 0</span></p>
                             <p id="face-grouping-row" hidden><span class="queue-label">Grouping Faces:</span> <span id="face-grouping-status">computing</span></p>
                             <p id="face-reassess-row" hidden><span class="queue-label">Matching Faces:</span> <span id="face-reassess-status">computing</span></p>
@@ -653,6 +684,29 @@
         <!-- ============================================================
              DIALOGS / MODALS
              ============================================================ -->
+
+        <!-- Add vs Import choice dialog -->
+        <dialog id="dialog-add-choice">
+            <div class="dialog-content">
+                <h3>Add Images</h3>
+                <p id="add-choice-message">How would you like to add these images?</p>
+                <div class="add-choice-options">
+                    <button id="add-choice-reference" class="action-btn choice-btn" title="Images stay in their current location on disk">
+                        <span class="icon" data-icon="folder">📁</span>
+                        <span class="choice-label">Add Folder</span>
+                        <span class="choice-desc">Reference images where they are</span>
+                    </button>
+                    <button id="add-choice-import" class="action-btn choice-btn primary" title="Copy images into the catalogue, organised by date">
+                        <span class="icon" data-icon="cloud_upload">⬆</span>
+                        <span class="choice-label">Import</span>
+                        <span class="choice-desc">Copy into catalogue, organised by date</span>
+                    </button>
+                </div>
+                <div class="dialog-actions">
+                    <button id="add-choice-cancel" class="action-btn">Cancel</button>
+                </div>
+            </div>
+        </dialog>
 
         <!-- Confirmation dialog (e.g., delete confirmation) -->
         <dialog id="dialog-confirm">

@@ -878,6 +878,7 @@ const App = {
 
         const response = await fetch(url, {
             headers,
+            cache: 'no-store',
             ...options,
         });
 

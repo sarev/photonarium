@@ -138,7 +138,7 @@ AppState.status = (function() {
 
         /**
          * Get queue counts.
-         * @returns {{indexing: number, embedding: number, face: number}}
+         * @returns {{indexing: number, embedding: number, face: number, nima: number, import: number}}
          */
         getQueues() {
             return {
@@ -146,6 +146,7 @@ AppState.status = (function() {
                 embedding: _status?.embedding_queue || 0,
                 face: _status?.face_queue || 0,
                 nima: _status?.nima_queue || 0,
+                import: _status?.import_queue || 0,
             };
         },
 

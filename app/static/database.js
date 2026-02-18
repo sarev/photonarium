@@ -108,6 +108,13 @@ const Database = {
     _maxHistorySamples: 10,
 
     /**
+     * Cached catalogue_dir from /api/config (empty string if disabled).
+     * @type {string}
+     * @private
+     */
+    _catalogueDir: '',
+
+    /**
      * Initialises the database module.
      * Called once during app startup.
      */
@@ -136,6 +143,9 @@ const Database = {
             nimaEta: App.$('nima-eta'),
             trashQueueRow: App.$('trash-queue-row'),
             trashQueueCount: App.$('trash-queue-count'),
+            importQueueRow: App.$('import-queue-row'),
+            importQueueCount: App.$('import-queue-count'),
+            importSkippedCount: App.$('import-skipped-count'),
             // Phase 4 status elements
             duplicatesRow: App.$('duplicates-row'),
             duplicatesStatus: App.$('duplicates-status'),
@@ -147,7 +157,19 @@ const Database = {
             faceEmbeddingsStatus: App.$('face-embeddings-status'),
             revealConfigBtn: App.$('btn-reveal-config'),
             trashedLink: App.$('status-trashed-link'),
+            // Import section elements
+            importSection: App.$('import-section'),
+            importDropZone: App.$('import-drop-zone'),
+            importFolderBtn: App.$('btn-import-folder'),
+            importFilesBtn: App.$('btn-import-files'),
+            importDirBtn: App.$('btn-import-dir'),
+            importFileInput: App.$('import-file-input'),
+            importDirInput: App.$('import-dir-input'),
+            importStatusText: App.$('import-status-text'),
         };
+
+        // Fetch catalogue_dir from config to decide import visibility
+        this._loadCatalogueDir();
 
         this._bindEvents();
 
@@ -253,6 +275,69 @@ const Database = {
                 }
             });
         }
+
+        // --- Import section event bindings ---
+
+        // Drag-and-drop on the import drop zone (desktop only)
+        const zone = this._els.importDropZone;
+        if (zone) {
+            zone.addEventListener('dragover', (e) => {
+                e.preventDefault();
+                e.dataTransfer.dropEffect = 'copy';
+                zone.classList.add('drag-over');
+            });
+            zone.addEventListener('dragleave', () => {
+                zone.classList.remove('drag-over');
+            });
+            zone.addEventListener('drop', (e) => {
+                e.preventDefault();
+                zone.classList.remove('drag-over');
+                this._handleDrop(e.dataTransfer);
+            });
+        }
+
+        // "Pick Folder" in import section — uses native folder picker,
+        // then offers choice between Add Folder and Import
+        if (this._els.importFolderBtn) {
+            this._els.importFolderBtn.addEventListener('click', async () => {
+                const picked = await this._pickFolder();
+                if (!picked || !picked.path) return;
+                this._showAddChoice(picked.path);
+            });
+        }
+
+        // "Pick Photos" — opens file picker, uploads via preflight dedup
+        if (this._els.importFilesBtn && this._els.importFileInput) {
+            this._els.importFilesBtn.addEventListener('click', () => {
+                this._els.importFileInput.click();
+            });
+            this._els.importFileInput.addEventListener('change', () => {
+                const files = this._els.importFileInput.files;
+                if (files && files.length > 0) {
+                    this._uploadFiles(files);
+                }
+                // Reset so the same files can be re-selected
+                this._els.importFileInput.value = '';
+            });
+        }
+
+        // "Pick Folder" on mobile (webkitdirectory) — uploads folder contents
+        if (this._els.importDirBtn && this._els.importDirInput) {
+            // Show this button only if webkitdirectory is supported AND on mobile
+            if ('webkitdirectory' in this._els.importDirInput && window.innerWidth <= 768) {
+                this._els.importDirBtn.hidden = false;
+            }
+            this._els.importDirBtn.addEventListener('click', () => {
+                this._els.importDirInput.click();
+            });
+            this._els.importDirInput.addEventListener('change', () => {
+                const files = this._els.importDirInput.files;
+                if (files && files.length > 0) {
+                    this._uploadFiles(files);
+                }
+                this._els.importDirInput.value = '';
+            });
+        }
     },
 
     /* ----------------------------------------------------------------------
@@ -282,11 +367,19 @@ const Database = {
 
     /**
      * Prompts for a folder path and adds it to the database.
+     * If a catalogue directory is configured, shows a choice dialog
+     * (Add Folder vs Import). Otherwise adds the folder directly.
      * @private
      */
     async _addFolder() {
         const picked = await this._pickFolder();
         if (!picked || !picked.path) {
+            return;
+        }
+
+        // If catalogue is configured, offer the choice
+        if (this._catalogueDir) {
+            this._showAddChoice(picked.path);
             return;
         }
 
@@ -329,6 +422,10 @@ const Database = {
         const list = this._els.folderList;
         list.innerHTML = '';
 
+        // Normalise catalogue path for comparison (lowercase + forward slashes on Windows)
+        const normPath = (p) => p.replace(/\\/g, '/').toLowerCase();
+        const catalogueNorm = this._catalogueDir ? normPath(this._catalogueDir) : '';
+
         for (const folder of folders) {
             const li = document.createElement('li');
             li.className = 'folder-item';
@@ -337,19 +434,41 @@ const Database = {
             pathEl.className = 'folder-path';
             pathEl.textContent = folder.path;
 
+            const isCatalogue = catalogueNorm && normPath(folder.path) === catalogueNorm;
+
             const countEl = document.createElement('span');
             countEl.className = 'folder-count';
             countEl.textContent = `${folder.count || 0} images`;
 
+            // Show a "catalogue" badge after the image count
+            if (isCatalogue) {
+                const badge = document.createElement('span');
+                badge.className = 'folder-catalogue-badge';
+                badge.textContent = 'catalogue';
+                badge.title = 'Managed import directory \u2014 images are copied here when you use Import';
+                countEl.appendChild(badge);
+            }
+
             const removeBtn = document.createElement('button');
             removeBtn.type = 'button';
             removeBtn.className = 'toolbar-btn folder-remove';
-            removeBtn.title = "Remove folder from Photonarium (doesn't affect the folder/files on disk!)";
+            if (isCatalogue) {
+                removeBtn.disabled = true;
+                removeBtn.title = 'Catalogue directory cannot be removed';
+            } else {
+                removeBtn.title = "Remove folder from Photonarium (doesn't affect the folder/files on disk!)";
+            }
             removeBtn.innerHTML = App.icon('delete', '\u{1F5D1}');
-            removeBtn.addEventListener('click', () => this._removeFolder(folder.path));
+            if (!isCatalogue) {
+                removeBtn.addEventListener('click', () => this._removeFolder(folder.path));
+            }
 
-            li.appendChild(pathEl);
-            li.appendChild(countEl);
+            const infoEl = document.createElement('div');
+            infoEl.className = 'folder-info';
+            infoEl.appendChild(pathEl);
+            infoEl.appendChild(countEl);
+
+            li.appendChild(infoEl);
             li.appendChild(removeBtn);
 
             list.appendChild(li);
@@ -459,7 +578,9 @@ const Database = {
 
         // Determine if any processing is active
         const trashQueue = status.trash_queue || 0;
-        const hasQueueWork = indexing > 0 || embedding > 0 || faces > 0 || nima > 0 || trashQueue > 0;
+        const importQueue = status.import_queue || 0;
+        const importActive = importQueue > 0 || status.import_progress != null;
+        const hasQueueWork = indexing > 0 || embedding > 0 || faces > 0 || nima > 0 || trashQueue > 0 || importActive;
         const hasPhase4Work = duplicates || faceGrouping || faceEmbeddings;
         const hasAnyWork = hasQueueWork || hasPhase4Work;
 
@@ -516,12 +637,29 @@ const Database = {
 
             // Show/hide trash queue row
             if (this._els.trashQueueRow && this._els.trashQueueCount) {
-                const trashQueue = status.trash_queue || 0;
                 if (trashQueue > 0) {
                     this._els.trashQueueRow.hidden = false;
                     this._els.trashQueueCount.textContent = trashQueue;
                 } else {
                     this._els.trashQueueRow.hidden = true;
+                }
+            }
+
+            // Show/hide import queue row.  The ImportWorker dequeues items
+            // before copying, so importQueue (qsize) can be 0 while files
+            // are still being processed.  Use import_progress to track
+            // actual completion.
+            if (this._els.importQueueRow && this._els.importQueueCount) {
+                const ip = status.import_progress;
+                if (ip) {
+                    const remaining = (ip.total || 0) - (ip.done || 0);
+                    this._els.importQueueRow.hidden = false;
+                    this._els.importQueueCount.textContent = remaining;
+                    if (this._els.importSkippedCount) {
+                        this._els.importSkippedCount.textContent = ip.skipped || 0;
+                    }
+                } else {
+                    this._els.importQueueRow.hidden = true;
                 }
             }
 
@@ -585,6 +723,7 @@ const Database = {
             if (this._els.faceQueueRow) this._els.faceQueueRow.hidden = true;
             if (this._els.nimaQueueRow) this._els.nimaQueueRow.hidden = true;
             if (this._els.trashQueueRow) this._els.trashQueueRow.hidden = true;
+            if (this._els.importQueueRow) this._els.importQueueRow.hidden = true;
             if (this._els.duplicatesRow) this._els.duplicatesRow.hidden = true;
             if (this._els.faceGroupingRow) this._els.faceGroupingRow.hidden = true;
             if (this._els.faceReassessRow) this._els.faceReassessRow.hidden = true;
@@ -784,6 +923,255 @@ const Database = {
 
         // Format ETA
         this._els.nimaEta.textContent = ' (' + this._formatEta(etaSeconds) + ')';
+    },
+
+    /* ----------------------------------------------------------------------
+       Import / Catalogue
+       ---------------------------------------------------------------------- */
+
+    /**
+     * Fetches the catalogue_dir from /api/config and shows/hides the
+     * import section accordingly. Called once during init().
+     * @private
+     */
+    async _loadCatalogueDir() {
+        try {
+            const response = await App.apiGet('/config');
+            this._catalogueDir = response?.data?.catalogue_dir || '';
+            if (this._catalogueDir && this._els.importSection) {
+                this._els.importSection.hidden = false;
+            }
+
+            // Set the file picker's accept filter from the backend's
+            // image_extensions list so RAW formats are included too.
+            const exts = response?.data?.image_extensions;
+            if (exts?.length && this._els.importFileInput) {
+                // Combine image/* (for standard types) with explicit extensions
+                // (for RAW formats that browsers don't recognise as images)
+                this._els.importFileInput.accept =
+                    ['image/*', ...exts].join(',');
+            }
+        } catch {
+            // Config load failures are non-fatal — import section stays hidden
+        }
+    },
+
+    /**
+     * Handles files/folders dropped onto the import drop zone.
+     * For file drops: uploads via preflight dedup.
+     * For folder drops (desktop DataTransferItem entries): shows choice dialog.
+     * @param {DataTransfer} dataTransfer - The drop event's dataTransfer
+     * @private
+     */
+    async _handleDrop(dataTransfer) {
+        const files = dataTransfer.files;
+        if (!files || files.length === 0) return;
+
+        // Check if any of the dropped items are directories via webkitGetAsEntry
+        let hasDirectories = false;
+        if (dataTransfer.items) {
+            for (const item of dataTransfer.items) {
+                const entry = item.webkitGetAsEntry?.();
+                if (entry && entry.isDirectory) {
+                    hasDirectories = true;
+                    break;
+                }
+            }
+        }
+
+        if (hasDirectories) {
+            // Cannot get real filesystem paths from the browser drop API, so
+            // we upload the files just like "Pick Photos" would.
+            // Collect all files from the DataTransfer (browser flattens dirs).
+            this._uploadFiles(files);
+        } else {
+            // Pure file drop — upload directly
+            this._uploadFiles(files);
+        }
+    },
+
+    /**
+     * Shows the Add Folder vs Import choice dialog.
+     * @param {string} path - The folder path selected by the user
+     * @private
+     */
+    _showAddChoice(path) {
+        const dialog = App.$('dialog-add-choice');
+        if (!dialog) return;
+
+        const refBtn = App.$('add-choice-reference');
+        const importBtn = App.$('add-choice-import');
+        const cancelBtn = App.$('add-choice-cancel');
+
+        // Clean up old listeners by cloning buttons
+        const newRefBtn = refBtn.cloneNode(true);
+        const newImportBtn = importBtn.cloneNode(true);
+        const newCancelBtn = cancelBtn.cloneNode(true);
+        refBtn.replaceWith(newRefBtn);
+        importBtn.replaceWith(newImportBtn);
+        cancelBtn.replaceWith(newCancelBtn);
+
+        newRefBtn.addEventListener('click', async () => {
+            dialog.close();
+            try {
+                await AppState.folders.add(path);
+            } catch (error) {
+                console.error('Error adding folder:', error);
+                App.showError('Could not add folder.');
+            }
+        });
+
+        newImportBtn.addEventListener('click', async () => {
+            dialog.close();
+            await this._importFromPath(path);
+        });
+
+        newCancelBtn.addEventListener('click', () => {
+            dialog.close();
+        });
+
+        dialog.showModal();
+    },
+
+    /**
+     * Imports images from a local filesystem path (desktop only).
+     * Sends the path to the backend which handles the actual file copying.
+     * @param {string} path - Path to file or directory on disk
+     * @private
+     */
+    async _importFromPath(path) {
+        try {
+            const response = await App.apiPost('/import', { paths: [path] });
+            const queued = response?.data?.queued || 0;
+            if (queued > 0) {
+                App.showInfo(`Import started: ${queued} image${queued !== 1 ? 's' : ''} queued.`);
+            } else {
+                App.showInfo('No new images found to import.');
+            }
+        } catch (error) {
+            console.error('Error starting import:', error);
+            App.showError('Could not start import.');
+        }
+    },
+
+    /**
+     * Uploads files via the preflight dedup + multipart upload flow.
+     *
+     * 1. Compute SHA-256 checksums for all selected files (client-side)
+     * 2. Send checksums to /api/import/preflight to find which are new
+     * 3. Upload only the new files via /api/import/upload
+     *
+     * Uses crypto.subtle.digest() which is hardware-accelerated (~500MB/s).
+     *
+     * @param {FileList} fileList - Files from input element or drop event
+     * @private
+     */
+    async _uploadFiles(fileList) {
+        const files = [...fileList];
+        if (files.length === 0) return;
+
+        // Filter to image files only (by MIME type or extension)
+        const imageFiles = files.filter(f => {
+            if (f.type && f.type.startsWith('image/')) return true;
+            // Fallback: check extension for camera RAW files that lack MIME types
+            const ext = '.' + f.name.split('.').pop().toLowerCase();
+            return ['.jpg', '.jpeg', '.png', '.gif', '.bmp', '.tiff', '.tif', '.webp',
+                '.cr2', '.cr3', '.nef', '.nrw', '.arw', '.srf', '.dng', '.raf',
+                '.rw2', '.orf', '.pef', '.srw', '.x3f', '.3fr', '.iiq',
+                '.rwl', '.kdc', '.dcr', '.erf'].includes(ext);
+        });
+
+        if (imageFiles.length === 0) {
+            App.showInfo('No image files found in selection.');
+            return;
+        }
+
+        try {
+            // Preflight dedup: send file name+size pairs to the backend which
+            // checks them against import_name+size (catches previously imported
+            // files even if renamed on disk due to collision) and basename+size
+            // (catches files already in watched folders).  This is instant (no
+            // file reading, no crypto), works on plain HTTP.  The backend's
+            // SHA-256 dedup in ImportWorker catches any remaining edge cases.
+            this._setImportStatus(`Checking ${imageFiles.length} file${imageFiles.length !== 1 ? 's' : ''} for duplicates...`);
+
+            const fileMeta = imageFiles.map(f => ({ name: f.name, size: f.size }));
+            const preflight = await App.apiPost('/import/preflight', { files: fileMeta });
+            const known = preflight?.data?.known || [];
+            const newFiles = imageFiles.filter((_, i) => !known[i]);
+            const skippedCount = imageFiles.length - newFiles.length;
+
+            if (newFiles.length === 0) {
+                this._setImportStatus(null);
+                const n = imageFiles.length;
+                App.showInfo(`${n} image${n !== 1 ? 's' : ''} checked, all already in your library.`);
+                return;
+            }
+
+            const total = imageFiles.length;
+            this._setImportStatus(
+                `Uploading ${newFiles.length} of ${total} image${total !== 1 ? 's' : ''}...`,
+            );
+
+            // Upload files via multipart with a generous timeout so the UI
+            // doesn't hang indefinitely if the server response is lost.
+            const formData = new FormData();
+            for (const file of newFiles) {
+                formData.append('files', file);
+            }
+            const controller = new AbortController();
+            const timeoutId = setTimeout(() => controller.abort(), 120_000);
+            try {
+                const uploadResponse = await fetch('/api/import/upload', {
+                    method: 'POST',
+                    body: formData,
+                    signal: controller.signal,
+                });
+                clearTimeout(timeoutId);
+                if (!uploadResponse.ok) {
+                    throw new Error(`Upload failed: ${uploadResponse.status}`);
+                }
+            } catch (uploadErr) {
+                clearTimeout(timeoutId);
+                if (uploadErr.name === 'AbortError') {
+                    // Timeout — the server likely received the files but the
+                    // response was lost.  Show a non-fatal message instead of
+                    // an error since the import may still proceed server-side.
+                    this._setImportStatus(null);
+                    App.showInfo('Upload timed out, but the server may still be processing your images.');
+                    return;
+                }
+                throw uploadErr;
+            }
+
+            this._setImportStatus(null);
+            const parts = [`${total} checked`];
+            parts.push(`${newFiles.length} importing`);
+            if (skippedCount > 0) parts.push(`${skippedCount} already present`);
+            App.showInfo(parts.join(', ') + '.');
+
+        } catch (error) {
+            this._setImportStatus(null);
+            console.error('Error uploading files:', error);
+            App.showError('Could not upload files for import.');
+        }
+    },
+
+    /**
+     * Updates or hides the import status text below the drop zone.
+     * @param {string|null} message - Status message, or null to hide
+     * @private
+     */
+    _setImportStatus(message) {
+        const el = this._els.importStatusText;
+        if (!el) return;
+        if (message) {
+            el.textContent = message;
+            el.hidden = false;
+        } else {
+            el.hidden = true;
+            el.textContent = '';
+        }
     },
 };
 

@@ -165,6 +165,31 @@ AppState.folders = (function() {
             }
         },
 
+        /**
+         * Optimistically adjust a folder's cached image count.
+         *
+         * Used by the ``import_complete`` event handler to bump the
+         * catalogue folder count immediately after import, before the
+         * ingestion pipeline has indexed the new files.  The real count
+         * is reconciled when ``processing_complete`` triggers a full
+         * ``load()``.
+         *
+         * @param {string} folderPath - Folder path to adjust
+         * @param {number} delta - Amount to add (can be negative)
+         */
+        adjustCount(folderPath, delta) {
+            if (!folderPath || !delta) return;
+            const norm = (p) => p.replace(/\\/g, '/').toLowerCase();
+            const target = norm(folderPath);
+            for (const folder of _folders) {
+                if (norm(folder.path) === target) {
+                    folder.count = (folder.count || 0) + delta;
+                    broadcast({ type: 'changed' });
+                    return;
+                }
+            }
+        },
+
         // --- Statistics ---
 
         /**

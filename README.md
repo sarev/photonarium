@@ -51,6 +51,7 @@ Find out more about the motivations behind Photonarium in [`BACKGROUND.md`](BACK
 - **Duplicate detection** at four levels of similarity (identical, near-identical, similar, related) plus auto-generated **directory groups** and user-curated **custom groups** (albums), with **Refine Groups** to filter by quality and view the best (or worst) images in the Gallery, or prune duplicates to trash
 - **Camera RAW support** - native support for 20+ camera RAW formats alongside JPEG, PNG, and other standard image types. No conversion needed.
 - **Camera data** - full EXIF metadata extraction. Search and filter by camera, lens, ISO, aperture, shutter speed, and more.
+- **Import into catalogue** - copy images from SD cards, phone uploads, or downloads into a managed catalogue directory, organised by date. Preflight dedup avoids importing files you already have.
 - **Ratings and descriptions** so you can build your own favourites system
 
 Once you have run the model downloader, the models stay on your machine. Everything runs locally.
@@ -550,12 +551,28 @@ Finally, once you're reasonably happy you've built up a good cross-section of fa
 
 ## Database
 
-Database is where you tell Photonarium where your photos live, and where you can see what the app is currently doing.
+Database is where you tell Photonarium where your photos live, import new images, and see what the app is currently doing.
 
 - Add folders (scanned recursively)
+- Import images into a managed catalogue directory (see Import below)
 - Rescan folders to pick up changes
-- Watch progress for indexing, embeddings, and face work (with ETAs when possible)
+- Watch progress for indexing, embeddings, face work, and imports (with ETAs when possible)
 - Click **Edit Settings** to open the in-app settings editor (works from any device on your network)
+
+### Import
+
+The Database screen has an Import section that lets you copy images into a Photonarium-managed directory, organised by date (`YYYY/YYYY-MM-DD/filename.jpg`). The originals are not modified. By default, the catalogue lives at `<data-dir>/catalogue/` -- set `catalogue_dir` in settings to use a different location.
+
+**On desktop:**
+- Drag and drop images or folders onto the import drop zone, or use the Pick Folder / Pick Photos buttons.
+- When you drop a folder, a choice dialog lets you either reference the folder in place (Add Folder) or copy its contents into the catalogue (Import).
+- File drops always import.
+
+**On mobile:**
+- Tap Pick Photos to open the system photo picker. On Android, a Pick Folder button is also available.
+- Before uploading, the browser computes SHA-256 checksums and sends them to the backend for dedup. Only new files are uploaded, saving bandwidth.
+
+Imported files are processed by the normal indexing pipeline (thumbnails, embeddings, face detection) automatically.
 
 Supported image types include: `.jpg`, `.jpeg`, `.png`, `.gif`, `.bmp`, `.tiff`, `.tif`, `.webp`, and camera RAW formats (`.cr2`, `.cr3`, `.nef`, `.nrw`, `.arw`, `.srf`, `.dng`, `.raf`, `.rw2`, `.orf`, `.pef`, `.srw`, `.x3f`, `.3fr`, `.iiq`, `.rwl`, `.kdc`, `.dcr`, `.erf`). RAW support requires the `rawpy` package. Note that RAW files cannot be rotated within Photonarium. RAW files are also slower to process than standard formats - each file requires full demosaicing of the sensor data, so indexing and opening full-screen images will take a little longer than with JPEGs.
 
@@ -756,6 +773,8 @@ Key settings:
 * `caption_model`: BLIP model for image captioning (run `python download_models.py` after changing)
 * `caption_max_length`: maximum caption length in tokens
 * `caption_min_length`: minimum caption length (higher = more descriptive)
+* `catalogue_dir`: path to the managed catalogue directory for imports (default: `<data-dir>/catalogue/`)
+* `import_threads`: parallel threads for file copying during import (1-16, default 4)
 * `trash_dir`: custom path for the trash directory (default: `<data-dir>/trash/`)
 
 ## Trash directory

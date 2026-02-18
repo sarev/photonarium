@@ -398,7 +398,7 @@ const Gallery = {
         App.on('imagesModified', (imageIds) => this._onImagesModified(imageIds));
 
         // Subscribe to AppState for reactive updates
-        this._unsubs.push(AppState.images.onChanged(() => this._onImagesChanged()));
+        this._unsubs.push(AppState.images.onChanged((event) => this._onImagesChanged(event)));
     },
 
     /**
@@ -592,9 +592,10 @@ const Gallery = {
     /**
      * Handles AppState.images changes.
      * Reactive update when images are added, removed, or modified.
+     * @param {Object} [event] - Change event from AppState.images broadcast.
      * @private
      */
-    _onImagesChanged() {
+    _onImagesChanged(event) {
         // Only refresh if we're on the gallery screen
         if (App.getScreen() !== 'gallery') {
             this.state.needsRefresh = true;
@@ -602,7 +603,11 @@ const Gallery = {
         }
 
         const imageCount = AppState.images.getCount();
-        if (imageCount === this.state.lastImageCount) return;
+
+        // For delta updates (not a full reload), skip if count is unchanged.
+        // Full reloads (e.g. from processing_complete) always refresh so
+        // newly indexed images appear even if the count was already correct.
+        if (!event?.reload && imageCount === this.state.lastImageCount) return;
 
         // Preserve state
         const scrollTop = this._els.grid?.scrollTop || 0;

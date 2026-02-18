@@ -4963,7 +4963,9 @@
 
                 const name = document.createElement('span');
                 name.className = 'name';
-                name.textContent = match.person_name;
+                // Show similarity score after name for diagnostic visibility
+                const pct = Math.round(match.similarity * 100);
+                name.textContent = `${match.person_name} (${pct}%)`;
                 item.appendChild(name);
 
                 item.addEventListener('click', async (e) => {
