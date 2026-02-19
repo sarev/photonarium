@@ -66,6 +66,7 @@ The tutorial generator (`tools/mktutorial/tutorial.py`) now supports a `--setup`
 
 - **Quick Match similarity scores:** The Quick Match popup now shows match confidence as a percentage next to each person name (e.g. "Alice (83%)"), making it easier to judge match quality.
 - **Faster face reassessment after scanning:** Face reassessment (auto-matching unknown faces to known people) now runs immediately after face detection, before the slower duplicate grouping phase. Previously it ran last, adding an unnecessary delay before newly scanned faces were identified.
+- **Gallery trash button:** A toolbar button for moving selected images to trash, making deletion accessible on mobile devices where the Delete key is unavailable. The button is disabled when no images are selected.
 
 ## v1.0.8-beta.8
 
