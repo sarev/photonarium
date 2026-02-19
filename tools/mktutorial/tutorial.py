@@ -1058,11 +1058,29 @@ def step_faces_autocomplete(page, ctx):
 def step_faces_failed_detections(page, ctx):
     # Commit the autocomplete selection left open by the previous step.
     # The dropdown may have closed between steps (focus lost during
-    # screenshot capture), so fall back to Enter.
+    # screenshot capture), so re-open it if needed before clicking.
+    card = face_card_by_image(page, 'photo_075.jpg', 'left')
+    input_el = card.locator('.face-card-input')
     if page.locator('.face-card-autocomplete-item').count() > 0:
         page.locator('.face-card-autocomplete-item').first.click()
     else:
-        page.keyboard.press('Enter')
+        # Dropdown closed — re-trigger it by focusing and re-typing
+        input_el.click()
+        input_el.fill('')
+        input_el.fill('Ali')
+        page.wait_for_selector('.face-card-autocomplete-item', state='visible', timeout=5000)
+        page.locator('.face-card-autocomplete-item').first.click()
+    # Verify the assignment landed as "Alice", not literal "Ali"
+    page.wait_for_function(
+        """() => {
+        const cards = document.querySelectorAll('.face-card');
+        return [...cards].some(c => {
+            const input = c.querySelector('.face-card-input');
+            return input && input.value === 'Alice';
+        });
+    }""",
+        timeout=5000,
+    )
     page.wait_for_timeout(800)
     # Identify all false-positive detections and select the first one
     non_face_ids = get_non_face_ids(page)
@@ -1204,27 +1222,35 @@ def step_faces_more_people(page, ctx):
         timeout=10000,
     )
     # Force-load lazy person-card thumbnails by re-setting their src,
-    # then wait until every image has actually decoded
-    page.evaluate("""() => {
-        document.querySelectorAll(
-            '.faces-section.known .person-card img'
-        ).forEach(img => {
-            img.loading = 'eager';
-            const src = img.src;
-            img.src = '';
-            img.src = src;
-        });
-    }""")
-    page.wait_for_function(
-        """() => {
-        const imgs = document.querySelectorAll(
-            '.faces-section.known .person-card img');
-        return imgs.length >= 3
-            && [...imgs].every(img => img.complete && img.naturalWidth > 0);
-    }""",
-        timeout=5000,
-    )
-    page.wait_for_timeout(300)
+    # then wait until every image has actually decoded.  The backend may
+    # still be generating the face thumbnail for Nia, so retry the
+    # force-load cycle up to a few times with pauses in between.
+    for _attempt in range(5):
+        page.evaluate("""() => {
+            document.querySelectorAll(
+                '.faces-section.known .person-card img'
+            ).forEach(img => {
+                img.loading = 'eager';
+                const src = img.src;
+                img.src = '';
+                img.src = src;
+            });
+        }""")
+        try:
+            page.wait_for_function(
+                """() => {
+                const imgs = document.querySelectorAll(
+                    '.faces-section.known .person-card img');
+                return imgs.length >= 3
+                    && [...imgs].every(img =>
+                        img.complete && img.naturalWidth > 0 && img.naturalHeight > 0);
+            }""",
+                timeout=3000,
+            )
+            break
+        except Exception:
+            page.wait_for_timeout(500)
+    page.wait_for_timeout(500)
 
 
 @step('drag-and-drop')
