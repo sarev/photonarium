@@ -1083,6 +1083,7 @@ const App = {
         this._bindBtn('btn-reveal-folder', () => this._handleRevealFolderClick());
         this._bindBtn('btn-rotate-ccw', () => this._handleRotateClick(270));
         this._bindBtn('btn-rotate-cw', () => this._handleRotateClick(90));
+        this._bindBtn('btn-trash', () => this.emit('trashSelected'));
         this._bindBtn('btn-select-all', () => this.emit('selectAll'));
         this._bindBtn('btn-clear-selection', () => this.clearSelection());
 
@@ -1343,6 +1344,12 @@ const App = {
         if (rotateCwBtn) {
             rotateCwBtn.disabled = rotateDisabled;
             rotateCwBtn.title = rotateTitle || rotateCwBtn.getAttribute('data-default-title') || 'Rotate right';
+        }
+
+        // Trash button: enabled when at least one image is selected
+        const trashBtn = document.getElementById('btn-trash');
+        if (trashBtn) {
+            trashBtn.disabled = selCount === 0;
         }
 
         // Slideshow buttons: enabled when the effective image list has > 1 images

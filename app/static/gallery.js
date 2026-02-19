@@ -395,6 +395,7 @@ const Gallery = {
         App.on('filterChanged', () => this._onFilterChanged());
         App.on('selectionChanged', (sel) => this._onSelectionChanged(sel));
         App.on('selectAll', () => this._selection.selectAll());
+        App.on('trashSelected', () => this._deleteImages(App.getSelectedImages()));
         App.on('imagesModified', (imageIds) => this._onImagesModified(imageIds));
 
         // Subscribe to AppState for reactive updates
