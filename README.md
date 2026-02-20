@@ -570,7 +570,7 @@ The Database screen has an Import section that lets you copy images into a Photo
 
 **On mobile:**
 - Tap Pick Photos to open the system photo picker. On Android, a Pick Folder button is also available.
-- Before uploading, the browser computes SHA-256 checksums and sends them to the backend for dedup. Only new files are uploaded, saving bandwidth.
+- Before uploading, the browser sends file names and sizes to the backend for a fast duplicate check. Only new files are uploaded, saving bandwidth.
 
 Imported files are processed by the normal indexing pipeline (thumbnails, embeddings, face detection) automatically.
 

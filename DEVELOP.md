@@ -477,7 +477,7 @@ Shown by default when the database is empty.
   configured) is shown with a badge and cannot be removed.
 - **Image import** - Drop zone for drag-and-drop import (desktop), file/folder
   picker buttons. Desktop imports send local paths to the backend; mobile
-  imports use file upload with preflight SHA-256 dedup to avoid transferring
+  imports use file upload with preflight name+size dedup to avoid transferring
   files the backend already has. A choice dialog lets desktop users choose
   between "Add Folder" (reference in place) and "Import" (copy into catalogue).
 - **Processing status** - Polls backend for indexing, embedding, face

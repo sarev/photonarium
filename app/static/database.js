@@ -1057,11 +1057,9 @@ const Database = {
     /**
      * Uploads files via the preflight dedup + multipart upload flow.
      *
-     * 1. Compute SHA-256 checksums for all selected files (client-side)
-     * 2. Send checksums to /api/import/preflight to find which are new
-     * 3. Upload only the new files via /api/import/upload
-     *
-     * Uses crypto.subtle.digest() which is hardware-accelerated (~500MB/s).
+     * 1. Send file name+size pairs to /api/import/preflight to find which are new
+     * 2. Upload only the new files via /api/import/upload
+     * 3. Backend ImportWorker does final SHA-256 dedup to catch edge cases
      *
      * @param {FileList} fileList - Files from input element or drop event
      * @private
