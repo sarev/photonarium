@@ -1395,12 +1395,6 @@ const App = {
     _updateFilterButton() {
         const hasFilter = this.hasActiveFilter();
 
-        const btn = document.getElementById('btn-filter');
-        if (btn) {
-            // Toggle active class to indicate filter is active (styling only)
-            btn.classList.toggle('active', hasFilter);
-        }
-
         const clearBtn = document.getElementById('btn-clear-filter');
         if (clearBtn) {
             // Enable/disable clear filter button based on filter state
