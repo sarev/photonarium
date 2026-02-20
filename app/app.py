@@ -1745,8 +1745,8 @@ def prune_duplicates():
     and keeps the top N, moving the rest to the trash directory.
 
     The quality scoring algorithm mirrors the frontend Quality sort
-    (weighted percentile composite of NIMA+LAION aesthetic, sharpness,
-    pixel count, and bits-per-pixel).
+    (absolute aesthetic scores from NIMA+LAION normalised to 0-1,
+    plus percentile-ranked sharpness, pixel count, and bits-per-pixel).
 
     Supports two mutually exclusive modes:
     - **Keep mode** (default): keep the best N images, trash the rest.

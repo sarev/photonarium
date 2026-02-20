@@ -95,7 +95,7 @@ AppState.images = (function() {
         const { by, direction } = AppState.view.getSort();
         const sorted = [...images];
 
-        // Quality sort: percentile ranking within the current image set
+        // Quality sort: absolute aesthetic + percentile-ranked technical factors
         // (works for both group views and the full gallery).
         // Higher scores = better quality.  'desc' (default) = best first.
         if (by === 'quality') {
@@ -138,12 +138,12 @@ AppState.images = (function() {
     }
 
     /**
-     * Compute composite quality scores for a set of images using percentile
-     * ranking. Works on any image set (group or full gallery). Blends NIMA +
-     * LAION aesthetic scores (when available),
-     * sharpness (log Laplacian variance), pixel count, and bits-per-pixel into
-     * a weighted composite.  Weights and NIMA/LAION blend ratio come from the
-     * backend configuration (``/api/config``).
+     * Compute composite quality scores for a set of images. Works on any
+     * image set (group or full gallery). The aesthetic component uses
+     * absolute scores (LAION and NIMA divided by 10 to normalise to 0-1),
+     * while sharpness, pixel count, and bits-per-pixel use percentile
+     * ranking within the set.  Weights and NIMA/LAION blend ratio come
+     * from the backend configuration (``/api/config``).
      *
      * @param {Array} images - Array of image objects with aesthetic_laion, aesthetic_nima, laplacian_var, width, height, size
      * @returns {Map<string, number>} Map of image ID to quality score [0..1]
@@ -152,7 +152,6 @@ AppState.images = (function() {
     function _computeQualityScores(images) {
         const n = images.length;
         if (n === 0) return new Map();
-        if (n === 1) return new Map([[images[0].id, 0.5]]);
 
         // Read quality config (weights + NIMA/LAION blend alpha)
         const qc = App.getQualityConfig();
@@ -162,27 +161,17 @@ AppState.images = (function() {
         const wB = qc.weightBpp;
         const alpha = qc.alpha;
 
-        // Blend NIMA and LAION into a single aesthetic raw value.
-        // NIMA scores are in [1, 10] while LAION scores are unbounded
-        // (~1.5-8 typical), so we percentile-rank them independently before
-        // blending.  If no images have NIMA scores, fall back to LAION only.
+        // Aesthetic: absolute scores normalised to [0..1] by dividing by 10.
+        // Both LAION and NIMA output on a 0-10 scale, so /10 gives a
+        // meaningful absolute value (not a relative percentile).  When both
+        // are available, blend with alpha (NIMA weight) and (1-alpha) (LAION).
         const hasNima = images.some(i => i.aesthetic_nima != null);
-
-        let aestheticRaw;
-        if (hasNima) {
-            // Percentile-rank each signal independently, then blend
-            const laionRanks = _percentileRanks(images.map(i => i.aesthetic_laion ?? 0));
-            const nimaRanks = _percentileRanks(images.map(i => i.aesthetic_nima ?? 0));
-            aestheticRaw = laionRanks.map((lr, idx) => {
-                // If this specific image lacks a NIMA score, use LAION only
-                if (images[idx].aesthetic_nima == null) return lr;
-                return alpha * nimaRanks[idx] + (1 - alpha) * lr;
-            });
-            // Re-rank the blended values so they're on the same [0..1] scale
-            aestheticRaw = _percentileRanks(aestheticRaw);
-        } else {
-            aestheticRaw = _percentileRanks(images.map(i => i.aesthetic_laion ?? 0));
-        }
+        const aestheticRaw = images.map(i => {
+            const laion = (i.aesthetic_laion ?? 0) / 10;
+            if (!hasNima || i.aesthetic_nima == null) return laion;
+            const nima = i.aesthetic_nima / 10;
+            return alpha * nima + (1 - alpha) * laion;
+        });
 
         // Other components — percentile-ranked
         const S = _percentileRanks(images.map(i => Math.log1p(i.laplacian_var || 0)));

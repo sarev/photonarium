@@ -413,7 +413,7 @@ When you open a group in the Gallery, images are automatically sorted by **Quali
 - **Resolution** (15%) - total pixel count (higher resolution = better).
 - **Compression quality** (5%) - bits per pixel, which favours less-compressed originals over heavily compressed copies.
 
-Each factor is ranked within the group (percentile), so the scores are always relative - a "good" score in one group doesn't necessarily equal the same absolute quality as in another.
+The aesthetic component uses the raw model scores (divided by 10 to normalise to 0-1), so a score of 60% reflects a genuine 6/10 from the models rather than a relative ranking. Sharpness, resolution, and compression quality are percentile-ranked within the current image set, since they have no natural absolute scale.
 
 These weights can be adjusted in `photonarium.yml` to suit your preferences:
 

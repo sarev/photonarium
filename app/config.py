@@ -405,7 +405,7 @@ CONFIG_SCHEMA: list[tuple[str, list[tuple[str, list[str]]]]] = [
                     'frontend. They are applied at sort time and do not affect stored data.',
                     '',
                     'Component weights (should sum to ~1.0):',
-                    '  aesthetic - blended NIMA+LAION aesthetic score (percentile rank)',
+                    '  aesthetic - blended NIMA+LAION score (absolute, normalised to 0-1)',
                     '  sharpness - log Laplacian variance (percentile rank)',
                     '  pixels    - total pixel count (percentile rank)',
                     '  bpp       - bits per pixel (percentile rank)',
@@ -418,7 +418,7 @@ CONFIG_SCHEMA: list[tuple[str, list[tuple[str, list[str]]]]] = [
                 'quality_alpha',
                 [
                     'Blend ratio for NIMA vs LAION aesthetic scores.',
-                    'A = alpha * NIMA_normalised + (1 - alpha) * LAION',
+                    'A = alpha * (NIMA / 10) + (1 - alpha) * (LAION / 10)',
                     'Set to 0.0 to use LAION only, 1.0 for NIMA only.',
                     'Range: 0.0-1.0',
                 ],
