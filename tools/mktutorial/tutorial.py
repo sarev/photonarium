@@ -183,6 +183,17 @@ def setup_step(key):
 # =========================================================================
 
 
+def park_mouse(page):
+    """Move the mouse to a neutral location to avoid stray hover highlights.
+
+    Parks at the bottom-left corner of the viewport -- away from the toolbar
+    (top), thumbnails (centre), and info panel (right).  Called automatically
+    before each screenshot.  Steps that need a visible hover state (e.g.
+    revealing overlay buttons) should set ``ctx['_keep_hover'] = True``.
+    """
+    page.mouse.move(2, VIEWPORT['height'] - 2)
+
+
 def wait_for_thumbnails(page, selector='.gallery-item img[src]', count=1):
     """Wait until at least `count` thumbnail images have loaded."""
     page.wait_for_selector(selector, timeout=5000)
@@ -890,6 +901,7 @@ def step_custom_groups_adding_photos(page, ctx):
     first_item.hover()
     page.wait_for_timeout(300)
     highlight_element(page, '.gallery-item-group-btn', color='rgba(206, 147, 216, 0.6)', width='2px')
+    ctx['_keep_hover'] = True
 
 
 @step('the-group-picker')
@@ -1155,6 +1167,7 @@ def step_faces_the_ignore_control(page, ctx):
         color='rgba(255, 180, 0, 0.6)',
         width='3px',
     )
+    ctx['_keep_hover'] = True
 
 
 @step('ignoring')
@@ -1475,6 +1488,7 @@ def step_tagging_ignoring(page, ctx):
     unknown = page.locator('.face-box.unknown').first
     unknown.hover()
     page.wait_for_timeout(500)
+    ctx['_keep_hover'] = True
 
 
 # =========================================================================
@@ -2061,6 +2075,13 @@ def main():
                 try:
                     step_def['action'](page, ctx)
                     page.wait_for_timeout(200)
+
+                    # Park the mouse in a neutral area so toolbar buttons
+                    # don't show misleading hover highlights.  Steps that
+                    # need a visible hover state set _keep_hover in ctx.
+                    if not ctx.pop('_keep_hover', False):
+                        park_mouse(page)
+                        page.wait_for_timeout(100)
 
                     # Screenshot first, THEN remove highlights so they
                     # appear in the screenshot but don't leak to next step
