@@ -1,5 +1,37 @@
 # Release Notes
 
+## v1.1.0-beta.10
+
+### Toolbar Colour Overhaul
+
+The toolbar has been visually refreshed with meaningful colour cues throughout:
+
+- **Always-visible navigation:** Screen buttons (Gallery, Database, Groups, Search, Faces) are now always shown. The current screen's button displays in its signature colour (blue, pink, purple, teal, green) rather than being hidden entirely.
+- **Active toggle colours:** Sort buttons highlight yellow when active, face filter buttons highlight green, and the search button highlights teal -- making it easy to see which toggles are on at a glance.
+- **Hover colours:** Most toolbar buttons now show a themed background tint on hover -- blue for slideshow/shuffle/fullscreen, red for trash/delete, purple for group new/rename, teal for refine/clear-filter, indigo for selection controls, and orange for rotation.
+- **Group filter repositioned:** The group name filter input has been moved next to the Refine button, starts narrower, and smoothly expands on focus.
+
+### Clearer Database Screen Labels
+
+The Database screen now distinguishes between its two modes of adding images more clearly:
+
+- **Import Images** -- "copies photos into your catalogue, organised by date"
+- **Local Indexed Folders** -- "photos stay where they are, nothing is moved or copied"
+
+Button labels updated to match: "Add Local Folder" and "Rescan Local Folders". Short explanatory hints appear next to each section heading.
+
+### Other Improvements
+
+- **Version in toolbar:** The Database screen now shows the Photonarium version (git tag or short commit hash with date) next to the logo.
+- **Friendlier status labels:** The processing queue label "Embedding" has been renamed to "Classifying" -- less technical for end users.
+- **Tutorial updated:** Screenshot script updated for all beta 9 changes (slideshow/shuffle/trash buttons, Refine groups, import labels, Quick Match percentages). Mouse cursor is now parked in a neutral location before each screenshot to prevent misleading hover highlights on toolbar buttons.
+
+### Bug Fixes
+
+- **Fullscreen hover invisible on black:** Hover tint on fullscreen viewer controls (buttons, navigation arrows) was darkening from black to darker black -- invisible when viewing a portrait image on a landscape display with black bars. Now uses a white tint that visibly lightens buttons regardless of backdrop.
+- **Search button falsely highlighted:** The Search screen navigation button showed a teal "active" highlight whenever a filter was active, even when viewing a different screen. This made it look like two screens were selected simultaneously. The Clear Filter button already indicates an active filter, so the redundant Search button highlight has been removed.
+- **Preflight dedup docs corrected:** Documentation incorrectly stated that client-side import dedup uses SHA-256 checksums. It actually uses file basename and size pairs for the preflight check (the backend's ImportWorker still uses SHA-256 as a safety net).
+
 ## v1.0.9-beta.9
 
 ### Import into Catalogue
