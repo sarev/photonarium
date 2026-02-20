@@ -47,9 +47,9 @@
     --color-overlay-text: #ffffff;
     --color-overlay-gradient: linear-gradient(transparent, rgba(0, 0, 0, 0.7));
     --color-overlay-button-bg: rgba(0, 0, 0, 0.5);
-    --color-overlay-button-hover: rgba(0, 0, 0, 0.8);
+    --color-overlay-button-hover: rgba(255, 255, 255, 0.2);
     --color-overlay-nav-bg: rgba(0, 0, 0, 0.4);
-    --color-overlay-nav-hover: rgba(0, 0, 0, 0.7);
+    --color-overlay-nav-hover: rgba(255, 255, 255, 0.15);
     --color-overlay-toast-bg: rgba(0, 0, 0, 0.7);
     --color-overlay-toast-action: rgba(255, 255, 255, 0.2);
     --color-overlay-toast-action-border: rgba(255, 255, 255, 0.4);
