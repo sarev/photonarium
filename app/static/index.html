@@ -216,6 +216,7 @@
                     <button id="btn-dup-refine" class="toolbar-btn" title="Refine groups">
                         <span class="icon" data-icon="filter_list">&#x25BC;</span>
                     </button>
+                    <input type="text" id="dup-group-filter" class="semantic-query-input dup-group-filter named-group-control custom-group-control" placeholder="Filter..." title="Filter groups by name" hidden>
                     <div class="toolbar-separator custom-group-control" hidden></div>
                     <button id="btn-group-new" class="toolbar-btn custom-group-control" title="Create new group" hidden>
                         <span class="icon" data-icon="create_new_folder">+</span>
@@ -226,7 +227,6 @@
                     <button id="btn-group-delete" class="toolbar-btn custom-group-control" title="Remove selected group (doesn't touch the images!)" hidden disabled>
                         <span class="icon" data-icon="delete">&#x1F5D1;</span>
                     </button>
-                    <input type="text" id="dup-group-filter" class="semantic-query-input named-group-control custom-group-control" placeholder="Filter groups by name..." hidden>
                 </div>
 
                 <!-- Database controls (visible when data-screen="database") -->
@@ -262,12 +262,9 @@
 
             <!-- Center section: navigation and mode buttons -->
             <div class="toolbar-center">
-                <!-- Back to gallery button (visible on database, search, duplicates, faces screens) -->
-                <div class="toolbar-group" data-for-screen="database search duplicates faces">
-                    <button id="btn-back-gallery" class="toolbar-btn" title="Back to gallery">
-                        <span class="icon" data-icon="photo_library">🏞️</span>
-                    </button>
-                </div>
+                <button id="btn-back-gallery" class="toolbar-btn" title="Gallery (Ctrl+G)">
+                    <span class="icon" data-icon="photo_library">🏞️</span>
+                </button>
                 <button id="btn-database" class="toolbar-btn" title="Import and manage (Ctrl+M)">
                     <span class="icon" data-icon="cloud_upload">📥</span>
                 </button>

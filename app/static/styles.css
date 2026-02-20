@@ -19,7 +19,7 @@
      Red     → Unknown faces, danger/delete actions
      Orange  → Image rotation, focused/editing face
      Amber   → Ratings, preferred/starred items
-     Blue    → Thumbnail size controls, dimensions in info panel
+     Blue    → Gallery screen, thumbnail size controls, dimensions in info panel
      Yellow  → Sort controls
      Indigo  → Selection controls
      Brown   → Theme toggle
@@ -520,6 +520,34 @@ a:hover {
     color: var(--color-accent);
 }
 
+/* Active toggle buttons use their feature's signature colour */
+#btn-sort-date.active,
+#btn-sort-rating.active,
+#btn-sort-content.active,
+#btn-sort-people.active,
+#btn-sort-quality.active,
+#btn-sort-direction.active,
+#btn-dup-sort-size.active,
+#btn-dup-sort-alpha.active,
+#btn-dup-sort-semantic.active,
+#btn-dup-sort-people.active,
+#btn-faces-sort-direction.active {
+    background-color: var(--color-pastel-yellow-bg);
+    color: var(--color-pastel-yellow-fg);
+}
+
+#btn-faces-only-unknowns.active,
+#btn-faces-focus-person.active,
+#btn-picker-hide-locked.active {
+    background-color: var(--color-pastel-green-bg);
+    color: var(--color-pastel-green-fg);
+}
+
+#btn-filter.active {
+    background-color: var(--color-pastel-teal-bg);
+    color: var(--color-pastel-teal-fg);
+}
+
 /* Clear filter button shows persistent background when filter is active */
 #btn-clear-filter:not(:disabled) {
     background-color: var(--color-pastel-teal-bg);
@@ -530,11 +558,32 @@ a:hover {
     cursor: not-allowed;
 }
 
+/* Current-screen nav button: "you are here" with the screen's signature color */
+.toolbar-btn-current:disabled {
+    opacity: 1;
+    cursor: default;
+}
+#btn-back-gallery.toolbar-btn-current  { color: var(--color-pastel-blue-fg); }
+#btn-database.toolbar-btn-current      { color: var(--color-pastel-pink-fg); }
+#btn-duplicates.toolbar-btn-current    { color: var(--color-pastel-purple-fg); }
+#btn-filter.toolbar-btn-current        { color: var(--color-pastel-teal-fg); }
+#btn-faces.toolbar-btn-current         { color: var(--color-pastel-green-fg); }
+
 @media (pointer: fine) {
     .toolbar-btn:disabled:hover {
         background: transparent;
         color: var(--color-text-secondary);
     }
+
+    /* Current-screen buttons keep their color on hover */
+    .toolbar-btn-current:disabled:hover {
+        background: transparent;
+    }
+    #btn-back-gallery.toolbar-btn-current:hover  { color: var(--color-pastel-blue-fg); }
+    #btn-database.toolbar-btn-current:hover      { color: var(--color-pastel-pink-fg); }
+    #btn-duplicates.toolbar-btn-current:hover     { color: var(--color-pastel-purple-fg); }
+    #btn-filter.toolbar-btn-current:hover         { color: var(--color-pastel-teal-fg); }
+    #btn-faces.toolbar-btn-current:hover          { color: var(--color-pastel-green-fg); }
 }
 
 .toolbar-btn .material-symbols-outlined {
@@ -579,7 +628,11 @@ a:hover {
         color: var(--color-pastel-blue-fg);
     }
 
-    #btn-fullscreen:hover,
+    #btn-fullscreen:hover {
+        background-color: var(--color-pastel-blue-bg);
+        color: var(--color-pastel-blue-fg);
+    }
+
     #btn-reveal-folder:hover {
         background-color: var(--color-pastel-green-bg);
         color: var(--color-pastel-green-fg);
@@ -591,14 +644,37 @@ a:hover {
         color: var(--color-pastel-orange-fg);
     }
 
+    #btn-trash:hover {
+        background-color: var(--color-face-unknown-light);
+        color: var(--color-face-unknown);
+    }
+
+    #btn-slideshow:hover,
+    #btn-shuffle:hover {
+        background-color: var(--color-pastel-blue-bg);
+        color: var(--color-pastel-blue-fg);
+    }
+
     #btn-database:hover {
         background-color: var(--color-pastel-pink-bg);
         color: var(--color-pastel-pink-fg);
     }
 
-    #btn-duplicates:hover {
+    #btn-duplicates:hover,
+    #btn-group-new:hover,
+    #btn-group-rename:hover {
         background-color: var(--color-pastel-purple-bg);
         color: var(--color-pastel-purple-fg);
+    }
+
+    #btn-group-delete:hover {
+        background-color: var(--color-face-unknown-light);
+        color: var(--color-face-unknown);
+    }
+
+    #btn-dup-refine:hover {
+        background-color: var(--color-pastel-teal-bg);
+        color: var(--color-pastel-teal-fg);
     }
 
     #btn-filter:hover {
@@ -625,8 +701,10 @@ a:hover {
     #btn-sort-rating:hover,
     #btn-sort-content:hover,
     #btn-sort-people:hover,
+    #btn-sort-quality:hover,
     #btn-sort-direction:hover,
     #btn-dup-sort-size:hover,
+    #btn-dup-sort-alpha:hover,
     #btn-dup-sort-semantic:hover,
     #btn-dup-sort-people:hover,
     #btn-faces-sort-direction:hover {
@@ -635,9 +713,15 @@ a:hover {
     }
 
     #btn-select-all:hover,
-    #btn-clear-selection:hover {
+    #btn-clear-selection:hover,
+    #btn-remove-from-group:hover {
         background-color: var(--color-pastel-indigo-bg);
         color: var(--color-pastel-indigo-fg);
+    }
+
+    #btn-clear-filter:hover {
+        background-color: var(--color-pastel-teal-bg);
+        color: var(--color-pastel-teal-fg);
     }
 
     #btn-theme:hover {
@@ -646,10 +730,14 @@ a:hover {
     }
 
     #btn-prev-group:hover,
-    #btn-next-group:hover,
-    #btn-back-gallery:hover {
+    #btn-next-group:hover {
         background-color: var(--color-pastel-grey-bg);
         color: var(--color-pastel-grey-fg);
+    }
+
+    #btn-back-gallery:hover {
+        background-color: var(--color-pastel-blue-bg);
+        color: var(--color-pastel-blue-fg);
     }
 }
 
@@ -717,6 +805,16 @@ a:hover {
 
 .semantic-query-input::placeholder {
     color: var(--color-text-muted);
+}
+
+/* Group filter input -- narrower at rest, expands on focus */
+.dup-group-filter {
+    width: 100px;
+    transition: border-color 0.15s, background-color 0.15s, opacity 0.15s, width 0.2s ease;
+}
+
+.dup-group-filter:focus {
+    width: 180px;
 }
 
 /* Min group size control */

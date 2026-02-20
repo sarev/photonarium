@@ -712,9 +712,9 @@ const App = {
             group.hidden = !forScreens.includes(activeScreen);
         }
 
-        // Hide navigation buttons for the current screen
-        // (no point showing a button to go to the screen you're already on)
+        // Shade and disable the navigation button for the current screen
         const screenButtons = {
+            'gallery': 'btn-back-gallery',
             'database': 'btn-database',
             'duplicates': 'btn-duplicates',
             'search': 'btn-filter',
@@ -724,7 +724,9 @@ const App = {
         for (const [screen, btnId] of Object.entries(screenButtons)) {
             const btn = document.getElementById(btnId);
             if (btn) {
-                btn.hidden = (activeScreen === screen);
+                const isCurrent = activeScreen === screen;
+                btn.disabled = isCurrent;
+                btn.classList.toggle('toolbar-btn-current', isCurrent);
             }
         }
 
