@@ -455,7 +455,7 @@
             <div class="database-container">
                 <!-- Import section — visible only when catalogue_dir is configured -->
                 <section id="import-section" class="database-section" hidden>
-                    <h2>Import Images</h2>
+                    <h2>Import Images <small class="section-hint">copies photos into your catalogue, organised by date</small></h2>
                     <div id="import-drop-zone" class="import-drop-zone" title="Drag photos or folders here to copy them into your catalogue">
                         <span class="icon import-drop-icon" data-icon="cloud_upload">⬆</span>
                         <p class="import-drop-text desktop-only">Drag and drop images or folders here to import</p>
@@ -484,11 +484,11 @@
                 </section>
 
                 <section class="database-section">
-                    <h2>Image Source Folders</h2>
+                    <h2>Local Indexed Folders <small class="section-hint">photos stay where they are, nothing is moved or copied</small></h2>
                     <div class="folder-controls">
                         <button id="btn-add-folder" class="action-btn desktop-only">
                             <span class="icon" data-icon="create_new_folder">📁</span>
-                            Add Folder
+                            Add Local Folder
                         </button>
                     </div>
                     <ul id="folder-list" class="folder-list">
@@ -537,7 +537,7 @@
                     <div class="scan-controls">
                         <button id="btn-rescan" class="action-btn">
                             <span class="icon" data-icon="refresh">↻</span>
-                            Rescan All Folders
+                            Rescan Local Folders
                         </button>
                         <button id="btn-reveal-config" class="action-btn" title="Open the settings editor">
                             <span class="icon" data-icon="settings">⚙</span>

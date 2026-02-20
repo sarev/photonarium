@@ -2838,6 +2838,13 @@ a:hover {
     color: var(--color-text-pink);
 }
 
+.section-hint {
+    font-size: 0.75rem;
+    font-weight: 400;
+    color: var(--color-text-tertiary);
+    margin-left: 0.5rem;
+}
+
 .folder-controls {
     margin-bottom: 1rem;
 }
