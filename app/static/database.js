@@ -942,6 +942,13 @@ const Database = {
                 this._els.importSection.hidden = false;
             }
 
+            // Show version string in the toolbar (Database screen only)
+            const version = response?.data?.version;
+            const versionEl = App.$('toolbar-version');
+            if (version && versionEl) {
+                versionEl.textContent = version;
+            }
+
             // Set the file picker's accept filter from the backend's
             // image_extensions list so RAW formats are included too.
             const exts = response?.data?.image_extensions;

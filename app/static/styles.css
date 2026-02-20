@@ -475,6 +475,15 @@ a:hover {
     display: block;
 }
 
+/* Version label — shown next to logo on Database screen only */
+.toolbar-version {
+    font-size: 0.7rem;
+    color: var(--color-text-tertiary);
+    white-space: nowrap;
+    align-self: center;
+    margin-left: 0.25rem;
+}
+
 /* Toolbar buttons */
 .toolbar-btn {
     display: inline-flex;

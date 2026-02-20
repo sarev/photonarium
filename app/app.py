@@ -169,6 +169,46 @@ _config: 'Config | None' = None
 # Used by /api/config/reveal to locate the file on disk.
 _config_file_path: str | None = None
 
+# Application version — extracted from git at startup.
+# Format: "Photonarium: <tag> (<date>)" or "Photonarium: <hash> (<date>)".
+_app_version: str = ''
+
+
+def _get_version_from_git() -> str:
+    """Build a version string from git.
+
+    If HEAD is exactly on a tag, uses the tag name.  Otherwise uses the
+    short commit hash.  The commit date is appended in parentheses.
+
+    Returns:
+        Formatted string like ``Photonarium: v1.0.9-beta.9 (2026-02-18)``
+        or ``Photonarium: a1b2c3d (2026-02-18)``, or empty on failure.
+    """
+    try:
+        repo_root = Path(__file__).resolve().parent.parent
+
+        def _git(*args: str) -> str:
+            r = subprocess.run(
+                ['git', *args],
+                cwd=repo_root,
+                capture_output=True,
+                text=True,
+                timeout=5,
+            )
+            return r.stdout.strip() if r.returncode == 0 else ''
+
+        # Try exact tag first, fall back to short hash
+        label = _git('describe', '--tags', '--exact-match') or _git('rev-parse', '--short', 'HEAD')
+        if not label:
+            return ''
+
+        # Commit date in YYYY-MM-DD format
+        date = _git('log', '-1', '--format=%cd', '--date=short')
+
+        return f'Photonarium: {label} ({date})' if date else f'Photonarium: {label}'
+    except Exception:
+        return ''
+
 
 # =============================================================================
 # Database Instance
@@ -1367,6 +1407,7 @@ def get_config():
             'trash_dir': str(db.trash_dir),
             'catalogue_dir': str(db.catalogue_dir),
             'image_extensions': sorted(config.image_extensions),
+            'version': _app_version,
         }
     )
 
@@ -4200,6 +4241,9 @@ if __name__ == '__main__':
         logger.info(f'Config initialised: {_resolved_cfg_path}')
         logger.info(f'  data_dir = {_init_data_dir}')
         sys.exit(0)
+
+    # Extract version from git tag (before any long-running operations)
+    _app_version = _get_version_from_git()
 
     # Normal startup: load config (creates default if needed)
     _config = load_config(
