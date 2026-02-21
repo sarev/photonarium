@@ -26,6 +26,10 @@ PHOTOS_OVERLAY := docker/docker-compose.photos.yml
 # Tutorial examples for testing
 TEST_PHOTOS := $(CURDIR)/tools/mktutorial/examples
 
+# HuggingFace token for faster model downloads (optional)
+# Set HF_TOKEN in your environment or ~/.cache/huggingface/token
+HF_TOKEN_ARG := $(if $(HF_TOKEN),--build-arg HF_TOKEN=$(HF_TOKEN),)
+
 # Colours for help output (disabled if not a terminal)
 CYAN  := $(shell tput setaf 6 2>/dev/null || echo "")
 RESET := $(shell tput sgr0 2>/dev/null || echo "")
@@ -40,6 +44,7 @@ RESET := $(shell tput sgr0 2>/dev/null || echo "")
 build:  ## Build CPU-only image (default, ~3.5 GB)
 	docker build \
 		--build-arg TORCH_INDEX=$(TORCH_CPU) \
+		$(HF_TOKEN_ARG) \
 		-t $(IMAGE_NAME):latest \
 		-t $(IMAGE_NAME):cpu \
 		-t $(IMAGE_NAME):$(VERSION) \
@@ -48,6 +53,7 @@ build:  ## Build CPU-only image (default, ~3.5 GB)
 build-cu118:  ## Build CUDA 11.8 image (GTX 10xx, RTX 20xx)
 	docker build \
 		--build-arg TORCH_INDEX=$(TORCH_CU118) \
+		$(HF_TOKEN_ARG) \
 		-t $(IMAGE_NAME):cu118 \
 		-t $(IMAGE_NAME):$(VERSION)-cu118 \
 		-f docker/Dockerfile .
@@ -55,6 +61,7 @@ build-cu118:  ## Build CUDA 11.8 image (GTX 10xx, RTX 20xx)
 build-cu126:  ## Build CUDA 12.6 image (RTX 30xx, 40xx)
 	docker build \
 		--build-arg TORCH_INDEX=$(TORCH_CU126) \
+		$(HF_TOKEN_ARG) \
 		-t $(IMAGE_NAME):cu126 \
 		-t $(IMAGE_NAME):$(VERSION)-cu126 \
 		-f docker/Dockerfile .
@@ -62,6 +69,7 @@ build-cu126:  ## Build CUDA 12.6 image (RTX 30xx, 40xx)
 build-cu128:  ## Build CUDA 12.8 image (RTX 50xx / Blackwell) [speculative]
 	docker build \
 		--build-arg TORCH_INDEX=$(TORCH_CU128) \
+		$(HF_TOKEN_ARG) \
 		-t $(IMAGE_NAME):cu128 \
 		-t $(IMAGE_NAME):$(VERSION)-cu128 \
 		-f docker/Dockerfile .
@@ -70,6 +78,7 @@ build-intel:  ## Build Intel iGPU image (IPEX for Celeron/Atom NAS)
 	docker build \
 		--build-arg TORCH_INDEX=$(TORCH_CPU) \
 		--build-arg INSTALL_IPEX=1 \
+		$(HF_TOKEN_ARG) \
 		-t $(IMAGE_NAME):intel \
 		-t $(IMAGE_NAME):$(VERSION)-intel \
 		-f docker/Dockerfile .

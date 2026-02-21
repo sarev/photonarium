@@ -14,6 +14,7 @@ FROM python:3.12-slim AS base
 # Build arguments
 ARG TORCH_INDEX=https://download.pytorch.org/whl/cpu
 ARG INSTALL_IPEX=0
+ARG HF_TOKEN=""
 
 # System dependencies for opencv-headless, Pillow, rawpy, and gosu
 RUN apt-get update && apt-get install -y --no-install-recommends \
@@ -51,8 +52,10 @@ COPY download_models.py .
 # Download all ML models into a staging directory.
 # On first run, entrypoint.sh copies them to /config (the user's volume).
 # This includes: OpenCLIP, BLIP, LAION aesthetic head, NIMA weights.
+# HF_TOKEN is optional but speeds up downloads and avoids rate limits.
+ARG HF_TOKEN
 RUN mkdir -p /defaults && \
-    HF_HUB_OFFLINE=0 python download_models.py --data-dir /defaults
+    HF_HUB_OFFLINE=0 HF_TOKEN="${HF_TOKEN}" python download_models.py --data-dir /defaults
 
 # Copy entrypoint script
 COPY docker/entrypoint.sh /entrypoint.sh
