@@ -53,9 +53,11 @@ COPY download_models.py .
 # On first run, entrypoint.sh copies them to /config (the user's volume).
 # This includes: OpenCLIP, BLIP, LAION aesthetic head, NIMA weights.
 # HF_TOKEN is optional but speeds up downloads and avoids rate limits.
+# Safety: remove any token files that HF might create (in same layer to prevent leaks).
 ARG HF_TOKEN
 RUN mkdir -p /defaults && \
-    HF_HUB_OFFLINE=0 HF_TOKEN="${HF_TOKEN}" python download_models.py --data-dir /defaults
+    HF_HUB_OFFLINE=0 HF_TOKEN="${HF_TOKEN}" python download_models.py --data-dir /defaults && \
+    rm -f /root/.cache/huggingface/token /defaults/.cache/huggingface/token 2>/dev/null || true
 
 # Copy entrypoint script
 COPY docker/entrypoint.sh /entrypoint.sh
