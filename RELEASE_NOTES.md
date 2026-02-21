@@ -1,5 +1,47 @@
 # Release Notes
 
+## v1.1.2-beta.12
+
+### Docker Build Improvements
+
+**Layer optimization for faster rebuilds:**
+
+The Dockerfile has been restructured to place ML models (~2.5GB) in the first layer, independent of pip installs and application code. This dramatically speeds up rebuilds during development:
+
+- **Before:** Any code change triggered a full rebuild including model re-processing (~10+ minutes).
+- **After:** Code changes only rebuild the final ~3MB layer (~seconds). The model layer stays cached.
+
+**New build workflow:**
+
+```bash
+# Download models once (stores in docker/models/)
+make download-models
+
+# Build images (models are COPYed, not downloaded)
+make build
+```
+
+The `download-models` target runs `download_models.py --standalone`, which uses default model settings without requiring a running app. Build targets now depend on `check-models` and fail with a helpful error if models haven't been pre-downloaded.
+
+**Layer structure (bottom to top):**
+
+| Layer | Contents | Size | Rebuilds when... |
+|-------|----------|------|------------------|
+| 1 | ML models (HuggingFace + PyTorch) | ~2.6GB | Model defaults change |
+| 2 | PyTorch | 1-4GB | CUDA variant changes |
+| 3 | pip requirements | ~500MB | requirements.txt changes |
+| 4 | Application code | ~3MB | Any code change |
+
+**FaceNet models now pre-downloaded:**
+
+The FaceNet face detection (MTCNN) and recognition (InceptionResnetV1) models are now included in the Docker image. Previously, these ~107MB models were downloaded on first container start, requiring internet access. Now all models are baked in and the container works fully offline from the first run.
+
+### Documentation
+
+- **NAS photo syncing guide:** README now explains how to sync photos to a NAS using vendor tools (Synology Cloud Sync, QNAP Qsync, etc.) before indexing with Photonarium.
+- **BACKGROUND.md updated:** Added Docker/NAS deployment information and negative semantic search as a differentiator.
+- **Building from Source:** README now documents the `make download-models` prerequisite step.
+
 ## v1.1.1-beta.11
 
 ### Docker Support

@@ -835,6 +835,10 @@ If you want to build the image yourself (developers, custom modifications):
 git clone https://github.com/7thsw/photonarium.git
 cd photonarium
 
+# Download ML models (run once, requires ~2.5GB disk space)
+# This pre-downloads models so they can be baked into the image
+make download-models
+
 # Build CPU image (x86_64)
 make build
 
@@ -848,11 +852,13 @@ make build-arm64
 make all-images
 ```
 
+The `make download-models` step downloads all ML models (OpenCLIP, BLIP, FaceNet, LAION, NIMA) to `docker/models/` so they can be copied into the Docker image during build. This only needs to be run once - subsequent builds reuse the cached models. The build will fail with an error if models haven't been downloaded.
+
 See the Makefile for all available build targets. Note that building ARM64 images on x86_64 uses QEMU emulation and is slow.
 
 ---
 
-# Manual Installation
+# Direct Installation
 
 If you prefer to run Photonarium directly on your system without Docker, follow these instructions.
 
@@ -905,7 +911,7 @@ chmod +x install.sh
 
 The `chmod` command only needs to be run once (it marks the script as executable).
 
-## Manual installation
+## Manual installation detail
 
 If you prefer to install manually, or the installer script doesn't suit your setup, follow these steps.
 

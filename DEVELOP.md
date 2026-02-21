@@ -349,9 +349,34 @@ both GPU and CPU. Standalone implementation using only torch and torchvision
 
 ### `download_models.py` - Model Downloader
 
-Standalone script that queries `app/app.py --list-models` for the current
-configuration, then downloads the required OpenCLIP and BLIP/BLIP-2 models from
-HuggingFace. Run before first use or after changing model settings.
+Standalone script that downloads the required ML models (OpenCLIP, BLIP/BLIP-2,
+FaceNet, LAION aesthetic head, NIMA) from HuggingFace and other sources. Run
+before first use or after changing model settings.
+
+**Two modes:**
+
+- **Standard mode:** Queries `app/app.py --list-models` for the current
+  configuration, then downloads the models specified in `photonarium.yml`.
+- **Standalone mode (`--standalone`):** Uses hardcoded default model settings
+  without querying app.py. Used for Docker builds where the app isn't available
+  yet. The defaults (`ViT-B-32`, `blip-image-captioning-large`) are defined as
+  constants at the top of the script and must be kept in sync with
+  `app/config.py` if changed.
+
+**Docker build workflow:**
+
+```bash
+# Pre-download models to docker/models/ (run once)
+HF_HOME=docker/models/huggingface \
+TORCH_HOME=docker/models/torch \
+python download_models.py --standalone --data-dir docker/models
+
+# Build image (models are COPYed from docker/models/)
+make build
+```
+
+This decouples the model layer from pip installs and app code, so code changes
+don't trigger multi-GB model re-downloads during Docker builds.
 
 ---
 
