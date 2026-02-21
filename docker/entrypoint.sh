@@ -28,13 +28,24 @@ useradd -o -u "$PUID" -g "$PGID" -d /config -s /bin/bash photonarium 2>/dev/null
 # -----------------------------------------------------------------------------
 # First-run setup: copy models from image to /config volume
 # -----------------------------------------------------------------------------
-# Models are baked into /defaults during docker build. On first run, we copy
-# them to /config so they persist across container updates. Uses cp -n
-# (no-clobber) so user-replaced models aren't overwritten.
+# Models are baked into the image during docker build:
+#   - /defaults/ contains LAION aesthetic head and NIMA weights
+#   - /root/.cache/huggingface/ contains OpenCLIP and BLIP models
+#
+# On first run, we copy them to /config so they persist across container
+# updates. Uses cp -n (no-clobber) so user-replaced models aren't overwritten.
 
 if [ -d "/defaults" ] && [ "$(ls -A /defaults 2>/dev/null)" ]; then
     echo "Copying ML models to /config (first run only)..."
     cp -rn /defaults/. /config/ 2>/dev/null || true
+fi
+
+# Copy HuggingFace cache (OpenCLIP, BLIP models) to /config/.cache/huggingface/
+# The app runs as photonarium user with HOME=/config, so HF looks here.
+if [ -d "/root/.cache/huggingface" ] && [ ! -d "/config/.cache/huggingface" ]; then
+    echo "Copying HuggingFace models to /config/.cache/ (first run only)..."
+    mkdir -p /config/.cache
+    cp -r /root/.cache/huggingface /config/.cache/
 fi
 
 # -----------------------------------------------------------------------------
