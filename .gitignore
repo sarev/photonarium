@@ -17,3 +17,4 @@ tools/mktutorial/__pycache__/
 docker/.env
 docker/config/
 docker/catalogue/
+docker/models/

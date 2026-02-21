@@ -28,9 +28,8 @@ PHOTOS_OVERLAY := docker/docker-compose.photos.yml
 # Tutorial examples for testing
 TEST_PHOTOS := $(CURDIR)/tools/mktutorial/examples
 
-# HuggingFace token for faster model downloads (optional)
-# Set HF_TOKEN in your environment or ~/.cache/huggingface/token
-HF_TOKEN_ARG := $(if $(HF_TOKEN),--build-arg HF_TOKEN=$(HF_TOKEN),)
+# Model cache directory (must exist before building)
+MODELS_DIR := docker/models
 
 # Colours for help output (disabled if not a terminal)
 CYAN  := $(shell tput setaf 6 2>/dev/null || echo "")
@@ -42,63 +41,80 @@ DOCKER_REPO := 7thsw/photonarium
 # Variant tags we publish (excludes versioned tags like v1.1.0-cu126)
 VARIANT_TAGS := latest cpu cu118 cu126 cu128 intel arm64
 
-.PHONY: build build-cu118 build-cu126 build-cu128 build-intel build-arm64 all-images \
+.PHONY: download-models check-models build build-cu118 build-cu126 build-cu128 build-intel build-arm64 all-images \
         use test test-photos up up-photos down logs shell push clean clean-all help
+
+# =============================================================================
+# Model preparation (run once before building images)
+# =============================================================================
+
+download-models:  ## Download ML models to docker/models/ (run once)
+	@echo "Downloading ML models to $(MODELS_DIR)/"
+	@mkdir -p $(MODELS_DIR)
+	HF_HOME=$(MODELS_DIR)/huggingface \
+	TORCH_HOME=$(MODELS_DIR)/torch \
+	python3 download_models.py --standalone --data-dir $(MODELS_DIR)
+	@echo ""
+	@echo "Models downloaded. You can now run 'make build' etc."
+
+# Helper to check models exist before building
+check-models:
+	@if [ ! -f "$(MODELS_DIR)/.laion-aesthetic-head.pth" ]; then \
+		echo "Error: Models not found in $(MODELS_DIR)/"; \
+		echo "Run 'make download-models' first."; \
+		exit 1; \
+	fi
 
 # =============================================================================
 # Build targets
 # =============================================================================
 
-build:  ## Build CPU-only image (default, ~3.5 GB)
+build: check-models  ## Build CPU-only image (default, ~3.5 GB)
 	docker build \
 		--build-arg TORCH_INDEX=$(TORCH_CPU) \
 		--build-arg VERSION=$(VERSION) \
 		--build-arg GIT_COMMIT=$(GIT_COMMIT) \
 		--build-arg BUILD_DATE=$(BUILD_DATE) \
 		--build-arg VARIANT=cpu \
-		$(HF_TOKEN_ARG) \
 		-t $(IMAGE_NAME):latest \
 		-t $(IMAGE_NAME):cpu \
 		-t $(IMAGE_NAME):$(VERSION) \
 		-f docker/Dockerfile .
 
-build-cu118:  ## Build CUDA 11.8 image (GTX 10xx, RTX 20xx)
+build-cu118: check-models  ## Build CUDA 11.8 image (GTX 10xx, RTX 20xx)
 	docker build \
 		--build-arg TORCH_INDEX=$(TORCH_CU118) \
 		--build-arg VERSION=$(VERSION) \
 		--build-arg GIT_COMMIT=$(GIT_COMMIT) \
 		--build-arg BUILD_DATE=$(BUILD_DATE) \
 		--build-arg VARIANT=cu118 \
-		$(HF_TOKEN_ARG) \
 		-t $(IMAGE_NAME):cu118 \
 		-t $(IMAGE_NAME):$(VERSION)-cu118 \
 		-f docker/Dockerfile .
 
-build-cu126:  ## Build CUDA 12.6 image (RTX 30xx, 40xx)
+build-cu126: check-models  ## Build CUDA 12.6 image (RTX 30xx, 40xx)
 	docker build \
 		--build-arg TORCH_INDEX=$(TORCH_CU126) \
 		--build-arg VERSION=$(VERSION) \
 		--build-arg GIT_COMMIT=$(GIT_COMMIT) \
 		--build-arg BUILD_DATE=$(BUILD_DATE) \
 		--build-arg VARIANT=cu126 \
-		$(HF_TOKEN_ARG) \
 		-t $(IMAGE_NAME):cu126 \
 		-t $(IMAGE_NAME):$(VERSION)-cu126 \
 		-f docker/Dockerfile .
 
-build-cu128:  ## Build CUDA 12.8 image (RTX 50xx / Blackwell) [speculative]
+build-cu128: check-models  ## Build CUDA 12.8 image (RTX 50xx / Blackwell) [speculative]
 	docker build \
 		--build-arg TORCH_INDEX=$(TORCH_CU128) \
 		--build-arg VERSION=$(VERSION) \
 		--build-arg GIT_COMMIT=$(GIT_COMMIT) \
 		--build-arg BUILD_DATE=$(BUILD_DATE) \
 		--build-arg VARIANT=cu128 \
-		$(HF_TOKEN_ARG) \
 		-t $(IMAGE_NAME):cu128 \
 		-t $(IMAGE_NAME):$(VERSION)-cu128 \
 		-f docker/Dockerfile .
 
-build-intel:  ## Build Intel iGPU image (IPEX for Celeron/Atom NAS)
+build-intel: check-models  ## Build Intel iGPU image (IPEX for Celeron/Atom NAS)
 	docker build \
 		--build-arg TORCH_INDEX=$(TORCH_CPU) \
 		--build-arg INSTALL_IPEX=1 \
@@ -106,12 +122,11 @@ build-intel:  ## Build Intel iGPU image (IPEX for Celeron/Atom NAS)
 		--build-arg GIT_COMMIT=$(GIT_COMMIT) \
 		--build-arg BUILD_DATE=$(BUILD_DATE) \
 		--build-arg VARIANT=intel \
-		$(HF_TOKEN_ARG) \
 		-t $(IMAGE_NAME):intel \
 		-t $(IMAGE_NAME):$(VERSION)-intel \
 		-f docker/Dockerfile .
 
-build-arm64:  ## Build ARM64 image (Raspberry Pi, Apple Silicon)
+build-arm64: check-models  ## Build ARM64 image (Raspberry Pi, Apple Silicon)
 	docker buildx build \
 		--platform linux/arm64 \
 		--build-arg TORCH_INDEX= \
@@ -119,7 +134,6 @@ build-arm64:  ## Build ARM64 image (Raspberry Pi, Apple Silicon)
 		--build-arg GIT_COMMIT=$(GIT_COMMIT) \
 		--build-arg BUILD_DATE=$(BUILD_DATE) \
 		--build-arg VARIANT=arm64 \
-		$(HF_TOKEN_ARG) \
 		--load \
 		-t $(IMAGE_NAME):arm64 \
 		-t $(IMAGE_NAME):$(VERSION)-arm64 \
@@ -196,8 +210,8 @@ endif
 test:  ## Run container smoke test (health check)
 	@echo "Starting container..."
 	@docker compose -f $(COMPOSE_FILE) up -d
-	@echo "Waiting for startup (10s)..."
-	@sleep 10
+	@echo "Waiting for startup (30s)..."
+	@sleep 30
 	@echo "Checking health endpoint..."
 	@curl -sf http://localhost:5000/api/health && echo " - Health check passed" || \
 		(echo " - Health check FAILED"; docker compose -f $(COMPOSE_FILE) down; exit 1)
@@ -306,6 +320,10 @@ help:  ## Show this help
 	@echo ""
 	@echo "Usage: make [target]"
 	@echo ""
+	@echo "$(CYAN)Setup (run once):$(RESET)"
+	@grep -E '^download-models:.*##' $(MAKEFILE_LIST) | \
+		awk 'BEGIN {FS = ":.*##"}; {printf "  $(CYAN)%-14s$(RESET) %s\n", $$1, $$2}'
+	@echo ""
 	@echo "$(CYAN)Build targets:$(RESET)"
 	@grep -E '^build.*:.*##' $(MAKEFILE_LIST) | \
 		awk 'BEGIN {FS = ":.*##"}; {printf "  $(CYAN)%-14s$(RESET) %s\n", $$1, $$2}'
@@ -326,12 +344,14 @@ help:  ## Show this help
 		awk 'BEGIN {FS = ":.*##"}; {printf "  $(CYAN)%-14s$(RESET) %s\n", $$1, $$2}'
 	@echo ""
 	@echo "Examples:"
-	@echo "  make build          Build CPU image for NAS deployment"
-	@echo "  make build-cu126    Build CUDA 12.6 image for RTX 30xx/40xx"
-	@echo "  make build-arm64    Build ARM64 image for Raspberry Pi/Apple Silicon"
-	@echo "  make push           Push all built images to DockerHub"
-	@echo "  make up             Start the container"
-	@echo "  make logs           Follow container output"
+	@echo "  make download-models  Download models (run once before building)"
+	@echo "  make build            Build CPU image for NAS deployment"
+	@echo "  make build-cu126      Build CUDA 12.6 image for RTX 30xx/40xx"
+	@echo "  make build-arm64      Build ARM64 image for Raspberry Pi/Apple Silicon"
+	@echo "  make all-images       Build all image variants"
+	@echo "  make push             Push all built images to DockerHub"
+	@echo "  make up               Start the container"
+	@echo "  make logs             Follow container output"
 	@echo ""
 
 .DEFAULT_GOAL := help

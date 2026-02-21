@@ -7,6 +7,11 @@
 #   Intel:     docker build --build-arg INSTALL_IPEX=1 -t photonarium:intel ...
 #
 # Or use the Makefile: make build, make build-cu126, make build-intel, etc.
+#
+# Prerequisites:
+#   Models must be pre-downloaded to docker/models/ before building:
+#   HF_HOME=docker/models/huggingface TORCH_HOME=docker/models/torch \
+#   python download_models.py --standalone --data-dir docker/models
 # =============================================================================
 
 FROM python:3.12-slim AS base
@@ -14,7 +19,6 @@ FROM python:3.12-slim AS base
 # Build arguments
 ARG TORCH_INDEX=https://download.pytorch.org/whl/cpu
 ARG INSTALL_IPEX=0
-ARG HF_TOKEN=""
 
 # Version metadata (passed from Makefile)
 ARG VERSION=dev
@@ -35,7 +39,26 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 WORKDIR /app
 
-# Install PyTorch first (largest dependency, good for layer caching)
+# -----------------------------------------------------------------------------
+# Layer 1: ML Models (rarely changes, ~2.5GB)
+# -----------------------------------------------------------------------------
+# Models are pre-downloaded locally via download_models.py --standalone.
+# This layer is independent of pip installs and app code, so it's cached
+# even when dependencies or code change.
+
+# LAION aesthetic head and NIMA weights
+COPY docker/models/.laion-aesthetic-head.pth /defaults/
+COPY docker/models/.nima-mobilenetv2-ava.pth /defaults/
+
+# HuggingFace models (OpenCLIP, BLIP)
+COPY docker/models/huggingface/ /root/.cache/huggingface/
+
+# PyTorch models (FaceNet InceptionResnetV1)
+COPY docker/models/torch/ /root/.cache/torch/
+
+# -----------------------------------------------------------------------------
+# Layer 2: PyTorch (changes per variant, ~1-4GB)
+# -----------------------------------------------------------------------------
 # TORCH_INDEX can be empty for ARM64 builds (use default PyPI)
 RUN if [ -n "${TORCH_INDEX}" ]; then \
         pip install --no-cache-dir torch torchvision torchaudio --index-url ${TORCH_INDEX}; \
@@ -48,33 +71,29 @@ RUN if [ "${INSTALL_IPEX}" = "1" ]; then \
         pip install --no-cache-dir intel-extension-for-pytorch; \
     fi
 
-# Copy and install Python dependencies
+# -----------------------------------------------------------------------------
+# Layer 3: Python dependencies (rarely changes)
+# -----------------------------------------------------------------------------
 COPY docker/requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
 # Install facenet-pytorch with --no-deps to avoid version conflicts
 RUN pip install --no-cache-dir --no-deps facenet-pytorch
 
-# Copy application source
+# -----------------------------------------------------------------------------
+# Layer 4: Application code (changes frequently, small)
+# -----------------------------------------------------------------------------
 COPY app/ ./app/
 COPY download_models.py .
-
-# Download all ML models into a staging directory.
-# On first run, entrypoint.sh copies them to /config (the user's volume).
-# This includes: OpenCLIP, BLIP, FaceNet (MTCNN + InceptionResnetV1), LAION aesthetic head, NIMA weights.
-# HF_TOKEN is optional but speeds up downloads and avoids rate limits.
-# Safety: remove any token files that HF might create (in same layer to prevent leaks).
-ARG HF_TOKEN
-RUN mkdir -p /defaults && \
-    HF_HUB_OFFLINE=0 HF_TOKEN="${HF_TOKEN}" python download_models.py --data-dir /defaults && \
-    rm -f /root/.cache/huggingface/token /defaults/.cache/huggingface/token 2>/dev/null || true
 
 # Copy entrypoint script
 COPY docker/entrypoint.sh /entrypoint.sh
 RUN chmod +x /entrypoint.sh
 
+# -----------------------------------------------------------------------------
+# Metadata and runtime config
+# -----------------------------------------------------------------------------
 # OCI image labels (see: https://github.com/opencontainers/image-spec/blob/main/annotations.md)
-# Placed late in Dockerfile to avoid cache invalidation on version bumps.
 ARG VERSION
 ARG GIT_COMMIT
 ARG BUILD_DATE
@@ -89,11 +108,10 @@ LABEL org.opencontainers.image.title="Photonarium" \
       org.opencontainers.image.vendor="7thsw" \
       io.photonarium.variant="${VARIANT}"
 
-# Runtime configuration
 EXPOSE 5000
 VOLUME ["/config", "/catalogue"]
 
-# Health check (requires /api/health endpoint - Phase 1 backend change)
+# Health check
 HEALTHCHECK --interval=30s --timeout=10s --start-period=120s --retries=3 \
     CMD curl -sf http://localhost:5000/api/health || exit 1
 
