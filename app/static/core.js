@@ -969,6 +969,8 @@ const App = {
                 timeoutMs: data.thumbnail_timeout_ms,
                 scrollThrottleMs: data.thumbnail_scroll_throttle_ms,
             };
+            // Headless mode (Docker) - hides desktop-only UI features
+            this._headless = data.headless ?? false;
             // "On this day..." feature toggle
             this._onThisDayEnabled = data.on_this_day_enabled ?? true;
             // Slideshow interval (seconds per image, read by Fullscreen module)
@@ -1019,6 +1021,16 @@ const App = {
      */
     getSlideshowInterval() {
         return this._slideshowInterval ?? 5;
+    },
+
+    /**
+     * Check whether we're running in headless mode (Docker).
+     * When true, desktop-only features like folder picker and "reveal in
+     * file manager" should be hidden.
+     * @returns {boolean}
+     */
+    isHeadless() {
+        return this._headless ?? false;
     },
 
     /* ----------------------------------------------------------------------

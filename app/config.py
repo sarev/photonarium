@@ -560,6 +560,7 @@ FIELD_CONSTRAINTS: dict[str, dict[str, int | float | bool]] = {
     'quality_alpha': {'min': 0.0, 'max': 1.0, 'step': 0.01},
     'slideshow_interval': {'min': 1.0, 'max': 60.0, 'step': 0.5},
     'import_threads': {'min': 1, 'max': 16, 'step': 1},
+    'scan_interval_minutes': {'min': 1, 'max': 1440, 'step': 1, 'special_zero': True},
 }
 
 
@@ -573,6 +574,8 @@ class Config:
             installer; can be overridden at runtime with ``--data-dir``.
         server_host: Network interface to bind to ('0.0.0.0' for LAN, '127.0.0.1' for local only).
         server_port: Port number for the web server (1024-65535).
+        headless: When True, hides desktop-only UI features (folder picker, reveal
+            in file manager). Set automatically by Docker entrypoint.
         image_extensions: Set of lowercase file extensions to treat as images.
         thumbnail_quality: JPEG quality for thumbnails (1-100).
         max_image_dimension: Max width/height before downsampling (0 to disable).
@@ -617,11 +620,15 @@ class Config:
         catalogue_dir: Path to managed catalogue directory for imported images.
             Empty string means use the default (<data-dir>/catalogue/).
         import_threads: Number of parallel threads for file copying during import (1-16).
+        scan_interval_minutes: Interval for automatic folder rescans (0 = disabled).
+            Useful for Docker/NAS deployments where photos sync continuously.
+            The timer waits for all processing to complete before starting countdown.
     """
 
     data_dir: str = ''
     server_host: str = '0.0.0.0'
     server_port: int = 5000
+    headless: bool = False
     image_extensions: set[str] = field(
         default_factory=lambda: {
             '.jpg',
@@ -693,6 +700,7 @@ class Config:
     trash_dir: str = ''
     catalogue_dir: str = ''
     import_threads: int = 4
+    scan_interval_minutes: int = 0
 
     def __post_init__(self) -> None:
         """Validate configuration values after initialisation."""

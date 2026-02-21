@@ -1323,6 +1323,29 @@ def import_upload():
 
 
 # =============================================================================
+# Health Check
+# =============================================================================
+
+
+@app.route('/api/health', methods=['GET'])
+def health():
+    """Health check endpoint for Docker/monitoring.
+
+    Returns 200 if the server is running and the database is accessible.
+    Used by Docker HEALTHCHECK and external monitoring tools.
+
+    Returns:
+        JSON object with status 'ok' or error message with 503 status.
+    """
+    try:
+        db = get_db()
+        db.conn.execute('SELECT 1')
+        return success_response({'status': 'ok'})
+    except Exception as e:
+        return error_response(f'Database unavailable: {e}', 503)
+
+
+# =============================================================================
 # Status Endpoints
 # =============================================================================
 
@@ -1380,18 +1403,20 @@ def get_config():
     """Get frontend configuration values.
 
     Returns configuration values needed by the frontend for thumbnail
-    loading behaviour and quality scoring weights.
+    loading behaviour, quality scoring weights, and UI mode.
 
     Returns:
-        JSON object with thumbnail settings (concurrent_requests, extra_rows,
-        timeout_ms, scroll_throttle_ms) and quality scoring weights
-        (quality_weight_aesthetic, quality_weight_sharpness, quality_weight_pixels,
-        quality_weight_bpp, quality_alpha, nima_enabled).
+        JSON object with headless mode flag, thumbnail settings
+        (concurrent_requests, extra_rows, timeout_ms, scroll_throttle_ms),
+        and quality scoring weights (quality_weight_aesthetic,
+        quality_weight_sharpness, quality_weight_pixels, quality_weight_bpp,
+        quality_alpha, nima_enabled).
     """
     db = get_db()
     config = db.config
     return success_response(
         {
+            'headless': config.headless,
             'thumbnail_concurrent_requests': config.thumbnail_concurrent_requests,
             'thumbnail_extra_rows': config.thumbnail_extra_rows,
             'thumbnail_timeout_ms': config.thumbnail_timeout_ms,

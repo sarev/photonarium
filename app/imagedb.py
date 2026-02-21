@@ -4515,6 +4515,91 @@ class ImportWorker(threading.Thread):
 
 
 # =============================================================================
+# SCAN TIMER THREAD (HEADLESS/DOCKER SCHEDULED RESCANS)
+# =============================================================================
+
+
+class ScanTimerThread(threading.Thread):
+    """Background thread for scheduled automatic rescans in headless/Docker mode.
+
+    When ``scan_interval_minutes`` is configured (> 0), this thread waits for
+    the specified interval and then triggers a full rescan if no other
+    processing is active. This enables NAS deployments to automatically
+    detect newly added images without manual intervention.
+
+    The timer restarts after each rescan completes, ensuring consistent
+    intervals between scan completions (not scan starts).
+
+    Follows the same daemon-thread pattern as :class:`TrashWorker`.
+    """
+
+    def __init__(
+        self,
+        interval_minutes: int,
+        stop_event: threading.Event,
+        is_processing_fn: Callable[[], bool],
+        trigger_rescan_fn: Callable[[], None],
+    ):
+        """Initialise the scan timer thread.
+
+        Args:
+            interval_minutes: Minutes between automatic rescans (must be > 0).
+            stop_event: Event to signal thread should stop.
+            is_processing_fn: Callable that returns True if processing is active.
+            trigger_rescan_fn: Callable to trigger a full rescan.
+        """
+        super().__init__(name='ScanTimerThread', daemon=True)
+        self._interval_minutes = interval_minutes
+        self._stop_event = stop_event
+        self._is_processing = is_processing_fn
+        self._trigger_rescan = trigger_rescan_fn
+
+    def run(self) -> None:
+        """Main loop -- wait for interval, check idle, trigger rescan.
+
+        Uses short sleep intervals (1 second) to remain responsive to
+        shutdown requests while still timing the overall interval.
+        """
+        logger.info(
+            f'Scan timer thread started (interval: {self._interval_minutes} minutes)'
+        )
+
+        interval_seconds = self._interval_minutes * 60
+        elapsed = 0.0
+
+        while not self._stop_event.is_set():
+            # Sleep in 1-second increments to stay responsive to shutdown
+            time.sleep(1.0)
+            if self._stop_event.is_set():
+                break
+
+            elapsed += 1.0
+
+            if elapsed >= interval_seconds:
+                elapsed = 0.0  # Reset timer
+
+                # Only trigger rescan if not already processing
+                if self._is_processing():
+                    logger.info(
+                        'Scan timer: skipping scheduled rescan (processing active)'
+                    )
+                    # Don't reset elapsed -- we'll retry on next iteration
+                    elapsed = interval_seconds - 60  # Retry in 1 minute
+                    if elapsed < 0:
+                        elapsed = 0
+                    continue
+
+                logger.info('Scan timer: triggering scheduled rescan')
+                try:
+                    self._trigger_rescan()
+                except Exception:
+                    logger.exception('Scan timer: rescan failed')
+                # Timer resets regardless of success/failure
+
+        logger.info('Scan timer thread stopped')
+
+
+# =============================================================================
 # IMAGE DATABASE CLASS (STARTUP SEQUENCE)
 # =============================================================================
 
@@ -4642,6 +4727,7 @@ class ImageDatabase:
         self._nima_thread: NimaThread | None = None
         self._trash_thread: TrashWorker | None = None
         self._import_thread: ImportWorker | None = None
+        self._scan_timer_thread: ScanTimerThread | None = None
 
         # Phase 4 status tracking (post-processing after queues empty)
         self._phase4_status_lock = threading.Lock()
@@ -5480,6 +5566,16 @@ class ImageDatabase:
             )
             self._import_thread.start()
 
+        # Start scan timer thread for scheduled rescans (headless/Docker mode)
+        if self.config.scan_interval_minutes > 0:
+            self._scan_timer_thread = ScanTimerThread(
+                interval_minutes=self.config.scan_interval_minutes,
+                stop_event=self._stop_event,
+                is_processing_fn=self._is_processing_active,
+                trigger_rescan_fn=self.queue_rescan_all,
+            )
+            self._scan_timer_thread.start()
+
         logger.info('Background threads started')
 
     def stop_threads(self, timeout: float = 5.0) -> None:
@@ -5520,6 +5616,11 @@ class ImageDatabase:
             self._import_thread.join(timeout=timeout)
             if self._import_thread.is_alive():
                 logger.warning('Import worker thread did not stop in time')
+
+        if self._scan_timer_thread is not None:
+            self._scan_timer_thread.join(timeout=timeout)
+            if self._scan_timer_thread.is_alive():
+                logger.warning('Scan timer thread did not stop in time')
 
         logger.info('Background threads stopped')
 
@@ -7017,6 +7118,18 @@ class ImageDatabase:
             result['face_reassess'] = face_reassess_status
 
         return result
+
+    def _is_processing_active(self) -> bool:
+        """Check if any background processing is currently active.
+
+        Used by the scan timer thread to avoid triggering a rescan while
+        processing is still in progress.
+
+        Returns:
+            True if any queues have items or Phase 4 processing is active.
+        """
+        status = self.get_processing_status()
+        return status.get('status') != 'up_to_date'
 
     def get_duplicate_status(self) -> dict[int, str]:
         """Get the computation status for each duplicate level.

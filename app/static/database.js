@@ -120,6 +120,7 @@ const Database = {
      */
     init() {
         this._els = {
+            foldersSection: App.$('folders-section'),
             folderList: App.$('folder-list'),
             addFolderBtn: App.$('btn-add-folder'),
             rescanBtn: App.$('btn-rescan'),
@@ -940,6 +941,17 @@ const Database = {
             this._catalogueDir = response?.data?.catalogue_dir || '';
             if (this._catalogueDir && this._els.importSection) {
                 this._els.importSection.hidden = false;
+            }
+
+            // In headless mode (Docker), hide folder management - folders are
+            // configured via docker-compose volumes, not the UI.
+            const headless = response?.data?.headless;
+            if (headless && this._els.foldersSection) {
+                this._els.foldersSection.hidden = true;
+            }
+            // Also hide "Rescan Local Folders" in headless mode (scheduled scans instead)
+            if (headless && this._els.rescanBtn) {
+                this._els.rescanBtn.hidden = true;
             }
 
             // Show version string in the toolbar (Database screen only)

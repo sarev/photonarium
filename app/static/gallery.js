@@ -1405,10 +1405,15 @@ const Gallery = {
             return;
         }
 
+        // In headless mode, the path is not clickable (no file manager to reveal in)
+        const pathClass = App.isHeadless() ? 'info-path' : 'info-path info-path-clickable';
+        const pathTitle = App.isHeadless() ? '' : 'title="Open containing folder"';
+        const pathDataId = App.isHeadless() ? '' : `data-image-id="${img.id}"`;
+
         content.innerHTML = `
             <div class="info-section">
                 <p class="info-filename">${App.escapeHtml(img.basename)}<button class="info-copy-btn" title="Copy full path to clipboard" data-copy="${App.escapeHtml(img.path)}"><span class="icon" data-icon="content_copy">\u{1F4CB}</span></button></p>
-                <p class="info-path info-path-clickable" title="Open containing folder" data-image-id="${img.id}">${App.escapeHtml(img.path)}</p>
+                <p class="${pathClass}" ${pathTitle} ${pathDataId}>${App.escapeHtml(img.path)}</p>
             </div>
 
             <div class="info-section">
