@@ -3,6 +3,9 @@
 Implementation plan for running Photonarium as a Docker container on NAS
 devices (Synology, QNAP, Unraid, TrueNAS) and generic Linux servers.
 
+**See also:** `docker-nas-overview.md` for a plain English overview of costs,
+benefits, workflow, and limitations.
+
 ---
 
 ## Design Decisions
@@ -11,9 +14,18 @@ devices (Synology, QNAP, Unraid, TrueNAS) and generic Linux servers.
 
 Photonarium is a single-process Python app with SQLite (no Postgres, Redis, or
 worker queues). This maps naturally to a single Docker container, following the
-LinuxServer.io pattern rather than the Immich/PhotoPrism multi-container
-pattern. A single container is simpler to deploy, back up, and reason about -
-important for home NAS users who aren't Docker experts.
+LinuxServer.io pattern rather than the Immich multi-container pattern (4
+containers: server, ML, PostgreSQL, Redis) or PhotoPrism's 2-container setup
+(app + MariaDB). A single container is simpler to deploy, back up, and reason
+about - important for home NAS users who aren't Docker experts.
+
+**SQLite concurrency note:** PhotoPrism strongly recommends MariaDB over SQLite
+for production, because SQLite locks the entire database on writes -- browsing
+while indexing can cause timeout errors. Photonarium uses WAL mode which allows
+concurrent reads during writes, significantly reducing this problem. However,
+we should document that very large indexing jobs (initial scan of 100k+ images)
+may still cause brief UI slowdowns, and recommend scheduling heavy scans during
+off-hours.
 
 ### Models baked into the image
 
@@ -26,15 +38,42 @@ which is outside `data_dir`. Two options exist:
   either run a download step or have internet on first start.
 
 **Decision: Option A (bake in).** The target audience (NAS users) values
-simplicity over image size. PhotoPrism uses the same approach. The LAION and
-NIMA weights (~11KB + ~9MB) go into `/config` at first run since they live in
-`data_dir`.
+simplicity over image size. PhotoPrism bakes its models in too. Immich takes
+the opposite approach (downloads on first use into a Docker volume), which
+requires internet access -- at odds with Photonarium's offline-first design.
+
+**All models** that `download_models.py` downloads are baked into the image
+during the build and copied to `/config` on first run. This includes the
+HuggingFace models (OpenCLIP, BLIP), the LAION aesthetic head, and the NIMA
+weights. At runtime, all models live in `/config` (the user's persistent
+volume) -- the app reads them from `data_dir` as normal. If models were left
+inside the image layer instead, they'd be inaccessible once gosu drops to the
+PUID/PGID user, and any model the app couldn't find would require internet
+access to download -- a non-starter for offline NAS deployments.
+
+### Single multi-arch image
+
+PhotoPrism publishes a single `photoprism/photoprism:latest` multi-arch image
+for amd64, arm64, and armv7 -- no architecture-specific images needed. GPU
+support is installed at runtime (`PHOTOPRISM_INIT: "tensorflow-gpu"`) rather
+than baked into separate images. This avoids maintaining multiple Dockerfiles.
+
+Photonarium should follow the single-image pattern for architecture (when
+arm64 is added). For GPU, the build-arg approach (CPU vs CUDA PyTorch wheels)
+is better since PyTorch CUDA adds ~800MB that CPU-only users shouldn't carry.
+But we should keep this to two images at most (`:latest` and `:cuda`), not a
+proliferation of variants.
 
 ### CPU-only base image, GPU optional
 
 Most NAS devices have no GPU. The default image uses CPU-only PyTorch (~800MB
 smaller than CUDA). A separate `Dockerfile.cuda` (or build arg) can produce a
 GPU-enabled variant for power users with NVIDIA GPUs on Unraid/QNAP.
+
+Note that many consumer NAS devices (Synology, QNAP) use Intel Celeron/Atom
+CPUs with integrated graphics. Intel iGPU acceleration via OpenVINO is arguably
+more relevant to the NAS audience than NVIDIA CUDA, and should be supported as
+a second GPU tier alongside the CUDA variant.
 
 ### PUID/PGID for NAS filesystem permissions
 
@@ -48,25 +87,89 @@ PhotoPrism all do it).
 ## Volume Layout
 
 ```
-/config     Persistent application data (database, thumbnails, trash, config)
-            Maps to: e.g. /volume1/docker/photonarium on Synology
-/photos     Read-only or read-write photo library
-            Maps to: e.g. /volume1/photos on Synology
+/config       Persistent application data (database, thumbnails, trash, config)
+              Maps to: e.g. /volume1/docker/photonarium on Synology
+/photos       Existing photo library (read-only or read-write)
+              Maps to: e.g. /volume1/photos on Synology
+/catalogue    Managed catalogue for imported photos (organised by date)
+              Maps to: e.g. /volume1/photonarium-catalogue on Synology
 ```
+
+**IMPORTANT: `/config` must be on local storage**, never on a network share
+(NFS/SMB). SQLite does not work reliably over network filesystems -- concurrent
+access can corrupt the database. Photo storage (`/photos`) and the catalogue
+(`/catalogue`) can be on network shares or HDD arrays.
+
+**Size expectations for `/config`:** This volume is larger than it sounds. For
+a library of ~65k images, real-world sizes are roughly:
+- Database: ~1 GB (grows with library size, benefits most from SSD)
+- ML models: ~5-10 GB (depends on model choice, read on startup then cached
+  in RAM -- does not benefit much from SSD)
+- Thumbnails: ~6 GB (200px + 400px for every image, read-heavy but sequential
+  -- tolerates HDD fine)
+- LAION/NIMA weights: ~9 MB
+
+That's **15-20 GB** for a medium-sized library, growing with collection size.
+NAS SSD caches are often limited (e.g., 128-256 GB shared with other apps),
+so recommending "put it all on SSD" isn't always practical. The database is
+the only component that genuinely needs fast random I/O. Thumbnails and models
+are read-sequentially and work fine on spinning disk.
+
+For users with limited SSD space, document that `/config` can live on HDD
+with acceptable performance. The main impact is slower thumbnail loading on
+first view (before the in-memory LRU cache warms up) and slightly slower
+startup. The database will still work on HDD -- it's just not as snappy for
+large filter/sort operations.
+
+In Docker, the catalogue volume is the primary way new photos enter the system
+(via the Import feature in the UI). The `/photos` volume is for indexing
+existing photo libraries that live elsewhere on the NAS. Users may have one or
+both, depending on their workflow.
 
 Inside `/config`:
 ```
-/config/photonarium.yml          Configuration file
-/config/photonarium.db           SQLite database
-/config/.thumbnails/             Thumbnail cache (200px + 400px)
-/config/trash/                   Trashed images (unless overridden)
-/config/.laion-aesthetic-head.pth   LAION aesthetic weights (downloaded on first run)
-/config/.nima-mobilenetv2-ava.pth   NIMA aesthetic weights (downloaded on first run)
+/config/photonarium.yml            Configuration file
+/config/photonarium.db             SQLite database
+/config/.thumbnails/               Thumbnail cache (200px + 400px)
+/config/trash/                     Trashed images (unless overridden)
+/config/.cache/huggingface/        HuggingFace models (OpenCLIP, BLIP)
+/config/.laion-aesthetic-head.pth  LAION aesthetic weights
+/config/.nima-mobilenetv2-ava.pth  NIMA aesthetic weights
 ```
+
+All ML models are copied from the image on first run. They persist in the
+volume across container updates, so subsequent starts are fast. If a new
+Photonarium version ships with updated models, the user can delete the old
+model files and restart to get fresh copies from the image.
 
 The `/photos` mount is the user's existing photo library. Photonarium indexes
 it but does not modify originals (only trash moves files out). If the user
 wants trash to go elsewhere, they can set `trash_dir` in the config.
+
+**Read-only originals:** PhotoPrism has an explicit `PHOTOPRISM_READONLY` flag
+for read-only originals. Photonarium should document that `/photos` can be
+mounted read-only (`:ro` in compose) with the caveat that **trash and rotate
+will not work** -- both modify files on disk (trash moves them, rotate
+rewrites the JPEG). Import (copy-into-catalogue) writes to the catalogue
+volume, not `/photos`, so it would still work. Consider adding a
+`PHOTONARIUM_READONLY` env var that disables trash/rotate in the UI and hides
+the relevant buttons (cleaner than silent failures or cryptic OS errors).
+
+**Bind mounts only:** PhotoPrism explicitly warns against Docker named volumes
+for user data (risk of data loss during container recreation). Document that
+`/config` and `/photos` should always be bind mounts to host paths, never
+anonymous or named Docker volumes. This ensures data survives `docker compose
+down && docker compose up`.
+
+**Multiple photo libraries:** Mount additional libraries as subdirectories:
+```yaml
+volumes:
+  - /nas/photos:/photos/main
+  - /nas/holidays:/photos/holidays
+  - /mnt/external:/photos/external:ro    # read-only external drive
+```
+Register each via `--add-folder /photos/main --add-folder /photos/holidays`
+etc. No code changes needed -- this works with the existing design.
 
 ---
 
@@ -108,75 +211,85 @@ def health():
         return error_response('Database unavailable', 503)
 ```
 
-#### 1b. Add text-based folder input to the frontend
+#### 1b. Headless mode: hide desktop-only features
 
-The native folder picker (`tkinter.filedialog`) doesn't work in headless
-Docker containers. NAS users need a way to type/paste folder paths in the
-web UI.
+The containerised Photonarium runs headless -- there is no display server,
+no tkinter folder picker, and no local file manager to "reveal" files in.
+Rather than building fallback UIs (text-based path input, error toasts for
+failed reveals), the Docker version should cleanly disable all desktop-only
+features.
 
-**Files:** `static/index.html`, `static/database.js`
+**Add a `headless` config option** (default `false`). The Docker entrypoint
+sets it to `true`. When headless, `/api/config` returns `headless: true` and
+the frontend hides:
 
-**HTML change** (`index.html`): Add a text input + button next to the existing
-"Add Folder" button inside the `.folder-controls` div:
-```html
-<div class="folder-path-input" id="folder-path-input" style="display:none">
-    <input type="text" id="folder-path-text" placeholder="/path/to/photos"
-           title="Type or paste the full path to a photo folder">
-    <button id="btn-add-path" class="action-btn" title="Add this folder path">
-        <span class="icon" data-icon="add">+</span>
-    </button>
-    <button id="btn-cancel-path" class="action-btn" title="Cancel">
-        <span class="icon" data-icon="close">X</span>
-    </button>
-</div>
-```
+- The entire **"Local Indexed Folders"** section (add folder, folder picker,
+  rescan, remove buttons). In Docker, folders are pre-mounted as volumes and
+  registered via `--add-folder` CLI flags in docker-compose.yml -- there is
+  no need for runtime folder management in the UI.
+- The **"Reveal in file manager"** button in the Gallery toolbar (calls
+  `xdg-open`/`open`/`explorer` which don't exist in a container).
+- The **native folder picker** path in the Import feature (if implemented).
+  Import in Docker uses the file upload path only.
 
-**JS change** (`database.js`): The existing `_addFolder()` method calls
-`_pickFolder()` which calls `/api/pick-folder`. Two approaches:
+The backend `/api/pick-folder` and `/api/reveal` endpoints can remain but
+will simply never be called when headless. No fallback text inputs needed.
 
-- **Approach A (auto-detect):** Try the native picker first. If it returns
-  null (headless), show the text input as fallback. This gives desktop users
-  the native experience and Docker users a working alternative.
-- **Approach B (config-driven):** Backend returns a `headless` flag from
-  `/api/config`. Frontend shows the text input instead of the native picker
-  button when headless.
+**Files:** `app/config.py` (add `headless: bool = False` to Config),
+`app/app.py` (include in `/api/config` response),
+`docker/entrypoint.sh` (set `headless: true` in generated config),
+`app/static/database.js` (check headless flag, hide folder section),
+`app/static/gallery.js` (check headless flag, hide reveal button).
 
-**Decision: Approach A (auto-detect).** No config needed. The native picker
-already returns null on failure, so the fallback is a natural extension.
+This is simpler than the previous text-input fallback approach and gives
+Docker users a cleaner, less confusing UI.
 
-Flow: Click "Add Folder" -> try native picker -> if null, show text input
-inline -> user types path -> validate via existing `POST /api/folders` ->
-hide input.
+#### 1c. Scheduled automatic rescans
 
-**CSS change** (`styles.css`): Style the inline path input to match the
-existing folder controls aesthetic.
+Essential for NAS deployments. Many NAS users have apps that sync photos from
+Apple Photos, Google Photos, Dropbox, OneDrive, etc. into local folders. These
+folders grow constantly without Photonarium knowing about it. In the desktop
+version, users can click "Rescan Local Folders" manually, but the Docker UI
+hides that section (headless mode). Without scheduled rescans, synced photos
+would sit unindexed indefinitely.
 
-#### 1c. Hide "Reveal" buttons when headless
+PhotoPrism solves this with `PHOTOPRISM_INDEX_SCHEDULE` (cron expression) and
+`PHOTOPRISM_AUTO_INDEX` (delay in seconds after WebDAV upload).
 
-The "Open containing folder" button in the Gallery toolbar calls `/api/reveal`
-which requires a desktop display server. In Docker it silently fails.
+**Add a `scan_schedule` config option** -- either a cron expression (flexible
+but complex for non-technical users) or a simple interval in minutes (e.g.,
+`scan_interval_minutes: 60`). The simpler interval approach is more in keeping
+with Photonarium's non-technical ethos.
 
-**Option A:** Backend returns a `desktop_features` flag in `/api/config`,
-frontend hides the reveal button when false.
-**Option B:** The reveal button already does nothing on failure (no crash, no
-error toast). Just leave it.
+**Implementation:** A daemon thread (similar to the existing TrashWorker
+pattern) that sleeps for the configured interval, then checks whether
+it's safe to scan. The mtime-based fast path means only genuinely new or
+changed files get processed, so scans are cheap when nothing has changed.
+The thread integrates with the existing graceful shutdown mechanism.
 
-**Decision: Option A.** A button that does nothing is confusing. Add a simple
-boolean to the config response. Detect headless by checking if `DISPLAY` env
-var is set (Linux) or if the platform is in a known container environment.
-Actually, simpler: add a `headless` config option (default false). Users set it
-to true in their Docker config, or the entrypoint script sets it. Frontend
-hides reveal + native picker when true.
+**Deferral logic:** The timer does not blindly fire every N minutes. If any
+background processing is still running when the interval elapses -- an
+unfinished scan, a large import, face detection, embedding computation --
+the scheduled scan waits until all processing completes, then restarts the
+interval timer from that point. This prevents scans from piling up or
+running back-to-back when photos are arriving quickly (e.g., a phone sync
+uploading hundreds of photos over several minutes). The sequence is always:
+all processing finishes -> wait full interval -> scan -> process -> wait
+full interval -> and so on. A manual "Rescan" from the UI resets the timer
+in the same way.
 
-Actually, even simpler: try the reveal, and if subprocess fails, return an
-error response that the frontend can use to show a toast. Currently the reveal
-endpoint has no error feedback for "no display server". This avoids any config
-flag - it just works (or tells you it didn't).
+**Default:** Disabled (`0`) for desktop installs (where the user controls when
+to scan). The Docker entrypoint config sets a sensible default like `60`
+(rescan every hour).
 
-**Revised decision:** Enhance `/api/reveal` to catch `FileNotFoundError` (no
-`xdg-open`) and `subprocess` errors, returning a clear error message. Frontend
-shows a toast. No config flag needed. The button stays visible but gives
-feedback instead of silently failing.
+**Files:** `app/config.py` (add `scan_interval_minutes: int = 0`),
+`app/imagedb.py` (add scan timer thread, start in `start_threads()`),
+`docker/entrypoint.sh` (set default in generated config).
+
+**Status display:** When a scheduled scan is active, the existing processing
+status display in the Database screen shows progress as normal. The frontend
+doesn't need to know or care whether the scan was triggered manually or by
+the timer.
 
 ### Phase 2: Docker Files
 
@@ -204,17 +317,17 @@ FROM base AS app
 WORKDIR /app
 COPY . .
 
-# Download ML models into the image layer
-# Models go to /root/.cache/huggingface/ (baked into image)
-# LAION/NIMA go to /defaults/ (copied to /config on first run)
-RUN python download_models.py --data-dir /defaults
+# Download ALL ML models into a staging directory inside the image.
+# On first run, entrypoint.sh copies them to /config (the user's volume).
+# This includes: OpenCLIP, BLIP, LAION aesthetic head, NIMA weights.
+RUN HF_HUB_OFFLINE=0 python download_models.py --data-dir /defaults
 
 # Entrypoint script handles PUID/PGID and first-run setup
 COPY docker/entrypoint.sh /entrypoint.sh
 RUN chmod +x /entrypoint.sh
 
 EXPOSE 5000
-VOLUME ["/config", "/photos"]
+VOLUME ["/config", "/catalogue"]
 HEALTHCHECK --interval=30s --timeout=10s --start-period=120s --retries=3 \
     CMD curl -f http://localhost:5000/api/health || exit 1
 
@@ -270,12 +383,12 @@ groupadd -o -g "$PGID" photonarium 2>/dev/null || true
 useradd -o -u "$PUID" -g "$PGID" -d /config -s /bin/bash photonarium 2>/dev/null || true
 
 # --- First-run setup ---
-# Copy default LAION/NIMA weights to /config if not present
-for f in .laion-aesthetic-head.pth .nima-mobilenetv2-ava.pth; do
-    if [ -f "/defaults/$f" ] && [ ! -f "/config/$f" ]; then
-        cp "/defaults/$f" "/config/$f"
-    fi
-done
+# Copy all baked-in models to /config if not already present.
+# Uses cp -n (no-clobber) so user-replaced models aren't overwritten.
+# Includes: HuggingFace models (OpenCLIP, BLIP), LAION head, NIMA weights.
+if [ -d "/defaults" ]; then
+    cp -rn /defaults/. /config/
+fi
 
 # Create default config if not present
 if [ ! -f /config/photonarium.yml ]; then
@@ -285,6 +398,9 @@ if [ ! -f /config/photonarium.yml ]; then
 data_dir: /config
 server_host: 0.0.0.0
 server_port: 5000
+headless: true
+catalogue_dir: /catalogue
+scan_interval_minutes: 60
 EOF
 fi
 
@@ -303,9 +419,11 @@ Notes:
 - `gosu` drops root privileges to the PUID/PGID user (standard NAS pattern)
 - `exec` replaces the shell so the Python process is PID 1 (receives SIGTERM)
 - `"$@"` passes any extra args (e.g. `--scan --detect-faces`)
-- First-run creates a minimal config pointing at `/config` as data dir
-- `/defaults/` contains the LAION/NIMA weights from the build stage
-- HuggingFace cache stays at `/root/.cache/huggingface/` (baked into image)
+- First-run creates a minimal config and copies all ML models to `/config`
+- `/defaults/` inside the image contains everything `download_models.py`
+  produces -- HuggingFace models, LAION head, NIMA weights
+- At runtime, the app reads all models from `/config` (= `data_dir`), never
+  from inside the image layer
 
 Dependency: `gosu` needs to be installed in the Dockerfile:
 ```dockerfile
@@ -317,27 +435,61 @@ RUN apt-get update && apt-get install -y --no-install-recommends gosu ...
 ```yaml
 services:
   photonarium:
-    image: photonarium/photonarium:latest
     container_name: photonarium
+    image: photonarium/photonarium:${PHOTONARIUM_VERSION:-latest}
     restart: unless-stopped
     ports:
-      - "5000:5000"
+      - "${PHOTONARIUM_PORT:-5000}:5000"
     volumes:
-      - ./config:/config          # App data (DB, thumbnails, config)
-      - /path/to/photos:/photos   # Your photo library
-    environment:
-      - PUID=1000                 # Your user ID (run: id -u)
-      - PGID=1000                 # Your group ID (run: id -g)
-    # Optional: Add more photo folders
-    # command: --add-folder /photos/holidays --add-folder /photos/family --scan
+      - ${CONFIG_PATH:-./config}:/config        # App data - MUST be local, not NFS/SMB
+      - ${CATALOGUE_PATH}:/catalogue            # Imported photos (organised by date)
+      - /etc/localtime:/etc/localtime:ro        # Timezone sync (EXIF timestamps)
+      # Optional: mount existing photo libraries for indexing
+      # - /nas/photos:/photos/main:ro
+      # - /nas/holidays:/photos/holidays:ro
+    env_file:
+      - .env
+    # Optional: register mounted photo folders on startup
+    # command: --add-folder /photos/main --add-folder /photos/holidays --scan
 ```
 
-#### 2e. `docker-compose.gpu.yml` (GPU override)
+#### 2e. `.env.example`
+
+Ship alongside `docker-compose.yml` for easy configuration. Users copy to `.env`
+and edit. This is the Docker convention and works well with NAS management UIs
+(Portainer, etc.) that have `.env` file editors.
+
+```
+# Photonarium Docker Configuration
+# Copy this file to .env and edit to match your setup.
+
+# User/group ID - match your NAS user (run: id -u / id -g)
+PUID=1000
+PGID=1000
+
+# Server port
+PHOTONARIUM_PORT=5000
+
+# Path to app data (DB, thumbnails, config) - MUST be local storage, not NFS
+CONFIG_PATH=./config
+
+# Path to catalogue directory for imported photos (can be on HDD/NAS share)
+CATALOGUE_PATH=/path/to/catalogue
+
+# Image version (default: latest)
+# PHOTONARIUM_VERSION=latest
+```
+
+#### 2f. GPU acceleration compose files
+
+Following Immich's pattern, GPU support uses separate compose files that extend
+the base config via `docker compose -f docker-compose.yml -f <hwaccel>.yml up`.
+
+**`hwaccel.cuda.yml`** (NVIDIA - Unraid, custom builds):
 
 ```yaml
 services:
   photonarium:
-    # Use with: docker compose -f docker-compose.yml -f docker-compose.gpu.yml up
     deploy:
       resources:
         reservations:
@@ -350,16 +502,42 @@ services:
       - NVIDIA_DRIVER_CAPABILITIES=compute,utility
 ```
 
-This requires a separate `Dockerfile.cuda` that installs CUDA-enabled PyTorch
-instead of CPU-only. Or a build arg:
+Requires the NVIDIA Container Toolkit on the host and a CUDA-enabled image.
+Build with a build arg:
+
 ```dockerfile
 ARG TORCH_INDEX=https://download.pytorch.org/whl/cpu
 RUN pip install torch torchvision --index-url ${TORCH_INDEX}
 ```
 
-Build with: `docker build --build-arg TORCH_INDEX=https://download.pytorch.org/whl/cu124 -t photonarium:cuda .`
+```bash
+docker build --build-arg TORCH_INDEX=https://download.pytorch.org/whl/cu124 \
+    -t photonarium:cuda .
+```
 
-#### 2f. `.dockerignore`
+**`hwaccel.intel.yml`** (Intel iGPU - many Synology/QNAP NAS devices):
+
+```yaml
+services:
+  photonarium:
+    devices:
+      - /dev/dri:/dev/dri
+    group_add:
+      - video
+      - render
+```
+
+Intel iGPU acceleration is arguably more relevant for the NAS audience than
+NVIDIA, since Celeron/Atom CPUs with integrated graphics are the most common
+NAS processors. PyTorch supports Intel GPUs via the `intel-extension-for-pytorch`
+package, or alternatively OpenVINO can be used for inference. This needs
+investigation during implementation to determine the best approach for
+Photonarium's workloads (CLIP, MTCNN, InceptionResnet, NIMA).
+
+**Note:** Immich also supports ROCm (AMD) and ARM NN (Mali), but these are
+uncommon on NAS hardware and can be added later if there is demand.
+
+#### 2g. `.dockerignore`
 
 ```
 env/
@@ -382,11 +560,12 @@ node_modules/
 
 Add a "Docker / NAS" section covering:
 - Quick start with `docker compose up`
-- Volume explanations (what goes where)
+- Volume explanations (what goes where, local-only warning for `/config`)
 - PUID/PGID for NAS permissions
 - Adding photo folders (CLI and web UI)
-- GPU variant (optional)
-- Platform-specific notes (Synology, Unraid, QNAP)
+- GPU variants (NVIDIA CUDA, Intel iGPU)
+- Reverse proxy guidance (see below)
+- Platform-specific notes (Synology, Unraid, QNAP, TrueNAS, Proxmox)
 
 #### 3b. Update `DEVELOP.md`
 
@@ -397,16 +576,161 @@ architecture decisions.
 
 Add Docker build/run commands to the CLI section.
 
+#### 3d. Reverse proxy guidance
+
+NAS users commonly run multiple services behind a reverse proxy. Document
+configurations for nginx, Caddy, and Traefik. Key considerations:
+
+**nginx:**
+```nginx
+server {
+    listen 80;
+    server_name photos.example.com;
+
+    # Large limit needed for the Import feature (file uploads)
+    client_max_body_size 5000M;
+
+    # Increased timeouts for long-running ML operations
+    proxy_read_timeout 600s;
+    proxy_send_timeout 600s;
+
+    location / {
+        proxy_pass http://localhost:5000;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+    }
+}
+```
+
+**Caddy** (simplest - auto-HTTPS):
+```
+photos.example.com {
+    reverse_proxy localhost:5000
+}
+```
+
+**Traefik:**
+- Increase `respondingTimeouts` on the entrypoint to 600s (default 60s will
+  kill long-running requests like batch import or ML processing).
+- Standard Docker labels on the photonarium service for routing.
+
+**Notes:**
+- Photonarium can be served at a domain root or behind a sub-path (Flask
+  handles relative URLs). Document both patterns. This is an advantage over
+  PhotoPrism and Immich, which both require serving at the domain root.
+- Upload size limit matters for the Import feature's file upload path. Without
+  it, large photo uploads via mobile/remote will fail at the proxy level.
+
+#### 3e. Backup guidance
+
+PhotoPrism has built-in automated daily DB backups with configurable retention.
+Photonarium should document backup procedures even if automated backup is
+deferred:
+
+**What to back up:**
+1. `/config/photonarium.db` -- The SQLite database (critical)
+2. `/config/photonarium.yml` -- Configuration file
+3. `/photos` -- Your actual photos (you probably already back these up)
+
+**What can be regenerated (skip to save space):**
+- `/config/.thumbnails/` -- Regenerated by `--generate-thumbnails`
+- `/config/.cache/huggingface/` -- Copied from image on first run (~2.5 GB)
+- `/config/.laion-aesthetic-head.pth`, `.nima-mobilenetv2-ava.pth` -- Copied
+  from image on first run
+
+**Simple backup (while container is running):**
+```bash
+# SQLite supports online backup via .backup command
+docker exec photonarium sqlite3 /config/photonarium.db ".backup /config/photonarium-backup.db"
+# Then copy from the host:
+cp ./config/photonarium-backup.db /path/to/backup/
+cp ./config/photonarium.yml /path/to/backup/
+```
+
+**Note:** Do NOT simply copy `photonarium.db` while the container is running --
+SQLite WAL mode means the `-wal` and `-shm` files must be consistent. Use the
+`.backup` command or stop the container first.
+
+**Future enhancement:** Consider adding a `PHOTONARIUM_BACKUP_SCHEDULE` config
+option (cron format) for automated DB backups, following PhotoPrism's pattern.
+This would be a small addition to the backend (run `sqlite3 .backup` on a
+timer thread) with high value for NAS users.
+
+#### 3f. Platform-specific deployment notes
+
+**Synology:**
+- Deploy via Docker and Portainer (Container Manager).
+- Mount `/config` on the SSD cache volume if space permits (15-20 GB+ for a
+  medium library), otherwise the main storage pool works with slightly slower
+  performance. `/photos` on the main storage pool.
+- PUID/PGID should match the Synology user that owns the photo share.
+
+**Unraid:**
+- Install via Community Apps template or Docker Compose (Compose Manager plugin).
+- `CONFIG_PATH` on the cache drive (appdata share) if space allows, otherwise
+  any share. Expect 15-20 GB+ for a medium-sized library.
+- Photo and catalogue volumes can be any Unraid share.
+- For GPU acceleration, Unraid does not support multiple compose files natively.
+  The hardware acceleration config must be inlined into the main compose file.
+
+**TrueNAS:**
+- Deploy via the TrueNAS Apps system (community train) or Docker Compose.
+- Create datasets for config, catalogue, and photos.
+- `/config` on SSD pool if space allows (15-20 GB+), otherwise HDD pool is
+  fine with slightly slower performance.
+
+**QNAP:**
+- Deploy via Container Station using docker-compose files.
+- Similar configuration to standard Docker deployment.
+
+**Proxmox:**
+
+Proxmox users have three deployment options:
+
+- **VM + Docker (safe path):** Create a standard Linux VM (Ubuntu/Debian),
+  install Docker Engine inside, and deploy with docker-compose. GPU passthrough
+  via Proxmox PCI passthrough (requires IOMMU/VT-d). Most reliable for NVIDIA
+  GPUs. Higher resource overhead than LXC.
+
+- **LXC + Docker (lighter weight):** Docker inside LXC is fragile and may
+  break on Proxmox upgrades. However, Photonarium's single-container nature
+  makes it a better LXC candidate than multi-container apps. The PhotoPrism
+  community commonly uses LXC on Proxmox (automated scripts like tteck's
+  helper scripts exist), and their experience shows it works well for single-
+  container apps when `nesting=1` is enabled. Intel iGPU passthrough to LXC
+  is straightforward (mount `/dev/dri`). NVIDIA in LXC is more complex --
+  consider a VM instead.
+
+- **LXC native (no Docker, recommended for Proxmox):** Skip Docker entirely
+  and install Photonarium directly in a Debian LXC container. Install Python
+  deps, clone the repo, run `app.py`. This avoids all Docker-in-LXC
+  compatibility issues and is the lightest option. Minimum spec: 2 cores,
+  3 GB RAM, 16 GB root storage. PhotoPrism's community project
+  `immich-in-lxc` proves this pattern works well for photo management apps.
+  Photonarium's single-process design makes it an even simpler candidate.
+
+  Mount NAS storage from Proxmox into the LXC or VM via NFS/SMB mount points
+  (add mount points in the container config, e.g.,
+  `mp0: /mnt/nas/photos,mp=/photos`).
+
 ---
 
 ## What This Plan Does NOT Include
 
 - **Multi-arch builds** (arm64 for ARM-based NAS like some Synology models).
   This is important but adds CI/CD complexity. Can be added later with
-  `docker buildx` once the x86_64 image is stable.
-- **Automatic folder scanning on mount.** Users must register folders via the
-  web UI or `--add-folder` CLI flag, then scan with `--scan` or the rescan
-  button. This is the existing design and works fine for Docker.
+  `docker buildx` once the x86_64 image is stable. The `python:3.12-slim`
+  base image already supports arm64, so the main blocker is PyTorch arm64
+  wheels and CI/CD setup, not fundamental architecture issues.
+- **Remote ML offloading.** Immich's most popular NAS feature is running the
+  ML container on a separate GPU-equipped machine while the server runs on
+  the NAS. Photonarium's architecture has ML in-process (not a separate
+  service), so splitting it out would be a major refactor. Not for MVP, but
+  worth considering as a future enhancement for users whose NAS has no GPU.
+  For now, the CPU-only approach with optional CUDA/Intel iGPU is the path.
+- **Scheduled automatic rescans.** Moved to Phase 1 -- see task 1c below.
 - **Docker Hub / GHCR publishing.** The image can be built locally. Publishing
   to a registry is a distribution concern, not an implementation concern.
 - **Watchtower / auto-update labels.** Nice-to-have, not MVP.
@@ -417,18 +741,19 @@ Add Docker build/run commands to the CLI section.
 ## Implementation Order
 
 1. **`/api/health` endpoint** (5 min, tiny change to app.py)
-2. **Improve `/api/reveal` error handling** (10 min, app.py)
-3. **Text-based folder input** (1-2 hours, index.html + database.js + styles.css)
+2. **`headless` config option** (30 min, config.py + app.py + database.js + gallery.js)
+3. **Scheduled automatic rescans** (1 hour, config.py + imagedb.py)
 4. **`requirements-docker.txt`** (10 min, new file)
 5. **`.dockerignore`** (5 min, new file)
 6. **`Dockerfile`** (30 min, new file, iterative testing)
 7. **`docker/entrypoint.sh`** (20 min, new file)
-8. **`docker-compose.yml`** + GPU variant (15 min, new files)
-9. **Build and test** (1-2 hours, iterative)
-10. **Documentation** (30 min, README + DEVELOP + CLAUDE updates)
+8. **`docker-compose.yml`** + `.env.example` (15 min, new files)
+9. **`hwaccel.cuda.yml`** + **`hwaccel.intel.yml`** (15 min, new files)
+10. **Build and test** (1-2 hours, iterative)
+11. **Documentation** (1 hour, README + DEVELOP + CLAUDE + reverse proxy + platform notes)
 
 Steps 1-3 are backend/frontend changes that benefit all users (not just
-Docker). Steps 4-8 are Docker-only files. Step 9 requires a Linux environment
+Docker). Steps 4-9 are Docker-only files. Step 10 requires a Linux environment
 (or WSL2) to test the actual container build and run cycle.
 
 ---
@@ -436,10 +761,13 @@ Docker). Steps 4-8 are Docker-only files. Step 9 requires a Linux environment
 ## Open Questions
 
 1. **Photo library read-only?** Should `/photos` be mounted read-only by
-   default? Trash moves files, which requires write access to the source.
-   If read-only, trash would need to copy instead of move (slower, uses more
-   space). Decision: mount read-write by default, document read-only as an
-   option with the caveat that trash won't work.
+   default? Trash moves files and rotate rewrites JPEGs, both requiring write
+   access. PhotoPrism offers an explicit `PHOTOPRISM_READONLY` env var for
+   this. Decision: recommend `:ro` mounts for existing libraries by default
+   (safer -- prevents accidental modification of originals). Trash and rotate
+   would only apply to photos in the catalogue. Consider adding a
+   `PHOTONARIUM_READONLY` env var that disables trash/rotate in the UI for
+   photos on read-only mounts (cleaner than silent OS permission errors).
 
 2. **Multi-folder mounts?** A user might have photos on multiple NAS shares.
    Docker compose supports multiple volume mounts. The user would mount them
@@ -456,4 +784,38 @@ Docker). Steps 4-8 are Docker-only files. Step 9 requires a Linux environment
    BLIP-large (~2GB), Python base (~150MB), and app deps (~200MB), the image
    will be ~3.5GB. This is comparable to PhotoPrism (~3GB) and much smaller
    than Immich (multiple containers totalling ~5GB+). Acceptable for NAS
-   deployment.
+   deployment. Note that the models are also copied to `/config` on first
+   run, so the total disk footprint is image (~3.5GB) + `/config` models
+   (~5-10GB) + database + thumbnails. For a medium-sized library (65k
+   images), expect `/config` to reach 15-20 GB.
+
+5. **Intel iGPU acceleration approach.** PyTorch has two paths for Intel GPU:
+   `intel-extension-for-pytorch` (IPEX) and OpenVINO (ONNX-based inference).
+   IPEX is closer to native PyTorch but adds ~1GB to image size. OpenVINO
+   requires model conversion but is more mature for inference-only workloads.
+   Need to investigate which works best for Photonarium's models (OpenCLIP
+   ViT-B-32, MTCNN, InceptionResnetV1, MobileNetV2-NIMA, BLIP) and whether
+   the performance gain on a Celeron N5105/N6005 justifies the complexity.
+   Decision deferred to implementation.
+
+6. **SQLite on network storage.** The plan correctly requires `/config` on
+   local storage. However, some NAS setups (e.g., Proxmox LXC with NFS-
+   mounted storage) might accidentally put everything on network storage.
+   The entrypoint script could add a runtime check (attempt an exclusive
+   lock on the database file) and warn loudly if it appears to be on a
+   network filesystem. Decision: add a warning log message on startup if
+   the config directory is on NFS/SMB (detect via `stat -f` filesystem
+   type or `df` output), but don't block startup.
+
+7. **Swap requirements.** PhotoPrism recommends at least 4 GB swap to prevent
+   OOM kills during indexing of large files (high-res panoramas, RAW images).
+   The entrypoint script could check available swap and warn if insufficient,
+   since NAS devices often have minimal swap configured. Alternatively,
+   document recommended swap sizes and how to add swap on each NAS platform.
+
+8. **Import volume.** Resolved: the catalogue gets its own `/catalogue`
+   volume mount, separate from `/config` (SSD, small) and `/photos` (existing
+   libraries). This follows PhotoPrism's 3-volume pattern (storage, originals,
+   import) and allows the catalogue to live on a large HDD/NAS share while
+   `/config` stays on fast local SSD. The entrypoint sets `catalogue_dir:
+   /catalogue` in the default config.
