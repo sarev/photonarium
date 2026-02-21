@@ -1,0 +1,75 @@
+# =============================================================================
+# Docker Build Ignore
+#
+# Files and directories excluded from the Docker build context.
+# This speeds up builds and reduces image size.
+# =============================================================================
+
+# Virtual environments
+env/
+venv/
+.venv/
+
+# Git / GitHub
+.git/
+.gitignore
+.github/
+
+# Claude Code
+.claude/
+
+# Python cache
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+
+# Local data files (never include in image)
+photonarium.db
+photonarium.db-wal
+photonarium.db-shm
+photonarium.yml
+.photonarium.yml
+
+# Thumbnail cache
+.thumbnails/
+
+# Trash directory
+trash/
+
+# ML model cache (downloaded during build, not from context)
+.cache/
+*.pth
+
+# Development/test data
+demo-seed/
+www/
+catalogue/
+config/
+
+# Node.js / linting tools
+node_modules/
+tools/
+.eslintcache
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Documentation (not needed in image)
+*.md
+snippets/
+
+# Desktop installers (not needed in Docker)
+install.sh
+install.bat
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log

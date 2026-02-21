@@ -1,0 +1,27 @@
+# =============================================================================
+# NVIDIA CUDA Hardware Acceleration Overlay
+#
+# Usage:
+#   docker compose -f docker/docker-compose.yml -f docker/hwaccel.cuda.yml up -d
+#
+# Requirements:
+#   - NVIDIA GPU
+#   - NVIDIA Container Toolkit installed on the host
+#   - A CUDA-enabled image (photonarium:cu118, :cu126, or :cu128)
+#
+# Set the appropriate image tag in your .env file:
+#   PHOTONARIUM_TAG=cu126
+# =============================================================================
+
+services:
+  photonarium:
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+    environment:
+      - NVIDIA_VISIBLE_DEVICES=all
+      - NVIDIA_DRIVER_CAPABILITIES=compute,utility

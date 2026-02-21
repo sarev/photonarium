@@ -1,0 +1,22 @@
+# =============================================================================
+# Intel iGPU Hardware Acceleration Overlay
+#
+# Usage:
+#   docker compose -f docker/docker-compose.yml -f docker/hwaccel.intel.yml up -d
+#
+# Requirements:
+#   - Intel CPU with integrated graphics (common on Synology/QNAP NAS)
+#   - The Intel image variant (photonarium:intel)
+#   - /dev/dri accessible on the host
+#
+# Set the appropriate image tag in your .env file:
+#   PHOTONARIUM_TAG=intel
+# =============================================================================
+
+services:
+  photonarium:
+    devices:
+      - /dev/dri:/dev/dri
+    group_add:
+      - video
+      - render
