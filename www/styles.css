@@ -212,7 +212,7 @@ code {
 }
 .nav-links a:hover { color: var(--text-primary); }
 
-.nav-github {
+.nav-icon {
     display: flex;
     align-items: center;
 }
@@ -533,6 +533,33 @@ code {
     color: var(--text-muted);
     font-size: 0.9rem;
     margin-bottom: 1.5rem;
+}
+
+.steps-note code {
+    background: rgba(255, 255, 255, 0.1);
+    padding: 0.15em 0.4em;
+    border-radius: 4px;
+    font-size: 0.85em;
+}
+
+.install-method-title {
+    display: flex;
+    align-items: center;
+    gap: 0.6rem;
+    font-size: 1.3rem;
+    font-weight: 600;
+    color: var(--text-primary);
+    margin: 3rem 0 1.5rem;
+    padding-bottom: 0.5rem;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+}
+
+.install-method-title:first-of-type {
+    margin-top: 0;
+}
+
+.install-method-title svg {
+    opacity: 0.7;
 }
 
 /* ------------------------------------------------------------------ */
