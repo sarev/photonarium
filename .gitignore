@@ -14,3 +14,6 @@ tools/mktutorial/.laion-aesthetic-head.pth
 tools/mktutorial/.nima-mobilenetv2-ava.pth
 tools/mktutorial/setup-cache/
 tools/mktutorial/__pycache__/
+docker/.env
+docker/config/
+docker/catalogue/

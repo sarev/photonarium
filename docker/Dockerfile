@@ -16,6 +16,12 @@ ARG TORCH_INDEX=https://download.pytorch.org/whl/cpu
 ARG INSTALL_IPEX=0
 ARG HF_TOKEN=""
 
+# Version metadata (passed from Makefile)
+ARG VERSION=dev
+ARG GIT_COMMIT=unknown
+ARG BUILD_DATE=unknown
+ARG VARIANT=cpu
+
 # System dependencies for opencv-headless, Pillow, rawpy, and gosu
 RUN apt-get update && apt-get install -y --no-install-recommends \
     libgl1 \
@@ -62,6 +68,22 @@ RUN mkdir -p /defaults && \
 # Copy entrypoint script
 COPY docker/entrypoint.sh /entrypoint.sh
 RUN chmod +x /entrypoint.sh
+
+# OCI image labels (see: https://github.com/opencontainers/image-spec/blob/main/annotations.md)
+# Placed late in Dockerfile to avoid cache invalidation on version bumps.
+ARG VERSION
+ARG GIT_COMMIT
+ARG BUILD_DATE
+ARG VARIANT
+LABEL org.opencontainers.image.title="Photonarium" \
+      org.opencontainers.image.description="Local AI-powered photo catalogue with semantic search" \
+      org.opencontainers.image.version="${VERSION}" \
+      org.opencontainers.image.revision="${GIT_COMMIT}" \
+      org.opencontainers.image.created="${BUILD_DATE}" \
+      org.opencontainers.image.source="https://github.com/7thsw/photonarium" \
+      org.opencontainers.image.licenses="Apache-2.0" \
+      org.opencontainers.image.vendor="7thsw" \
+      io.photonarium.variant="${VARIANT}"
 
 # Runtime configuration
 EXPOSE 5000

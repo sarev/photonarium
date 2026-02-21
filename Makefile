@@ -12,6 +12,8 @@
 
 IMAGE_NAME := photonarium
 VERSION    := $(shell git describe --tags --always 2>/dev/null || echo dev)
+GIT_COMMIT := $(shell git rev-parse --short HEAD 2>/dev/null || echo unknown)
+BUILD_DATE := $(shell date -u +%Y-%m-%dT%H:%M:%SZ)
 
 # PyTorch wheel index URLs
 TORCH_CPU   := https://download.pytorch.org/whl/cpu
@@ -34,8 +36,14 @@ HF_TOKEN_ARG := $(if $(HF_TOKEN),--build-arg HF_TOKEN=$(HF_TOKEN),)
 CYAN  := $(shell tput setaf 6 2>/dev/null || echo "")
 RESET := $(shell tput sgr0 2>/dev/null || echo "")
 
+# DockerHub repository (override with: make push DOCKER_REPO=myuser/photonarium)
+DOCKER_REPO := 7thsw/photonarium
+
+# Variant tags we publish (excludes versioned tags like v1.1.0-cu126)
+VARIANT_TAGS := latest cpu cu118 cu126 cu128 intel
+
 .PHONY: build build-cu118 build-cu126 build-cu128 build-intel all-images \
-        use test test-photos up up-photos down logs shell clean clean-all help
+        use test test-photos up up-photos down logs shell push clean clean-all help
 
 # =============================================================================
 # Build targets
@@ -44,6 +52,10 @@ RESET := $(shell tput sgr0 2>/dev/null || echo "")
 build:  ## Build CPU-only image (default, ~3.5 GB)
 	docker build \
 		--build-arg TORCH_INDEX=$(TORCH_CPU) \
+		--build-arg VERSION=$(VERSION) \
+		--build-arg GIT_COMMIT=$(GIT_COMMIT) \
+		--build-arg BUILD_DATE=$(BUILD_DATE) \
+		--build-arg VARIANT=cpu \
 		$(HF_TOKEN_ARG) \
 		-t $(IMAGE_NAME):latest \
 		-t $(IMAGE_NAME):cpu \
@@ -53,6 +65,10 @@ build:  ## Build CPU-only image (default, ~3.5 GB)
 build-cu118:  ## Build CUDA 11.8 image (GTX 10xx, RTX 20xx)
 	docker build \
 		--build-arg TORCH_INDEX=$(TORCH_CU118) \
+		--build-arg VERSION=$(VERSION) \
+		--build-arg GIT_COMMIT=$(GIT_COMMIT) \
+		--build-arg BUILD_DATE=$(BUILD_DATE) \
+		--build-arg VARIANT=cu118 \
 		$(HF_TOKEN_ARG) \
 		-t $(IMAGE_NAME):cu118 \
 		-t $(IMAGE_NAME):$(VERSION)-cu118 \
@@ -61,6 +77,10 @@ build-cu118:  ## Build CUDA 11.8 image (GTX 10xx, RTX 20xx)
 build-cu126:  ## Build CUDA 12.6 image (RTX 30xx, 40xx)
 	docker build \
 		--build-arg TORCH_INDEX=$(TORCH_CU126) \
+		--build-arg VERSION=$(VERSION) \
+		--build-arg GIT_COMMIT=$(GIT_COMMIT) \
+		--build-arg BUILD_DATE=$(BUILD_DATE) \
+		--build-arg VARIANT=cu126 \
 		$(HF_TOKEN_ARG) \
 		-t $(IMAGE_NAME):cu126 \
 		-t $(IMAGE_NAME):$(VERSION)-cu126 \
@@ -69,6 +89,10 @@ build-cu126:  ## Build CUDA 12.6 image (RTX 30xx, 40xx)
 build-cu128:  ## Build CUDA 12.8 image (RTX 50xx / Blackwell) [speculative]
 	docker build \
 		--build-arg TORCH_INDEX=$(TORCH_CU128) \
+		--build-arg VERSION=$(VERSION) \
+		--build-arg GIT_COMMIT=$(GIT_COMMIT) \
+		--build-arg BUILD_DATE=$(BUILD_DATE) \
+		--build-arg VARIANT=cu128 \
 		$(HF_TOKEN_ARG) \
 		-t $(IMAGE_NAME):cu128 \
 		-t $(IMAGE_NAME):$(VERSION)-cu128 \
@@ -78,6 +102,10 @@ build-intel:  ## Build Intel iGPU image (IPEX for Celeron/Atom NAS)
 	docker build \
 		--build-arg TORCH_INDEX=$(TORCH_CPU) \
 		--build-arg INSTALL_IPEX=1 \
+		--build-arg VERSION=$(VERSION) \
+		--build-arg GIT_COMMIT=$(GIT_COMMIT) \
+		--build-arg BUILD_DATE=$(BUILD_DATE) \
+		--build-arg VARIANT=intel \
 		$(HF_TOKEN_ARG) \
 		-t $(IMAGE_NAME):intel \
 		-t $(IMAGE_NAME):$(VERSION)-intel \
@@ -195,6 +223,40 @@ shell:  ## Open bash shell in running container
 	docker compose -f $(COMPOSE_FILE) exec photonarium bash
 
 # =============================================================================
+# Publishing
+# =============================================================================
+
+push:  ## Push all built images to DockerHub
+	@if ! git describe --tags --exact-match HEAD >/dev/null 2>&1; then \
+		echo "Warning: HEAD is not a tagged release."; \
+		echo "  Current version: $(VERSION)"; \
+		echo "  Pushing development builds to DockerHub is not recommended."; \
+		echo ""; \
+		read -p "Push anyway? [y/N] " confirm; \
+		if [ "$$confirm" != "y" ] && [ "$$confirm" != "Y" ]; then \
+			echo "Aborted."; \
+			exit 1; \
+		fi; \
+	fi
+	@echo "Pushing to $(DOCKER_REPO)..."
+	@found=0; \
+	for tag in $(VARIANT_TAGS); do \
+		if docker image inspect $(IMAGE_NAME):$$tag >/dev/null 2>&1; then \
+			echo ""; \
+			echo "Tagging and pushing: $$tag"; \
+			docker tag $(IMAGE_NAME):$$tag $(DOCKER_REPO):$$tag; \
+			docker push $(DOCKER_REPO):$$tag; \
+			found=1; \
+		fi; \
+	done; \
+	if [ $$found -eq 0 ]; then \
+		echo "No images to push. Build first with 'make build' or 'make build-cu126'."; \
+		exit 1; \
+	fi
+	@echo ""
+	@echo "Done. View at: https://hub.docker.com/r/$(DOCKER_REPO)/tags"
+
+# =============================================================================
 # Cleanup
 # =============================================================================
 
@@ -238,6 +300,10 @@ help:  ## Show this help
 	@grep -E '^(test|test-photos|up|up-photos|down|logs|shell):.*##' $(MAKEFILE_LIST) | \
 		awk 'BEGIN {FS = ":.*##"}; {printf "  $(CYAN)%-14s$(RESET) %s\n", $$1, $$2}'
 	@echo ""
+	@echo "$(CYAN)Publishing:$(RESET)"
+	@grep -E '^push:.*##' $(MAKEFILE_LIST) | \
+		awk 'BEGIN {FS = ":.*##"}; {printf "  $(CYAN)%-14s$(RESET) %s\n", $$1, $$2}'
+	@echo ""
 	@echo "$(CYAN)Cleanup:$(RESET)"
 	@grep -E '^clean.*:.*##' $(MAKEFILE_LIST) | \
 		awk 'BEGIN {FS = ":.*##"}; {printf "  $(CYAN)%-14s$(RESET) %s\n", $$1, $$2}'
@@ -245,6 +311,7 @@ help:  ## Show this help
 	@echo "Examples:"
 	@echo "  make build          Build CPU image for NAS deployment"
 	@echo "  make build-cu126    Build CUDA 12.6 image for RTX 30xx/40xx"
+	@echo "  make push           Push all built images to DockerHub"
 	@echo "  make up             Start the container"
 	@echo "  make logs           Follow container output"
 	@echo ""
