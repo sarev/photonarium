@@ -681,6 +681,17 @@ command: >-
 
 Each `--add-folder` flag registers a folder for indexing. Folders are stored in the database, so subsequent restarts will rescan them even if you remove the `--add-folder` flags from the command.
 
+### Syncing Photos to Your NAS
+
+Photonarium doesn't include built-in phone backup - and that's intentional. NAS vendors and cloud services already have excellent sync tools, and there's no need to reinvent the wheel:
+
+- **Synology**: Use [Cloud Sync](https://www.synology.com/en-us/dsm/feature/cloud_sync) to sync from Google Drive, Dropbox, OneDrive, etc., or [Synology Photos](https://www.synology.com/en-us/dsm/feature/photos) mobile app for phone backup
+- **QNAP**: Use [HybridMount](https://www.qnap.com/en/software/hybrid-mount) or [Qsync](https://www.qnap.com/en/software/qsync) for phone backup
+- **Unraid/TrueNAS**: Mount cloud storage via rclone, or use Nextcloud for phone backup
+- **Any NAS**: Native mobile apps from Apple Photos, Google Photos, OneDrive, and Dropbox can back up to their respective clouds, which you then sync to your NAS
+
+Once photos land on your NAS (however they get there), mount that folder into Photonarium and it will index them. Your existing backup workflow stays unchanged - Photonarium just adds AI-powered search and organisation on top.
+
 ## Hardware Acceleration
 
 ### NVIDIA GPUs
