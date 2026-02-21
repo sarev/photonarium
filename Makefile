@@ -40,9 +40,9 @@ RESET := $(shell tput sgr0 2>/dev/null || echo "")
 DOCKER_REPO := 7thsw/photonarium
 
 # Variant tags we publish (excludes versioned tags like v1.1.0-cu126)
-VARIANT_TAGS := latest cpu cu118 cu126 cu128 intel
+VARIANT_TAGS := latest cpu cu118 cu126 cu128 intel arm64
 
-.PHONY: build build-cu118 build-cu126 build-cu128 build-intel all-images \
+.PHONY: build build-cu118 build-cu126 build-cu128 build-intel build-arm64 all-images \
         use test test-photos up up-photos down logs shell push clean clean-all help
 
 # =============================================================================
@@ -111,7 +111,21 @@ build-intel:  ## Build Intel iGPU image (IPEX for Celeron/Atom NAS)
 		-t $(IMAGE_NAME):$(VERSION)-intel \
 		-f docker/Dockerfile .
 
-all-images: build build-cu118 build-cu126 build-cu128 build-intel  ## Build all image variants
+build-arm64:  ## Build ARM64 image (Raspberry Pi, Apple Silicon)
+	docker buildx build \
+		--platform linux/arm64 \
+		--build-arg TORCH_INDEX= \
+		--build-arg VERSION=$(VERSION) \
+		--build-arg GIT_COMMIT=$(GIT_COMMIT) \
+		--build-arg BUILD_DATE=$(BUILD_DATE) \
+		--build-arg VARIANT=arm64 \
+		$(HF_TOKEN_ARG) \
+		--load \
+		-t $(IMAGE_NAME):arm64 \
+		-t $(IMAGE_NAME):$(VERSION)-arm64 \
+		-f docker/Dockerfile .
+
+all-images: build build-cu118 build-cu126 build-cu128 build-intel build-arm64  ## Build all image variants
 
 # =============================================================================
 # Runtime targets
@@ -134,6 +148,7 @@ ifndef TAG
 		echo "  make build-cu118   CUDA 11.8 (older GPUs)"; \
 		echo "  make build-cu128   CUDA 12.8 (RTX 50xx)"; \
 		echo "  make build-intel   Intel iGPU"; \
+		echo "  make build-arm64   ARM64 (Raspberry Pi, Apple Silicon)"; \
 	else \
 		echo "Available (built): $$built_tags"; \
 		echo ""; \
@@ -268,11 +283,13 @@ clean:  ## Remove all built Photonarium images
 	-@docker rmi $(IMAGE_NAME):cu126 2>/dev/null || true
 	-@docker rmi $(IMAGE_NAME):cu128 2>/dev/null || true
 	-@docker rmi $(IMAGE_NAME):intel 2>/dev/null || true
+	-@docker rmi $(IMAGE_NAME):arm64 2>/dev/null || true
 	-@docker rmi $(IMAGE_NAME):$(VERSION) 2>/dev/null || true
 	-@docker rmi $(IMAGE_NAME):$(VERSION)-cu118 2>/dev/null || true
 	-@docker rmi $(IMAGE_NAME):$(VERSION)-cu126 2>/dev/null || true
 	-@docker rmi $(IMAGE_NAME):$(VERSION)-cu128 2>/dev/null || true
 	-@docker rmi $(IMAGE_NAME):$(VERSION)-intel 2>/dev/null || true
+	-@docker rmi $(IMAGE_NAME):$(VERSION)-arm64 2>/dev/null || true
 	@echo "Done."
 
 clean-all: clean  ## Remove images and prune Docker build cache
@@ -311,6 +328,7 @@ help:  ## Show this help
 	@echo "Examples:"
 	@echo "  make build          Build CPU image for NAS deployment"
 	@echo "  make build-cu126    Build CUDA 12.6 image for RTX 30xx/40xx"
+	@echo "  make build-arm64    Build ARM64 image for Raspberry Pi/Apple Silicon"
 	@echo "  make push           Push all built images to DockerHub"
 	@echo "  make up             Start the container"
 	@echo "  make logs           Follow container output"

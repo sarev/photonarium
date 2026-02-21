@@ -36,8 +36,12 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 WORKDIR /app
 
 # Install PyTorch first (largest dependency, good for layer caching)
-RUN pip install --no-cache-dir \
-    torch torchvision torchaudio --index-url ${TORCH_INDEX}
+# TORCH_INDEX can be empty for ARM64 builds (use default PyPI)
+RUN if [ -n "${TORCH_INDEX}" ]; then \
+        pip install --no-cache-dir torch torchvision torchaudio --index-url ${TORCH_INDEX}; \
+    else \
+        pip install --no-cache-dir torch torchvision torchaudio; \
+    fi
 
 # Install Intel Extension for PyTorch if requested
 RUN if [ "${INSTALL_IPEX}" = "1" ]; then \

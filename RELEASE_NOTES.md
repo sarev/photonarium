@@ -1,5 +1,68 @@
 # Release Notes
 
+## v1.1.1-beta.11
+
+### Docker Support
+
+Photonarium can now run as a Docker container, making it easy to deploy on NAS devices (Synology, QNAP, Unraid) or any system with Docker installed.
+
+**Pre-built images** are available on DockerHub at `7thsw/photonarium`:
+
+| Tag | Size | Best For |
+|-----|------|----------|
+| `latest` / `cpu` | ~4.5 GB | Most NAS devices, systems without a dedicated GPU |
+| `cu118` | ~8 GB | NVIDIA GTX 10-series, RTX 20-series (CUDA 11.8) |
+| `cu126` | ~10 GB | NVIDIA RTX 30-series, 40-series (CUDA 12.6) |
+| `cu128` | ~10 GB | NVIDIA RTX 50-series / Blackwell (CUDA 12.8) |
+| `intel` | ~5 GB | Intel integrated graphics (Celeron/Atom NAS CPUs) |
+| `arm64` | ~4 GB | ARM64 systems (Raspberry Pi 4/5, Apple Silicon) |
+
+The CPU and CUDA images are x86_64 only. Use the `arm64` tag for ARM-based systems.
+
+**Key features:**
+
+- **All models pre-downloaded:** ML models are baked into the image, so you can start using Photonarium immediately with no internet required after the initial pull.
+- **NAS-friendly permissions:** PUID/PGID environment variables let the container run as your NAS user, avoiding filesystem permission issues.
+- **Hardware acceleration:** Docker Compose overlay files for NVIDIA GPUs (via Container Toolkit) and Intel iGPUs (via `/dev/dri`).
+- **Headless mode:** Desktop-only features (folder picker dialogs, reveal in explorer) are hidden by default in Docker since they don't work without a display.
+- **Scheduled rescans:** The `scan_interval_minutes` setting enables automatic background rescans, useful for NAS setups where photos sync continuously via cloud services.
+- **OCI version labels:** Images include standard metadata (version, git commit, build date, variant) so you always know which release you're running.
+
+**Quick start:**
+
+```bash
+docker run -d \
+  --name photonarium \
+  -p 5000:5000 \
+  -v ~/photonarium/config:/config \
+  -v ~/photonarium/catalogue:/catalogue \
+  -v /path/to/your/photos:/photos:ro \
+  -e PUID=$(id -u) \
+  -e PGID=$(id -g) \
+  7thsw/photonarium:latest \
+  --add-folder /photos --scan
+```
+
+The `--add-folder` flag registers the photo directory (only needed on first run). The `--scan` flag triggers indexing. The `--add-folder` flag is needed because Docker runs in headless mode, which hides the "Add Folder" button (native folder picker dialogs don't work without a display). The folder list and Rescan button remain available in the web UI.
+
+See the [Docker Installation](#docker-installation) section in README.md for complete setup instructions, including Docker Compose examples, GPU acceleration, performance tips, and updating.
+
+### Quality Scoring: Absolute Aesthetics
+
+The Quality sort now uses absolute aesthetic scores instead of percentile ranks:
+
+- **Before:** The aesthetic component (60% weight) was percentile-ranked within the current image set, so a score of 0.8 meant "better than 80% of these images".
+- **After:** The aesthetic component uses the raw NIMA/LAION model output (divided by 10 to normalise to 0-1), so a score of 0.6 reflects a genuine 6/10 from the models.
+
+This change means quality scores are now comparable across different sets of images. Previously, viewing a group of all excellent images would spread them from 0% to 100%; now they'll cluster near their true aesthetic value.
+
+Sharpness, resolution, and compression quality remain percentile-ranked since they have no natural absolute scale.
+
+### Documentation
+
+- **Comprehensive Docker guide:** README.md now includes a full Docker Installation section covering quick start, image variants, Docker Compose, hardware acceleration (NVIDIA and Intel), configuration, performance tips (SSD for database, network storage for photos), auto-scanning, and updating.
+- **Licence documentation:** Added LICENSES.md documenting all third-party dependencies and their licences (Apache 2.0, MIT, BSD, PSF).
+
 ## v1.1.0-beta.10
 
 ### Toolbar Colour Overhaul

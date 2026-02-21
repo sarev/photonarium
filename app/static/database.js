@@ -943,15 +943,13 @@ const Database = {
                 this._els.importSection.hidden = false;
             }
 
-            // In headless mode (Docker), hide folder management - folders are
-            // configured via docker-compose volumes, not the UI.
+            // In headless mode (Docker), hide the "Add Local Folder" button since
+            // the native folder picker dialog doesn't work without a display.
+            // Folders are registered via CLI (--add-folder) instead.
+            // The folder list and Rescan button remain visible.
             const headless = response?.data?.headless;
-            if (headless && this._els.foldersSection) {
-                this._els.foldersSection.hidden = true;
-            }
-            // Also hide "Rescan Local Folders" in headless mode (scheduled scans instead)
-            if (headless && this._els.rescanBtn) {
-                this._els.rescanBtn.hidden = true;
+            if (headless && this._els.addFolderBtn) {
+                this._els.addFolderBtn.hidden = true;
             }
 
             // Show version string in the toolbar (Database screen only)

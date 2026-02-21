@@ -20,7 +20,8 @@
 - [Smart Groups](#smart-groups)
 - [Faces](#faces)
 - [Database](#database)
-- [Installation](#installation)
+- [Docker Installation](#docker-installation)
+- [Manual Installation](#manual-installation)
 - [Running Photonarium](#running-photonarium)
 - [Configuration](#configuration)
 - [Tips](#tips)
@@ -578,7 +579,271 @@ Supported image types include: `.jpg`, `.jpeg`, `.png`, `.gif`, `.bmp`, `.tiff`,
 
 ---
 
-# Installation
+# Docker Installation
+
+Docker is the easiest way to run Photonarium, especially on NAS devices (Synology, QNAP, Unraid, etc.) or any system where you want a self-contained deployment. All ML models are pre-downloaded in the image, so you can start using Photonarium immediately.
+
+## Quick Start
+
+Pull and run the CPU image (works on any system):
+
+```bash
+# Create directories for persistent data
+mkdir -p ~/photonarium/config ~/photonarium/catalogue
+
+# Run the container
+docker run -d \
+  --name photonarium \
+  -p 5000:5000 \
+  -v ~/photonarium/config:/config \
+  -v ~/photonarium/catalogue:/catalogue \
+  -v /path/to/your/photos:/photos:ro \
+  -e PUID=$(id -u) \
+  -e PGID=$(id -g) \
+  7thsw/photonarium:latest \
+  --add-folder /photos --scan
+```
+
+Then open `http://localhost:5000` in your browser. Your photos will start indexing automatically.
+
+The `--add-folder /photos` flag registers the mounted photo directory (only needed on first run - folders are saved in the database). The `--scan` flag triggers indexing. The `--add-folder` flag is needed because Docker runs in headless mode, which hides the "Add Folder" button (native folder picker dialogs don't work without a display). The folder list and Rescan button remain available in the web UI.
+
+On subsequent runs, you can omit `--add-folder` and just use `--scan` to pick up new images, or omit both flags entirely and use the **Rescan Local Folders** button in the web UI.
+
+## Image Variants
+
+Pre-built images are available on DockerHub at `7thsw/photonarium`:
+
+| Tag | Size | Best For |
+|-----|------|----------|
+| `latest` / `cpu` | ~4.5 GB | Most NAS devices, systems without a dedicated GPU |
+| `cu118` | ~8 GB | NVIDIA GTX 10-series, RTX 20-series (CUDA 11.8) |
+| `cu126` | ~10 GB | NVIDIA RTX 30-series, 40-series (CUDA 12.6) |
+| `cu128` | ~10 GB | NVIDIA RTX 50-series / Blackwell (CUDA 12.8) |
+| `intel` | ~5 GB | Intel integrated graphics (Celeron/Atom NAS CPUs) |
+| `arm64` | ~4 GB | ARM64 systems (Raspberry Pi 4/5, Apple Silicon) |
+
+The CPU and CUDA images are x86_64 only. Use the `arm64` tag for ARM-based systems. The CPU/arm64 images work without a dedicated GPU but process images more slowly. If you have a supported GPU, use the matching CUDA or Intel variant for significantly faster indexing and face detection.
+
+## Using Docker Compose
+
+Docker Compose makes it easier to manage configuration. Create a `docker-compose.yml` file:
+
+```yaml
+services:
+  photonarium:
+    container_name: photonarium
+    image: 7thsw/photonarium:latest
+    restart: unless-stopped
+    ports:
+      - "5000:5000"
+    volumes:
+      # Application data (database, thumbnails, models)
+      - ./config:/config
+      # Catalogue for imported photos
+      - ./catalogue:/catalogue
+      # Your photo library (read-only recommended)
+      - /path/to/your/photos:/photos:ro
+      # Timezone sync
+      - /etc/localtime:/etc/localtime:ro
+    environment:
+      - PUID=1000
+      - PGID=1000
+    # Register photo folder and start indexing
+    command: --add-folder /photos --scan --detect-faces
+```
+
+Then run:
+
+```bash
+docker compose up -d
+```
+
+The `command:` line registers your photo folder and starts processing. The `--add-folder` flag is idempotent (safe to repeat), so leaving it in the compose file is fine - it won't create duplicates. On subsequent container restarts, registered folders are rescanned for new images.
+
+### Multiple Photo Folders
+
+Mount each photo folder separately and register them all in the command:
+
+```yaml
+volumes:
+  - ./config:/config
+  - ./catalogue:/catalogue
+  - /nas/photos/holidays:/photos/holidays:ro
+  - /nas/photos/family:/photos/family:ro
+  - /nas/photos/archive:/photos/archive:ro
+command: >-
+  --add-folder /photos/holidays
+  --add-folder /photos/family
+  --add-folder /photos/archive
+  --scan --detect-faces
+```
+
+Each `--add-folder` flag registers a folder for indexing. Folders are stored in the database, so subsequent restarts will rescan them even if you remove the `--add-folder` flags from the command.
+
+## Hardware Acceleration
+
+### NVIDIA GPUs
+
+GPU acceleration dramatically speeds up image indexing and face detection. To enable it:
+
+1. **Install the NVIDIA Container Toolkit** on your host system. Follow the [official installation guide](https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/latest/install-guide.html).
+
+2. **Use a CUDA-enabled image** that matches your GPU:
+   - RTX 30-series, 40-series: `7thsw/photonarium:cu126`
+   - RTX 20-series, GTX 10-series: `7thsw/photonarium:cu118`
+   - RTX 50-series (Blackwell): `7thsw/photonarium:cu128`
+
+3. **Add GPU access to your container**:
+
+```yaml
+services:
+  photonarium:
+    image: 7thsw/photonarium:cu126
+    # ... other settings ...
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+    environment:
+      - NVIDIA_VISIBLE_DEVICES=all
+      - NVIDIA_DRIVER_CAPABILITIES=compute,utility
+```
+
+To verify GPU access, check the container logs on startup - it should show your GPU device.
+
+### Intel Integrated Graphics
+
+Many NAS devices (Synology, QNAP) have Intel Celeron or Atom CPUs with integrated graphics. The Intel image uses IPEX (Intel Extension for PyTorch) to accelerate computation on these iGPUs.
+
+```yaml
+services:
+  photonarium:
+    image: 7thsw/photonarium:intel
+    # ... other settings ...
+    devices:
+      - /dev/dri:/dev/dri
+    group_add:
+      - video
+      - render
+```
+
+Requires `/dev/dri` to be accessible on the host (standard on most Linux systems).
+
+## Configuration
+
+### Environment Variables
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `PUID` | 1000 | User ID for file ownership (match your NAS user) |
+| `PGID` | 1000 | Group ID for file ownership |
+| `PHOTONARIUM_PORT` | 5000 | Port the server listens on |
+
+**Tip:** On Synology/QNAP, find your user's PUID/PGID with `id your_username` via SSH.
+
+### Volumes
+
+| Container Path | Purpose |
+|----------------|---------|
+| `/config` | Database, thumbnails, ML models, configuration file |
+| `/catalogue` | Imported photos (organised by date) |
+| `/photos` | Your photo library (mount read-only with `:ro`) |
+
+### Configuration File
+
+On first run, Photonarium creates `/config/photonarium.yml` with Docker-appropriate defaults:
+
+- `headless: true` - hides desktop-only features (folder picker dialogs, reveal in explorer)
+- `scan_interval_minutes: 60` - automatic rescan every hour (useful if photos sync continuously)
+
+Edit this file to change settings. Most settings can also be changed via the **Edit Settings** button in the web UI.
+
+## Performance Tips
+
+### Put the Database on an SSD
+
+The `/config` volume contains Photonarium's SQLite database and thumbnail cache. For best performance, especially with large libraries (50,000+ images):
+
+- **Store `/config` on local SSD storage**, not network storage (NFS/SMB)
+- SQLite requires a local filesystem with proper locking - network storage causes corruption
+- Thumbnails also benefit from fast random-read performance
+
+Your photos (`/photos`) can remain on slower network or HDD storage since they're read sequentially during scanning.
+
+### Memory Considerations
+
+- The CPU image uses ~2-3 GB RAM during normal operation
+- CUDA images may use more during batch processing
+- Face detection on large batches temporarily spikes memory usage
+- For systems with limited RAM, reduce `embedding_batch_size` and `face_detection_batch_size` in settings
+
+### Network Storage for Photos
+
+Accessing photos over NFS or SMB is fine for the `/photos` mount:
+
+- Initial indexing may be slower due to network latency
+- Thumbnail generation reads each file once, then serves from the local cache
+- Subsequent browsing is fast because thumbnails are stored locally in `/config`
+
+## Scheduled Rescans
+
+For NAS setups where photos are synced continuously (e.g., via cloud services), enable automatic periodic rescans by editing `/config/photonarium.yml`:
+
+```yaml
+# Rescan all folders every 60 minutes
+scan_interval_minutes: 60
+```
+
+This runs in the background without blocking the UI. Combined with the `--scan` startup flag, this ensures new photos are indexed automatically whether they arrive while the container is running or while it was stopped.
+
+## Updating
+
+To update to a new version:
+
+```bash
+# Pull the latest image
+docker pull 7thsw/photonarium:latest
+
+# Restart the container
+docker compose down
+docker compose up -d
+```
+
+Your data in `/config` and `/catalogue` is preserved across updates. ML models are copied to `/config` on first run and reused, so updates don't re-download models.
+
+## Building from Source
+
+If you want to build the image yourself (developers, custom modifications):
+
+```bash
+# Clone the repository
+git clone https://github.com/7thsw/photonarium.git
+cd photonarium
+
+# Build CPU image (x86_64)
+make build
+
+# Build CUDA 12.6 image (x86_64, RTX 30xx/40xx)
+make build-cu126
+
+# Build ARM64 image (Raspberry Pi, Apple Silicon)
+make build-arm64
+
+# Build all variants
+make all-images
+```
+
+See the Makefile for all available build targets. Note that building ARM64 images on x86_64 uses QEMU emulation and is slow.
+
+---
+
+# Manual Installation
+
+If you prefer to run Photonarium directly on your system without Docker, follow these instructions.
 
 ## Requirements
 
