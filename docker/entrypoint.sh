@@ -31,6 +31,7 @@ useradd -o -u "$PUID" -g "$PGID" -d /config -s /bin/bash photonarium 2>/dev/null
 # Models are baked into the image during docker build:
 #   - /defaults/ contains LAION aesthetic head and NIMA weights
 #   - /root/.cache/huggingface/ contains OpenCLIP and BLIP models
+#   - /root/.cache/torch/ contains FaceNet models (InceptionResnetV1 vggface2)
 #
 # On first run, we copy them to /config so they persist across container
 # updates. Uses cp -n (no-clobber) so user-replaced models aren't overwritten.
@@ -46,6 +47,14 @@ if [ -d "/root/.cache/huggingface" ] && [ ! -d "/config/.cache/huggingface" ]; t
     echo "Copying HuggingFace models to /config/.cache/ (first run only)..."
     mkdir -p /config/.cache
     cp -r /root/.cache/huggingface /config/.cache/
+fi
+
+# Copy PyTorch cache (FaceNet models) to /config/.cache/torch/
+# InceptionResnetV1 vggface2 weights are stored here.
+if [ -d "/root/.cache/torch" ] && [ ! -d "/config/.cache/torch" ]; then
+    echo "Copying FaceNet models to /config/.cache/ (first run only)..."
+    mkdir -p /config/.cache
+    cp -r /root/.cache/torch /config/.cache/
 fi
 
 # -----------------------------------------------------------------------------

@@ -61,7 +61,7 @@ COPY download_models.py .
 
 # Download all ML models into a staging directory.
 # On first run, entrypoint.sh copies them to /config (the user's volume).
-# This includes: OpenCLIP, BLIP, LAION aesthetic head, NIMA weights.
+# This includes: OpenCLIP, BLIP, FaceNet (MTCNN + InceptionResnetV1), LAION aesthetic head, NIMA weights.
 # HF_TOKEN is optional but speeds up downloads and avoids rate limits.
 # Safety: remove any token files that HF might create (in same layer to prevent leaks).
 ARG HF_TOKEN

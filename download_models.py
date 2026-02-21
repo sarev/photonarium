@@ -156,6 +156,40 @@ def download_laion_head(model: str, pretrained: str, data_dir: str = '.') -> boo
         return True  # Non-fatal — app works without it
 
 
+def download_facenet_models() -> bool:
+    """Download FaceNet face detection and recognition models.
+
+    Downloads:
+    - MTCNN weights (bundled with facenet-pytorch, but triggers download on import)
+    - InceptionResnetV1 with vggface2 weights (~107MB) for face embeddings
+
+    Returns:
+        True if downloaded successfully, False otherwise.
+    """
+    print(f'\n{"=" * 60}')
+    print('Downloading FaceNet models (MTCNN + InceptionResnetV1)')
+    print('=' * 60)
+
+    try:
+        from facenet_pytorch import MTCNN, InceptionResnetV1
+
+        print('Loading MTCNN (face detection)...')
+        # MTCNN weights are bundled, but this ensures they're extracted
+        _mtcnn = MTCNN()
+        del _mtcnn
+
+        print('Loading InceptionResnetV1 with vggface2 weights (face recognition)...')
+        # This downloads the ~107MB vggface2 checkpoint
+        _resnet = InceptionResnetV1(pretrained='vggface2').eval()
+        del _resnet
+
+        print('FaceNet models downloaded successfully')
+        return True
+    except Exception as e:
+        print(f'Error downloading FaceNet models: {e}', file=sys.stderr)
+        return False
+
+
 def download_nima_model(data_dir: str = '.') -> bool:
     """Download the NIMA MobileNetV2-AVA aesthetic scoring checkpoint.
 
@@ -259,6 +293,10 @@ def main():
     if nima_info and nima_info.get('enabled', True):
         data_dir = nima_info.get('data_dir', '.')
         download_nima_model(data_dir=data_dir)
+
+    # Download FaceNet models (MTCNN + InceptionResnetV1)
+    if not download_facenet_models():
+        success = False
 
     print()
     print('=' * 60)
