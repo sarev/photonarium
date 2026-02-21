@@ -33,10 +33,8 @@ services:
       # Timezone sync for correct EXIF timestamp handling
       - /etc/localtime:/etc/localtime:ro
 
-      # Optional: mount existing photo libraries for indexing
-      # Uncomment and adjust paths as needed:
-      # - /path/to/photos:/photos/main:ro
-      # - /path/to/holidays:/photos/holidays:ro
+      # Photo libraries are mounted via docker-compose.photos.yml overlay
+      # Example: docker compose -f docker/docker-compose.yml -f docker/docker-compose.photos.yml up -d
 
     environment:
       - PUID=${PUID:-1000}

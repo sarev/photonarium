@@ -4332,7 +4332,8 @@ if __name__ == '__main__':
         print(json.dumps(models))
         sys.exit(0)
 
-    # Handle add-folder command (register folders for indexing, then exit)
+    # Handle add-folder command (register folders for indexing)
+    # If --scan is also provided, continue to start the server; otherwise exit.
     if args.add_folder:
         db = get_db()
         added = 0
@@ -4348,8 +4349,12 @@ if __name__ == '__main__':
                 logger.info(f'Added folder: {abs_path}')
                 added += 1
         if added:
-            logger.info(f'Registered {added} new folder(s). Run with --scan to index their images.')
-        sys.exit(0)
+            logger.info(f'Registered {added} new folder(s).')
+        # If --scan is provided, continue to server startup (don't exit)
+        if not args.scan:
+            if added:
+                logger.info('Run with --scan to index their images.')
+            sys.exit(0)
 
     # Handle thumbnail generation command
     if args.generate_thumbnails:

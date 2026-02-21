@@ -1,0 +1,20 @@
+# =============================================================================
+# Photo Library Mount Overlay
+#
+# Use this overlay to mount your photo library for indexing.
+#
+# Usage:
+#   docker compose -f docker/docker-compose.yml -f docker/docker-compose.photos.yml up -d
+#
+# Or copy this file, edit paths, and use your custom overlay.
+# =============================================================================
+
+services:
+  photonarium:
+    volumes:
+      # Mount your photo library (read-only recommended)
+      # Edit this path to match your photo location
+      - ${PHOTOS_PATH:-.}:/photos:ro
+
+    # Auto-register and scan photos on startup
+    command: --add-folder /photos --scan --detect-faces

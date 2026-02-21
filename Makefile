@@ -21,13 +21,17 @@ TORCH_CU128 := https://download.pytorch.org/whl/cu128
 
 # Compose file location
 COMPOSE_FILE := docker/docker-compose.yml
+PHOTOS_OVERLAY := docker/docker-compose.photos.yml
+
+# Tutorial examples for testing
+TEST_PHOTOS := $(CURDIR)/tools/mktutorial/examples
 
 # Colours for help output (disabled if not a terminal)
 CYAN  := $(shell tput setaf 6 2>/dev/null || echo "")
 RESET := $(shell tput sgr0 2>/dev/null || echo "")
 
 .PHONY: build build-cu118 build-cu126 build-cu128 build-intel all-images \
-        use test up down logs shell clean clean-all help
+        use test test-photos up up-photos down logs shell clean clean-all help
 
 # =============================================================================
 # Build targets
@@ -148,11 +152,32 @@ test:  ## Run container smoke test (health check)
 	@docker compose -f $(COMPOSE_FILE) down
 	@echo "Smoke test completed successfully."
 
+test-photos:  ## Run integration test with sample photos
+	@echo "Starting container with test photos..."
+	PHOTOS_PATH=$(TEST_PHOTOS) docker compose -f $(COMPOSE_FILE) -f $(PHOTOS_OVERLAY) up -d
+	@echo "Waiting for startup (15s)..."
+	@sleep 15
+	@echo "Checking health endpoint..."
+	@curl -sf http://localhost:5000/api/health && echo " - Health check passed" || \
+		(echo " - Health check FAILED"; docker compose -f $(COMPOSE_FILE) -f $(PHOTOS_OVERLAY) down; exit 1)
+	@echo ""
+	@echo "Container running with test photos at http://localhost:5000"
+	@echo "Run 'make logs' to follow output, 'make down' to stop."
+
 up:  ## Start container (docker compose up -d)
 	docker compose -f $(COMPOSE_FILE) up -d
 
+up-photos:  ## Start container with photos mount (set PHOTOS_PATH first)
+	@if [ -z "$(PHOTOS_PATH)" ]; then \
+		echo "Error: PHOTOS_PATH not set."; \
+		echo "Usage: PHOTOS_PATH=/path/to/photos make up-photos"; \
+		exit 1; \
+	fi
+	PHOTOS_PATH=$(PHOTOS_PATH) docker compose -f $(COMPOSE_FILE) -f $(PHOTOS_OVERLAY) up -d
+
 down:  ## Stop container (docker compose down)
-	docker compose -f $(COMPOSE_FILE) down
+	-docker compose -f $(COMPOSE_FILE) -f $(PHOTOS_OVERLAY) down 2>/dev/null
+	-docker compose -f $(COMPOSE_FILE) down 2>/dev/null
 
 logs:  ## Follow container logs
 	docker compose -f $(COMPOSE_FILE) logs -f
@@ -201,7 +226,7 @@ help:  ## Show this help
 	@echo ""
 	@echo "$(CYAN)Runtime targets:$(RESET)"
 	@echo "  $(CYAN)use            $(RESET) Select image variant (make use TAG=cu126)"
-	@grep -E '^(test|up|down|logs|shell):.*##' $(MAKEFILE_LIST) | \
+	@grep -E '^(test|test-photos|up|up-photos|down|logs|shell):.*##' $(MAKEFILE_LIST) | \
 		awk 'BEGIN {FS = ":.*##"}; {printf "  $(CYAN)%-14s$(RESET) %s\n", $$1, $$2}'
 	@echo ""
 	@echo "$(CYAN)Cleanup:$(RESET)"
