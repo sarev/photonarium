@@ -75,8 +75,15 @@ slightly slower startup.
 
 ## Building the container images
 
-There are two images to build: CPU-only (default) and CUDA (for NVIDIA GPU
-users). Both are built from the same Dockerfile using a build argument.
+Multiple image variants are built from the same Dockerfile using build arguments:
+
+| Variant | Tag | Target Hardware |
+|---------|-----|-----------------|
+| CPU-only | `:latest`, `:cpu` | Most NAS devices (default) |
+| CUDA 11.8 | `:cu118` | Older NVIDIA GPUs (GTX 10xx, RTX 20xx) |
+| CUDA 12.6 | `:cu126` | Modern NVIDIA GPUs (RTX 30xx, 40xx) |
+| CUDA 12.8 | `:cu128` | RTX 50xx / Blackwell (speculative, needs testing) |
+| Intel iGPU | `:intel` | Celeron/Atom NAS with integrated graphics |
 
 ### What happens during a build
 
@@ -90,17 +97,28 @@ users). Both are built from the same Dockerfile using a build argument.
 
 ### Build commands
 
+Builds are orchestrated via GNU Make (available on Linux/macOS/WSL2):
+
 ```bash
 # CPU-only (most NAS users) -- ~3.5 GB image
-docker build -t photonarium:latest .
+make build
 
-# NVIDIA CUDA variant -- ~4.3 GB image
-docker build \
-    --build-arg TORCH_INDEX=https://download.pytorch.org/whl/cu124 \
-    -t photonarium:cuda .
+# NVIDIA CUDA variants -- ~4.3 GB images
+make build-cu118    # CUDA 11.8 (GTX 10xx, RTX 20xx)
+make build-cu126    # CUDA 12.6 (RTX 30xx, 40xx)
+make build-cu128    # CUDA 12.8 (RTX 50xx / Blackwell) [speculative, needs testing]
+
+# Intel iGPU variant (Celeron/Atom NAS devices with integrated graphics)
+make build-intel
+
+# Build all variants
+make all-images
+
+# See all available targets
+make help
 ```
 
-A convenience script (`docker/build.sh`) wraps both commands. A full build
+A full build
 from scratch takes 10-20 minutes depending on internet speed. Rebuilds after
 code-only changes are much faster because Docker caches the expensive
 dependency and model layers.
@@ -168,21 +186,25 @@ Most NAS users will run CPU-only. ML processing (face detection, embeddings,
 quality scoring) is slower but works fine -- it just means the initial scan of
 a large library takes longer (hours rather than minutes for 65k images).
 
-Two GPU paths are planned:
+Two GPU paths are supported:
 
 ### NVIDIA CUDA
 
 For users with a discrete NVIDIA GPU (common on Unraid, custom server builds).
 Requires:
 - NVIDIA Container Toolkit installed on the host
-- The `:cuda` image variant
+- The appropriate CUDA image variant:
+  - `:cu118` for older GPUs (GTX 10xx, RTX 20xx)
+  - `:cu126` for modern GPUs (RTX 30xx, 40xx)
+  - `:cu128` for RTX 50xx / Blackwell (speculative, needs testing)
 - A compose override file (`hwaccel.cuda.yml`) for GPU device mapping
 
 ### Intel iGPU
 
 Potentially more relevant for NAS users, since many Synology and QNAP devices
-use Intel Celeron/Atom CPUs with integrated graphics. Implementation approach
-(IPEX vs OpenVINO) needs investigation. Requires:
+use Intel Celeron/Atom CPUs with integrated graphics. Uses Intel Extension for
+PyTorch (IPEX). Requires:
+- The `:intel` image variant
 - Passing `/dev/dri` into the container
 - A compose override file (`hwaccel.intel.yml`)
 
@@ -298,7 +320,7 @@ Automated scheduled backups (PhotoPrism-style) are a planned follow-up.
 
 ### Disk space
 
-- Docker image: ~3.5 GB (CPU) or ~4.3 GB (CUDA)
+- Docker image: ~3.5 GB (CPU/Intel) or ~4.3 GB (CUDA variants)
 - `/config` volume: 15-20 GB for ~65k images (scales with library size)
 - `/catalogue` volume: depends on how many photos you import
 

@@ -61,19 +61,27 @@ than baked into separate images. This avoids maintaining multiple Dockerfiles.
 Photonarium should follow the single-image pattern for architecture (when
 arm64 is added). For GPU, the build-arg approach (CPU vs CUDA PyTorch wheels)
 is better since PyTorch CUDA adds ~800MB that CPU-only users shouldn't carry.
-But we should keep this to two images at most (`:latest` and `:cuda`), not a
-proliferation of variants.
 
-### CPU-only base image, GPU optional
+### Image variants
 
-Most NAS devices have no GPU. The default image uses CPU-only PyTorch (~800MB
-smaller than CUDA). A separate `Dockerfile.cuda` (or build arg) can produce a
-GPU-enabled variant for power users with NVIDIA GPUs on Unraid/QNAP.
+Five image variants are built from a single Dockerfile using build arguments,
+managed via GNU Make:
+
+| Variant | Tag | PyTorch Index | Target Hardware |
+|---------|-----|---------------|-----------------|
+| CPU-only | `:latest`, `:cpu` | `/whl/cpu` | Most NAS devices (default) |
+| CUDA 11.8 | `:cu118` | `/whl/cu118` | Older NVIDIA (GTX 10xx, RTX 20xx) |
+| CUDA 12.6 | `:cu126` | `/whl/cu126` | Modern NVIDIA (RTX 30xx, 40xx) |
+| CUDA 12.8 | `:cu128` | `/whl/cu128` | RTX 50xx / Blackwell (speculative) |
+| Intel iGPU | `:intel` | `/whl/cpu` + IPEX | Celeron/Atom NAS with iGPU |
+
+Most NAS devices have no GPU. The default `:latest` image uses CPU-only PyTorch
+(~800MB smaller than CUDA variants).
 
 Note that many consumer NAS devices (Synology, QNAP) use Intel Celeron/Atom
-CPUs with integrated graphics. Intel iGPU acceleration via OpenVINO is arguably
-more relevant to the NAS audience than NVIDIA CUDA, and should be supported as
-a second GPU tier alongside the CUDA variant.
+CPUs with integrated graphics. The `:intel` variant uses Intel Extension for
+PyTorch (IPEX) for iGPU acceleration, which may be more relevant to the NAS
+audience than NVIDIA CUDA.
 
 ### PUID/PGID for NAS filesystem permissions
 
@@ -503,16 +511,19 @@ services:
 ```
 
 Requires the NVIDIA Container Toolkit on the host and a CUDA-enabled image.
-Build with a build arg:
+The Dockerfile uses a build arg to select the PyTorch variant:
 
 ```dockerfile
 ARG TORCH_INDEX=https://download.pytorch.org/whl/cpu
 RUN pip install torch torchvision --index-url ${TORCH_INDEX}
 ```
 
+CUDA builds are managed via Makefile targets:
+
 ```bash
-docker build --build-arg TORCH_INDEX=https://download.pytorch.org/whl/cu124 \
-    -t photonarium:cuda .
+make build-cu118    # CUDA 11.8 (GTX 10xx, RTX 20xx)
+make build-cu126    # CUDA 12.6 (RTX 30xx, 40xx)
+make build-cu128    # CUDA 12.8 (RTX 50xx / Blackwell) [speculative]
 ```
 
 **`hwaccel.intel.yml`** (Intel iGPU - many Synology/QNAP NAS devices):
@@ -537,7 +548,47 @@ Photonarium's workloads (CLIP, MTCNN, InceptionResnet, NIMA).
 **Note:** Immich also supports ROCm (AMD) and ARM NN (Mali), but these are
 uncommon on NAS hardware and can be added later if there is demand.
 
-#### 2g. `.dockerignore`
+#### 2g. `Makefile`
+
+GNU Make orchestrates all Docker builds. This provides a clean interface for
+building multiple image variants without remembering build-arg syntax:
+
+```makefile
+# PyTorch index URLs
+TORCH_CPU   := https://download.pytorch.org/whl/cpu
+TORCH_CU118 := https://download.pytorch.org/whl/cu118
+TORCH_CU126 := https://download.pytorch.org/whl/cu126
+TORCH_CU128 := https://download.pytorch.org/whl/cu128
+
+.PHONY: build build-cu118 build-cu126 build-cu128 build-intel all-images \
+        test up down logs shell clean help
+
+build:           ## Build CPU-only image (default, ~3.5 GB)
+	docker build --build-arg TORCH_INDEX=$(TORCH_CPU) \
+		-t photonarium:latest -t photonarium:cpu -f docker/Dockerfile .
+
+build-cu118:     ## Build CUDA 11.8 image (GTX 10xx, RTX 20xx)
+build-cu126:     ## Build CUDA 12.6 image (RTX 30xx, 40xx)
+build-cu128:     ## Build CUDA 12.8 image (RTX 50xx / Blackwell) [speculative]
+build-intel:     ## Build Intel iGPU image (IPEX)
+
+all-images:      ## Build all image variants
+
+test:            ## Run container smoke test (health check)
+up:              ## Start container (docker compose up -d)
+down:            ## Stop container (docker compose down)
+logs:            ## Follow container logs
+shell:           ## Open shell in running container
+
+clean:           ## Remove all built images
+help:            ## Show available targets (default)
+```
+
+The Makefile lives in the repository root (not inside `docker/`) so users can
+run `make build` from the top level. All Docker-related files are referenced
+via `docker/` paths (e.g., `-f docker/Dockerfile`).
+
+#### 2h. `.dockerignore`
 
 ```
 env/
@@ -743,18 +794,20 @@ Proxmox users have three deployment options:
 1. **`/api/health` endpoint** (5 min, tiny change to app.py)
 2. **`headless` config option** (30 min, config.py + app.py + database.js + gallery.js)
 3. **Scheduled automatic rescans** (1 hour, config.py + imagedb.py)
-4. **`requirements-docker.txt`** (10 min, new file)
-5. **`.dockerignore`** (5 min, new file)
-6. **`Dockerfile`** (30 min, new file, iterative testing)
+4. **`Makefile`** (15 min, new file, orchestrates all builds)
+5. **`docker/Dockerfile`** (30 min, new file, iterative testing)
+6. **`docker/requirements.txt`** (10 min, new file)
 7. **`docker/entrypoint.sh`** (20 min, new file)
-8. **`docker-compose.yml`** + `.env.example` (15 min, new files)
-9. **`hwaccel.cuda.yml`** + **`hwaccel.intel.yml`** (15 min, new files)
-10. **Build and test** (1-2 hours, iterative)
-11. **Documentation** (1 hour, README + DEVELOP + CLAUDE + reverse proxy + platform notes)
+8. **`docker/docker-compose.yml`** + `docker/.env.example` (15 min, new files)
+9. **`docker/hwaccel.cuda.yml`** + **`docker/hwaccel.intel.yml`** (15 min, new files)
+10. **`.dockerignore`** (5 min, new file)
+11. **Build and test** (1-2 hours, iterative via `make build`, `make test`)
+12. **Documentation** (1 hour, README + DEVELOP + CLAUDE + reverse proxy + platform notes)
 
 Steps 1-3 are backend/frontend changes that benefit all users (not just
-Docker). Steps 4-9 are Docker-only files. Step 10 requires a Linux environment
-(or WSL2) to test the actual container build and run cycle.
+Docker). Steps 4-10 are Docker-only files in the `docker/` subdirectory (except
+the root Makefile and .dockerignore). Step 11 requires a Linux environment (or
+WSL2) to test the actual container build and run cycle.
 
 ---
 
