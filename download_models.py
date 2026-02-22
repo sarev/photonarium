@@ -9,17 +9,21 @@ This script downloads all ML models required by Photonarium:
 - LAION aesthetic head (image quality scoring)
 - NIMA (aesthetic scoring)
 
+The script queries app.py --list-models to determine which models are needed
+based on the current configuration. This ensures the downloaded models always
+match the app's config.py settings.
+
 Usage:
-    # Standard usage (queries app.py for model config):
+    # Standard usage:
     python download_models.py
 
-    # Standalone mode with defaults (for Docker builds, no app.py needed):
-    python download_models.py --standalone --data-dir docker/models
+    # With custom data directory (for LAION/NIMA weights):
+    python download_models.py --data-dir /path/to/data
 
-    # With custom cache locations (for Docker builds):
+    # For Docker builds (redirect HuggingFace/PyTorch caches):
     HF_HOME=docker/models/huggingface \\
     TORCH_HOME=docker/models/torch \\
-    python download_models.py --standalone --data-dir docker/models
+    python download_models.py --data-dir docker/models
 
 Environment Variables:
     HF_HOME: HuggingFace cache directory (default: ~/.cache/huggingface)
@@ -34,36 +38,6 @@ import os
 import subprocess
 import sys
 import urllib.request
-
-# Default model configuration (must match app/config.py defaults)
-DEFAULT_OPENCLIP_MODEL = 'ViT-B-32'
-DEFAULT_OPENCLIP_PRETRAINED = 'openai'
-DEFAULT_CAPTION_MODEL = 'Salesforce/blip-image-captioning-large'
-
-
-def get_default_models(data_dir: str = '.') -> dict:
-    """Return default model configuration without querying app.py.
-
-    Used in standalone mode for Docker builds where app.py isn't available yet.
-    """
-    return {
-        'openclip': {
-            'model': DEFAULT_OPENCLIP_MODEL,
-            'pretrained': DEFAULT_OPENCLIP_PRETRAINED,
-        },
-        'caption': {
-            'model': DEFAULT_CAPTION_MODEL,
-        },
-        'laion_head': {
-            'model': DEFAULT_OPENCLIP_MODEL,
-            'pretrained': DEFAULT_OPENCLIP_PRETRAINED,
-            'data_dir': data_dir,
-        },
-        'nima': {
-            'enabled': True,
-            'data_dir': data_dir,
-        },
-    }
 
 
 def get_required_models(
@@ -290,9 +264,9 @@ Examples:
   # Standard usage (reads model config from app.py):
   python download_models.py
 
-  # Standalone mode for Docker builds (uses defaults, no app.py needed):
+  # For Docker builds (redirect caches to local directory):
   HF_HOME=docker/models/huggingface TORCH_HOME=docker/models/torch \\
-  python download_models.py --standalone --data-dir docker/models
+  python download_models.py --data-dir docker/models
 """,
     )
     parser.add_argument(
@@ -310,11 +284,6 @@ Examples:
         dest='config_path',
         help='Path to configuration file (forwarded to app.py)',
     )
-    parser.add_argument(
-        '--standalone',
-        action='store_true',
-        help='Use default model config without querying app.py (for Docker builds)',
-    )
     args = parser.parse_args()
 
     print('Photonarium Model Downloader')
@@ -331,13 +300,9 @@ Examples:
     print(f'Data directory:    {data_dir}')
     print()
 
-    # Get model configuration
-    if args.standalone:
-        print('Using default model configuration (standalone mode)')
-        models = get_default_models(data_dir=data_dir)
-    else:
-        print('Querying required models from app.py...')
-        models = get_required_models(data_dir=args.data_dir, config_path=args.config_path)
+    # Get model configuration by querying app.py
+    print('Querying required models from app.py...')
+    models = get_required_models(data_dir=args.data_dir, config_path=args.config_path)
 
     print(f'OpenCLIP: {models["openclip"]["model"]} ({models["openclip"]["pretrained"]})')
     print(f'Caption:  {models["caption"]["model"]}')

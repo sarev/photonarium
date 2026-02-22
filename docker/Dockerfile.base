@@ -1,0 +1,53 @@
+# =============================================================================
+# Photonarium Base Image
+#
+# Shared base for all x86_64 and arm64 variants. Contains:
+# - System dependencies (libgl1, libraw-dev, etc.)
+# - Pre-downloaded ML models (~2.6GB)
+# - Torch-independent Python packages
+#
+# This image is built once and extended by variant images that add PyTorch.
+#
+# Build:
+#   docker build -f docker/Dockerfile.base -t photonarium-base:x64 .
+#   docker buildx build --platform linux/arm64 -f docker/Dockerfile.base -t photonarium-base:arm64 .
+# =============================================================================
+
+FROM python:3.12-slim
+
+# System dependencies for opencv-headless, Pillow, rawpy, and gosu
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    libgl1 \
+    libglib2.0-0 \
+    libraw-dev \
+    gcc \
+    g++ \
+    curl \
+    gosu \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /app
+
+# -----------------------------------------------------------------------------
+# ML Models (~2.6GB) - rarely change, shared across all variants
+# -----------------------------------------------------------------------------
+# Models are pre-downloaded locally via `make models` before building.
+
+# LAION aesthetic head and NIMA weights
+COPY docker/models/.laion-aesthetic-head.pth /defaults/
+COPY docker/models/.nima-mobilenetv2-ava.pth /defaults/
+
+# HuggingFace models (OpenCLIP, BLIP)
+COPY docker/models/huggingface/ /root/.cache/huggingface/
+
+# PyTorch models (FaceNet InceptionResnetV1)
+COPY docker/models/torch/ /root/.cache/torch/
+
+# -----------------------------------------------------------------------------
+# Torch-independent Python packages
+# -----------------------------------------------------------------------------
+# These packages don't require torch at install time, so they can be shared
+# across all variants in the base image.
+
+COPY docker/requirements-base.txt .
+RUN pip install --no-cache-dir -r requirements-base.txt

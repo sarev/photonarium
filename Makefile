@@ -3,14 +3,18 @@
 #
 # Usage:
 #   make              Show available targets (help)
+#   make models       Download ML models (run once, or after config.py changes)
+#   make base-x64     Build shared base image for x86_64 variants
 #   make build        Build CPU-only image (default for most NAS devices)
 #   make build-cu126  Build CUDA 12.6 image (RTX 30xx, 40xx)
+#   make all-images   Build all variants
 #   make test         Run container smoke test
 #
-# Requires: GNU Make, Docker, docker-compose
+# Requires: GNU Make, Docker, docker-compose, Python venv with dependencies
 # =============================================================================
 
 IMAGE_NAME := photonarium
+BASE_IMAGE := photonarium-base
 VERSION    := $(shell git describe --tags --always 2>/dev/null || echo dev)
 GIT_COMMIT := $(shell git rev-parse --short HEAD 2>/dev/null || echo unknown)
 BUILD_DATE := $(shell date -u +%Y-%m-%dT%H:%M:%SZ)
@@ -28,49 +32,98 @@ PHOTOS_OVERLAY := docker/docker-compose.photos.yml
 # Tutorial examples for testing
 TEST_PHOTOS := $(CURDIR)/tools/mktutorial/examples
 
-# Model cache directory (must exist before building)
+# Model cache directory
 MODELS_DIR := docker/models
+
+# HuggingFace token (reads from HF CLI cache if not already set)
+HF_TOKEN ?= $(shell cat ~/.cache/huggingface/token 2>/dev/null)
+
+# Marker directory for dependency tracking
+MARKER_DIR := .build
 
 # Colours for help output (disabled if not a terminal)
 CYAN  := $(shell tput setaf 6 2>/dev/null || echo "")
 RESET := $(shell tput sgr0 2>/dev/null || echo "")
 
-# DockerHub repository (override with: make push DOCKER_REPO=myuser/photonarium)
+# DockerHub repositories
 DOCKER_REPO := 7thsw/photonarium
+BASE_REPO   := 7thsw/photonarium-base
 
-# Variant tags we publish (excludes versioned tags like v1.1.0-cu126)
+# Variant tags we publish
 VARIANT_TAGS := latest cpu cu118 cu126 cu128 intel arm64
 
-.PHONY: download-models check-models build build-cu118 build-cu126 build-cu128 build-intel build-arm64 all-images \
-        use test test-photos up up-photos down logs shell push clean clean-all help
-
 # =============================================================================
-# Model preparation (run once before building images)
+# Marker files for dependency tracking
 # =============================================================================
 
-download-models:  ## Download ML models to docker/models/ (run once)
-	@echo "Downloading ML models to $(MODELS_DIR)/"
+MODELS_MARKER     := $(MARKER_DIR)/models
+BASE_X64_MARKER   := $(MARKER_DIR)/base-x64
+BASE_ARM64_MARKER := $(MARKER_DIR)/base-arm64
+CPU_MARKER        := $(MARKER_DIR)/cpu
+CU118_MARKER      := $(MARKER_DIR)/cu118
+CU126_MARKER      := $(MARKER_DIR)/cu126
+CU128_MARKER      := $(MARKER_DIR)/cu128
+INTEL_MARKER      := $(MARKER_DIR)/intel
+ARM64_MARKER      := $(MARKER_DIR)/arm64
+
+# Common dependencies for all variant builds
+VARIANT_DEPS := docker/Dockerfile docker/requirements-ml.txt docker/entrypoint.sh \
+                $(wildcard app/*.py) $(wildcard app/static/*.js) $(wildcard app/static/*.css)
+
+.PHONY: models base-x64 base-arm64 build build-cu118 build-cu126 build-cu128 build-intel build-arm64 \
+        all-x64 all-images use test test-photos up up-photos down logs shell \
+        push-base push clean clean-all help
+
+# =============================================================================
+# Model download (depends on config.py)
+# =============================================================================
+
+$(MODELS_MARKER): app/config.py download_models.py
+	@echo "Downloading ML models to $(MODELS_DIR)/..."
 	@mkdir -p $(MODELS_DIR)
+	HF_TOKEN=$(HF_TOKEN) \
 	HF_HOME=$(MODELS_DIR)/huggingface \
 	TORCH_HOME=$(MODELS_DIR)/torch \
-	python3 download_models.py --standalone --data-dir $(MODELS_DIR)
+	python download_models.py --data-dir $(MODELS_DIR)
+	@mkdir -p $(MARKER_DIR) && touch $@
 	@echo ""
-	@echo "Models downloaded. You can now run 'make build' etc."
+	@echo "Models downloaded. You can now run 'make base-x64' or 'make build'."
 
-# Helper to check models exist before building
-check-models:
-	@if [ ! -f "$(MODELS_DIR)/.laion-aesthetic-head.pth" ]; then \
-		echo "Error: Models not found in $(MODELS_DIR)/"; \
-		echo "Run 'make download-models' first."; \
-		exit 1; \
-	fi
+models: $(MODELS_MARKER)  ## Download ML models (re-runs if config.py changes)
 
 # =============================================================================
-# Build targets
+# Base images
 # =============================================================================
 
-build: check-models  ## Build CPU-only image (default, ~3.5 GB)
+$(BASE_X64_MARKER): $(MODELS_MARKER) docker/Dockerfile.base docker/requirements-base.txt
+	@echo "Building base image (x64)..."
 	docker build \
+		-f docker/Dockerfile.base \
+		-t $(BASE_IMAGE):x64 \
+		-t $(BASE_IMAGE):latest \
+		.
+	@mkdir -p $(MARKER_DIR) && touch $@
+
+$(BASE_ARM64_MARKER): $(MODELS_MARKER) docker/Dockerfile.base docker/requirements-base.txt
+	@echo "Building base image (arm64)..."
+	docker buildx build \
+		--platform linux/arm64 \
+		--load \
+		-f docker/Dockerfile.base \
+		-t $(BASE_IMAGE):arm64 \
+		.
+	@mkdir -p $(MARKER_DIR) && touch $@
+
+base-x64: $(BASE_X64_MARKER)      ## Build x64 base image
+base-arm64: $(BASE_ARM64_MARKER)  ## Build arm64 base image
+
+# =============================================================================
+# Variant images (depend on base + app code)
+# =============================================================================
+
+$(CPU_MARKER): $(BASE_X64_MARKER) $(VARIANT_DEPS)
+	docker build \
+		--build-arg BASE_IMAGE=$(BASE_IMAGE):x64 \
 		--build-arg TORCH_INDEX=$(TORCH_CPU) \
 		--build-arg VERSION=$(VERSION) \
 		--build-arg GIT_COMMIT=$(GIT_COMMIT) \
@@ -80,9 +133,11 @@ build: check-models  ## Build CPU-only image (default, ~3.5 GB)
 		-t $(IMAGE_NAME):cpu \
 		-t $(IMAGE_NAME):$(VERSION) \
 		-f docker/Dockerfile .
+	@mkdir -p $(MARKER_DIR) && touch $@
 
-build-cu118: check-models  ## Build CUDA 11.8 image (GTX 10xx, RTX 20xx)
+$(CU118_MARKER): $(BASE_X64_MARKER) $(VARIANT_DEPS)
 	docker build \
+		--build-arg BASE_IMAGE=$(BASE_IMAGE):x64 \
 		--build-arg TORCH_INDEX=$(TORCH_CU118) \
 		--build-arg VERSION=$(VERSION) \
 		--build-arg GIT_COMMIT=$(GIT_COMMIT) \
@@ -91,9 +146,11 @@ build-cu118: check-models  ## Build CUDA 11.8 image (GTX 10xx, RTX 20xx)
 		-t $(IMAGE_NAME):cu118 \
 		-t $(IMAGE_NAME):$(VERSION)-cu118 \
 		-f docker/Dockerfile .
+	@mkdir -p $(MARKER_DIR) && touch $@
 
-build-cu126: check-models  ## Build CUDA 12.6 image (RTX 30xx, 40xx)
+$(CU126_MARKER): $(BASE_X64_MARKER) $(VARIANT_DEPS)
 	docker build \
+		--build-arg BASE_IMAGE=$(BASE_IMAGE):x64 \
 		--build-arg TORCH_INDEX=$(TORCH_CU126) \
 		--build-arg VERSION=$(VERSION) \
 		--build-arg GIT_COMMIT=$(GIT_COMMIT) \
@@ -102,9 +159,11 @@ build-cu126: check-models  ## Build CUDA 12.6 image (RTX 30xx, 40xx)
 		-t $(IMAGE_NAME):cu126 \
 		-t $(IMAGE_NAME):$(VERSION)-cu126 \
 		-f docker/Dockerfile .
+	@mkdir -p $(MARKER_DIR) && touch $@
 
-build-cu128: check-models  ## Build CUDA 12.8 image (RTX 50xx / Blackwell) [speculative]
+$(CU128_MARKER): $(BASE_X64_MARKER) $(VARIANT_DEPS)
 	docker build \
+		--build-arg BASE_IMAGE=$(BASE_IMAGE):x64 \
 		--build-arg TORCH_INDEX=$(TORCH_CU128) \
 		--build-arg VERSION=$(VERSION) \
 		--build-arg GIT_COMMIT=$(GIT_COMMIT) \
@@ -113,9 +172,11 @@ build-cu128: check-models  ## Build CUDA 12.8 image (RTX 50xx / Blackwell) [spec
 		-t $(IMAGE_NAME):cu128 \
 		-t $(IMAGE_NAME):$(VERSION)-cu128 \
 		-f docker/Dockerfile .
+	@mkdir -p $(MARKER_DIR) && touch $@
 
-build-intel: check-models  ## Build Intel iGPU image (IPEX for Celeron/Atom NAS)
+$(INTEL_MARKER): $(BASE_X64_MARKER) $(VARIANT_DEPS)
 	docker build \
+		--build-arg BASE_IMAGE=$(BASE_IMAGE):x64 \
 		--build-arg TORCH_INDEX=$(TORCH_CPU) \
 		--build-arg INSTALL_IPEX=1 \
 		--build-arg VERSION=$(VERSION) \
@@ -125,21 +186,32 @@ build-intel: check-models  ## Build Intel iGPU image (IPEX for Celeron/Atom NAS)
 		-t $(IMAGE_NAME):intel \
 		-t $(IMAGE_NAME):$(VERSION)-intel \
 		-f docker/Dockerfile .
+	@mkdir -p $(MARKER_DIR) && touch $@
 
-build-arm64: check-models  ## Build ARM64 image (Raspberry Pi, Apple Silicon)
+$(ARM64_MARKER): $(BASE_ARM64_MARKER) $(VARIANT_DEPS)
 	docker buildx build \
 		--platform linux/arm64 \
+		--load \
+		--build-arg BASE_IMAGE=$(BASE_IMAGE):arm64 \
 		--build-arg TORCH_INDEX= \
 		--build-arg VERSION=$(VERSION) \
 		--build-arg GIT_COMMIT=$(GIT_COMMIT) \
 		--build-arg BUILD_DATE=$(BUILD_DATE) \
 		--build-arg VARIANT=arm64 \
-		--load \
 		-t $(IMAGE_NAME):arm64 \
 		-t $(IMAGE_NAME):$(VERSION)-arm64 \
 		-f docker/Dockerfile .
+	@mkdir -p $(MARKER_DIR) && touch $@
 
-all-images: build build-cu118 build-cu126 build-cu128 build-intel build-arm64  ## Build all image variants
+build: $(CPU_MARKER)          ## Build CPU-only image (default, ~4.5 GB)
+build-cu118: $(CU118_MARKER)  ## Build CUDA 11.8 image (GTX 10xx, RTX 20xx)
+build-cu126: $(CU126_MARKER)  ## Build CUDA 12.6 image (RTX 30xx, 40xx)
+build-cu128: $(CU128_MARKER)  ## Build CUDA 12.8 image (RTX 50xx / Blackwell)
+build-intel: $(INTEL_MARKER)  ## Build Intel iGPU image (Celeron/Atom NAS)
+build-arm64: $(ARM64_MARKER)  ## Build ARM64 image (Raspberry Pi, Apple Silicon)
+
+all-x64: $(CPU_MARKER) $(CU118_MARKER) $(CU126_MARKER) $(CU128_MARKER) $(INTEL_MARKER)  ## Build all x64 variants
+all-images: all-x64 $(ARM64_MARKER)  ## Build all image variants
 
 # =============================================================================
 # Runtime targets
@@ -255,7 +327,16 @@ shell:  ## Open bash shell in running container
 # Publishing
 # =============================================================================
 
-push:  ## Push all built images to DockerHub
+push-base: $(BASE_X64_MARKER) $(BASE_ARM64_MARKER)  ## Push base images to DockerHub
+	@echo "Pushing base images to $(BASE_REPO)..."
+	docker tag $(BASE_IMAGE):x64 $(BASE_REPO):x64
+	docker push $(BASE_REPO):x64
+	docker tag $(BASE_IMAGE):arm64 $(BASE_REPO):arm64
+	docker push $(BASE_REPO):arm64
+	@echo ""
+	@echo "Base images pushed."
+
+push: all-images  ## Push all built images to DockerHub
 	@if ! git describe --tags --exact-match HEAD >/dev/null 2>&1; then \
 		echo "Warning: HEAD is not a tagged release."; \
 		echo "  Current version: $(VERSION)"; \
@@ -279,7 +360,7 @@ push:  ## Push all built images to DockerHub
 		fi; \
 	done; \
 	if [ $$found -eq 0 ]; then \
-		echo "No images to push. Build first with 'make build' or 'make build-cu126'."; \
+		echo "No images to push. Build first with 'make build' or 'make all-images'."; \
 		exit 1; \
 	fi
 	@echo ""
@@ -289,8 +370,8 @@ push:  ## Push all built images to DockerHub
 # Cleanup
 # =============================================================================
 
-clean:  ## Remove all built Photonarium images
-	@echo "Removing Photonarium images..."
+clean:  ## Remove variant images (keeps base images for faster rebuilds)
+	@echo "Removing variant images..."
 	-@docker rmi $(IMAGE_NAME):latest 2>/dev/null || true
 	-@docker rmi $(IMAGE_NAME):cpu 2>/dev/null || true
 	-@docker rmi $(IMAGE_NAME):cu118 2>/dev/null || true
@@ -304,10 +385,30 @@ clean:  ## Remove all built Photonarium images
 	-@docker rmi $(IMAGE_NAME):$(VERSION)-cu128 2>/dev/null || true
 	-@docker rmi $(IMAGE_NAME):$(VERSION)-intel 2>/dev/null || true
 	-@docker rmi $(IMAGE_NAME):$(VERSION)-arm64 2>/dev/null || true
-	@echo "Done."
+	@rm -f $(CPU_MARKER) $(CU118_MARKER) $(CU126_MARKER) $(CU128_MARKER) $(INTEL_MARKER) $(ARM64_MARKER)
+	@echo "Done. Base images retained for faster rebuilds."
 
-clean-all: clean  ## Remove images and prune Docker build cache
+clean-all:  ## Remove all images, markers, and prune Docker build cache
+	@echo "Removing all Photonarium images..."
+	-@docker rmi $(BASE_IMAGE):x64 2>/dev/null || true
+	-@docker rmi $(BASE_IMAGE):arm64 2>/dev/null || true
+	-@docker rmi $(BASE_IMAGE):latest 2>/dev/null || true
+	-@docker rmi $(IMAGE_NAME):latest 2>/dev/null || true
+	-@docker rmi $(IMAGE_NAME):cpu 2>/dev/null || true
+	-@docker rmi $(IMAGE_NAME):cu118 2>/dev/null || true
+	-@docker rmi $(IMAGE_NAME):cu126 2>/dev/null || true
+	-@docker rmi $(IMAGE_NAME):cu128 2>/dev/null || true
+	-@docker rmi $(IMAGE_NAME):intel 2>/dev/null || true
+	-@docker rmi $(IMAGE_NAME):arm64 2>/dev/null || true
+	-@docker rmi $(IMAGE_NAME):$(VERSION) 2>/dev/null || true
+	-@docker rmi $(IMAGE_NAME):$(VERSION)-cu118 2>/dev/null || true
+	-@docker rmi $(IMAGE_NAME):$(VERSION)-cu126 2>/dev/null || true
+	-@docker rmi $(IMAGE_NAME):$(VERSION)-cu128 2>/dev/null || true
+	-@docker rmi $(IMAGE_NAME):$(VERSION)-intel 2>/dev/null || true
+	-@docker rmi $(IMAGE_NAME):$(VERSION)-arm64 2>/dev/null || true
+	@rm -rf $(MARKER_DIR)
 	docker builder prune -f
+	@echo "Done."
 
 # =============================================================================
 # Help
@@ -321,13 +422,18 @@ help:  ## Show this help
 	@echo "Usage: make [target]"
 	@echo ""
 	@echo "$(CYAN)Setup (run once):$(RESET)"
-	@grep -E '^download-models:.*##' $(MAKEFILE_LIST) | \
+	@grep -E '^models:.*##' $(MAKEFILE_LIST) | \
+		awk 'BEGIN {FS = ":.*##"}; {printf "  $(CYAN)%-14s$(RESET) %s\n", $$1, $$2}'
+	@echo ""
+	@echo "$(CYAN)Base images:$(RESET)"
+	@grep -E '^base-.*:.*##' $(MAKEFILE_LIST) | \
 		awk 'BEGIN {FS = ":.*##"}; {printf "  $(CYAN)%-14s$(RESET) %s\n", $$1, $$2}'
 	@echo ""
 	@echo "$(CYAN)Build targets:$(RESET)"
 	@grep -E '^build.*:.*##' $(MAKEFILE_LIST) | \
 		awk 'BEGIN {FS = ":.*##"}; {printf "  $(CYAN)%-14s$(RESET) %s\n", $$1, $$2}'
 	@echo ""
+	@echo "  all-x64         Build all x64 variants"
 	@echo "  all-images      Build all image variants"
 	@echo ""
 	@echo "$(CYAN)Runtime targets:$(RESET)"
@@ -336,7 +442,7 @@ help:  ## Show this help
 		awk 'BEGIN {FS = ":.*##"}; {printf "  $(CYAN)%-14s$(RESET) %s\n", $$1, $$2}'
 	@echo ""
 	@echo "$(CYAN)Publishing:$(RESET)"
-	@grep -E '^push:.*##' $(MAKEFILE_LIST) | \
+	@grep -E '^push.*:.*##' $(MAKEFILE_LIST) | \
 		awk 'BEGIN {FS = ":.*##"}; {printf "  $(CYAN)%-14s$(RESET) %s\n", $$1, $$2}'
 	@echo ""
 	@echo "$(CYAN)Cleanup:$(RESET)"
@@ -344,14 +450,18 @@ help:  ## Show this help
 		awk 'BEGIN {FS = ":.*##"}; {printf "  $(CYAN)%-14s$(RESET) %s\n", $$1, $$2}'
 	@echo ""
 	@echo "Examples:"
-	@echo "  make download-models  Download models (run once before building)"
-	@echo "  make build            Build CPU image for NAS deployment"
-	@echo "  make build-cu126      Build CUDA 12.6 image for RTX 30xx/40xx"
-	@echo "  make build-arm64      Build ARM64 image for Raspberry Pi/Apple Silicon"
-	@echo "  make all-images       Build all image variants"
-	@echo "  make push             Push all built images to DockerHub"
-	@echo "  make up               Start the container"
-	@echo "  make logs             Follow container output"
+	@echo "  make models       Download models (run once)"
+	@echo "  make build        Build CPU image for NAS deployment"
+	@echo "  make build-cu126  Build CUDA 12.6 image for RTX 30xx/40xx"
+	@echo "  make build-arm64  Build ARM64 image for Raspberry Pi/Apple Silicon"
+	@echo "  make all-images   Build all image variants"
+	@echo "  make push         Push all built images to DockerHub"
+	@echo "  make up           Start the container"
+	@echo "  make logs         Follow container output"
+	@echo ""
+	@echo "Dependency chain:"
+	@echo "  config.py → models → base-x64 → build variants"
+	@echo "  Code changes only rebuild the variant layer (~3MB)"
 	@echo ""
 
 .DEFAULT_GOAL := help

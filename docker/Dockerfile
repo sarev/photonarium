@@ -1,20 +1,21 @@
 # =============================================================================
-# Photonarium Docker Image
+# Photonarium Docker Image (Variant)
+#
+# Extends the base image with variant-specific PyTorch and ML packages.
 #
 # Build variants:
-#   CPU-only:  docker build -t photonarium:latest -f docker/Dockerfile .
-#   CUDA:      docker build --build-arg TORCH_INDEX=.../cu126 -t photonarium:cu126 ...
-#   Intel:     docker build --build-arg INSTALL_IPEX=1 -t photonarium:intel ...
+#   CPU:   docker build --build-arg BASE_IMAGE=photonarium-base:x64 -t photonarium:cpu ...
+#   CUDA:  docker build --build-arg BASE_IMAGE=photonarium-base:x64 --build-arg TORCH_INDEX=.../cu126 ...
+#   ARM64: docker buildx build --build-arg BASE_IMAGE=photonarium-base:arm64 ...
 #
 # Or use the Makefile: make build, make build-cu126, make build-intel, etc.
 #
 # Prerequisites:
-#   Models must be pre-downloaded to docker/models/ before building:
-#   HF_HOME=docker/models/huggingface TORCH_HOME=docker/models/torch \
-#   python download_models.py --standalone --data-dir docker/models
+#   The base image must be built first: make base-x64 (or make base-arm64)
 # =============================================================================
 
-FROM python:3.12-slim AS base
+ARG BASE_IMAGE=photonarium-base:x64
+FROM ${BASE_IMAGE}
 
 # Build arguments
 ARG TORCH_INDEX=https://download.pytorch.org/whl/cpu
@@ -26,38 +27,8 @@ ARG GIT_COMMIT=unknown
 ARG BUILD_DATE=unknown
 ARG VARIANT=cpu
 
-# System dependencies for opencv-headless, Pillow, rawpy, and gosu
-RUN apt-get update && apt-get install -y --no-install-recommends \
-    libgl1 \
-    libglib2.0-0 \
-    libraw-dev \
-    gcc \
-    g++ \
-    curl \
-    gosu \
-    && rm -rf /var/lib/apt/lists/*
-
-WORKDIR /app
-
 # -----------------------------------------------------------------------------
-# Layer 1: ML Models (rarely changes, ~2.5GB)
-# -----------------------------------------------------------------------------
-# Models are pre-downloaded locally via download_models.py --standalone.
-# This layer is independent of pip installs and app code, so it's cached
-# even when dependencies or code change.
-
-# LAION aesthetic head and NIMA weights
-COPY docker/models/.laion-aesthetic-head.pth /defaults/
-COPY docker/models/.nima-mobilenetv2-ava.pth /defaults/
-
-# HuggingFace models (OpenCLIP, BLIP)
-COPY docker/models/huggingface/ /root/.cache/huggingface/
-
-# PyTorch models (FaceNet InceptionResnetV1)
-COPY docker/models/torch/ /root/.cache/torch/
-
-# -----------------------------------------------------------------------------
-# Layer 2: PyTorch (changes per variant, ~1-4GB)
+# PyTorch (variant-specific, ~1-4GB)
 # -----------------------------------------------------------------------------
 # TORCH_INDEX can be empty for ARM64 builds (use default PyPI)
 RUN if [ -n "${TORCH_INDEX}" ]; then \
@@ -72,16 +43,16 @@ RUN if [ "${INSTALL_IPEX}" = "1" ]; then \
     fi
 
 # -----------------------------------------------------------------------------
-# Layer 3: Python dependencies (rarely changes)
+# ML packages that depend on torch
 # -----------------------------------------------------------------------------
-COPY docker/requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
+COPY docker/requirements-ml.txt .
+RUN pip install --no-cache-dir -r requirements-ml.txt
 
 # Install facenet-pytorch with --no-deps to avoid version conflicts
 RUN pip install --no-cache-dir --no-deps facenet-pytorch
 
 # -----------------------------------------------------------------------------
-# Layer 4: Application code (changes frequently, small)
+# Application code (changes frequently, ~3MB)
 # -----------------------------------------------------------------------------
 COPY app/ ./app/
 COPY download_models.py .
@@ -94,10 +65,6 @@ RUN chmod +x /entrypoint.sh
 # Metadata and runtime config
 # -----------------------------------------------------------------------------
 # Write version info to a file so the app can read it (git isn't available in container)
-ARG VERSION
-ARG GIT_COMMIT
-ARG BUILD_DATE
-ARG VARIANT
 RUN echo "${VERSION}" > /app/VERSION && \
     echo "${GIT_COMMIT}" >> /app/VERSION && \
     echo "${BUILD_DATE}" >> /app/VERSION

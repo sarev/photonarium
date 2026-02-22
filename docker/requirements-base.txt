@@ -1,0 +1,14 @@
+# Torch-independent packages for the base image.
+# These can be installed before PyTorch.
+
+pillow
+opencv-python-headless
+imagehash
+numpy
+pyyaml
+flask
+waitress
+orjson
+requests
+rawpy
+exifread

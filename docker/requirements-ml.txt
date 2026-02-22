@@ -1,0 +1,5 @@
+# ML packages that require torch to be installed first.
+# These are installed after PyTorch in the variant images.
+
+open_clip_torch
+transformers
