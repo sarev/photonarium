@@ -93,11 +93,16 @@ RUN chmod +x /entrypoint.sh
 # -----------------------------------------------------------------------------
 # Metadata and runtime config
 # -----------------------------------------------------------------------------
-# OCI image labels (see: https://github.com/opencontainers/image-spec/blob/main/annotations.md)
+# Write version info to a file so the app can read it (git isn't available in container)
 ARG VERSION
 ARG GIT_COMMIT
 ARG BUILD_DATE
 ARG VARIANT
+RUN echo "${VERSION}" > /app/VERSION && \
+    echo "${GIT_COMMIT}" >> /app/VERSION && \
+    echo "${BUILD_DATE}" >> /app/VERSION
+
+# OCI image labels (see: https://github.com/opencontainers/image-spec/blob/main/annotations.md)
 LABEL org.opencontainers.image.title="Photonarium" \
       org.opencontainers.image.description="Local AI-powered photo catalogue with semantic search" \
       org.opencontainers.image.version="${VERSION}" \

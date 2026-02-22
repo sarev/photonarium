@@ -175,17 +175,21 @@ _app_version: str = ''
 
 
 def _get_version_from_git() -> str:
-    """Build a version string from git.
+    """Build a version string from git or a VERSION file.
 
-    If HEAD is exactly on a tag, uses the tag name.  Otherwise uses the
-    short commit hash.  The commit date is appended in parentheses.
+    Tries git first (for development installs). If git fails or isn't
+    available (e.g., in Docker), falls back to reading a VERSION file
+    written during Docker build.
 
     Returns:
         Formatted string like ``Photonarium: v1.0.9-beta.9 (2026-02-18)``
         or ``Photonarium: a1b2c3d (2026-02-18)``, or empty on failure.
     """
+    app_root = Path(__file__).resolve().parent
+
+    # Try git first (development installs)
     try:
-        repo_root = Path(__file__).resolve().parent.parent
+        repo_root = app_root.parent
 
         def _git(*args: str) -> str:
             r = subprocess.run(
@@ -199,15 +203,28 @@ def _get_version_from_git() -> str:
 
         # Try exact tag first, fall back to short hash
         label = _git('describe', '--tags', '--exact-match') or _git('rev-parse', '--short', 'HEAD')
-        if not label:
-            return ''
-
-        # Commit date in YYYY-MM-DD format
-        date = _git('log', '-1', '--format=%cd', '--date=short')
-
-        return f'Photonarium: {label} ({date})' if date else f'Photonarium: {label}'
+        if label:
+            # Commit date in YYYY-MM-DD format
+            date = _git('log', '-1', '--format=%cd', '--date=short')
+            return f'Photonarium: {label} ({date})' if date else f'Photonarium: {label}'
     except Exception:
-        return ''
+        pass
+
+    # Fall back to VERSION file (Docker builds)
+    # VERSION is at /app/VERSION, one level above /app/app/
+    try:
+        version_file = app_root.parent / 'VERSION'
+        if version_file.exists():
+            lines = version_file.read_text().strip().splitlines()
+            if lines:
+                version = lines[0]  # e.g., "v1.1.2-beta.12"
+                # BUILD_DATE is in ISO format, extract just the date part
+                build_date = lines[2][:10] if len(lines) > 2 else ''
+                return f'Photonarium: {version} ({build_date})' if build_date else f'Photonarium: {version}'
+    except Exception:
+        pass
+
+    return ''
 
 
 # =============================================================================
