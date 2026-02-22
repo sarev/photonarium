@@ -4,26 +4,16 @@
 
 ### Docker Build Improvements
 
+**Shared base image for DockerHub layer sharing:**
+
+Docker builds have been split into a base image (`Dockerfile.base`) and per-variant images (`Dockerfile`). The base image contains ML models, system dependencies, and torch-independent Python packages (~2.5GB). Variant images extend the base with only PyTorch and application code. This means variants share a single base layer on DockerHub instead of each uploading ~4-10GB independently. Requirements have been split into `requirements-base.txt` and `requirements-ml.txt` accordingly.
+
 **Layer optimization for faster rebuilds:**
 
-The Dockerfile has been restructured to place ML models (~2.5GB) in the first layer, independent of pip installs and application code. This dramatically speeds up rebuilds during development:
+Within each image, ML models are placed in the first layer, independent of pip installs and application code:
 
 - **Before:** Any code change triggered a full rebuild including model re-processing (~10+ minutes).
 - **After:** Code changes only rebuild the final ~3MB layer (~seconds). The model layer stays cached.
-
-**New build workflow:**
-
-```bash
-# Download models once (stores in docker/models/)
-make download-models
-
-# Build images (models are COPYed, not downloaded)
-make build
-```
-
-The `download-models` target runs `download_models.py --standalone`, which uses default model settings without requiring a running app. Build targets now depend on `check-models` and fail with a helpful error if models haven't been pre-downloaded.
-
-**Layer structure (bottom to top):**
 
 | Layer | Contents | Size | Rebuilds when... |
 |-------|----------|------|------------------|
@@ -32,9 +22,31 @@ The `download-models` target runs `download_models.py --standalone`, which uses 
 | 3 | pip requirements | ~500MB | requirements.txt changes |
 | 4 | Application code | ~3MB | Any code change |
 
+**New build workflow:**
+
+```bash
+make models     # Downloads ~2.5GB models (once, or if config.py changes)
+make base-x64   # Builds shared base image
+make build       # Builds CPU variant (extends base)
+```
+
+The Makefile uses marker files for proper dependency tracking. Build targets fail with a helpful error if models haven't been pre-downloaded.
+
 **FaceNet models now pre-downloaded:**
 
 The FaceNet face detection (MTCNN) and recognition (InceptionResnetV1) models are now included in the Docker image. Previously, these ~107MB models were downloaded on first container start, requiring internet access. Now all models are baked in and the container works fully offline from the first run.
+
+**Version display in Docker containers:**
+
+A `VERSION` file (tag, commit hash, build date) is written during Docker builds so the app can display version information in headless mode where git is not available. Development installs continue to use git directly.
+
+### Website
+
+- Docker added as a primary call-to-action button in the hero section.
+- Docker icon added to the top navigation alongside GitHub.
+- New "Docker & NAS Ready" feature card; feature grid consolidated to a 3x3 layout.
+- Getting Started section split into Docker and Manual Installation paths.
+- DockerHub link added to footer.
 
 ### Documentation
 
