@@ -815,6 +815,7 @@ Your photos (`/photos`) can remain on slower network or HDD storage since they'r
 - Face detection and image captioning temporarily spike memory usage
 - For systems with limited RAM (e.g. NAS devices, small VMs), reduce `embedding_batch_size`, `face_detection_batch_size`, and `nima_batch_size` in settings (default: 16-32). Smaller batches use less memory at the cost of slower processing.
 - The thumbnail RAM cache is configurable via `thumbnail_cache_size_mb` (default: 100MB). Reduce this on memory-constrained systems.
+- **Graceful OOM handling:** If memory runs low during model loading or batch inference, Photonarium catches the error, logs a clear message, and either retries with a smaller batch or disables the affected feature — rather than crashing the processing thread. On very constrained systems (e.g. Proxmox LXC with limited RAM), some features may be automatically disabled if there isn't enough memory to load their ML model.
 
 ### Network Storage for Photos
 
@@ -879,6 +880,8 @@ make all-images
 The `make download-models` step downloads all ML models (OpenCLIP, BLIP, FaceNet, LAION, NIMA) to `docker/models/` so they can be copied into the Docker image during build. This only needs to be run once - subsequent builds reuse the cached models. The build will fail with an error if models haven't been downloaded.
 
 See the Makefile for all available build targets. Note that building ARM64 images on x86_64 uses QEMU emulation and is slow.
+
+**Note:** `CLAUDE.md` (project context for [Claude Code](https://claude.ai/code)) is deliberately gitignored and is not part of the distributed source. Each developer maintains their own local copy.
 
 ---
 

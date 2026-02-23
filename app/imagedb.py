@@ -2259,6 +2259,7 @@ class OpenCLIPModel:
         self._model = None
         self._preprocess = None
         self._tokenizer = None
+        self._load_failed = False
         self._load_lock = threading.Lock()
 
     def _load_image_safe(self, path: Path | str) -> Image.Image | None:
@@ -2302,10 +2303,14 @@ class OpenCLIPModel:
         # Fast path: tokenizer is set last, so if it's ready everything is.
         if self._tokenizer is not None:
             return
+        if self._load_failed:
+            return
 
         with self._load_lock:
             # Re-check under lock in case another thread loaded while we waited.
             if self._tokenizer is not None:
+                return
+            if self._load_failed:
                 return
 
             logger.info('=' * 60)
@@ -2315,16 +2320,31 @@ class OpenCLIPModel:
 
             start_time = time.time()
 
-            # Suppress QuickGELU mismatch warning from open_clip
-            with warnings.catch_warnings():
-                warnings.filterwarnings('ignore', message='QuickGELU mismatch')
-                self._model, _, self._preprocess = open_clip.create_model_and_transforms(
-                    self.model_name,
-                    pretrained=self.pretrained,
+            try:
+                # Suppress QuickGELU mismatch warning from open_clip
+                with warnings.catch_warnings():
+                    warnings.filterwarnings('ignore', message='QuickGELU mismatch')
+                    self._model, _, self._preprocess = open_clip.create_model_and_transforms(
+                        self.model_name,
+                        pretrained=self.pretrained,
+                    )
+                self._model.eval().to(self.device)
+                # Tokenizer MUST be set last — it's the sentinel for the fast-path check.
+                self._tokenizer = open_clip.get_tokenizer(self.model_name)
+            except (MemoryError, RuntimeError) as e:
+                if not isinstance(e, MemoryError) and 'out of memory' not in str(e).lower():
+                    raise  # Re-raise non-OOM RuntimeErrors
+                self._load_failed = True
+                self._model = None
+                self._preprocess = None
+                if torch.cuda.is_available():
+                    torch.cuda.empty_cache()
+                logger.error(
+                    f'Out of memory loading OpenCLIP model '
+                    f'({self.model_name}/{self.pretrained}): {e} — '
+                    f'semantic search and image embeddings disabled'
                 )
-            self._model.eval().to(self.device)
-            # Tokenizer MUST be set last — it's the sentinel for the fast-path check.
-            self._tokenizer = open_clip.get_tokenizer(self.model_name)
+                return
 
             elapsed = time.time() - start_time
             logger.info('-' * 60)
@@ -2415,11 +2435,10 @@ class OpenCLIPModel:
         if not tensors:
             return results
 
-        # Stack into batch
-        batch = torch.stack(tensors).to(self.device)
-
-        # Encode batch
+        # Encode batch — with OOM fallback to single-item processing
         try:
+            batch = torch.stack(tensors).to(self.device)
+
             with torch.inference_mode():
                 if self.device == 'cuda':
                     with torch.amp.autocast('cuda'):
@@ -2434,6 +2453,32 @@ class OpenCLIPModel:
             # Map back to indices
             for batch_idx, original_idx in enumerate(valid_indices):
                 results.append((original_idx, embeddings[batch_idx].flatten()))
+
+        except (MemoryError, RuntimeError) as e:
+            if not isinstance(e, MemoryError) and 'out of memory' not in str(e).lower():
+                raise  # Re-raise non-OOM RuntimeErrors
+            logger.warning(f'OOM encoding batch of {len(tensors)} images, falling back to single-image processing')
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
+
+            # Process one at a time
+            for batch_idx, tensor in enumerate(tensors):
+                original_idx = valid_indices[batch_idx]
+                try:
+                    single = tensor.unsqueeze(0).to(self.device)
+                    with torch.inference_mode():
+                        if self.device == 'cuda':
+                            with torch.amp.autocast('cuda'):
+                                emb = self.model.encode_image(single)
+                        else:
+                            emb = self.model.encode_image(single)
+                        emb = emb / emb.norm(dim=-1, keepdim=True)
+                    results.append((original_idx, emb.cpu().numpy().flatten()))
+                except (MemoryError, RuntimeError):
+                    logger.error(f'OOM encoding single image (index {original_idx}), skipping')
+                    if torch.cuda.is_available():
+                        torch.cuda.empty_cache()
+                    results.append((original_idx, None))
 
         except Exception as e:
             logger.error(f'Failed to encode batch: {e}')
@@ -3505,10 +3550,42 @@ class NimaThread(threading.Thread):
         if not pil_images:
             return
 
-        # Score the batch
+        # Score the batch — with OOM fallback to single-image processing
         from nima import score_images_batch
 
-        scores = score_images_batch(self._model, pil_images, device=self._device)
+        try:
+            scores = score_images_batch(self._model, pil_images, device=self._device)
+        except (MemoryError, RuntimeError) as e:
+            if not isinstance(e, MemoryError) and 'out of memory' not in str(e).lower():
+                raise
+            logger.warning(
+                f'OOM scoring NIMA batch of {len(pil_images)} images, falling back to single-image processing'
+            )
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
+
+            # Process one at a time
+            scores = []
+            for i, img in enumerate(pil_images):
+                try:
+                    single_scores = score_images_batch(self._model, [img], device=self._device)
+                    scores.append(single_scores[0])
+                except (MemoryError, RuntimeError):
+                    logger.error(f'OOM scoring single image {valid_ids[i]}, skipping')
+                    if torch.cuda.is_available():
+                        torch.cuda.empty_cache()
+                    scores.append(None)
+
+            # Filter out failed images
+            paired = [(s, vid) for s, vid in zip(scores, valid_ids, strict=True) if s is not None]
+            skipped_oom = len(valid_ids) - len(paired)
+            if skipped_oom:
+                self._error_count += skipped_oom
+            if not paired:
+                return
+            scores, valid_ids = zip(*paired, strict=True)
+            scores = list(scores)
+            valid_ids = list(valid_ids)
 
         # Batch commit to database
         now = datetime.now().isoformat()
@@ -4560,9 +4637,7 @@ class ScanTimerThread(threading.Thread):
         Uses short sleep intervals (1 second) to remain responsive to
         shutdown requests while still timing the overall interval.
         """
-        logger.info(
-            f'Scan timer thread started (interval: {self._interval_minutes} minutes)'
-        )
+        logger.info(f'Scan timer thread started (interval: {self._interval_minutes} minutes)')
 
         interval_seconds = self._interval_minutes * 60
         elapsed = 0.0
@@ -4580,9 +4655,7 @@ class ScanTimerThread(threading.Thread):
 
                 # Only trigger rescan if not already processing
                 if self._is_processing():
-                    logger.info(
-                        'Scan timer: skipping scheduled rescan (processing active)'
-                    )
+                    logger.info('Scan timer: skipping scheduled rescan (processing active)')
                     # Don't reset elapsed -- we'll retry on next iteration
                     elapsed = interval_seconds - 60  # Retry in 1 minute
                     if elapsed < 0:
@@ -5288,6 +5361,9 @@ class ImageDatabase:
 
         Called during startup to populate the cache. This eliminates
         DB queries for thumbnail lookups.
+
+        Memory cost: ~100 bytes per entry (two 36-char UUID strings + dict overhead).
+        100k images ≈ 10MB — small and essential for performance.
         """
         cursor = self.conn.execute('SELECT id, checksum FROM images WHERE checksum IS NOT NULL AND deleted = 0')
         cache = {row[0]: row[1] for row in cursor}

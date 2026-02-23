@@ -242,6 +242,8 @@ class FaceDetector:
         # Lazy-loaded models
         self._mtcnn = None
         self._resnet = None
+        self._mtcnn_failed = False
+        self._resnet_failed = False
         self._device = device
         self._lock = threading.Lock()
 
@@ -262,32 +264,48 @@ class FaceDetector:
     @property
     def mtcnn(self):
         """Get the MTCNN face detector, loading if necessary."""
-        if self._mtcnn is None:
+        if self._mtcnn is None and not self._mtcnn_failed:
             with self._lock:
-                if self._mtcnn is None:
+                if self._mtcnn is None and not self._mtcnn_failed:
                     logger.info('Loading MTCNN face detector...')
-                    self._mtcnn = MTCNN(
-                        keep_all=True,
-                        device=self.device,
-                        min_face_size=self.min_face_size,
-                        thresholds=[0.6, 0.7, 0.7],  # Default MTCNN thresholds
-                        post_process=True,  # Apply standardization for ResNet input
-                    )
-                    logger.info('MTCNN loaded')
+                    try:
+                        self._mtcnn = MTCNN(
+                            keep_all=True,
+                            device=self.device,
+                            min_face_size=self.min_face_size,
+                            thresholds=[0.6, 0.7, 0.7],  # Default MTCNN thresholds
+                            post_process=True,  # Apply standardization for ResNet input
+                        )
+                        logger.info('MTCNN loaded')
+                    except (MemoryError, RuntimeError) as e:
+                        if not isinstance(e, MemoryError) and 'out of memory' not in str(e).lower():
+                            raise
+                        self._mtcnn_failed = True
+                        if torch.cuda.is_available():
+                            torch.cuda.empty_cache()
+                        logger.error(f'Out of memory loading MTCNN: {e} — face detection disabled')
         return self._mtcnn
 
     @property
     def resnet(self):
         """Get the InceptionResnetV1 model, loading if necessary."""
-        if self._resnet is None:
+        if self._resnet is None and not self._resnet_failed:
             with self._lock:
-                if self._resnet is None:
+                if self._resnet is None and not self._resnet_failed:
                     logger.info('Loading InceptionResnetV1 for face recognition embeddings...')
-                    self._resnet = InceptionResnetV1(
-                        pretrained='vggface2',
-                        device=self.device,
-                    ).eval()
-                    logger.info('InceptionResnetV1 loaded')
+                    try:
+                        self._resnet = InceptionResnetV1(
+                            pretrained='vggface2',
+                            device=self.device,
+                        ).eval()
+                        logger.info('InceptionResnetV1 loaded')
+                    except (MemoryError, RuntimeError) as e:
+                        if not isinstance(e, MemoryError) and 'out of memory' not in str(e).lower():
+                            raise
+                        self._resnet_failed = True
+                        if torch.cuda.is_available():
+                            torch.cuda.empty_cache()
+                        logger.error(f'Out of memory loading InceptionResnetV1: {e} — face embeddings disabled')
         return self._resnet
 
     def detect_faces(
@@ -665,18 +683,59 @@ class FaceDetector:
             return results
 
         # Phase 4: Batch compute embeddings for ALL faces across all images
-        # Tensors are on CPU from Phase 3, move to GPU for ResNet
-        all_tensors = torch.stack([fd[1] for fd in all_faces_data]).to(self.device)
+        # Tensors are on CPU from Phase 3, move to GPU for ResNet.
         # Note: MTCNN with post_process=True already standardizes to [-1, 1] for ResNet
+        if self.resnet is None:
+            logger.warning('ResNet model unavailable — skipping face embeddings')
+            return results
 
-        with torch.no_grad():
-            embeddings_batch = self.resnet(all_tensors)
-            embeddings_batch = embeddings_batch.cpu().numpy()
+        try:
+            all_tensors = torch.stack([fd[1] for fd in all_faces_data]).to(self.device)
 
-        # Release GPU memory from embedding computation
-        del all_tensors
-        if torch.cuda.is_available():
-            torch.cuda.empty_cache()
+            with torch.no_grad():
+                embeddings_batch = self.resnet(all_tensors)
+                embeddings_batch = embeddings_batch.cpu().numpy()
+
+            # Release GPU memory from embedding computation
+            del all_tensors
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
+
+        except (MemoryError, RuntimeError) as e:
+            if not isinstance(e, MemoryError) and 'out of memory' not in str(e).lower():
+                raise
+            logger.warning(
+                f'OOM computing face embeddings for batch of {len(all_faces_data)} faces, '
+                f'falling back to single-face processing'
+            )
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
+
+            # Process one face at a time
+            single_embeddings = []
+            failed_indices = set()
+            for i, fd in enumerate(all_faces_data):
+                try:
+                    single_tensor = fd[1].unsqueeze(0).to(self.device)
+                    with torch.no_grad():
+                        emb = self.resnet(single_tensor)
+                        single_embeddings.append(emb.cpu().numpy().flatten())
+                    del single_tensor
+                except (MemoryError, RuntimeError):
+                    logger.error(f'OOM computing embedding for single face {i}, skipping')
+                    if torch.cuda.is_available():
+                        torch.cuda.empty_cache()
+                    failed_indices.add(i)
+
+            if failed_indices:
+                # Filter out failed faces
+                all_faces_data = [fd for i, fd in enumerate(all_faces_data) if i not in failed_indices]
+                embeddings_batch = np.array([e for i, e in enumerate(single_embeddings) if i not in failed_indices])
+            else:
+                embeddings_batch = np.array(single_embeddings)
+
+            if len(embeddings_batch) == 0:
+                return results
 
         # Clear CPU tensors from all_faces_data (keep only metadata)
         all_faces_metadata = [

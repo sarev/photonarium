@@ -170,6 +170,7 @@ class CaptionGenerator:
         self._model = None
         self._processor = None
         self._is_blip2 = None  # Set during model loading
+        self._load_failed = False
         self._lock = threading.Lock()
 
     @property
@@ -187,12 +188,16 @@ class CaptionGenerator:
         return self._device
 
     def _load_model(self) -> None:
-        """Load the BLIP-2 model (called on first use)."""
+        """Load the BLIP/BLIP-2 model (called on first use)."""
         if self._model is not None:
+            return
+        if self._load_failed:
             return
 
         with self._lock:
             if self._model is not None:
+                return
+            if self._load_failed:
                 return
 
             model_type = 'BLIP-2' if _is_blip2_model(self.model_name) else 'BLIP'
@@ -207,38 +212,51 @@ class CaptionGenerator:
 
             start_time = time.time()
 
-            # Import and load the appropriate model type
-            self._is_blip2 = _is_blip2_model(self.model_name)
+            try:
+                # Import and load the appropriate model type
+                self._is_blip2 = _is_blip2_model(self.model_name)
 
-            if self._is_blip2:
-                # BLIP-2 models (larger, more capable)
-                from transformers import Blip2ForConditionalGeneration, Blip2Processor
+                if self._is_blip2:
+                    # BLIP-2 models (larger, more capable)
+                    from transformers import Blip2ForConditionalGeneration, Blip2Processor
 
-                self._processor = Blip2Processor.from_pretrained(
-                    self.model_name,
-                    clean_up_tokenization_spaces=False,
+                    self._processor = Blip2Processor.from_pretrained(
+                        self.model_name,
+                        clean_up_tokenization_spaces=False,
+                    )
+                    model = Blip2ForConditionalGeneration.from_pretrained(
+                        self.model_name,
+                        torch_dtype=torch.float16 if self.device != 'cpu' else torch.float32,
+                    )
+                else:
+                    # Standard BLIP models (smaller, faster)
+                    from transformers import BlipForConditionalGeneration, BlipProcessor
+
+                    self._processor = BlipProcessor.from_pretrained(
+                        self.model_name,
+                        clean_up_tokenization_spaces=False,
+                    )
+                    model = BlipForConditionalGeneration.from_pretrained(
+                        self.model_name,
+                        torch_dtype=torch.float16 if self.device != 'cpu' else torch.float32,
+                    )
+
+                model = model.to(self.device)
+                model.eval()
+
+                self._model = model
+            except (MemoryError, RuntimeError) as e:
+                if not isinstance(e, MemoryError) and 'out of memory' not in str(e).lower():
+                    raise  # Re-raise non-OOM RuntimeErrors
+                self._load_failed = True
+                self._model = None
+                self._processor = None
+                if torch.cuda.is_available():
+                    torch.cuda.empty_cache()
+                logger.error(
+                    f'Out of memory loading {model_type} model ({self.model_name}): {e} — image captioning disabled'
                 )
-                model = Blip2ForConditionalGeneration.from_pretrained(
-                    self.model_name,
-                    torch_dtype=torch.float16 if self.device != 'cpu' else torch.float32,
-                )
-            else:
-                # Standard BLIP models (smaller, faster)
-                from transformers import BlipForConditionalGeneration, BlipProcessor
-
-                self._processor = BlipProcessor.from_pretrained(
-                    self.model_name,
-                    clean_up_tokenization_spaces=False,
-                )
-                model = BlipForConditionalGeneration.from_pretrained(
-                    self.model_name,
-                    torch_dtype=torch.float16 if self.device != 'cpu' else torch.float32,
-                )
-
-            model = model.to(self.device)
-            model.eval()
-
-            self._model = model
+                return
 
             elapsed = time.time() - start_time
             logger.info('-' * 60)

@@ -1,5 +1,27 @@
 # Release Notes
 
+## v1.1.3-beta.13
+
+### Graceful OOM / Low-Memory Handling
+
+Memory-intensive code paths now fail gracefully instead of silently crashing the processing thread when RAM is insufficient. This is particularly relevant for deployments on memory-constrained systems such as Proxmox LXC containers or small NAS devices.
+
+**Model loading protection (4 sites):**
+
+All four ML model load sites (OpenCLIP, BLIP/BLIP-2, MTCNN, InceptionResnetV1) are now wrapped in OOM-aware try/except blocks. On failure, the app logs a clear error message identifying the model, sets a "load failed" flag to prevent retry loops on every request, and disables the dependent feature (e.g. semantic search, captioning, face detection) rather than crashing.
+
+**Batch inference OOM retry (3 sites):**
+
+The three `torch.stack().to(device)` batch inference sites (image embeddings, NIMA scoring, face embeddings) now catch OOM errors and automatically fall back to single-item processing. This maximises progress — if a batch of 16 images fails, each is retried individually, and only truly impossible items are skipped.
+
+**Chunked similarity search:**
+
+The `np.vstack` call in `_get_images_by_similarity()` previously loaded ALL image embeddings into a single matrix (~200MB for 100k images). This is now processed in chunks of 10,000 embeddings (~20MB each), reducing peak memory allocation.
+
+### Documentation
+
+- **CLAUDE.md gitignored:** `CLAUDE.md` is deliberately excluded from version control (listed in `.gitignore`). It contains project context for Claude Code and is maintained locally by each developer. It is not part of the distributed source.
+
 ## v1.1.2-beta.12
 
 ### Docker Build Improvements

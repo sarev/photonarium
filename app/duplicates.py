@@ -1267,10 +1267,16 @@ def _get_images_by_similarity(
     ids = [row['id'] for row in rows]
     embeddings = [np.frombuffer(row['embedding'], dtype=np.float32) for row in rows]
 
-    embedding_matrix = np.vstack(embeddings)
-    similarities = embedding_matrix @ reference_embedding
-
-    similarity_map = {ids[i]: float(similarities[i]) for i in range(len(ids))}
+    # Process in chunks to avoid a single large allocation on low-memory systems.
+    # Each embedding is ~2KB (512 × float32), so 10k embeddings ≈ 20MB per chunk.
+    chunk_size = 10000
+    similarity_map: dict[str, float] = {}
+    for start in range(0, len(embeddings), chunk_size):
+        chunk_ids = ids[start : start + chunk_size]
+        chunk_matrix = np.vstack(embeddings[start : start + chunk_size])
+        chunk_sims = chunk_matrix @ reference_embedding
+        for i, cid in enumerate(chunk_ids):
+            similarity_map[cid] = float(chunk_sims[i])
 
     cursor = conn.execute("""
         SELECT id, path, basename, size, width, height, timestamp,

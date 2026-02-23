@@ -837,3 +837,4 @@ The following rules apply to all submissions to the Photonarium codebase:
 15. Ensure key documents are kept up-to-date (`README.md` and `DEVELOP.md`) and GUI elements have helpful, non-technical tooltips (`title` strings).
 16. Schema changes need proper SQLite migrations so existing databases aren't broken on upgrade.
 17. Avoid adding new dependencies without strong justification, prefer stdlib/existing dependencies.
+18. Handle low-memory/OOM conditions gracefully. Model loads, batch inference, and large allocations must catch `MemoryError`/`RuntimeError` and degrade (retry with a smaller batch, skip, or disable the feature) rather than crash the processing thread.
