@@ -6983,15 +6983,23 @@ class ImageDatabase:
         cursor = self.conn.execute('SELECT COUNT(*) as count FROM folders')
         total_folders = cursor.fetchone()['count']
 
-        cursor = self.conn.execute('SELECT COUNT(*) as count FROM people')
-        total_people = cursor.fetchone()['count']
+        # people/faces tables are created by FaceDB, which may not have
+        # initialised yet when the frontend first polls /api/status.
+        try:
+            cursor = self.conn.execute('SELECT COUNT(*) as count FROM people')
+            total_people = cursor.fetchone()['count']
+        except Exception:
+            total_people = 0
 
-        cursor = self.conn.execute(
-            """SELECT COUNT(*) as count FROM faces f
-               JOIN images i ON f.image_id = i.id
-               WHERE f.suppressed = 0 AND i.deleted = 0"""
-        )
-        total_faces = cursor.fetchone()['count']
+        try:
+            cursor = self.conn.execute(
+                """SELECT COUNT(*) as count FROM faces f
+                   JOIN images i ON f.image_id = i.id
+                   WHERE f.suppressed = 0 AND i.deleted = 0"""
+            )
+            total_faces = cursor.fetchone()['count']
+        except Exception:
+            total_faces = 0
 
         return {
             'totalImages': total_images,
@@ -7065,15 +7073,23 @@ class ImageDatabase:
         cursor = self.conn.execute('SELECT COUNT(*) as count FROM images WHERE deleted = 0')
         total_images = cursor.fetchone()['count']
 
-        cursor = self.conn.execute('SELECT COUNT(*) as count FROM people')
-        total_people = cursor.fetchone()['count']
+        # people/faces tables are created by FaceDB, which may not have
+        # initialised yet when the frontend first polls /api/status.
+        try:
+            cursor = self.conn.execute('SELECT COUNT(*) as count FROM people')
+            total_people = cursor.fetchone()['count']
+        except Exception:
+            total_people = 0
 
-        cursor = self.conn.execute(
-            """SELECT COUNT(*) as count FROM faces f
-               JOIN images i ON f.image_id = i.id
-               WHERE f.suppressed = 0 AND i.deleted = 0"""
-        )
-        total_faces = cursor.fetchone()['count']
+        try:
+            cursor = self.conn.execute(
+                """SELECT COUNT(*) as count FROM faces f
+                   JOIN images i ON f.image_id = i.id
+                   WHERE f.suppressed = 0 AND i.deleted = 0"""
+            )
+            total_faces = cursor.fetchone()['count']
+        except Exception:
+            total_faces = 0
 
         # Build response - only include Phase 4 statuses if they're active
         result = {

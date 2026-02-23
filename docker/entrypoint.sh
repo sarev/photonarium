@@ -4,9 +4,8 @@
 #
 # Handles:
 #   - PUID/PGID user creation for NAS filesystem permissions
-#   - First-run model copying from image to /config volume
-#   - Default config file generation
-#   - Application startup
+#   - First-run setup (small model weights + default config)
+#   - Application startup with model paths pointing to the image
 # =============================================================================
 
 set -e
@@ -26,36 +25,25 @@ groupadd -o -g "$PGID" photonarium 2>/dev/null || true
 useradd -o -u "$PUID" -g "$PGID" -d /config -s /bin/bash photonarium 2>/dev/null || true
 
 # -----------------------------------------------------------------------------
-# First-run setup: copy models from image to /config volume
+# First-run setup: copy small model weights to /config
 # -----------------------------------------------------------------------------
-# Models are baked into the image during docker build:
-#   - /defaults/ contains LAION aesthetic head and NIMA weights
-#   - /root/.cache/huggingface/ contains OpenCLIP and BLIP models
-#   - /root/.cache/torch/ contains FaceNet models (InceptionResnetV1 vggface2)
+# Only the LAION aesthetic head (~2KB) and NIMA weights (~9MB) live in /config
+# because the app loads them from data_dir. These are tiny and copy instantly.
 #
-# On first run, we copy them to /config so they persist across container
-# updates. Uses cp -n (no-clobber) so user-replaced models aren't overwritten.
+# The large models (HuggingFace ~2.5GB, FaceNet ~107MB) stay in the image
+# and are accessed via HF_HOME and TORCH_HOME environment variables below.
+# This avoids duplicating ~2.6GB to the config volume on every new container.
 
 if [ -d "/defaults" ] && [ "$(ls -A /defaults 2>/dev/null)" ]; then
-    echo "Copying ML models to /config (first run only)..."
+    echo "Copying model weights to /config..."
     cp -rn /defaults/. /config/ 2>/dev/null || true
 fi
 
-# Copy HuggingFace cache (OpenCLIP, BLIP models) to /config/.cache/huggingface/
-# The app runs as photonarium user with HOME=/config, so HF looks here.
-if [ -d "/root/.cache/huggingface" ] && [ ! -d "/config/.cache/huggingface" ]; then
-    echo "Copying HuggingFace models to /config/.cache/ (first run only)..."
-    mkdir -p /config/.cache
-    cp -r /root/.cache/huggingface /config/.cache/
-fi
-
-# Copy PyTorch cache (FaceNet models) to /config/.cache/torch/
-# InceptionResnetV1 vggface2 weights are stored here.
-if [ -d "/root/.cache/torch" ] && [ ! -d "/config/.cache/torch" ]; then
-    echo "Copying FaceNet models to /config/.cache/ (first run only)..."
-    mkdir -p /config/.cache
-    cp -r /root/.cache/torch /config/.cache/
-fi
+# -----------------------------------------------------------------------------
+# Point model libraries at the in-image caches (read-only, no copying needed)
+# -----------------------------------------------------------------------------
+export HF_HOME=/root/.cache/huggingface
+export TORCH_HOME=/root/.cache/torch
 
 # -----------------------------------------------------------------------------
 # Generate default config if not present

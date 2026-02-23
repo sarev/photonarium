@@ -1,5 +1,11 @@
-# ML packages that require torch to be installed first.
-# These are installed after PyTorch in the variant images.
+# ML packages and numpy-dependent packages.
+# These are installed after PyTorch in the variant images to ensure
+# numpy is only installed once (by torch), avoiding Docker layer conflicts.
 
+numpy
+pillow
+opencv-python-headless
+imagehash
+rawpy
 open_clip_torch
 transformers

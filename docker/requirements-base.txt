@@ -1,14 +1,12 @@
-# Torch-independent packages for the base image.
-# These can be installed before PyTorch.
+# Packages for the base image that have NO numpy dependency.
+# Anything that depends on numpy must go in requirements-ml.txt
+# to avoid Docker union filesystem conflicts (base layer's numpy .so
+# files leak through alongside the variant layer's, causing
+# "cannot load module more than once per process" at runtime).
 
-pillow
-opencv-python-headless
-imagehash
-numpy
 pyyaml
 flask
 waitress
 orjson
 requests
-rawpy
 exifread

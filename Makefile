@@ -72,7 +72,8 @@ VARIANT_DEPS := docker/Dockerfile docker/requirements-ml.txt docker/entrypoint.s
 
 .PHONY: models base-x64 base-arm64 build build-cu118 build-cu126 build-cu128 build-intel build-arm64 \
         all-x64 all-images use test test-photos up up-photos down logs shell \
-        push-base push clean clean-all help
+        push-base push-latest push-cu118 push-cu126 push-cu128 push-intel push-arm64 push \
+        clean clean-all help
 
 # =============================================================================
 # Model download (depends on config.py)
@@ -121,7 +122,7 @@ base-arm64: $(BASE_ARM64_MARKER)  ## Build arm64 base image
 # Variant images (depend on base + app code)
 # =============================================================================
 
-$(CPU_MARKER): $(BASE_X64_MARKER) $(VARIANT_DEPS)
+$(CPU_MARKER): $(VARIANT_DEPS) | $(BASE_X64_MARKER)
 	docker build \
 		--build-arg BASE_IMAGE=$(BASE_IMAGE):x64 \
 		--build-arg TORCH_INDEX=$(TORCH_CPU) \
@@ -135,7 +136,7 @@ $(CPU_MARKER): $(BASE_X64_MARKER) $(VARIANT_DEPS)
 		-f docker/Dockerfile .
 	@mkdir -p $(MARKER_DIR) && touch $@
 
-$(CU118_MARKER): $(BASE_X64_MARKER) $(VARIANT_DEPS)
+$(CU118_MARKER): $(VARIANT_DEPS) | $(BASE_X64_MARKER)
 	docker build \
 		--build-arg BASE_IMAGE=$(BASE_IMAGE):x64 \
 		--build-arg TORCH_INDEX=$(TORCH_CU118) \
@@ -148,7 +149,7 @@ $(CU118_MARKER): $(BASE_X64_MARKER) $(VARIANT_DEPS)
 		-f docker/Dockerfile .
 	@mkdir -p $(MARKER_DIR) && touch $@
 
-$(CU126_MARKER): $(BASE_X64_MARKER) $(VARIANT_DEPS)
+$(CU126_MARKER): $(VARIANT_DEPS) | $(BASE_X64_MARKER)
 	docker build \
 		--build-arg BASE_IMAGE=$(BASE_IMAGE):x64 \
 		--build-arg TORCH_INDEX=$(TORCH_CU126) \
@@ -161,7 +162,7 @@ $(CU126_MARKER): $(BASE_X64_MARKER) $(VARIANT_DEPS)
 		-f docker/Dockerfile .
 	@mkdir -p $(MARKER_DIR) && touch $@
 
-$(CU128_MARKER): $(BASE_X64_MARKER) $(VARIANT_DEPS)
+$(CU128_MARKER): $(VARIANT_DEPS) | $(BASE_X64_MARKER)
 	docker build \
 		--build-arg BASE_IMAGE=$(BASE_IMAGE):x64 \
 		--build-arg TORCH_INDEX=$(TORCH_CU128) \
@@ -174,7 +175,7 @@ $(CU128_MARKER): $(BASE_X64_MARKER) $(VARIANT_DEPS)
 		-f docker/Dockerfile .
 	@mkdir -p $(MARKER_DIR) && touch $@
 
-$(INTEL_MARKER): $(BASE_X64_MARKER) $(VARIANT_DEPS)
+$(INTEL_MARKER): $(VARIANT_DEPS) | $(BASE_X64_MARKER)
 	docker build \
 		--build-arg BASE_IMAGE=$(BASE_IMAGE):x64 \
 		--build-arg TORCH_INDEX=$(TORCH_CPU) \
@@ -188,7 +189,7 @@ $(INTEL_MARKER): $(BASE_X64_MARKER) $(VARIANT_DEPS)
 		-f docker/Dockerfile .
 	@mkdir -p $(MARKER_DIR) && touch $@
 
-$(ARM64_MARKER): $(BASE_ARM64_MARKER) $(VARIANT_DEPS)
+$(ARM64_MARKER): $(VARIANT_DEPS) | $(BASE_ARM64_MARKER)
 	docker buildx build \
 		--platform linux/arm64 \
 		--load \
@@ -327,43 +328,39 @@ shell:  ## Open bash shell in running container
 # Publishing
 # =============================================================================
 
-push-base: $(BASE_X64_MARKER) $(BASE_ARM64_MARKER)  ## Push base images to DockerHub
-	@echo "Pushing base images to $(BASE_REPO)..."
+push-base:  ## Push base images to DockerHub
 	docker tag $(BASE_IMAGE):x64 $(BASE_REPO):x64
 	docker push $(BASE_REPO):x64
 	docker tag $(BASE_IMAGE):arm64 $(BASE_REPO):arm64
 	docker push $(BASE_REPO):arm64
-	@echo ""
-	@echo "Base images pushed."
 
-push: all-images  ## Push all built images to DockerHub
-	@if ! git describe --tags --exact-match HEAD >/dev/null 2>&1; then \
-		echo "Warning: HEAD is not a tagged release."; \
-		echo "  Current version: $(VERSION)"; \
-		echo "  Pushing development builds to DockerHub is not recommended."; \
-		echo ""; \
-		read -p "Push anyway? [y/N] " confirm; \
-		if [ "$$confirm" != "y" ] && [ "$$confirm" != "Y" ]; then \
-			echo "Aborted."; \
-			exit 1; \
-		fi; \
-	fi
-	@echo "Pushing to $(DOCKER_REPO)..."
-	@found=0; \
-	for tag in $(VARIANT_TAGS); do \
-		if docker image inspect $(IMAGE_NAME):$$tag >/dev/null 2>&1; then \
-			echo ""; \
-			echo "Tagging and pushing: $$tag"; \
-			docker tag $(IMAGE_NAME):$$tag $(DOCKER_REPO):$$tag; \
-			docker push $(DOCKER_REPO):$$tag; \
-			found=1; \
-		fi; \
-	done; \
-	if [ $$found -eq 0 ]; then \
-		echo "No images to push. Build first with 'make build' or 'make all-images'."; \
-		exit 1; \
-	fi
-	@echo ""
+push-latest:  ## Push latest/cpu image to DockerHub
+	docker tag $(IMAGE_NAME):latest $(DOCKER_REPO):latest
+	docker push $(DOCKER_REPO):latest
+	docker tag $(IMAGE_NAME):cpu $(DOCKER_REPO):cpu
+	docker push $(DOCKER_REPO):cpu
+
+push-cu118:  ## Push CUDA 11.8 image to DockerHub
+	docker tag $(IMAGE_NAME):cu118 $(DOCKER_REPO):cu118
+	docker push $(DOCKER_REPO):cu118
+
+push-cu126:  ## Push CUDA 12.6 image to DockerHub
+	docker tag $(IMAGE_NAME):cu126 $(DOCKER_REPO):cu126
+	docker push $(DOCKER_REPO):cu126
+
+push-cu128:  ## Push CUDA 12.8 image to DockerHub
+	docker tag $(IMAGE_NAME):cu128 $(DOCKER_REPO):cu128
+	docker push $(DOCKER_REPO):cu128
+
+push-intel:  ## Push Intel iGPU image to DockerHub
+	docker tag $(IMAGE_NAME):intel $(DOCKER_REPO):intel
+	docker push $(DOCKER_REPO):intel
+
+push-arm64:  ## Push ARM64 image to DockerHub
+	docker tag $(IMAGE_NAME):arm64 $(DOCKER_REPO):arm64
+	docker push $(DOCKER_REPO):arm64
+
+push: push-latest push-cu118 push-cu126 push-cu128 push-intel push-arm64  ## Push all images to DockerHub
 	@echo "Done. View at: https://hub.docker.com/r/$(DOCKER_REPO)/tags"
 
 # =============================================================================
