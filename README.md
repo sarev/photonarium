@@ -760,7 +760,7 @@ Requires `/dev/dri` to be accessible on the host (standard on most Linux systems
 
 | Container Path | Purpose |
 |----------------|---------|
-| `/config` | Database, thumbnails, ML models, configuration file |
+| `/config` | Database, thumbnails, configuration file |
 | `/catalogue` | Imported photos (organised by date) |
 | `/photos` | Your photo library (mount read-only with `:ro`) |
 
@@ -772,6 +772,29 @@ On first run, Photonarium creates `/config/photonarium.yml` with Docker-appropri
 - `scan_interval_minutes: 60` - automatic rescan every hour (useful if photos sync continuously)
 
 Edit this file to change settings. Most settings can also be changed via the **Edit Settings** button in the web UI.
+
+## Running on Proxmox (LXC Containers)
+
+If you're running Docker inside a Proxmox LXC container, photo directories from the host must be bind-mounted into the LXC before Docker can see them. Docker bind mounts only work on paths that already exist inside the LXC.
+
+**On the Proxmox host** (not inside the LXC), edit the container config:
+
+```bash
+# Replace 102 with your LXC container ID
+nano /etc/pve/lxc/102.conf
+
+# Add a bind mount for your photo directory:
+mp0: /path/to/photos/on/proxmox,mp=/mnt/photos,ro=1
+```
+
+Then restart the LXC container. After this, `/mnt/photos` inside the LXC will have your files, and you can use it as a Docker volume:
+
+```yaml
+volumes:
+  - /mnt/photos:/photos:ro
+```
+
+**Disk space:** The LXC needs enough storage for the Docker image (~4.5GB for CPU) plus the `/config` volume (database, thumbnails). For a small library, 15-20GB is sufficient. Larger libraries need more space for thumbnails.
 
 ## Performance Tips
 
@@ -787,10 +810,11 @@ Your photos (`/photos`) can remain on slower network or HDD storage since they'r
 
 ### Memory Considerations
 
-- The CPU image uses ~2-3 GB RAM during normal operation
+- The CPU image uses ~2-3 GB RAM during normal operation (the ML models account for most of this)
 - CUDA images may use more during batch processing
-- Face detection on large batches temporarily spikes memory usage
-- For systems with limited RAM, reduce `embedding_batch_size` and `face_detection_batch_size` in settings
+- Face detection and image captioning temporarily spike memory usage
+- For systems with limited RAM (e.g. NAS devices, small VMs), reduce `embedding_batch_size`, `face_detection_batch_size`, and `nima_batch_size` in settings (default: 16-32). Smaller batches use less memory at the cost of slower processing.
+- The thumbnail RAM cache is configurable via `thumbnail_cache_size_mb` (default: 100MB). Reduce this on memory-constrained systems.
 
 ### Network Storage for Photos
 
@@ -824,7 +848,7 @@ docker compose down
 docker compose up -d
 ```
 
-Your data in `/config` and `/catalogue` is preserved across updates. ML models are copied to `/config` on first run and reused, so updates don't re-download models.
+Your data in `/config` and `/catalogue` is preserved across updates. ML models are baked into the image, so updates include the latest models automatically.
 
 ## Building from Source
 

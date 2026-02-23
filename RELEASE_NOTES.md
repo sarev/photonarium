@@ -40,6 +40,23 @@ The FaceNet face detection (MTCNN) and recognition (InceptionResnetV1) models ar
 
 A `VERSION` file (tag, commit hash, build date) is written during Docker builds so the app can display version information in headless mode where git is not available. Development installs continue to use git directly.
 
+**Eliminated model duplication on first run:**
+
+Previously, the entrypoint copied ~2.6GB of HuggingFace and FaceNet models from the image to the `/config` volume on first start, doubling disk usage and requiring extra storage. Models now stay in the image and are accessed directly via `HF_HOME` and `TORCH_HOME` environment variables. Only the small LAION/NIMA weights (~11MB) are copied to `/config`.
+
+**Fixed numpy crash on startup:**
+
+Docker's union filesystem was causing a `cannot load module more than once per process` error when numpy was installed in both the base and variant image layers. Fixed by moving all numpy-dependent packages (pillow, opencv, imagehash, rawpy) from the base image to the variant image, so numpy is only installed once — after PyTorch.
+
+**Makefile push/rebuild improvements:**
+
+- Per-variant push targets (`make push-latest`, `make push-cu118`, etc.) for pushing individual images without triggering builds of other variants.
+- Base image is now an order-only prerequisite for variant builds, so rebuilding the base no longer cascades to all variants.
+
+### Bug Fixes
+
+- **Status endpoint crash on fresh databases:** The `/api/status` and `/api/stats` endpoints crashed with `TypeError: 'NoneType' object is not subscriptable` on a brand-new database because the `people` and `faces` tables (created by FaceDB) might not exist yet when the frontend first polls. Now returns zero counts gracefully.
+
 ### Website
 
 - Docker added as a primary call-to-action button in the hero section.
@@ -53,6 +70,8 @@ A `VERSION` file (tag, commit hash, build date) is written during Docker builds 
 - **NAS photo syncing guide:** README now explains how to sync photos to a NAS using vendor tools (Synology Cloud Sync, QNAP Qsync, etc.) before indexing with Photonarium.
 - **BACKGROUND.md updated:** Added Docker/NAS deployment information and negative semantic search as a differentiator.
 - **Building from Source:** README now documents the `make download-models` prerequisite step.
+- **Proxmox LXC guide:** README now includes setup instructions for running Docker inside a Proxmox LXC container, including bind-mount configuration and disk space requirements.
+- **Memory tuning guidance:** Expanded memory considerations section with specific settings to reduce for constrained systems.
 
 ## v1.1.1-beta.11
 
