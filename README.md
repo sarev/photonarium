@@ -601,14 +601,14 @@ docker run -d \
   -e PUID=$(id -u) \
   -e PGID=$(id -g) \
   7thsw/photonarium:latest \
-  --add-folder /photos --scan
+  --add-folder /photos --scan --detect-faces
 ```
 
 Then open `http://localhost:5000` in your browser. Your photos will start indexing automatically.
 
-The `--add-folder /photos` flag registers the mounted photo directory (only needed on first run - folders are saved in the database). The `--scan` flag triggers indexing. The `--add-folder` flag is needed because Docker runs in headless mode, which hides the "Add Folder" button (native folder picker dialogs don't work without a display). The folder list and Rescan button remain available in the web UI.
+The `--add-folder /photos` flag registers the mounted photo directory (only needed on first run - folders are saved in the database). The `--scan` flag triggers indexing. The `--add-folder` flag is needed because Docker runs in headless mode, which hides the GUI "Add Folder" button (native folder picker dialogs don't work without a display). The folder list and Rescan button remain available in the web UI. The `--detect-faces` flag causes the face detection and naming parts of the processing pipeline to as (new) images are indexed after startup.
 
-On subsequent runs, you can omit `--add-folder` and just use `--scan` to pick up new images, or omit both flags entirely and use the **Rescan Local Folders** button in the web UI.
+On subsequent runs, you can omit `--add-folder` and just use `--scan --detect-faces` to pick up new images, or omit these flags entirely and use the **Rescan Local Folders** button in the web UI.
 
 ## Image Variants
 
