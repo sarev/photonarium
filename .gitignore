@@ -19,3 +19,8 @@ docker/config/
 docker/catalogue/
 docker/models/
 .build/
+.laion-aesthetic-head.pth
+.nima-mobilenetv2-ava.pth
+.thumbnails/
+catalogue/
+photonarium.db
