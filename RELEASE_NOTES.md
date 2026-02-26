@@ -2,9 +2,11 @@
 
 ## v1.1.4-beta.14
 
-### Server Log Viewer
+### Management Screen
 
-A new **View Logs** button on the Database screen opens a dialog showing recent server log output. This is useful for diagnosing issues on headless or Docker deployments where the terminal isn't visible.
+The Database screen (now titled "Management") has been expanded with tools for administering headless and Docker deployments without needing terminal access.
+
+**Server Log Viewer:** A **View Logs** button opens a dialog showing recent server log output.
 
 - **Database-backed storage:** Log entries are written to a `logs` table in the SQLite database via a dedicated logging handler, independent of the main database connection.
 - **Colour-coded levels:** ERROR (red), WARNING (amber), INFO (green), and DEBUG (muted) entries are visually distinct in both light and dark themes.
@@ -12,9 +14,28 @@ A new **View Logs** button on the Database screen opens a dialog showing recent 
 - **Configurable retention:** The `log_retention_lines` setting (100-100,000, default 1,000) controls how many lines are kept. Set to 0 to disable database logging entirely. Old entries are trimmed automatically.
 - **Fail-silent design:** The log handler never crashes the application — all writes are wrapped in exception handlers, and the handler is only attached after the database is fully initialised.
 
+**Server Restart:** A **Restart** button lets you restart the backend process directly from the UI — useful for applying settings changes on headless or Docker deployments.
+
+- Uses `os.execv()` to replace the process in-place, preserving the PID and all original CLI arguments. This works in bare-metal and Docker (PID 1 preserved) deployments without external orchestration.
+- The frontend shows a "Restarting..." overlay, polls `/api/health` until the server is back, and auto-reloads the page. Times out after 30 seconds with an error message.
+
+**Toolbar refresh:** The Management screen toolbar icon has been changed to a cog and repositioned as the left-most button for quicker access.
+
+### Screen-Accent Thumbnail Labels
+
+Thumbnail text labels now use each screen's signature toolbar colour for at-a-glance screen identification:
+
+- **Gallery:** Image filenames shown in blue (matching the Gallery toolbar button)
+- **Groups:** Custom group and directory names shown in purple (matching the Groups toolbar button)
+- **Faces:** Person names in the People list shown in green (matching the Faces toolbar button)
+
 ### Bug Fixes
 
 - **Noisy console logging for event polling:** The `[API] GET /events?since=...` message appeared in the browser console every 2 seconds because the polling filter compared the full URL (with query params) against a bare path. Switched to `startsWith()` matching so polling endpoints are correctly suppressed.
+
+### Documentation
+
+- **Docker quick start:** Added `--detect-faces` to the Docker quick start examples so face detection runs on first launch.
 
 ## v1.1.3-beta.13
 
