@@ -167,6 +167,8 @@ const Database = {
             importFileInput: App.$('import-file-input'),
             importDirInput: App.$('import-dir-input'),
             importStatusText: App.$('import-status-text'),
+            // Server restart
+            restartServerBtn: App.$('btn-restart-server'),
             // Log viewer elements
             viewLogsBtn: App.$('btn-view-logs'),
             logsDialog: App.$('dialog-logs'),
@@ -270,6 +272,11 @@ const Database = {
         this._els.addFolderBtn.addEventListener('click', () => this._addFolder());
         this._els.rescanBtn.addEventListener('click', () => this._rescanAll());
         this._els.revealConfigBtn.addEventListener('click', () => Settings.show());
+
+        // Server restart
+        if (this._els.restartServerBtn) {
+            this._els.restartServerBtn.addEventListener('click', () => this._restartServer());
+        }
 
         // Log viewer
         if (this._els.viewLogsBtn) {
@@ -1210,6 +1217,53 @@ const Database = {
             el.hidden = true;
             el.textContent = '';
         }
+    },
+
+    // -- Server restart ------------------------------------------------------
+
+    /**
+     * Restarts the backend server after user confirmation.
+     * Shows a loading overlay, fires the restart endpoint, then polls
+     * /api/health until the server is back (or times out after 30s).
+     * On success, reloads the page to pick up any changes.
+     * @private
+     */
+    async _restartServer() {
+        const confirmed = await App.confirm(
+            'Restart Server',
+            'Restart the server? The application will be briefly unavailable while the server restarts.',
+        );
+        if (!confirmed) return;
+
+        AppState.loading.show('restart', 'Restarting server\u2026');
+        try {
+            await App.apiPost('/restart');
+        } catch {
+            // Server may have already closed the connection — that's expected
+        }
+
+        // Wait for the server to go down, then poll until it's back
+        await new Promise(resolve => setTimeout(resolve, 2000));
+
+        const deadline = Date.now() + 30000;
+        const poll = () => {
+            if (Date.now() > deadline) {
+                AppState.loading.hide('restart');
+                App.showError('Server did not come back within 30 seconds. Check the server logs.');
+                return;
+            }
+            fetch('/api/health').then(resp => {
+                if (resp.ok) {
+                    AppState.loading.hide('restart');
+                    window.location.reload();
+                } else {
+                    setTimeout(poll, 2000);
+                }
+            }).catch(() => {
+                setTimeout(poll, 2000);
+            });
+        };
+        poll();
     },
 
     // -- Log viewer ---------------------------------------------------------

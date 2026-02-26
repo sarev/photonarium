@@ -1362,6 +1362,29 @@ def health():
         return error_response(f'Database unavailable: {e}', 503)
 
 
+@app.route('/api/restart', methods=['POST'])
+def restart_server():
+    """Restart the server process in-place using os.execv().
+
+    Returns a success response immediately, then spawns a daemon thread
+    that waits briefly (so waitress can flush the HTTP response) before
+    shutting down the database and replacing the process image.
+
+    Works in bare-metal and Docker (PID preserved) deployments.
+    """
+
+    def _do_restart():
+        time.sleep(1)  # let waitress flush the response
+        logger.info('Performing server restart via os.execv()...')
+        shutdown_db()
+        os.execv(sys.executable, [sys.executable] + sys.argv)  # noqa: S606
+
+    logger.info('Restart requested via /api/restart')
+    t = threading.Thread(target=_do_restart, daemon=True)
+    t.start()
+    return success_response(message='Server restarting...')
+
+
 # =============================================================================
 # Status Endpoints
 # =============================================================================
