@@ -1009,7 +1009,7 @@ a:hover {
 .gallery-item-label {
     margin-top: 0.5rem;
     font-size: 0.8rem;
-    color: var(--color-text-secondary);
+    color: var(--color-pastel-blue-fg);
     text-align: center;
     max-width: 100%;
     overflow: hidden;
@@ -2670,6 +2670,11 @@ a:hover {
     white-space: nowrap;
 }
 
+/* People list: name uses Faces screen accent for at-a-glance screen identity */
+.person-card .face-card-name {
+    color: var(--color-pastel-green-fg);
+}
+
 .face-card-name.unknown {
     color: var(--color-text-muted);
     font-style: italic;
@@ -3803,7 +3808,7 @@ a:hover {
     margin-top: 0.4rem;
     font-size: 0.8rem;
     font-weight: 600;
-    color: var(--color-text-primary);
+    color: var(--color-pastel-purple-fg);
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
