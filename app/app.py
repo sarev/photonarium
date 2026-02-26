@@ -1379,7 +1379,7 @@ def restart_server():
         shutdown_db()
         os.execv(sys.executable, [sys.executable] + sys.argv)  # noqa: S606
 
-    logger.info('Restart requested via /api/restart')
+    logger.warning('Restart requested via /api/restart')
     t = threading.Thread(target=_do_restart, daemon=True)
     t.start()
     return success_response(message='Server restarting...')
