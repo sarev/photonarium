@@ -451,6 +451,12 @@ def init_database(db_path: Path | str) -> sqlite3.Connection:
     # Create image metadata table (EXIF key-value pairs for search)
     conn.execute(_SQL_CREATE_IMAGE_METADATA)
 
+    # Create log storage table (database-backed log viewer)
+    from logdb import SQL_CREATE_LOGS, SQL_CREATE_LOGS_INDEX
+
+    conn.execute(SQL_CREATE_LOGS)
+    conn.execute(SQL_CREATE_LOGS_INDEX)
+
     # Create face recognition tables
     init_face_tables(conn)
 
@@ -4870,6 +4876,7 @@ class ImageDatabase:
         self._migrate_renumber_custom_groups_to_level5()
         self._migrate_initial_directory_groups()
         self._migrate_add_exif_metadata()
+        self._migrate_add_logs_table()
 
         # Steps 6-7: Start background threads
         self.start_threads()
@@ -5354,6 +5361,23 @@ class ImageDatabase:
         else:
             logger.info('Added EXIF metadata support (one-time migration)')
 
+        record_migration(self.conn, migration_id)
+
+    def _migrate_add_logs_table(self) -> None:
+        """One-time migration to note the logs table addition.
+
+        The ``logs`` table and index are created by ``_init_database()`` via
+        ``CREATE TABLE IF NOT EXISTS``.  This migration simply logs that the
+        feature is now available so the user sees it in the startup output.
+
+        Only runs once; tracked via the migrations table.
+        """
+        migration_id = 'add_logs_table_v1'
+
+        if has_migration_run(self.conn, migration_id):
+            return
+
+        logger.info('Added database log storage — viewable from Management > View Logs (one-time migration)')
         record_migration(self.conn, migration_id)
 
     def _load_checksum_cache(self) -> None:

@@ -543,6 +543,10 @@
                             <span class="icon" data-icon="settings">⚙</span>
                             Edit Settings
                         </button>
+                        <button id="btn-view-logs" class="action-btn" title="View recent server log output">
+                            <span class="icon" data-icon="receipt_long">📋</span>
+                            View Logs
+                        </button>
                     </div>
                 </section>
             </div>
@@ -885,6 +889,33 @@
                 <div class="dialog-actions settings-actions">
                     <button id="settings-cancel" class="action-btn">Cancel</button>
                     <button id="settings-save" class="action-btn primary">Save</button>
+                </div>
+            </div>
+        </dialog>
+
+        <!-- Server log viewer dialog -->
+        <dialog id="dialog-logs">
+            <div class="dialog-content logs-dialog">
+                <div class="logs-header">
+                    <h3>Server Logs</h3>
+                    <div class="logs-controls">
+                        <select id="logs-level-filter" title="Filter by log level">
+                            <option value="">All levels</option>
+                            <option value="ERROR">Error</option>
+                            <option value="WARNING">Warning</option>
+                            <option value="INFO">Info</option>
+                            <option value="DEBUG">Debug</option>
+                        </select>
+                        <button id="logs-refresh" class="action-btn" title="Refresh logs">
+                            <span class="icon" data-icon="refresh">↻</span>
+                        </button>
+                    </div>
+                </div>
+                <div id="logs-content" class="logs-content">
+                    <!-- Dynamically populated -->
+                </div>
+                <div class="dialog-actions">
+                    <button id="logs-close" class="action-btn primary">Close</button>
                 </div>
             </div>
         </dialog>

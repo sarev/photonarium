@@ -167,6 +167,13 @@ const Database = {
             importFileInput: App.$('import-file-input'),
             importDirInput: App.$('import-dir-input'),
             importStatusText: App.$('import-status-text'),
+            // Log viewer elements
+            viewLogsBtn: App.$('btn-view-logs'),
+            logsDialog: App.$('dialog-logs'),
+            logsContent: App.$('logs-content'),
+            logsLevelFilter: App.$('logs-level-filter'),
+            logsRefreshBtn: App.$('logs-refresh'),
+            logsCloseBtn: App.$('logs-close'),
         };
 
         // Fetch catalogue_dir from config to decide import visibility
@@ -263,6 +270,22 @@ const Database = {
         this._els.addFolderBtn.addEventListener('click', () => this._addFolder());
         this._els.rescanBtn.addEventListener('click', () => this._rescanAll());
         this._els.revealConfigBtn.addEventListener('click', () => Settings.show());
+
+        // Log viewer
+        if (this._els.viewLogsBtn) {
+            this._els.viewLogsBtn.addEventListener('click', () => this._showLogs());
+        }
+        if (this._els.logsCloseBtn) {
+            this._els.logsCloseBtn.addEventListener('click', () => {
+                this._els.logsDialog.close();
+            });
+        }
+        if (this._els.logsRefreshBtn) {
+            this._els.logsRefreshBtn.addEventListener('click', () => this._fetchLogs());
+        }
+        if (this._els.logsLevelFilter) {
+            this._els.logsLevelFilter.addEventListener('change', () => this._fetchLogs());
+        }
 
         // "Trashed" stat link — opens the trash directory in the file manager
         if (this._els.trashedLink) {
@@ -1187,6 +1210,90 @@ const Database = {
             el.hidden = true;
             el.textContent = '';
         }
+    },
+
+    // -- Log viewer ---------------------------------------------------------
+
+    /**
+     * Opens the log viewer dialog and fetches current logs.
+     * @private
+     */
+    _showLogs() {
+        if (!this._els.logsDialog) return;
+        this._els.logsLevelFilter.value = '';
+        this._els.logsContent.textContent = '';
+        this._els.logsDialog.showModal();
+        this._fetchLogs();
+    },
+
+    /**
+     * Fetches logs from the backend and renders them into the dialog.
+     * Reads the current level filter to apply server-side filtering.
+     * @private
+     */
+    async _fetchLogs() {
+        const content = this._els.logsContent;
+        if (!content) return;
+
+        const level = this._els.logsLevelFilter?.value || '';
+        const params = new URLSearchParams();
+        if (level) params.set('level', level);
+
+        try {
+            const resp = await App.apiGet(`/logs${params.toString() ? '?' + params : ''}`);
+            this._renderLogs(resp.data || []);
+        } catch (err) {
+            content.textContent = 'Could not load logs.';
+            console.error('Error fetching logs:', err);
+        }
+    },
+
+    /**
+     * Renders an array of log entries into the logs dialog content area.
+     * Uses textContent (not innerHTML) for the message to avoid XSS.
+     * Auto-scrolls to the bottom (most recent) after rendering.
+     *
+     * @param {Array<{timestamp: string, level: string, logger: string, message: string}>} logs
+     * @private
+     */
+    _renderLogs(logs) {
+        const content = this._els.logsContent;
+        content.textContent = '';
+
+        if (!logs || logs.length === 0) {
+            const empty = document.createElement('div');
+            empty.className = 'logs-empty';
+            empty.textContent = 'No log entries found.';
+            content.appendChild(empty);
+            return;
+        }
+
+        const frag = document.createDocumentFragment();
+        for (const entry of logs) {
+            const row = document.createElement('div');
+            row.className = `log-entry log-level-${entry.level}`;
+
+            const ts = document.createElement('span');
+            ts.className = 'log-timestamp';
+            ts.textContent = entry.timestamp;
+
+            const badge = document.createElement('span');
+            badge.className = 'log-level-badge';
+            badge.textContent = entry.level;
+
+            const msg = document.createElement('span');
+            msg.className = 'log-message';
+            msg.textContent = entry.message;
+
+            row.appendChild(ts);
+            row.appendChild(badge);
+            row.appendChild(msg);
+            frag.appendChild(row);
+        }
+        content.appendChild(frag);
+
+        // Auto-scroll to bottom (most recent entries)
+        content.scrollTop = content.scrollHeight;
     },
 };
 

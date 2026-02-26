@@ -452,6 +452,19 @@ CONFIG_SCHEMA: list[tuple[str, list[tuple[str, list[str]]]]] = [
         ],
     ),
     (
+        'Logging',
+        [
+            (
+                'log_retention_lines',
+                [
+                    'Maximum number of log lines to retain in the database (100-100000).',
+                    'These are viewable from the Management screen.',
+                    'Set to 0 to disable database logging.',
+                ],
+            ),
+        ],
+    ),
+    (
         'Trash Directory',
         [
             (
@@ -561,6 +574,7 @@ FIELD_CONSTRAINTS: dict[str, dict[str, int | float | bool]] = {
     'slideshow_interval': {'min': 1.0, 'max': 60.0, 'step': 0.5},
     'import_threads': {'min': 1, 'max': 16, 'step': 1},
     'scan_interval_minutes': {'min': 1, 'max': 1440, 'step': 1, 'special_zero': True},
+    'log_retention_lines': {'min': 100, 'max': 100000, 'step': 100, 'special_zero': True},
 }
 
 
@@ -623,6 +637,8 @@ class Config:
         scan_interval_minutes: Interval for automatic folder rescans (0 = disabled).
             Useful for Docker/NAS deployments where photos sync continuously.
             The timer waits for all processing to complete before starting countdown.
+        log_retention_lines: Maximum number of log lines to retain in the database
+            (100-100000). Viewable from the Management screen. Set to 0 to disable.
     """
 
     data_dir: str = ''
@@ -701,6 +717,7 @@ class Config:
     catalogue_dir: str = ''
     import_threads: int = 4
     scan_interval_minutes: int = 0
+    log_retention_lines: int = 1000
 
     def __post_init__(self) -> None:
         """Validate configuration values after initialisation."""

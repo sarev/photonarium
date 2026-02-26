@@ -559,6 +559,7 @@ Database is where you tell Photonarium where your photos live, import new images
 - Rescan folders to pick up changes
 - Watch progress for indexing, embeddings, face work, and imports (with ETAs when possible)
 - Click **Edit Settings** to open the in-app settings editor (works from any device on your network)
+- Click **View Logs** to see recent server log output in a colour-coded, filterable dialog (useful for diagnosing issues without needing terminal access)
 
 ### Import
 

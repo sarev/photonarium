@@ -873,7 +873,7 @@ const App = {
         const headers = method === 'GET' ? {} : { 'Content-Type': 'application/json' };
 
         // Log API request (skip noisy polling endpoints)
-        const isPolling = endpoint === '/events' || endpoint === '/status';
+        const isPolling = endpoint.startsWith('/events') || endpoint.startsWith('/status');
         if (!isPolling) {
             console.log(`[API] ${method} ${endpoint}`);
         }

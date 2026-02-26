@@ -1,5 +1,21 @@
 # Release Notes
 
+## v1.1.4-beta.14
+
+### Server Log Viewer
+
+A new **View Logs** button on the Database screen opens a dialog showing recent server log output. This is useful for diagnosing issues on headless or Docker deployments where the terminal isn't visible.
+
+- **Database-backed storage:** Log entries are written to a `logs` table in the SQLite database via a dedicated logging handler, independent of the main database connection.
+- **Colour-coded levels:** ERROR (red), WARNING (amber), INFO (green), and DEBUG (muted) entries are visually distinct in both light and dark themes.
+- **Level filtering:** A dropdown filters log entries by severity level.
+- **Configurable retention:** The `log_retention_lines` setting (100-100,000, default 1,000) controls how many lines are kept. Set to 0 to disable database logging entirely. Old entries are trimmed automatically.
+- **Fail-silent design:** The log handler never crashes the application — all writes are wrapped in exception handlers, and the handler is only attached after the database is fully initialised.
+
+### Bug Fixes
+
+- **Noisy console logging for event polling:** The `[API] GET /events?since=...` message appeared in the browser console every 2 seconds because the polling filter compared the full URL (with query params) against a bare path. Switched to `startsWith()` matching so polling endpoints are correctly suppressed.
+
 ## v1.1.3-beta.13
 
 ### Graceful OOM / Low-Memory Handling

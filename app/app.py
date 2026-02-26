@@ -2363,6 +2363,38 @@ def get_event_count():
 
 
 # =============================================================================
+# Logs Endpoint
+# =============================================================================
+
+
+@app.route('/api/logs', methods=['GET'])
+def get_logs_endpoint():
+    """Retrieve recent server log entries from the database.
+
+    Query Parameters:
+        level: Optional log level filter (e.g. 'ERROR', 'WARNING').
+        limit: Maximum rows to return (default 500, capped at config max).
+
+    Returns:
+        JSON array of {timestamp, level, logger, message} objects,
+        ordered oldest-first (most recent at the end).
+    """
+    from logdb import get_logs
+
+    config = get_db().config
+    max_limit = config.log_retention_lines if config.log_retention_lines > 0 else 500
+    level = request.args.get('level', '').strip() or None
+    try:
+        limit = min(int(request.args.get('limit', 500)), max_limit)
+    except (ValueError, TypeError):
+        limit = 500
+    limit = max(1, limit)
+
+    logs = get_logs(DATABASE_PATH, level=level, limit=limit)
+    return success_response(logs)
+
+
+# =============================================================================
 # People Endpoints
 # =============================================================================
 
@@ -4479,6 +4511,15 @@ if __name__ == '__main__':
 
     # Initialise database before starting server
     get_db()
+
+    # Attach database log handler (captures all log output to SQLite)
+    if _config.log_retention_lines > 0:
+        from logdb import DatabaseLogHandler
+
+        _db_log_handler = DatabaseLogHandler(DATABASE_PATH, _config.log_retention_lines)
+        _db_log_handler.setLevel(logging.INFO)
+        _db_log_handler.setFormatter(logging.Formatter('%(message)s'))
+        logging.getLogger().addHandler(_db_log_handler)
 
     # Resolve server host/port: CLI --port overrides config, config overrides defaults
     server_host = db.config.server_host

@@ -4955,6 +4955,150 @@ dialog::backdrop {
 
 
 /* ============================================================================
+   LOG VIEWER DIALOG
+   ============================================================================ */
+
+#dialog-logs {
+    max-width: min(900px, 95vw);
+}
+
+.logs-dialog {
+    display: flex;
+    flex-direction: column;
+    max-height: 80vh;
+    max-height: 80dvh;
+    padding: 0;
+}
+
+.logs-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 1rem;
+    padding: 1.5rem 1.5rem 0.75rem;
+    flex-shrink: 0;
+}
+
+.logs-header h3 {
+    margin: 0;
+    flex-shrink: 0;
+}
+
+.logs-controls {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+}
+
+.logs-controls select {
+    padding: 0.25rem 0.5rem;
+    border: 1px solid var(--color-border);
+    border-radius: 4px;
+    background: var(--color-bg-primary);
+    color: var(--color-text-primary);
+    font-size: 0.8rem;
+}
+
+.logs-content {
+    overflow-y: auto;
+    flex: 1;
+    padding: 0 1rem 1rem;
+    font-family: 'Consolas', 'Monaco', 'Courier New', monospace;
+    font-size: 0.75rem;
+    line-height: 1.5;
+    min-height: 200px;
+}
+
+.logs-dialog .dialog-actions {
+    padding: 0.75rem 1.5rem;
+    border-top: 1px solid var(--color-border);
+    flex-shrink: 0;
+}
+
+.logs-empty {
+    color: var(--color-text-muted);
+    text-align: center;
+    padding: 2rem;
+    font-family: var(--font-primary, inherit);
+    font-size: 0.85rem;
+}
+
+.log-entry {
+    display: flex;
+    gap: 0.5rem;
+    padding: 2px 0.5rem;
+    border-bottom: 1px solid var(--color-border-light);
+    align-items: baseline;
+    word-break: break-word;
+}
+
+.log-entry:last-child {
+    border-bottom: none;
+}
+
+.log-timestamp {
+    color: var(--color-text-muted);
+    white-space: nowrap;
+    flex-shrink: 0;
+}
+
+.log-level-badge {
+    font-size: 0.65rem;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.03em;
+    padding: 1px 5px;
+    border-radius: 3px;
+    white-space: nowrap;
+    flex-shrink: 0;
+    min-width: 4.5em;
+    text-align: center;
+}
+
+.log-message {
+    flex: 1;
+    min-width: 0;
+}
+
+/* Level-specific colours */
+.log-level-ERROR .log-level-badge {
+    background: rgba(162, 81, 81, 0.15);
+    color: var(--color-danger);
+}
+
+.log-level-ERROR .log-message {
+    color: var(--color-danger);
+}
+
+.log-level-WARNING .log-level-badge {
+    background: rgba(255, 193, 7, 0.15);
+    color: var(--color-warning);
+}
+
+.log-level-WARNING .log-message {
+    color: var(--color-text-primary);
+}
+
+.log-level-INFO .log-level-badge {
+    background: rgba(90, 118, 91, 0.15);
+    color: var(--color-success);
+}
+
+.log-level-INFO .log-message {
+    color: var(--color-text-secondary);
+}
+
+.log-level-DEBUG .log-level-badge {
+    background: var(--color-bg-secondary);
+    color: var(--color-text-muted);
+}
+
+.log-level-DEBUG .log-message {
+    color: var(--color-text-muted);
+}
+
+
+/* ============================================================================
    ON THIS DAY OVERLAY
    Nostalgic photo album shown on app load when there are photos from today's
    date across multiple years.  Intentionally NOT themed - always cream/sepia.
