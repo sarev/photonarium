@@ -52,6 +52,26 @@ logger = logging.getLogger(__name__)
 # Default thumbnail directory
 DEFAULT_THUMBNAIL_DIR = Path('.thumbnails')
 
+# Canonical thumbnail sizes (px).  Requests are snapped to the nearest
+# canonical size (see THUMBNAIL_SIZE_SNAP_THRESHOLD in app.py).
+THUMBNAIL_SIZE_SMALL = 200
+THUMBNAIL_SIZE_LARGE = 400
+THUMBNAIL_SIZES = (THUMBNAIL_SIZE_SMALL, THUMBNAIL_SIZE_LARGE)
+
+# JPEG encoding defaults
+THUMBNAIL_DEFAULT_QUALITY = 85
+
+# Sharpening applied after downscale (UnsharpMask parameters)
+THUMBNAIL_SHARPEN_RADIUS = 1.0
+THUMBNAIL_SHARPEN_PERCENT = 60
+THUMBNAIL_SHARPEN_THRESHOLD = 3
+
+# Skip draft mode for source images below this dimension (px)
+THUMBNAIL_MAX_SOURCE_DIM = 16384
+
+# Quality used when saving rotated full-size images
+ROTATION_SAVE_QUALITY = 95
+
 
 def _move_with_retry(src: Path, dst: Path, max_retries: int = 5, delay: float = 0.1) -> None:
     """Move a file with retry logic for Windows file locking issues.
@@ -113,8 +133,8 @@ def generate_thumbnail(
     source_path: Path | str,
     dest_path: Path | str,
     size: int,
-    quality: int = 85,
-    max_source_dimension: int = 16384,
+    quality: int = THUMBNAIL_DEFAULT_QUALITY,
+    max_source_dimension: int = THUMBNAIL_MAX_SOURCE_DIM,
 ) -> bool:
     """Generate a thumbnail from a source image.
 
@@ -171,8 +191,8 @@ def generate_thumbnail(
                     # For others, we fall through to normal processing
                     try:
                         img.draft('RGB', draft_size)
-                    except Exception:
-                        pass  # Draft not supported for this format
+                    except Exception as e:
+                        logger.debug(f'PIL draft mode not supported for this format: {e}')
 
             # Handle EXIF orientation (already applied by raw_open_image for RAW)
             img = ImageOps.exif_transpose(img)
@@ -193,7 +213,13 @@ def generate_thumbnail(
             img.thumbnail((size, size), Image.Resampling.LANCZOS)
 
             # Apply subtle sharpening to counteract downscale blur
-            img = img.filter(ImageFilter.UnsharpMask(radius=1.0, percent=60, threshold=3))
+            img = img.filter(
+                ImageFilter.UnsharpMask(
+                    radius=THUMBNAIL_SHARPEN_RADIUS,
+                    percent=THUMBNAIL_SHARPEN_PERCENT,
+                    threshold=THUMBNAIL_SHARPEN_THRESHOLD,
+                )
+            )
 
             # Save as JPEG
             img.save(dest_path, 'JPEG', quality=quality, optimize=True)
@@ -474,12 +500,12 @@ def _rotate_with_pillow(path: Path, degrees: float) -> bool:
             save_kwargs = {}
 
             if suffix in ('.jpg', '.jpeg'):
-                save_kwargs['quality'] = 95
+                save_kwargs['quality'] = ROTATION_SAVE_QUALITY
                 save_kwargs['optimize'] = True
             elif suffix == '.png':
                 save_kwargs['optimize'] = True
             elif suffix == '.webp':
-                save_kwargs['quality'] = 95
+                save_kwargs['quality'] = ROTATION_SAVE_QUALITY
 
             # Save to temp file first, then replace
             with tempfile.NamedTemporaryFile(
@@ -728,7 +754,7 @@ def _generate_thumbnails_for_image(
 def generate_missing_thumbnails(
     images: list[dict],
     thumbnail_dir: Path | str,
-    quality: int = 85,
+    quality: int = THUMBNAIL_DEFAULT_QUALITY,
     max_workers: int = 8,
     max_source_dimension: int = 0,
 ) -> dict:
@@ -747,7 +773,7 @@ def generate_missing_thumbnails(
     Returns:
         Dict with 'generated', 'skipped', and 'errors' counts.
     """
-    sizes = (200, 400)
+    sizes = THUMBNAIL_SIZES
     thumbnail_dir = Path(thumbnail_dir)
 
     total = len(images)

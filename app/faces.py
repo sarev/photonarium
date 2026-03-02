@@ -53,6 +53,7 @@ import torch
 from facenet_pytorch import MTCNN, InceptionResnetV1
 from PIL import Image, ImageFilter
 
+from dbutil import sql_placeholders
 from duplicates import UnionFind
 from rawimage import open_image as raw_open_image
 
@@ -61,6 +62,29 @@ if TYPE_CHECKING:
 
 # Configure module logger
 logger = logging.getLogger(__name__)
+
+# ---------------------------------------------------------------------------
+# Detection / recognition constants
+# ---------------------------------------------------------------------------
+
+# Minimum MTCNN confidence score to accept a detected face
+FACE_DETECTION_MIN_CONFIDENCE = 0.95
+# Minimum face dimension in pixels (MTCNN min_face_size)
+FACE_DETECTION_MIN_SIZE_PX = 40
+# Images larger than this are downscaled before detection
+FACE_DETECTION_MAX_DIM = 4096
+# MTCNN cascade thresholds (P-Net, R-Net, O-Net)
+FACE_MTCNN_THRESHOLDS = [0.6, 0.7, 0.7]
+# Extra padding around face crop as a fraction of the larger dimension
+FACE_CROP_PADDING_RATIO = 0.1
+# Aspect ratio tolerance: faces within ±this of 1.0 are treated as square
+FACE_THUMB_SQUARE_TOLERANCE = 0.05
+# Gaussian blur radius for the letterbox background of non-square face thumbs
+FACE_THUMB_BG_BLUR_RADIUS = 8
+# Blend alpha toward black for the letterbox background darkening
+FACE_THUMB_BG_DARKEN_ALPHA = 0.4
+# Default cosine-similarity threshold for face recognition
+FACE_RECOGNITION_DEFAULT_THRESHOLD = 0.65
 
 
 # =============================================================================
@@ -142,9 +166,9 @@ def init_face_tables(conn: sqlite3.Connection) -> None:
     for index_sql in _SQL_CREATE_FACE_INDEXES:
         try:
             conn.execute(index_sql)
-        except sqlite3.OperationalError:
+        except sqlite3.OperationalError as e:
             # Index already exists
-            pass
+            logger.debug(f'Face index creation skipped (already exists): {e}')
 
     # Run migrations for schema updates
     _run_migrations(conn)
@@ -225,8 +249,8 @@ class FaceDetector:
 
     def __init__(
         self,
-        min_confidence: float = 0.95,
-        min_face_size: int = 40,
+        min_confidence: float = FACE_DETECTION_MIN_CONFIDENCE,
+        min_face_size: int = FACE_DETECTION_MIN_SIZE_PX,
         device: str | None = None,
     ):
         """Initialize the face detector.
@@ -273,7 +297,7 @@ class FaceDetector:
                             keep_all=True,
                             device=self.device,
                             min_face_size=self.min_face_size,
-                            thresholds=[0.6, 0.7, 0.7],  # Default MTCNN thresholds
+                            thresholds=FACE_MTCNN_THRESHOLDS,
                             post_process=True,  # Apply standardization for ResNet input
                         )
                         logger.info('MTCNN loaded')
@@ -311,7 +335,7 @@ class FaceDetector:
     def detect_faces(
         self,
         image_path: Path | str,
-        max_dimension: int = 4096,
+        max_dimension: int = FACE_DETECTION_MAX_DIM,
     ) -> list[DetectedFace]:
         """Detect faces in an image.
 
@@ -475,7 +499,7 @@ class FaceDetector:
     def preload_images_batch(
         self,
         image_paths: list[Path | str],
-        max_dimension: int = 4096,
+        max_dimension: int = FACE_DETECTION_MAX_DIM,
         num_workers: int = 4,
     ) -> list[tuple[Path, Image.Image, float]]:
         """Preload and preprocess images in parallel on CPU.
@@ -803,8 +827,8 @@ def _create_face_thumbnail(
     px_w = int(box_w * width)
     px_h = int(box_h * height)
 
-    # Expand crop region slightly for context (10% padding)
-    padding = int(max(px_w, px_h) * 0.1)
+    # Expand crop region slightly for context
+    padding = int(max(px_w, px_h) * FACE_CROP_PADDING_RATIO)
     px_x = max(0, px_x - padding)
     px_y = max(0, px_y - padding)
     px_w = min(width - px_x, px_w + 2 * padding)
@@ -817,17 +841,17 @@ def _create_face_thumbnail(
     crop_w, crop_h = face_crop.size
     aspect_ratio = crop_w / crop_h if crop_h > 0 else 1.0
 
-    # If nearly square (within 5%), just resize directly
-    if 0.95 <= aspect_ratio <= 1.05:
+    # If nearly square, just resize directly
+    if (1 - FACE_THUMB_SQUARE_TOLERANCE) <= aspect_ratio <= (1 + FACE_THUMB_SQUARE_TOLERANCE):
         thumb = face_crop.resize((size, size), Image.Resampling.LANCZOS)
     else:
         # Non-square: create blurred/darkened background with centered face
         # Background: stretch to square, blur, darken
         background = face_crop.resize((size, size), Image.Resampling.LANCZOS)
-        background = background.filter(ImageFilter.GaussianBlur(radius=8))
+        background = background.filter(ImageFilter.GaussianBlur(radius=FACE_THUMB_BG_BLUR_RADIUS))
         # Darken by blending with black
         darkener = Image.new('RGB', (size, size), (0, 0, 0))
-        background = Image.blend(background, darkener, 0.4)
+        background = Image.blend(background, darkener, FACE_THUMB_BG_DARKEN_ALPHA)
 
         # Foreground: resize proportionally to fit within square
         if crop_w > crop_h:
@@ -1557,7 +1581,7 @@ def get_faces_for_images(
         return []
 
     # Use parameterized query with placeholder for each ID
-    placeholders = ','.join('?' * len(image_ids))
+    placeholders = sql_placeholders(image_ids)
     cursor = conn.execute(
         f"""SELECT f.id, f.image_id, f.box_x, f.box_y, f.box_w, f.box_h,
                    f.confidence, f.person_id, f.created_at, f.manually_tagged,
@@ -2054,7 +2078,7 @@ def has_faces_detected(
 def find_best_match(
     embedding: np.ndarray,
     known_embeddings: list[tuple[str, str, np.ndarray]],
-    threshold: float = 0.65,
+    threshold: float = FACE_RECOGNITION_DEFAULT_THRESHOLD,
     person_thresholds: dict[str, float | None] | None = None,
     ignored_person_ids: set[str] | None = None,
 ) -> tuple[str, str, float] | None:
@@ -2313,7 +2337,7 @@ def batch_identify_faces(
 
 def reassess_unknown_faces(
     conn: sqlite3.Connection,
-    threshold: float = 0.65,
+    threshold: float = FACE_RECOGNITION_DEFAULT_THRESHOLD,
     person_id: str | None = None,
 ) -> list[tuple[str, str, float]]:
     """Re-assess all unknown faces against known embeddings.
@@ -2560,7 +2584,7 @@ _grouping_status: dict | None = None  # {status: 'idle'|'computing'|'done', prog
 
 def compute_unknown_face_groups(
     conn: sqlite3.Connection,
-    threshold: float = 0.65,
+    threshold: float = FACE_RECOGNITION_DEFAULT_THRESHOLD,
 ) -> int:
     """Compute similarity groups for unknown faces using UnionFind clustering.
 
@@ -2677,7 +2701,7 @@ def _compute_unknown_face_groups_impl(
             # Update faces in batches to avoid "too many SQL variables" error
             for i in range(0, len(members), BATCH_SIZE):
                 batch = members[i : i + BATCH_SIZE]
-                placeholders = ','.join('?' * len(batch))
+                placeholders = sql_placeholders(batch)
                 conn.execute(f'UPDATE faces SET unknown_group_id = ? WHERE id IN ({placeholders})', [group_id] + batch)
 
     conn.commit()
@@ -2798,7 +2822,7 @@ def clear_reassessment_result() -> None:
 
 def reassess_unknown_faces_async(
     db: ImageDatabase,
-    threshold: float = 0.65,
+    threshold: float = FACE_RECOGNITION_DEFAULT_THRESHOLD,
     person_id: str | None = None,
     callback: callable | None = None,
 ) -> None:
@@ -3071,7 +3095,7 @@ def reassess_unknown_faces_async(
                 updated_faces = []
                 if actually_updated:
                     person_ids_list = list(set(m[1] for m in actually_updated))
-                    placeholders = ','.join('?' * len(person_ids_list))
+                    placeholders = sql_placeholders(person_ids_list)
                     cursor = db.conn.execute(
                         f'SELECT id, name FROM people WHERE id IN ({placeholders})', person_ids_list
                     )

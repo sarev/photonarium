@@ -126,6 +126,8 @@ from imagedb import (
 from rawimage import is_raw_format
 from rawimage import open_image as raw_open_image
 from thumbnails import (
+    THUMBNAIL_SIZE_LARGE,
+    THUMBNAIL_SIZE_SMALL,
     ThumbnailCache,
     generate_missing_thumbnails,
     generate_thumbnail,
@@ -159,6 +161,10 @@ app = Flask(__name__, static_folder='static', static_url_path='')
 
 DATABASE_PATH = os.environ.get('PHOTONARIUM_DB', 'photonarium.db')
 THUMBNAIL_CACHE_DIR = os.environ.get('PHOTONARIUM_THUMBNAILS', '.thumbnails')
+
+# Threshold for snapping requested thumbnail size to small vs large canonical
+# size.  Requests above this value get the large size, at or below get small.
+THUMBNAIL_SIZE_SNAP_THRESHOLD = 300
 
 # The loaded Config object — set once during startup, read-only afterwards.
 # Stored at module level so get_db() can pass it to ImageDatabase without
@@ -207,8 +213,8 @@ def _get_version_from_git() -> str:
             # Commit date in YYYY-MM-DD format
             date = _git('log', '-1', '--format=%cd', '--date=short')
             return f'Photonarium: {label} ({date})' if date else f'Photonarium: {label}'
-    except Exception:
-        pass
+    except Exception as e:
+        logger.debug(f'Git version detection failed: {e}')
 
     # Fall back to VERSION file (Docker builds)
     # VERSION is at /app/VERSION, one level above /app/app/
@@ -221,8 +227,8 @@ def _get_version_from_git() -> str:
                 # BUILD_DATE is in ISO format, extract just the date part
                 build_date = lines[2][:10] if len(lines) > 2 else ''
                 return f'Photonarium: {version} ({build_date})' if build_date else f'Photonarium: {version}'
-    except Exception:
-        pass
+    except Exception as e:
+        logger.debug(f'VERSION file detection failed: {e}')
 
     return ''
 
@@ -707,8 +713,8 @@ def get_thumbnail(image_id):
     to disk. This eliminates filesystem reads for frequently-accessed
     thumbnails.
     """
-    requested_size = request.args.get('size', 200, type=int)
-    size = 400 if requested_size > 300 else 200
+    requested_size = request.args.get('size', THUMBNAIL_SIZE_SMALL, type=int)
+    size = THUMBNAIL_SIZE_LARGE if requested_size > THUMBNAIL_SIZE_SNAP_THRESHOLD else THUMBNAIL_SIZE_SMALL
 
     db = get_db()
     cache = get_thumbnail_cache()
@@ -767,7 +773,7 @@ def get_histogram_images(image_id):
     try:
         db = get_db()
         cache = get_thumbnail_cache()
-        size = 400
+        size = THUMBNAIL_SIZE_LARGE
 
         # Get checksum for cache lookup
         checksum = db.get_checksum(image_id)

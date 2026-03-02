@@ -156,7 +156,7 @@ AppState.duplicates = (function() {
                 });
             }
             // Persist to backend (fire-and-forget)
-            App.apiPost(`/groups/${hash}/preview`, { image_id: imageId }).catch(() => {});
+            App.apiPost(`/groups/${hash}/preview`, { image_id: imageId }).catch(e => console.warn('Preview persist failed:', e));
         }
     }
 
@@ -782,7 +782,7 @@ AppState.duplicates = (function() {
             });
 
             // Persist (fire-and-forget)
-            App.apiPost(`/groups/${groupHash}/preview`, { image_id: imageId }).catch(() => {});
+            App.apiPost(`/groups/${groupHash}/preview`, { image_id: imageId }).catch(e => console.warn('Preview persist failed:', e));
         },
 
         /**

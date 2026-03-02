@@ -34,6 +34,9 @@ AppState.events = (function() {
     const { createSubscriberSystem } = AppState;
     const { subscribe, broadcast, notify } = createSubscriberSystem();
 
+    /** @constant {number} Default interval between event polls (ms) */
+    const EVENTS_POLL_INTERVAL_MS = 2000;
+
     // =========================================================================
     // STATE
     // =========================================================================
@@ -45,7 +48,7 @@ AppState.events = (function() {
     let _polling = false;
 
     /** @type {number} Poll interval in ms */
-    let _intervalMs = 2000;
+    let _intervalMs = EVENTS_POLL_INTERVAL_MS;
 
     /** @type {number} Cursor for multi-client polling — server_time from last response */
     let _lastServerTime = 0;
@@ -591,9 +594,9 @@ AppState.events = (function() {
         /**
          * Start polling for events.
          * Safe to call multiple times - only starts one timer.
-         * @param {number} [intervalMs=2000] - Polling interval in ms
+         * @param {number} [intervalMs=EVENTS_POLL_INTERVAL_MS] - Polling interval in ms
          */
-        startPolling(intervalMs = 2000) {
+        startPolling(intervalMs = EVENTS_POLL_INTERVAL_MS) {
             if (_pollTimer) return;
 
             _intervalMs = intervalMs;

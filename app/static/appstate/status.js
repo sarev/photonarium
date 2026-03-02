@@ -83,7 +83,7 @@ AppState.status = (function() {
 
                 if (isCompleted && !wasCompleted) {
                     // Acknowledge the reassessment
-                    App.apiPost('/faces/reassess-ack').catch(() => {});
+                    App.apiPost('/faces/reassess-ack').catch(e => console.warn('Reassess ACK failed:', e));
 
                     // Trigger faces reload if loaded
                     setTimeout(() => {

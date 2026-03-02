@@ -38,6 +38,7 @@ from typing import Any
 from PIL import Image
 from PIL.ExifTags import IFD, TAGS
 
+from exifutil import parse_exif_datetime
 from rawimage import extract_raw_exif, is_raw_format
 
 # Configure module logger
@@ -117,42 +118,6 @@ def _validate_time(hour: int, minute: int, second: int) -> bool:
 # =============================================================================
 
 
-def _parse_exif_datetime(exif_value: str) -> datetime | None:
-    """Parse an EXIF datetime string into a datetime object.
-
-    EXIF datetime format is typically "YYYY:MM:DD HH:MM:SS".
-
-    Args:
-        exif_value: EXIF datetime string.
-
-    Returns:
-        datetime object if parsing succeeds, None otherwise.
-    """
-    if not exif_value or not isinstance(exif_value, str):
-        return None
-
-    # EXIF format: "2024:01:15 14:30:00"
-    try:
-        return datetime.strptime(exif_value.strip(), '%Y:%m:%d %H:%M:%S')
-    except ValueError:
-        pass
-
-    # Some cameras use different formats, try alternatives
-    alternative_formats = [
-        '%Y-%m-%d %H:%M:%S',
-        '%Y/%m/%d %H:%M:%S',
-        '%Y:%m:%d %H:%M',
-        '%Y-%m-%d %H:%M',
-    ]
-    for fmt in alternative_formats:
-        try:
-            return datetime.strptime(exif_value.strip(), fmt)
-        except ValueError:
-            continue
-
-    return None
-
-
 def extract_exif_timestamp(path: Path | str) -> datetime | None:
     """Extract timestamp from image EXIF data.
 
@@ -186,13 +151,13 @@ def extract_exif_timestamp(path: Path | str) -> datetime | None:
 
             # Try DateTimeOriginal first (when photo was actually taken)
             if 'DateTimeOriginal' in exif_dict:
-                result = _parse_exif_datetime(exif_dict['DateTimeOriginal'])
+                result = parse_exif_datetime(exif_dict['DateTimeOriginal'])
                 if result:
                     return result
 
             # Fall back to DateTime (when file was modified)
             if 'DateTime' in exif_dict:
-                result = _parse_exif_datetime(exif_dict['DateTime'])
+                result = parse_exif_datetime(exif_dict['DateTime'])
                 if result:
                     return result
 
@@ -468,8 +433,8 @@ def _extract_exif_pillow(path: Path) -> dict[str, str] | None:
                     for tag_id, value in exif_ifd.items():
                         tag_name = TAGS.get(tag_id, str(tag_id))
                         raw[tag_name] = value
-            except Exception:
-                pass
+            except Exception as e:
+                logger.debug(f'Failed to read EXIF sub-IFD from {path}: {e}')
 
             # GPS IFD
             gps_info = None
@@ -477,8 +442,8 @@ def _extract_exif_pillow(path: Path) -> dict[str, str] | None:
                 gps_ifd = exif.get_ifd(IFD.GPSInfo)
                 if gps_ifd:
                     gps_info = gps_ifd
-            except Exception:
-                pass
+            except Exception as e:
+                logger.debug(f'Failed to read GPS IFD from {path}: {e}')
 
             return _normalise_exif(raw, gps_info)
 
@@ -641,7 +606,7 @@ def _normalise_exif(raw: dict[str, Any], gps_info: dict | None = None) -> dict[s
     for tag in ('DateTimeOriginal', 'DateTime'):
         dt_val = raw.get(tag)
         if dt_val:
-            parsed = _parse_exif_datetime(str(dt_val))
+            parsed = parse_exif_datetime(str(dt_val))
             if parsed:
                 result['Date Taken'] = parsed.strftime('%Y-%m-%d %H:%M:%S')
                 break
@@ -859,7 +824,7 @@ def _normalise_exifread_tags(tags: dict[str, Any]) -> dict[str, str] | None:
     for tag_name in ('EXIF DateTimeOriginal', 'Image DateTime'):
         val = tags.get(tag_name)
         if val:
-            parsed = _parse_exif_datetime(str(val))
+            parsed = parse_exif_datetime(str(val))
             if parsed:
                 result['Date Taken'] = parsed.strftime('%Y-%m-%d %H:%M:%S')
                 break
@@ -1176,7 +1141,7 @@ def derive_timestamp_with_confidence(
     if exif_data is not None:
         date_taken = exif_data.get('Date Taken')
         if date_taken:
-            timestamp = _parse_exif_datetime(date_taken)
+            timestamp = parse_exif_datetime(date_taken)
             if timestamp:
                 logger.debug(f'Timestamp from pre-read EXIF: {timestamp} for {path}')
                 return (timestamp, CONFIDENCE_EXIF)

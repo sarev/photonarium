@@ -40,6 +40,8 @@ import cv2
 import numpy as np
 from PIL import Image, ImageOps
 
+from exifutil import parse_exif_datetime
+
 # Configure module logger
 logger = logging.getLogger(__name__)
 
@@ -301,45 +303,11 @@ def extract_raw_exif(path: Path | str) -> datetime | None:
         for tag_name in ('EXIF DateTimeOriginal', 'Image DateTime'):
             value = tags.get(tag_name)
             if value:
-                result = _parse_exif_datetime(str(value))
+                result = parse_exif_datetime(str(value))
                 if result:
                     return result
 
     except Exception as e:
         logger.debug(f'Failed to extract EXIF from RAW file {path}: {e}')
-
-    return None
-
-
-def _parse_exif_datetime(exif_value: str) -> datetime | None:
-    """Parse an EXIF datetime string into a datetime object.
-
-    Replicates the logic from metadata._parse_exif_datetime() to avoid
-    a circular import (metadata.py imports from us for RAW detection).
-
-    EXIF datetime format is typically ``YYYY:MM:DD HH:MM:SS``.
-
-    Args:
-        exif_value: EXIF datetime string.
-
-    Returns:
-        datetime object if parsing succeeds, None otherwise.
-    """
-    if not exif_value or not isinstance(exif_value, str):
-        return None
-
-    # Standard EXIF format: "2024:01:15 14:30:00"
-    formats = [
-        '%Y:%m:%d %H:%M:%S',
-        '%Y-%m-%d %H:%M:%S',
-        '%Y/%m/%d %H:%M:%S',
-        '%Y:%m:%d %H:%M',
-        '%Y-%m-%d %H:%M',
-    ]
-    for fmt in formats:
-        try:
-            return datetime.strptime(exif_value.strip(), fmt)
-        except ValueError:
-            continue
 
     return None

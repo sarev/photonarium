@@ -5,7 +5,7 @@
 #   make              Show available targets (help)
 #   make models       Download ML models (run once, or after config.py changes)
 #   make base-x64     Build shared base image for x86_64 variants
-#   make build        Build CPU-only image (default for most NAS devices)
+#   make build-cpu    Build CPU-only image (default for most NAS devices)
 #   make build-cu126  Build CUDA 12.6 image (RTX 30xx, 40xx)
 #   make all-images   Build all variants
 #   make test         Run container smoke test
@@ -24,6 +24,9 @@ TORCH_CPU   := https://download.pytorch.org/whl/cpu
 TORCH_CU118 := https://download.pytorch.org/whl/cu118
 TORCH_CU126 := https://download.pytorch.org/whl/cu126
 TORCH_CU128 := https://download.pytorch.org/whl/cu128
+
+# Number of recent release versions to keep (override: make prune-all KEEP=3)
+KEEP ?= 2
 
 # Compose file location
 COMPOSE_FILE := docker/docker-compose.yml
@@ -70,10 +73,10 @@ ARM64_MARKER      := $(MARKER_DIR)/arm64
 VARIANT_DEPS := docker/Dockerfile docker/requirements-ml.txt docker/entrypoint.sh \
                 $(wildcard app/*.py) $(wildcard app/static/*.js) $(wildcard app/static/*.css)
 
-.PHONY: models base-x64 base-arm64 build build-cu118 build-cu126 build-cu128 build-intel build-arm64 \
+.PHONY: models base-x64 base-arm64 build build-cpu build-cu118 build-cu126 build-cu128 build-intel build-arm64 \
         all-x64 all-images use test test-photos up up-photos down logs shell \
         push-base push-latest push-cu118 push-cu126 push-cu128 push-intel push-arm64 push \
-        clean clean-all help
+        prune prune-all clean clean-all help
 
 # =============================================================================
 # Model download (depends on config.py)
@@ -132,7 +135,7 @@ $(CPU_MARKER): $(VARIANT_DEPS) | $(BASE_X64_MARKER)
 		--build-arg VARIANT=cpu \
 		-t $(IMAGE_NAME):latest \
 		-t $(IMAGE_NAME):cpu \
-		-t $(IMAGE_NAME):$(VERSION) \
+		-t $(IMAGE_NAME):$(VERSION)-cpu \
 		-f docker/Dockerfile .
 	@mkdir -p $(MARKER_DIR) && touch $@
 
@@ -204,12 +207,13 @@ $(ARM64_MARKER): $(VARIANT_DEPS) | $(BASE_ARM64_MARKER)
 		-f docker/Dockerfile .
 	@mkdir -p $(MARKER_DIR) && touch $@
 
-build: $(CPU_MARKER)          ## Build CPU-only image (default, ~4.5 GB)
+build-cpu: $(CPU_MARKER)      ## Build CPU-only image (default, ~4.5 GB)
 build-cu118: $(CU118_MARKER)  ## Build CUDA 11.8 image (GTX 10xx, RTX 20xx)
 build-cu126: $(CU126_MARKER)  ## Build CUDA 12.6 image (RTX 30xx, 40xx)
 build-cu128: $(CU128_MARKER)  ## Build CUDA 12.8 image (RTX 50xx / Blackwell)
 build-intel: $(INTEL_MARKER)  ## Build Intel iGPU image (Celeron/Atom NAS)
 build-arm64: $(ARM64_MARKER)  ## Build ARM64 image (Raspberry Pi, Apple Silicon)
+build: build-cpu              ## Alias for build-cpu
 
 all-x64: $(CPU_MARKER) $(CU118_MARKER) $(CU126_MARKER) $(CU128_MARKER) $(INTEL_MARKER)  ## Build all x64 variants
 all-images: all-x64 $(ARM64_MARKER)  ## Build all image variants
@@ -376,7 +380,7 @@ clean:  ## Remove variant images (keeps base images for faster rebuilds)
 	-@docker rmi $(IMAGE_NAME):cu128 2>/dev/null || true
 	-@docker rmi $(IMAGE_NAME):intel 2>/dev/null || true
 	-@docker rmi $(IMAGE_NAME):arm64 2>/dev/null || true
-	-@docker rmi $(IMAGE_NAME):$(VERSION) 2>/dev/null || true
+	-@docker rmi $(IMAGE_NAME):$(VERSION)-cpu 2>/dev/null || true
 	-@docker rmi $(IMAGE_NAME):$(VERSION)-cu118 2>/dev/null || true
 	-@docker rmi $(IMAGE_NAME):$(VERSION)-cu126 2>/dev/null || true
 	-@docker rmi $(IMAGE_NAME):$(VERSION)-cu128 2>/dev/null || true
@@ -397,7 +401,7 @@ clean-all:  ## Remove all images, markers, and prune Docker build cache
 	-@docker rmi $(IMAGE_NAME):cu128 2>/dev/null || true
 	-@docker rmi $(IMAGE_NAME):intel 2>/dev/null || true
 	-@docker rmi $(IMAGE_NAME):arm64 2>/dev/null || true
-	-@docker rmi $(IMAGE_NAME):$(VERSION) 2>/dev/null || true
+	-@docker rmi $(IMAGE_NAME):$(VERSION)-cpu 2>/dev/null || true
 	-@docker rmi $(IMAGE_NAME):$(VERSION)-cu118 2>/dev/null || true
 	-@docker rmi $(IMAGE_NAME):$(VERSION)-cu126 2>/dev/null || true
 	-@docker rmi $(IMAGE_NAME):$(VERSION)-cu128 2>/dev/null || true
@@ -405,6 +409,74 @@ clean-all:  ## Remove all images, markers, and prune Docker build cache
 	-@docker rmi $(IMAGE_NAME):$(VERSION)-arm64 2>/dev/null || true
 	@rm -rf $(MARKER_DIR)
 	docker builder prune -f
+	@echo "Done."
+
+prune:  ## Remove non-release versioned images (intermediate commits)
+	@echo "Pruning non-release $(IMAGE_NAME) images..."
+	@# Non-release versions have a git-describe suffix: -<N>-g<hex>
+	@# e.g. v1.1.4-beta.14-3-gdd3bbbe vs release v1.1.4-beta.14
+	@all_tags=$$(docker images $(IMAGE_NAME) --format '{{.Tag}}' 2>/dev/null \
+		| grep '^v' | sort -u); \
+	if [ -z "$$all_tags" ]; then \
+		echo "No versioned images found."; \
+	else \
+		removed=0; \
+		for tag in $$all_tags; do \
+			base=$$(echo "$$tag" | sed -E 's/-(cpu|cu118|cu126|cu128|intel|arm64)$$//'); \
+			if echo "$$base" | grep -qE -- '-[0-9]+-g[0-9a-f]+$$'; then \
+				echo "  $(IMAGE_NAME):$$tag"; \
+				docker rmi "$(IMAGE_NAME):$$tag" 2>/dev/null || true; \
+				removed=$$((removed + 1)); \
+			fi; \
+		done; \
+		if [ "$$removed" -eq 0 ]; then \
+			echo "No non-release images found."; \
+		else \
+			echo "Removed $$removed non-release tag(s)."; \
+		fi; \
+	fi
+	@echo "Pruning dangling images..."
+	@docker image prune -f
+	@echo "Pruning build cache..."
+	@docker builder prune -f
+	@echo "Done."
+
+prune-all: prune  ## Also remove old releases, keeping KEEP=2 most recent
+	@echo "Pruning old release versions (keeping $(KEEP))..."
+	@all_tags=$$(docker images $(IMAGE_NAME) --format '{{.Tag}}' 2>/dev/null \
+		| grep '^v' | sort -u); \
+	if [ -z "$$all_tags" ]; then \
+		echo "No release images remaining."; \
+	else \
+		base_versions=$$(docker images $(IMAGE_NAME) \
+			--format '{{.CreatedAt}}\t{{.Tag}}' 2>/dev/null \
+			| grep '	v' | sort -r \
+			| awk -F'\t' '{print $$2}' \
+			| sed -E 's/-(cpu|cu118|cu126|cu128|intel|arm64)$$//' \
+			| awk '!seen[$$0]++'); \
+		total=$$(echo "$$base_versions" | wc -l); \
+		if [ "$$total" -le "$(KEEP)" ]; then \
+			echo "Only $$total release(s) found, nothing to prune."; \
+		else \
+			keep=$$(echo "$$base_versions" | head -n $(KEEP)); \
+			remove=$$(echo "$$base_versions" | tail -n +$$(($(KEEP) + 1))); \
+			echo "Keeping:"; \
+			echo "$$keep" | while read -r ver; do echo "  $$ver"; done; \
+			echo "Removing:"; \
+			removed=0; \
+			for ver in $$remove; do \
+				matching=$$(echo "$$all_tags" \
+					| grep -E "^$${ver}(-(cpu|cu118|cu126|cu128|intel|arm64))?$$"); \
+				for tag in $$matching; do \
+					echo "  $(IMAGE_NAME):$$tag"; \
+					docker rmi "$(IMAGE_NAME):$$tag" 2>/dev/null || true; \
+					removed=$$((removed + 1)); \
+				done; \
+			done; \
+			echo "Removed $$removed release tag(s)."; \
+		fi; \
+	fi
+	@docker image prune -f
 	@echo "Done."
 
 # =============================================================================
@@ -443,15 +515,16 @@ help:  ## Show this help
 		awk 'BEGIN {FS = ":.*##"}; {printf "  $(CYAN)%-14s$(RESET) %s\n", $$1, $$2}'
 	@echo ""
 	@echo "$(CYAN)Cleanup:$(RESET)"
-	@grep -E '^clean.*:.*##' $(MAKEFILE_LIST) | \
+	@grep -E '^(prune|prune-all|clean).*:.*##' $(MAKEFILE_LIST) | \
 		awk 'BEGIN {FS = ":.*##"}; {printf "  $(CYAN)%-14s$(RESET) %s\n", $$1, $$2}'
 	@echo ""
 	@echo "Examples:"
 	@echo "  make models       Download models (run once)"
-	@echo "  make build        Build CPU image for NAS deployment"
+	@echo "  make build-cpu    Build CPU image for NAS deployment"
 	@echo "  make build-cu126  Build CUDA 12.6 image for RTX 30xx/40xx"
 	@echo "  make build-arm64  Build ARM64 image for Raspberry Pi/Apple Silicon"
 	@echo "  make all-images   Build all image variants"
+	@echo "  make prune        Remove intermediate commit images"
 	@echo "  make push         Push all built images to DockerHub"
 	@echo "  make up           Start the container"
 	@echo "  make logs         Follow container output"

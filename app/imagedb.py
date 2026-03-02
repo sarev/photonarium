@@ -190,6 +190,7 @@ import torch
 
 # Local imports
 from config import Config, get_default_config, load_config
+from dbutil import sql_placeholders
 from duplicates import DuplicateManager, embedding_to_numpy
 from faces import (
     FaceDetector,
@@ -469,17 +470,17 @@ def init_database(db_path: Path | str) -> sqlite3.Connection:
             logger.debug(f'    Checking migration: {trimmed}')
             conn.execute(migration_sql)
             logger.info(f'    Schema migration applied: {trimmed}')
-        except sqlite3.OperationalError:
+        except sqlite3.OperationalError as e:
             # Column/table already exists, ignore
-            pass
+            logger.debug(f'    Migration skipped (already applied): {e}')
 
     # Create indexes (after migrations so new columns exist)
     for index_sql in _SQL_CREATE_INDEXES:
         try:
             conn.execute(index_sql)
-        except sqlite3.OperationalError:
+        except sqlite3.OperationalError as e:
             # Index already exists, ignore
-            pass
+            logger.debug(f'    Index creation skipped (already exists): {e}')
 
     conn.commit()
 
@@ -3524,7 +3525,7 @@ class NimaThread(threading.Thread):
 
         # Look up checksums for these image IDs
         with self._db_lock:
-            placeholders = ','.join('?' * len(image_ids))
+            placeholders = sql_placeholders(image_ids)
             cursor = self.conn.execute(f'SELECT id, checksum FROM images WHERE id IN ({placeholders})', image_ids)
             rows = {row['id']: row['checksum'] for row in cursor.fetchall()}
 
@@ -3778,7 +3779,7 @@ def semantic_search(
     score_map = {ids[i]: float(scores[i]) for i in top_indices}
 
     # Fetch full image data for the top results
-    placeholders = ','.join('?' * len(top_ids))
+    placeholders = sql_placeholders(top_ids)
     cursor = conn.execute(
         f"""
         SELECT id, path, basename, size, width, height, timestamp,
@@ -4509,8 +4510,8 @@ class ImportWorker(threading.Thread):
             # Still try to clean up staging even on failure
             try:
                 self._cleanup_staging_file(Path(source_path))
-            except Exception:
-                pass
+            except Exception as e2:
+                logger.debug(f'ImportWorker: staging cleanup failed for {source_path}: {e2}')
             with self._progress_lock:
                 if self._progress is not None:
                     self._progress['done'] += 1
@@ -4561,8 +4562,8 @@ class ImportWorker(threading.Thread):
             ts = derive_timestamp(path)
             if ts is not None:
                 return ts
-        except Exception:
-            pass
+        except Exception as e:
+            logger.debug(f'Timestamp derivation failed for {path}, falling back to mtime: {e}')
         # Fallback to file modification time
         return datetime.fromtimestamp(path.stat().st_mtime)
 
@@ -6420,7 +6421,7 @@ class ImageDatabase:
         # Look up file paths for all images (single batch query)
         paths: dict[str, str] = {}
         with self._db_lock:
-            placeholders = ','.join('?' for _ in image_ids)
+            placeholders = sql_placeholders(image_ids)
             cursor = self.conn.execute(f'SELECT id, path FROM images WHERE id IN ({placeholders})', image_ids)
             for row in cursor.fetchall():
                 paths[row['id']] = row['path']
@@ -6443,7 +6444,7 @@ class ImageDatabase:
         removed_face_ids = []
         affected_person_ids = set()
         with self._db_lock:
-            placeholders = ','.join('?' for _ in enqueued)
+            placeholders = sql_placeholders(enqueued)
 
             # Collect faces belonging to these images BEFORE soft-delete,
             # so we can clean up person references and face thumbnails.
@@ -6469,7 +6470,7 @@ class ImageDatabase:
 
             # Hard-delete orphaned face records (CASCADE won't fire on UPDATE)
             if removed_face_ids:
-                face_placeholders = ','.join('?' for _ in removed_face_ids)
+                face_placeholders = sql_placeholders(removed_face_ids)
                 self.conn.execute(
                     f'DELETE FROM faces WHERE id IN ({face_placeholders})',
                     removed_face_ids,
@@ -6868,7 +6869,7 @@ class ImageDatabase:
         query_embedding = self._get_clip_model().encode_semantic_query(query)
 
         # Get embeddings for the specified images
-        placeholders = ','.join('?' * len(image_ids))
+        placeholders = sql_placeholders(image_ids)
         cursor = self.conn.execute(
             f'SELECT id, embedding FROM images WHERE id IN ({placeholders}) AND embedding IS NOT NULL', image_ids
         )
@@ -7433,7 +7434,7 @@ def _signal_handler(signum: int, frame) -> None:
         frame: Current stack frame (unused).
     """
     signal_name = signal.Signals(signum).name
-    logger.info(f'Received {signal_name}, initiating graceful shutdown')
+    logger.warning(f'Received {signal_name}, initiating graceful shutdown')
 
     if _active_database is not None:
         _active_database.close()

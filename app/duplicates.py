@@ -30,6 +30,7 @@ from typing import Any
 import numpy as np
 
 from config import Config, get_default_config
+from dbutil import sql_placeholders
 
 logger = logging.getLogger(__name__)
 
@@ -449,7 +450,7 @@ def _compute_duplicates_level0_incremental(
     image_to_group = _get_image_to_group_mapping(conn, level=0)
 
     # Get checksums for dirty images
-    placeholders = ','.join('?' * len(dirty_ids))
+    placeholders = sql_placeholders(dirty_ids)
     cursor = conn.execute(f'SELECT id, checksum FROM images WHERE id IN ({placeholders}) AND deleted = 0', dirty_ids)
     dirty_checksums = {row['id']: row['checksum'] for row in cursor.fetchall()}
 
@@ -1108,7 +1109,7 @@ def _compute_duplicates_embedding_incremental(
 
     # Fetch dirty embeddings - these are typically few so OK to load at once
     if dirty_ids:
-        placeholders = ','.join('?' * len(dirty_ids))
+        placeholders = sql_placeholders(dirty_ids)
         cursor = conn.execute(
             f'SELECT id, embedding FROM images WHERE id IN ({placeholders}) AND deleted = 0 AND embedding IS NOT NULL',
             dirty_ids,
@@ -1566,7 +1567,7 @@ class DuplicateManager:
 
         try:
             # Get all affected groups before removing
-            placeholders = ','.join('?' * len(image_ids))
+            placeholders = sql_placeholders(image_ids)
             cursor = conn.execute(
                 f'SELECT DISTINCT level, group_hash FROM duplicate_groups WHERE image_id IN ({placeholders})', image_ids
             )
@@ -1764,7 +1765,7 @@ class DuplicateManager:
                 image_ids = eg.get('image_ids', [])
                 if not image_ids:
                     continue
-                placeholders = ','.join('?' for _ in image_ids)
+                placeholders = sql_placeholders(image_ids)
                 cursor = conn.execute(
                     f"""
                     SELECT id, aesthetic_laion, aesthetic_nima,
@@ -1931,7 +1932,7 @@ class DuplicateManager:
             preview_ids = [row['preview_image_id'] for row in custom_group_rows if row['preview_image_id']]
             preview_images: dict[str, dict] = {}
             if preview_ids:
-                placeholders = ','.join('?' * len(preview_ids))
+                placeholders = sql_placeholders(preview_ids)
                 cursor = conn.execute(
                     f'SELECT id, basename FROM images WHERE id IN ({placeholders}) AND deleted = 0',
                     preview_ids,
@@ -2498,7 +2499,7 @@ class DuplicateManager:
             if not damaged_hashes:
                 return False
 
-            placeholders = ','.join('?' * len(damaged_hashes))
+            placeholders = sql_placeholders(damaged_hashes)
             conn.execute(
                 f'UPDATE custom_groups SET damaged = 1 WHERE group_hash IN ({placeholders})',
                 damaged_hashes,
@@ -2597,7 +2598,7 @@ class DuplicateManager:
         now = datetime.now().isoformat()
         conn = self._get_db()
         try:
-            placeholders = ','.join('?' * len(image_ids))
+            placeholders = sql_placeholders(image_ids)
             conn.execute(
                 f'DELETE FROM duplicate_groups WHERE level = ? AND group_hash = ? AND image_id IN ({placeholders})',
                 [LEVEL_CUSTOM, group_hash] + image_ids,
