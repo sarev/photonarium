@@ -10,138 +10,85 @@ Core responsibilities:
 3) Compute derived properties (timestamps, checksums, perceptual hashes, etc.).
 4) Compute and store semantic embeddings for images and text using OpenCLIP.
 5) Provide query helpers for gallery browsing, semantic search, similarity, and
-   duplicate grouping.
+   duplicate/group management.
 6) Generate and cache thumbnails on demand.
-7) Run background processing in threads and optionally broadcast progress via
-   Server-Sent Events (SSE).
-8) Provide graceful shutdown helpers and an optional standalone test mode.
+7) Run background processing in threads and broadcast progress via event polling.
+8) Provide graceful shutdown helpers.
 
-the main entry point is the `ImageDatabase` class. Everything else is either:
-
-- Pure helper functions (database CRUD, scanning, embedding maths, thumbnails)
-- Background worker threads
-- Small utilities for streaming progress (SSE) and shutdown handling
+The main entry point is the `ImageDatabase` class.  Everything else is either
+pure helper functions, background worker threads, or small utilities.
 
 -------------------------------------------------------------------------------
-Concepts used in this file
+Concepts
 -------------------------------------------------------------------------------
 
 SQLite schema (high level)
-    The database stores:
-    - Registered folders (the roots to scan)
-    - Images (one row per discovered image path, plus metadata)
-    - Duplicate groups (pre-computed groupings at different similarity levels)
-    - One-time migrations bookkeeping
-
-    Embeddings are stored as raw float32 bytes (BLOB). When you read them back
-    they are converted to NumPy arrays via `np.frombuffer(..., dtype=np.float32)`.
+    The database stores folders (scan roots), images (metadata + embeddings),
+    faces (bounding boxes + embeddings), people (named identities), duplicate
+    and custom groups, and one-time migration bookkeeping.  Embeddings are
+    stored as raw float32 BLOBs.
 
 Images and metadata
-    When ingesting an image, the module extracts or derives:
-    - A "best" timestamp (preferring EXIF, then filename patterns, then filesystem)
-    - A checksum (content hash, used for exact duplicates and thumbnail filenames)
-    - A perceptual hash (used for near-duplicate detection)
-    - Basic dimensions and file size
-    - Optional user-editable fields such as description and rating
+    Ingestion extracts or derives: a "best" timestamp (EXIF > filename patterns
+    > filesystem), a SHA-256 checksum, a perceptual hash, dimensions, file
+    size, and optional user-editable fields (description, rating).
 
-OpenCLIP embeddings (what and why)
-    OpenCLIP is a library that provides CLIP-style models. CLIP models map both
-    images and text into the same vector space. In practice this enables:
-    - Semantic search: turn a text query into a vector, compare with stored image
-      vectors using cosine similarity.
-    - Visual similarity: compare image vectors to find visually related images.
-    - Optional description embeddings: the same text encoder can embed user
-      descriptions, which can be used to improve search recall.
+OpenCLIP embeddings
+    CLIP maps images and text into the same vector space, enabling semantic
+    search (text-to-image cosine similarity), visual similarity (image-to-image),
+    and optional description embeddings for improved recall.
 
-    This module wraps OpenCLIP + PyTorch in `OpenCLIPModel` and uses it from the
-    background embedding thread (and as a fallback for query-time encoding).
-
-Duplicate detection levels
-    Duplicate groups are computed after processing completes and stored in the
-    database for fast retrieval. The module treats duplicates as tiers:
-    - Level 0: exact matches (typically checksum-based)
-    - Level 1: near-identical (perceptual hash distance threshold)
-    - Level 2: similar (embedding cosine similarity threshold)
-    - Level 3: related (a looser embedding similarity threshold)
-    Thresholds are configurable in the YAML config file.
+Group levels
+    Groups are pre-computed and stored for fast retrieval:
+    - Level 0: identical (SHA-256 checksum match)
+    - Level 1: near-identical (perceptual hash distance ≤ threshold)
+    - Level 2: similar (high OpenCLIP cosine similarity)
+    - Level 3: related (lower OpenCLIP cosine similarity)
+    - Level 4: directories (auto-generated from folder structure)
+    - Level 5: custom (user-curated albums)
+    Similarity thresholds are configurable in the YAML config file.
 
 Thumbnails
-    Thumbnails are generated on demand and cached on disk under a dedicated
-    directory. The cache key is the image checksum so it remains stable even if
-    the image is moved to a different path.
+    Cached on disk keyed by image checksum (stable across moves/renames).
 
-Events (optional)
-    The module includes a small SSE implementation (`EventQueue` and helpers).
-    The idea is simple: background work emits events like "image ingested" or
-    "processing complete", and any number of subscribers can stream them.
+Events
+    ``EventQueue`` emits events (e.g. "processing complete", "images changed")
+    which the frontend polls via ``/api/events``.
 
 -------------------------------------------------------------------------------
-How the module is structured
+Module layout (sections separated by banners)
 -------------------------------------------------------------------------------
 
-The module is laid out in sections separated by banners. Roughly:
+ 1) Database schema and initialisation
+ 2) Folder management and scanning
+ 3) Image CRUD helpers
+ 4) Metadata extraction (delegates timestamps to ``metadata.py``)
+ 5) Ingestion thread — file paths → metadata → DB rows → embedding queue
+ 6) Embedding thread — OpenCLIP embeddings in batches
+ 7) Face detection thread — MTCNN detection + InceptionResnetV1 embeddings
+ 8) NIMA thread — MobileNetV2-AVA aesthetic scoring
+ 9) Semantic search (cosine similarity on pre-normalised vectors)
+10) Thumbnail helpers (bulk of logic in ``thumbnails.py``)
+11) Event queue
+12) Trash and import workers
+13) Scan timer thread (scheduled rescans for headless/Docker)
+14) ``ImageDatabase`` — public API, thread lifecycle, startup sequence
+15) Graceful shutdown and signal handling
 
-1) Database schema and initialisation
-    - SQL DDL strings and `init_database()` which enables WAL mode, creates
-      tables/indexes, and applies lightweight migrations.
-
-2) Folder management and scanning
-    - Canonical path handling.
-    - Folder registration helpers.
-    - A scanner that walks registered folders and queues discovered image paths.
-
-3) Image CRUD helpers
-    - Thin helpers that read/write dictionaries to/from the `images` table.
-    - Soft delete is supported (mark rows as deleted) with an option to delete
-      from disk and/or hard-delete the row.
-
-4) Metadata extraction
-    - Image dimension, checksum, perceptual hash, and sharpness computation.
-    - Delegates timestamp extraction to `timestamps.py`.
-
-5) Ingestion thread
-    - Consumes file paths, extracts metadata, writes rows, and queues image IDs
-      for embedding.
-
-6) Embedding thread (OpenCLIP)
-    - Batches queued image IDs, computes embeddings, stores results in a single
-      executemany+commit per batch.
-
-7) Semantic search
-    - `semantic_search()` compares a query embedding with stored embeddings.
-    - `get_images_by_similarity()` compares one image to all others.
-    - Cosine similarity via dot product (vectors are pre-normalised).
-
-8) Thumbnail generation (stubs)
-    - Database-dependent thumbnail helpers. Most thumbnail logic lives in
-      `thumbnails.py`.
-
-9) Event queue and SSE
-    - `Event`, `EventQueue`, and `create_sse_generator()`.
-
-10) `ImageDatabase` public API wrapper
-    - Owns a single SQLite connection, queues, and thread control events.
-    - Provides methods for external callers: folder management, image CRUD,
-      thumbnail retrieval, semantic search, duplicate groups, stats, and SSE.
-
-11) Graceful shutdown helpers
-    - Signal handlers and a context manager to ensure threads stop and the DB is
-      closed on exit.
-
-Configuration is loaded from `config.py`, timestamps from `timestamps.py`,
-thumbnails from `thumbnails.py`, and face detection/recognition from `faces.py`.
+Configuration: ``config.py``.  Face detection/recognition: ``faces.py``.
+Duplicate detection: ``duplicates.py``.  Thumbnails: ``thumbnails.py``.
 
 -------------------------------------------------------------------------------
-Threading and safety notes
+Threading and safety
 -------------------------------------------------------------------------------
 
-- Three worker threads run by default: ingestion, embedding, and face detection.
-- Work is coordinated through `queue.Queue` instances.
-- The database connection is shared and protected by `threading.RLock`.
-- Embedding and face detection threads yield the GIL periodically (10ms sleep
-  between batches) to prevent blocking Flask request handling.
-- "Up to date" means all queues are empty, not necessarily that the filesystem
-  will never change. Rescans can be queued explicitly.
+- Four chained worker threads: ingestion → embedding → face detection, plus
+  NIMA scoring (concurrent, not chained).  Additional threads for trash,
+  import, and optional scan timer.
+- Work is coordinated through ``queue.Queue`` instances.
+- The database connection is shared and protected by ``threading.RLock``.
+- Worker threads yield the GIL periodically (10ms sleep between batches) to
+  prevent blocking Flask request handling.
 
 """
 
@@ -3962,7 +3909,7 @@ class EventQueue:
             self._events.append(event)
             # Trim oldest events if queue is too large
             if len(self._events) > self.MAX_EVENTS:
-                self._events = self._events[-self.MAX_EVENTS:]
+                self._events = self._events[-self.MAX_EVENTS :]
         logger.debug(f'Event queued: {event_type} (buffered: {len(self._events)})')
 
     def get_pending_count(self) -> int:
