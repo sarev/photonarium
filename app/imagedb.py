@@ -3962,7 +3962,7 @@ class EventQueue:
             self._events.append(event)
             # Trim oldest events if queue is too large
             if len(self._events) > self.MAX_EVENTS:
-                self._events = self._events[-self.MAX_EVENTS :]
+                self._events = self._events[-self.MAX_EVENTS:]
         logger.debug(f'Event queued: {event_type} (buffered: {len(self._events)})')
 
     def get_pending_count(self) -> int:

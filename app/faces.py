@@ -2700,7 +2700,7 @@ def _compute_unknown_face_groups_impl(
 
             # Update faces in batches to avoid "too many SQL variables" error
             for i in range(0, len(members), BATCH_SIZE):
-                batch = members[i : i + BATCH_SIZE]
+                batch = members[i: i + BATCH_SIZE]
                 placeholders = sql_placeholders(batch)
                 conn.execute(f'UPDATE faces SET unknown_group_id = ? WHERE id IN ({placeholders})', [group_id] + batch)
 
