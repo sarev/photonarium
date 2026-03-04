@@ -2781,7 +2781,8 @@ class EmbeddingThread(threading.Thread):
                         break
 
                     # Get image path from database
-                    image = get_image(self.conn, image_id)
+                    with self._db_lock:
+                        image = get_image(self.conn, image_id)
                     if image is None:
                         logger.warning(f'Image not found for image embedding: {image_id}')
                         self.embedding_queue.task_done()
@@ -3030,7 +3031,8 @@ class FaceDetectionThread(threading.Thread):
                 if self.stop_event.is_set():
                     break
 
-                image = get_image(self.conn, image_id)
+                with self._db_lock:
+                    image = get_image(self.conn, image_id)
                 if image is None:
                     logger.warning(f'Image not found for face detection: {image_id}')
                     continue
@@ -3153,7 +3155,8 @@ class FaceDetectionThread(threading.Thread):
         path_to_id: dict[Path, str] = {}
 
         for image_id in image_ids:
-            image = get_image(self.conn, image_id)
+            with self._db_lock:
+                image = get_image(self.conn, image_id)
             if image is None:
                 logger.warning(f'Image not found for face detection: {image_id}')
                 continue
@@ -5462,16 +5465,17 @@ class ImageDatabase:
             return
 
         # Find images without face detection
-        cursor = self.conn.execute("""
-            SELECT i.id
-            FROM images i
-            WHERE i.deleted = 0
-              AND i.embedding IS NOT NULL
-              AND NOT EXISTS (
-                  SELECT 1 FROM faces f WHERE f.image_id = i.id
-              )
-        """)
-        rows = cursor.fetchall()
+        with self._db_lock:
+            cursor = self.conn.execute("""
+                SELECT i.id
+                FROM images i
+                WHERE i.deleted = 0
+                  AND i.embedding IS NOT NULL
+                  AND NOT EXISTS (
+                      SELECT 1 FROM faces f WHERE f.image_id = i.id
+                  )
+            """)
+            rows = cursor.fetchall()
 
         if rows:
             logger.info(f'Queueing {len(rows)} images for face detection')
@@ -5487,11 +5491,12 @@ class ImageDatabase:
         if not self.config.nima_enabled:
             return
 
-        cursor = self.conn.execute("""
-            SELECT id FROM images
-            WHERE aesthetic_nima IS NULL AND deleted = 0 AND checksum IS NOT NULL
-        """)
-        rows = cursor.fetchall()
+        with self._db_lock:
+            cursor = self.conn.execute("""
+                SELECT id FROM images
+                WHERE aesthetic_nima IS NULL AND deleted = 0 AND checksum IS NOT NULL
+            """)
+            rows = cursor.fetchall()
 
         if rows:
             logger.info(f'Queueing {len(rows)} images for NIMA scoring')
@@ -5506,21 +5511,22 @@ class ImageDatabase:
         cleared and images re-queued for scoring.
         """
         current_model = 'mobilenetv2-ava'  # Only one model currently; future-proofing
-        stored_model = get_metadata(self.conn, 'nima_model')
+        with self._db_lock:
+            stored_model = get_metadata(self.conn, 'nima_model')
 
-        if stored_model == current_model:
-            return  # No change
+            if stored_model == current_model:
+                return  # No change
 
-        if stored_model is not None:
-            # Model has changed — wipe all NIMA scores
-            logger.info(
-                f'NIMA model changed ({stored_model} → {current_model}), clearing existing scores for re-computation'
-            )
-            with self._db_lock:
+            if stored_model is not None:
+                # Model has changed — wipe all NIMA scores
+                logger.info(
+                    f'NIMA model changed ({stored_model} → {current_model}), '
+                    f'clearing existing scores for re-computation'
+                )
                 self.conn.execute('UPDATE images SET aesthetic_nima = NULL')
                 self.conn.commit()
 
-        set_metadata(self.conn, 'nima_model', current_model)
+            set_metadata(self.conn, 'nima_model', current_model)
 
     def start_threads(self) -> None:
         """Start the background processing threads."""
