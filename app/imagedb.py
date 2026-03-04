@@ -2672,6 +2672,7 @@ class EmbeddingThread(threading.Thread):
         self._processed_count = 0
         self._error_count = 0
         self._completion_triggered = False
+        self._on_complete_finished = False  # Set after on_complete callback returns
 
         # LAION aesthetic head weights (loaded lazily on first use).
         # Protected by _laion_lock because both the main thread (backfill)
@@ -2887,6 +2888,10 @@ class EmbeddingThread(threading.Thread):
                     self.on_complete()
                 except Exception as e:
                     logger.error(f'Error in completion callback: {e}')
+            # Signal that callback has finished — downstream threads (e.g.
+            # FaceDetectionThread) must wait for this before checking their own
+            # completion, because the callback may populate their work queues.
+            self._on_complete_finished = True
 
 
 class FaceDetectionThread(threading.Thread):
@@ -3324,11 +3329,20 @@ class FaceDetectionThread(threading.Thread):
         """Check if all processing is complete and trigger completion callback.
 
         Completion requires:
+        - EmbeddingThread's on_complete callback has finished (which
+          populates the face queue — must check BEFORE testing queue empty)
         - IngestionThread is idle
         - EmbeddingThread's queue is empty
         - FaceDetectionThread's queue is empty
         """
         if self._completion_triggered:
+            return
+
+        # The embedding thread's on_complete callback populates the face
+        # queue.  We must not check face_queue.empty() until that callback
+        # has returned, otherwise we race and fire completion before the
+        # face queue is populated.
+        if not self.embedding_thread._on_complete_finished:
             return
 
         # Check all threads are idle
