@@ -1,5 +1,21 @@
 # Release Notes
 
+## v1.1.5-beta.15
+
+### Bug Fixes
+
+- **Content similarity sort not re-triggerable:** Clicking "Sort by content similarity" with a different image selected did nothing because `setSortBy('content')` was a no-op when already on content sort. Added a `{ force }` option to `setSortBy()` so the button re-evaluates the reference image and re-fetches similarity scores.
+- **Content similarity button enabled without valid selection:** The button was clickable with no selection or multiple images selected, producing an error toast. It is now disabled unless exactly one image is selected, matching the "Clear filter" button's disabled style.
+- **Face detection completing before its queue was populated:** `FaceDetectionThread` raced with `EmbeddingThread`'s completion callback — the face thread would check its (empty) queue and fire its completion callback before `on_embedding_complete()` had populated the face queue. This caused face detection to run after duplicate computation instead of before it. Fixed by adding a flag so the face thread waits until the embedding callback has finished before checking queue emptiness.
+- **"Database is locked" errors during image indexing:** Six database access sites in background threads were not protected by `_db_lock`, causing SQLite contention during sustained ingestion writes. Wrapped all six sites (embedding batch collection, face prefetch thread pool, face legacy path, face queue population, NIMA queue, and NIMA model invalidation).
+
+### Code Quality
+
+- **Deduplicated helpers:** Extracted `parse_exif_datetime()` into shared `app/exifutil.py` (was duplicated in `metadata.py` and `rawimage.py`). Added `sql_placeholders()` helper in `app/dbutil.py`, replacing 16 inline `','.join('?' * len(...))` patterns.
+- **Named constants:** Replaced magic numbers with named constants in `thumbnails.py`, `app.py`, `faces.py`, and `events.js`.
+- **Silent catch logging:** Added `logger.debug()`/`console.warn()` to previously silent `except`/`catch` blocks across backend and frontend modules.
+- **Documentation:** Updated `imagedb.py` module docstring to reflect current codebase (event polling, 6 group levels, 4 threads, faces/people schema).
+
 ## v1.1.4-beta.14
 
 ### Management Screen
