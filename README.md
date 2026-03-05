@@ -853,6 +853,24 @@ docker compose up -d
 
 Your data in `/config` and `/catalogue` is preserved across updates. ML models are baked into the image, so updates include the latest models automatically.
 
+### Automatic update notifications
+
+Docker does not notify you when a new image is available. Most NAS platforms handle this natively:
+
+- **Synology** (Container Manager), **QNAP** (Container Station), and **Unraid** (Community Apps) show update badges and let you pull new images with a click.
+- **TrueNAS SCALE** and **OpenMediaVault** don't have built-in container update notifications.
+
+For bare Linux or Docker Compose setups, [Watchtower](https://containrrr.dev/watchtower/) can monitor running containers and automatically pull updated images:
+
+```bash
+# Run Watchtower alongside your containers — it checks for updates daily
+docker run -d --name watchtower \
+    -v /var/run/docker.sock:/var/run/docker.sock \
+    containrrr/watchtower
+```
+
+Alternatively, [Diun](https://crazymax.dev/diun/) sends notifications (email, Discord, Slack, etc.) without auto-updating, if you prefer to pull manually.
+
 ## Building from Source
 
 If you want to build the image yourself (developers, custom modifications):
