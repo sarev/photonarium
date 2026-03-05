@@ -294,8 +294,8 @@ const App = {
      * @fires App#sortChanged
      * @deprecated Use AppState.view.setSortBy() instead
      */
-    setSortBy(sortBy) {
-        AppState.view.setSortBy(sortBy);
+    setSortBy(sortBy, options) {
+        AppState.view.setSortBy(sortBy, options);
         // Event bridging handled in _initAppStateBridge()
     },
 
@@ -1104,7 +1104,7 @@ const App = {
         // Sort controls
         this._bindBtn('btn-sort-date', () => this.setSortBy('date'));
         this._bindBtn('btn-sort-rating', () => this.setSortBy('rating'));
-        this._bindBtn('btn-sort-content', () => this.setSortBy('content'));
+        this._bindBtn('btn-sort-content', () => this.setSortBy('content', { force: true }));
         this._bindBtn('btn-sort-people', () => this.setSortBy('people'));
         this._bindBtn('btn-sort-quality', () => this.setSortBy('quality'));
         this._bindBtn('btn-sort-direction', () => this.toggleSortDirection());

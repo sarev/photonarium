@@ -871,6 +871,7 @@ const Gallery = {
         if (this._selection) {
             this._selection.setSelected(selection);
         }
+        this._updateContentSortButton(selection);
         // Defer info panel updates while fullscreen is open — the selection
         // tracks every image the user navigates to, but rendering the info
         // panel (including on-demand histogram generation) is wasted work
@@ -878,6 +879,17 @@ const Gallery = {
         // The fullscreenClosing handler triggers a catch-up update instead.
         if (AppState.nav.isFullscreenOpen()) return;
         this._updateInfoPanel(selection);
+    },
+
+    /**
+     * Enables/disables the "Sort by content similarity" button based on
+     * whether exactly one image is selected.
+     * @param {string[]} selection - Currently selected image IDs
+     * @private
+     */
+    _updateContentSortButton(selection) {
+        const btn = document.getElementById('btn-sort-content');
+        if (btn) btn.disabled = selection.length !== 1;
     },
 
     /**

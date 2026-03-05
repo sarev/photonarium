@@ -166,11 +166,14 @@ AppState.view = (function() {
         /**
          * Set sort field.
          * @param {string} by - 'date', 'rating', 'content', 'people', or 'quality'
+         * @param {{ force?: boolean }} [options] - If force is true, broadcast
+         *     even when the value is unchanged (e.g. to re-trigger content sort
+         *     with a different reference image).
          */
-        setSortBy(by) {
+        setSortBy(by, { force = false } = {}) {
             const valid = ['date', 'rating', 'content', 'people', 'quality'];
             if (!valid.includes(by)) return;
-            if (_sortBy === by) return;
+            if (_sortBy === by && !force) return;
 
             _sortBy = by;
             storage.set('sortBy', by);
