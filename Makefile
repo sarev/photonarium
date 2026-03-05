@@ -13,6 +13,9 @@
 # Requires: GNU Make, Docker, docker-compose, Python venv with dependencies
 # =============================================================================
 
+# BuildKit is required for --mount=type=cache (pip download caching)
+export DOCKER_BUILDKIT := 1
+
 IMAGE_NAME := photonarium
 BASE_IMAGE := photonarium-base
 VERSION    := $(shell git describe --tags --always 2>/dev/null || echo dev)

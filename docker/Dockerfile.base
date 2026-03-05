@@ -1,3 +1,5 @@
+# syntax=docker/dockerfile:1
+
 # =============================================================================
 # Photonarium Base Image
 #
@@ -50,4 +52,5 @@ COPY docker/models/torch/ /root/.cache/torch/
 # across all variants in the base image.
 
 COPY docker/requirements-base.txt .
-RUN pip install --no-cache-dir -r requirements-base.txt
+RUN --mount=type=cache,target=/root/.cache/pip \
+    pip install --retries 3 -r requirements-base.txt

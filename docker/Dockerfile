@@ -14,42 +14,46 @@
 #   The base image must be built first: make base-x64 (or make base-arm64)
 # =============================================================================
 
+# syntax=docker/dockerfile:1
+
 ARG BASE_IMAGE=photonarium-base:x64
 FROM ${BASE_IMAGE}
 
-# Build arguments
+# Build arguments that affect package installation layers.
+# Version/metadata ARGs are declared later (after pip installs) so that
+# changing them doesn't invalidate the expensive dependency layers.
 ARG TORCH_INDEX=https://download.pytorch.org/whl/cpu
 ARG INSTALL_IPEX=0
-
-# Version metadata (passed from Makefile)
-ARG VERSION=dev
-ARG GIT_COMMIT=unknown
-ARG BUILD_DATE=unknown
-ARG VARIANT=cpu
 
 # -----------------------------------------------------------------------------
 # PyTorch (variant-specific, ~1-4GB)
 # -----------------------------------------------------------------------------
 # TORCH_INDEX can be empty for ARM64 builds (use default PyPI)
-RUN if [ -n "${TORCH_INDEX}" ]; then \
-        pip install --no-cache-dir torch torchvision torchaudio --index-url ${TORCH_INDEX}; \
+# --mount=type=cache keeps downloaded wheels across builds so a layer cache
+# miss doesn't require re-downloading multi-GB packages over the network.
+RUN --mount=type=cache,target=/root/.cache/pip \
+    if [ -n "${TORCH_INDEX}" ]; then \
+        pip install --retries 3 torch torchvision torchaudio --index-url ${TORCH_INDEX}; \
     else \
-        pip install --no-cache-dir torch torchvision torchaudio; \
+        pip install --retries 3 torch torchvision torchaudio; \
     fi
 
 # Install Intel Extension for PyTorch if requested
-RUN if [ "${INSTALL_IPEX}" = "1" ]; then \
-        pip install --no-cache-dir intel-extension-for-pytorch; \
+RUN --mount=type=cache,target=/root/.cache/pip \
+    if [ "${INSTALL_IPEX}" = "1" ]; then \
+        pip install --retries 3 intel-extension-for-pytorch; \
     fi
 
 # -----------------------------------------------------------------------------
 # ML packages that depend on torch
 # -----------------------------------------------------------------------------
 COPY docker/requirements-ml.txt .
-RUN pip install --no-cache-dir -r requirements-ml.txt
+RUN --mount=type=cache,target=/root/.cache/pip \
+    pip install --retries 3 -r requirements-ml.txt
 
 # Install facenet-pytorch with --no-deps to avoid version conflicts
-RUN pip install --no-cache-dir --no-deps facenet-pytorch
+RUN --mount=type=cache,target=/root/.cache/pip \
+    pip install --retries 3 --no-deps facenet-pytorch
 
 # -----------------------------------------------------------------------------
 # Application code (changes frequently, ~3MB)
@@ -64,6 +68,13 @@ RUN chmod +x /entrypoint.sh
 # -----------------------------------------------------------------------------
 # Metadata and runtime config
 # -----------------------------------------------------------------------------
+# Version ARGs declared here — after all pip installs — so that version bumps
+# only invalidate the cheap final layers, not the multi-GB dependency layers.
+ARG VERSION=dev
+ARG GIT_COMMIT=unknown
+ARG BUILD_DATE=unknown
+ARG VARIANT=cpu
+
 # Write version info to a file so the app can read it (git isn't available in container)
 RUN echo "${VERSION}" > /app/VERSION && \
     echo "${GIT_COMMIT}" >> /app/VERSION && \
