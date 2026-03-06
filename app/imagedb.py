@@ -5057,7 +5057,8 @@ class ImageDatabase:
         Returns:
             Number of faces updated.
         """
-        face_ids = get_faces_without_semantic_embedding(self.conn)
+        with self._db_lock:
+            face_ids = get_faces_without_semantic_embedding(self.conn)
 
         if not face_ids:
             return 0
@@ -5092,7 +5093,8 @@ class ImageDatabase:
                 try:
                     embedding = clip_model.encode_image(thumb_path)
                     if embedding is not None:
-                        update_face_semantic_embedding(self.conn, face_id, embedding)
+                        with self._db_lock:
+                            update_face_semantic_embedding(self.conn, face_id, embedding)
                         count += 1
                 except Exception as e:
                     logger.warning(f'Failed to compute CLIP embedding for face {face_id}: {e}')
@@ -7296,8 +7298,12 @@ class ImageDatabase:
         - Incremental vs full computation based on dirty image count
         - Status tracking per level
         - Epoch management
+
+        Uses a private connection (via DuplicateManager._get_db()) rather
+        than the shared self.conn to avoid concurrent cursor conflicts with
+        NimaThread and other background threads that are still running.
         """
-        self._duplicate_manager.compute_all(self.conn)
+        self._duplicate_manager.compute_all()
 
     def _reassess_faces_with_status(self) -> None:
         """Match unknown faces against known people (locked faces).

@@ -1351,8 +1351,13 @@ class DuplicateManager:
         self._cache_loaded = False
 
     def _get_db(self) -> sqlite3.Connection:
-        """Get a database connection."""
+        """Get a private database connection.
+
+        Sets busy_timeout to match the shared connection so writes wait
+        gracefully when another thread holds SQLite's write lock.
+        """
         conn = sqlite3.connect(self._db_path)
+        conn.execute('PRAGMA busy_timeout=5000')
         conn.row_factory = sqlite3.Row
         return conn
 
