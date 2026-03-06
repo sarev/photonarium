@@ -68,11 +68,16 @@ class DatabaseLogHandler(logging.Handler):
         self._lock_db = threading.Lock()
         self._insert_count = 0
 
+        # Track silent failures so we can surface the first few via stderr
+        # (can't use ``logger`` inside a handler — infinite recursion).
+        self._error_count = 0
+
         # Open a dedicated connection for log writes.  The ``logs`` table is
-        # created by imagedb._init_database() during startup — we just need
-        # our own WAL-mode connection for concurrent writes.
+        # created by imagedb.init_database() during startup — the handler must
+        # be attached after that call so the table exists.
         self._conn = sqlite3.connect(db_path, check_same_thread=False)
         self._conn.execute('PRAGMA journal_mode=WAL')
+        self._conn.execute('PRAGMA busy_timeout=5000')
         self._conn.commit()
 
     def emit(self, record: logging.LogRecord) -> None:
@@ -93,9 +98,17 @@ class DatabaseLogHandler(logging.Handler):
                 self._insert_count += 1
                 if self._insert_count % 100 == 0:
                     self._trim()
-        except Exception:
-            # Must never crash the application
-            pass
+        except Exception as exc:
+            # Must never crash the application — but surface the first few
+            # failures to stderr for diagnostics (can't use logger here).
+            self._error_count += 1
+            if self._error_count <= 3:
+                import sys
+
+                print(
+                    f'[DatabaseLogHandler] emit failed ({type(exc).__name__}: {exc})',
+                    file=sys.stderr,
+                )
 
     def close(self) -> None:
         """Close the dedicated database connection."""

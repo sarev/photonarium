@@ -171,6 +171,10 @@ THUMBNAIL_SIZE_SNAP_THRESHOLD = 300
 # re-loading from disk.
 _config: 'Config | None' = None
 
+# Whether --debug was passed on the command line.  Set in __main__, read by
+# _attach_db_log_handler() to choose the handler's log level.
+_debug_mode: bool = False
+
 # The resolved config file path — set once during startup.
 # Used by /api/config/reveal to locate the file on disk.
 _config_file_path: str | None = None
@@ -300,8 +304,34 @@ def get_caption_generator() -> CaptionGenerator:
     return _caption_generator
 
 
+def _attach_db_log_handler() -> None:
+    """Attach the DatabaseLogHandler to the root logger.
+
+    Called from ``get_db()`` after ``init_database()`` has created the ``logs``
+    table but before ``startup()`` runs the bulk of initialisation.  This
+    ensures thread-start, scanning, and model-loading messages are captured
+    in the in-app log viewer.
+    """
+    if _config is None or _config.log_retention_lines <= 0:
+        return
+
+    from logdb import DatabaseLogHandler
+
+    handler = DatabaseLogHandler(DATABASE_PATH, _config.log_retention_lines)
+    handler.setLevel(logging.DEBUG if _debug_mode else logging.INFO)
+    handler.setFormatter(logging.Formatter('%(message)s'))
+    logging.getLogger().addHandler(handler)
+
+
 def get_db() -> ImageDatabase:
-    """Get the database instance, initializing if necessary."""
+    """Get the database instance, initializing if necessary.
+
+    Uses ``auto_start=False`` so the database log handler can be attached
+    after the ``logs`` table is created (by ``init_database()``) but before
+    ``startup()`` runs the bulk of initialisation (thread starts, scanning,
+    model loading).  This ensures startup messages are captured in the
+    in-app log viewer.
+    """
     global db
     if db is None:
         logger.info('Initialising ImageDatabase...')
@@ -309,11 +339,17 @@ def get_db() -> ImageDatabase:
             db_path=DATABASE_PATH,
             thumbnail_dir=THUMBNAIL_CACHE_DIR,
             config=_config,
-            auto_start=True,
+            auto_start=False,
             run_scan=_run_scan,
             run_face_detection=_run_face_detection,
             run_face_grouping=_run_face_grouping,
         )
+
+        # Attach database log handler now that the logs table exists.
+        # Must happen before startup() so thread/scan/model messages are captured.
+        _attach_db_log_handler()
+
+        db.startup()
         register_signal_handlers(db)
         logger.info('ImageDatabase initialised')
         # Pre-populate images cache for fast first request
@@ -4333,8 +4369,13 @@ if __name__ == '__main__':
     )
     args = parser.parse_args()
 
-    # Apply debug logging early, before anything else runs
+    # Apply debug logging early, before anything else runs.
+    # The root logger level must also be lowered so that DEBUG records
+    # propagated from module loggers reach all root-level handlers
+    # (including the DatabaseLogHandler used by the in-app log viewer).
     if args.debug:
+        _debug_mode = True
+        logging.getLogger().setLevel(logging.DEBUG)
         for module in ['app', '__main__', 'imagedb', 'faces', 'thumbnails', 'duplicates', 'config', 'metadata']:
             logging.getLogger(module).setLevel(logging.DEBUG)
         logger.info('Debug logging enabled')
@@ -4558,15 +4599,6 @@ if __name__ == '__main__':
 
     # Initialise database before starting server
     get_db()
-
-    # Attach database log handler (captures all log output to SQLite)
-    if _config.log_retention_lines > 0:
-        from logdb import DatabaseLogHandler
-
-        _db_log_handler = DatabaseLogHandler(DATABASE_PATH, _config.log_retention_lines)
-        _db_log_handler.setLevel(logging.INFO)
-        _db_log_handler.setFormatter(logging.Formatter('%(message)s'))
-        logging.getLogger().addHandler(_db_log_handler)
 
     # Resolve server host/port: CLI --port overrides config, config overrides defaults
     server_host = db.config.server_host
