@@ -35,8 +35,14 @@ When you rescan local folders, Photonarium now automatically recomputes timestam
 ### Bug Fixes
 
 - **DB concurrency errors during rescan completion:** The post-processing completion callback (duplicate computation, face grouping) ran on the shared database connection without proper locking while the NIMA scoring thread was still active, causing "another row available" and "database is locked" errors on large libraries. Fixed by giving duplicate computation its own private connection and adding lock protection to face semantic embedding backfill.
+- **Premature completion callbacks during rescan:** Three intertwined bugs caused background threads to fire completion callbacks before work was finished: (1) all queues being momentarily empty at startup triggered spurious completion, (2) the `_on_complete_finished` gate flag was never reset between rescans, and (3) errors in completion callbacks left uncommitted transactions that blocked subsequent database access. Fixed with a `has_started_processing` guard, proper flag resets (including in `queue_rescan_all()`), and `conn.rollback()` in error handlers.
+- **Debug logging not visible in frontend log viewer:** The DatabaseLogHandler was attached after `get_db()` returned, so all startup messages (thread starts, scanning, model loading) were already emitted and missed. Split database initialisation to attach the handler between table creation and startup. Also added `busy_timeout` to the handler's SQLite connection to prevent silent INSERT failures during heavy write contention.
 - **YAML serialisation of list config values:** List-type config fields (like `filename_date_overrides`) were serialised using Python repr instead of valid YAML. Now renders as proper YAML block lists with correct quoting.
 - **list[str] config values not saved from UI:** The settings save endpoint didn't handle `list[str]` fields, causing them to fall through to the default handler. Added explicit coercion.
+
+### Developer / Debugging
+
+- **`--debug` CLI flag:** Enables DEBUG-level logging for all application modules. Debug output appears on both the console and the in-app log viewer (select "Debug" from the level filter dropdown).
 
 ### Docker
 
