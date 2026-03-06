@@ -1,5 +1,48 @@
 # Release Notes
 
+## v1.1.6-beta.16
+
+### Smarter Filename Date Parsing
+
+Photonarium now uses a scoring-based date parser that handles a much wider range of filename and folder naming conventions. The parser evaluates multiple possible interpretations of each path and picks the best one based on confidence scoring.
+
+**New patterns recognised:**
+
+- **Human-style month names:** "February", "Feb", "febr", and similar abbreviations
+- **Seasons:** "Summer 2006", "Winter 2023" (mapped to the season's start month)
+- **Holidays:** "Christmas 2019", "Xmas", "Halloween", "NYE" (mapped to the holiday date)
+- **Position words:** "early May", "mid June", "late December" (mapped to day 1/15/28)
+- **Apostrophe years:** "Feb'03" → February 2003
+- **Year-only folders:** "Photos/2019/" fills in January 1st as a best guess
+- **WhatsApp timestamps:** "WhatsApp Image 2026-01-06 at 12.33.29.jpeg" now correctly parses the separated time (HH.MM.SS)
+
+**Ambiguous date handling (date_order config):**
+
+A new `date_order` setting (DMY/MDY/YMD) controls how ambiguous numeric dates like "07-03-2024" are interpreted. This is a preference, not absolute — if the preferred interpretation produces an invalid date (e.g. month 13), a valid alternative is used automatically. The setting appears as a dropdown in the Settings dialog.
+
+**Filename date overrides:**
+
+A new `filename_date_overrides` config setting lets you map filename patterns (like `WhatsApp Image *`) to specific strftime formats, overriding the automatic parser for known naming conventions.
+
+**Camera sequence number fix:**
+
+Digit runs directly preceded by letters (e.g. "DSC0042", "IMG0001") are no longer misinterpreted as timestamps.
+
+### Timestamp Recomputation on Rescan
+
+When you rescan local folders, Photonarium now automatically recomputes timestamps for all images that weren't manually dated by the user. This means images that previously fell back to filesystem dates or "unknown" will benefit from the improved parser on their next rescan — no re-import needed.
+
+### Bug Fixes
+
+- **DB concurrency errors during rescan completion:** The post-processing completion callback (duplicate computation, face grouping) ran on the shared database connection without proper locking while the NIMA scoring thread was still active, causing "another row available" and "database is locked" errors on large libraries. Fixed by giving duplicate computation its own private connection and adding lock protection to face semantic embedding backfill.
+- **YAML serialisation of list config values:** List-type config fields (like `filename_date_overrides`) were serialised using Python repr instead of valid YAML. Now renders as proper YAML block lists with correct quoting.
+- **list[str] config values not saved from UI:** The settings save endpoint didn't handle `list[str]` fields, causing them to fall through to the default handler. Added explicit coercion.
+
+### Docker
+
+- Improved Docker build caching and pip download resilience.
+- Added container update notification guidance to README.
+
 ## v1.1.5-beta.15
 
 ### Bug Fixes
