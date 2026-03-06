@@ -1720,6 +1720,7 @@ def extract_image_metadata(
     path: Path | str,
     max_dimension: int = 0,
     filename_date_overrides: list[str] | None = None,
+    date_order: str = 'DMY',
 ) -> ImageMetadata | None:
     """Extract all metadata from an image file.
 
@@ -1728,6 +1729,8 @@ def extract_image_metadata(
         max_dimension: Max dimension for phash/laplacian (0 to disable).
         filename_date_overrides: Optional glob patterns where filename timestamps
             override EXIF (e.g. WhatsApp images).
+        date_order: Preferred date order for ambiguous numeric dates in
+            filenames ('DMY', 'MDY', or 'YMD').
 
     Returns:
         ImageMetadata object with all extracted data,
@@ -1776,6 +1779,7 @@ def extract_image_metadata(
         path,
         exif_data=exif_data,
         filename_date_overrides=filename_date_overrides,
+        date_order=date_order,
     )
 
     # Check if lossless format
@@ -1835,6 +1839,7 @@ class IngestionThread(threading.Thread):
         import_names: dict[str, str] | None = None,
         import_names_lock: threading.Lock | None = None,
         filename_date_overrides: list[str] | None = None,
+        date_order: str = 'DMY',
     ):
         """Initialise the ingestion thread.
 
@@ -1856,6 +1861,8 @@ class IngestionThread(threading.Thread):
             import_names_lock: Lock protecting the import_names dict.
             filename_date_overrides: Glob patterns where filename timestamps
                 override EXIF (e.g. WhatsApp images).
+            date_order: Preferred date order for ambiguous numeric dates in
+                filenames ('DMY', 'MDY', or 'YMD').
         """
         super().__init__(name='IngestionThread', daemon=True)
         self.conn = conn
@@ -1875,6 +1882,7 @@ class IngestionThread(threading.Thread):
         self._import_names = import_names or {}  # Shared import name mapping
         self._import_names_lock = import_names_lock or threading.Lock()
         self._filename_date_overrides = filename_date_overrides
+        self._date_order = date_order
         self._pending_count = 0  # Number of items being processed (not just in queue)
         self._pending_lock = threading.Lock()
 
@@ -2037,6 +2045,7 @@ class IngestionThread(threading.Thread):
                         path,
                         self.max_image_dimension,
                         self._filename_date_overrides,
+                        self._date_order,
                     )
                     if metadata is not None:
                         with self._db_lock:
@@ -2096,6 +2105,7 @@ class IngestionThread(threading.Thread):
                 path,
                 self.max_image_dimension,
                 self._filename_date_overrides,
+                self._date_order,
             )
             if metadata is None:
                 logger.warning(f'Failed to extract metadata for changed image: {path}')
@@ -2140,6 +2150,7 @@ class IngestionThread(threading.Thread):
                 path,
                 self.max_image_dimension,
                 self._filename_date_overrides,
+                self._date_order,
             )
             if metadata is None:
                 logger.warning(f'Failed to extract metadata for new image: {path}')
@@ -5584,6 +5595,7 @@ class ImageDatabase:
             import_names=self._import_names,
             import_names_lock=self._import_names_lock,
             filename_date_overrides=self.config.filename_date_overrides,
+            date_order=self.config.date_order,
         )
         self._ingestion_thread.start()
 

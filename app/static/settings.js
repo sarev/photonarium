@@ -152,6 +152,22 @@ const Settings = {
     _createInput(field) {
         const c = field.constraints || {};
 
+        // Enumerated choices — render as a dropdown select
+        if (field.choices && Array.isArray(field.choices)) {
+            const select = document.createElement('select');
+            select.className = 'dialog-input settings-select';
+            select.dataset.key = field.key;
+            select.dataset.type = 'choice';
+            for (const opt of field.choices) {
+                const option = document.createElement('option');
+                option.value = opt;
+                option.textContent = opt;
+                if (opt === field.value) option.selected = true;
+                select.appendChild(option);
+            }
+            return select;
+        }
+
         if (field.type === 'boolean') {
             // Checkbox with label wrapper for click area
             const row = document.createElement('div');
@@ -300,6 +316,11 @@ const Settings = {
         // Text inputs
         this._dialog.querySelectorAll('input[type="text"][data-key]').forEach(input => {
             values[input.dataset.key] = input.value;
+        });
+
+        // Select dropdowns (choice type)
+        this._dialog.querySelectorAll('select[data-key]').forEach(select => {
+            values[select.dataset.key] = select.value;
         });
 
         // Textareas (set type — split by lines)

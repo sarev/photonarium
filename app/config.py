@@ -147,6 +147,17 @@ CONFIG_SCHEMA: list[tuple[str, list[tuple[str, list[str]]]]] = [
                     'One pattern per line (e.g. "WhatsApp Image *").',
                 ],
             ),
+            (
+                'date_order',
+                [
+                    'Preferred date order for ambiguous numeric dates in filenames.',
+                    'Only affects dates where day/month cannot be determined from context.',
+                    'For example, "07-03-2024" is 7 March with DMY, or 3 July with MDY.',
+                    'This is a preference, not absolute — if the preferred interpretation',
+                    'produces an invalid date (e.g. month 13), valid alternatives are used.',
+                    'Options: DMY (day-month-year), MDY (month-day-year), YMD (year-month-day)',
+                ],
+            ),
         ],
     ),
     (
@@ -587,6 +598,15 @@ FIELD_CONSTRAINTS: dict[str, dict[str, int | float | bool]] = {
     'log_retention_lines': {'min': 100, 'max': 100000, 'step': 100, 'special_zero': True},
 }
 
+# FIELD_CHOICES — single source of truth for enumerated string options
+# ---------------------------------------------------------------------------
+# Maps field name → list of valid values.  Used by _validate() and
+# get_config_schema() so the API, validation, and settings UI stay in sync.
+
+FIELD_CHOICES: dict[str, list[str]] = {
+    'date_order': ['DMY', 'MDY', 'YMD'],
+}
+
 
 @dataclass
 class Config:
@@ -620,6 +640,10 @@ class Config:
     # Glob patterns for filenames where the filename-derived timestamp should
     # take priority over EXIF (e.g. WhatsApp images that rewrite EXIF dates).
     filename_date_overrides: list[str] = field(default_factory=lambda: ['WhatsApp Image *', 'WhatsApp Video *'])
+    # Preferred date order for ambiguous numeric dates in filenames.
+    # Only affects dates where day/month are ambiguous (e.g. 07-03-2024).
+    # Options: DMY (day-month-year), MDY (month-day-year), YMD (year-month-day).
+    date_order: str = 'DMY'
     # OpenCLIP model architecture name.
     openclip_model: str = 'ViT-B-32'
     # OpenCLIP pretrained weights name.
@@ -741,6 +765,12 @@ class Config:
         if not isinstance(self.on_this_day_enabled, bool):
             raise ValueError('on_this_day_enabled must be a boolean')
 
+        # --- Enumerated choice fields (from FIELD_CHOICES) ---
+        for field_name, choices in FIELD_CHOICES.items():
+            value = getattr(self, field_name)
+            if value not in choices:
+                raise ValueError(f'{field_name} must be one of {choices}, got {value!r}')
+
         # --- filename_date_overrides: must be a list of strings ---
         if not isinstance(self.filename_date_overrides, (list, tuple)):
             raise ValueError('filename_date_overrides must be a list')
@@ -838,6 +868,19 @@ def _format_yaml_value(value: Any, field_name: str) -> str:
             escaped = value.replace("'", "''")
             return f"{field_name}: '{escaped}'"
         return f'{field_name}: {value}'
+    elif isinstance(value, list):
+        if not value:
+            return f'{field_name}: []'
+        # YAML block list — one item per line, quoting items with special chars
+        lines: list[str] = [f'{field_name}:']
+        for item in value:
+            s = str(item)
+            if any(c in s for c in ':#{}[]&*?|>!%@`\\\'"'):
+                escaped = s.replace("'", "''")
+                lines.append(f"  - '{escaped}'")
+            else:
+                lines.append(f'  - {s}')
+        return '\n'.join(lines)
     else:
         return f'{field_name}: {value}'
 
@@ -962,6 +1005,10 @@ def get_config_schema(config: Config) -> dict[str, Any]:
             # Attach numeric constraints if defined
             if field_name in FIELD_CONSTRAINTS:
                 entry['constraints'] = dict(FIELD_CONSTRAINTS[field_name])
+
+            # Attach enumerated choices if defined
+            if field_name in FIELD_CHOICES:
+                entry['choices'] = FIELD_CHOICES[field_name]
 
             if warning:
                 entry['warning'] = True

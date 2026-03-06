@@ -1569,6 +1569,13 @@ def save_config_endpoint():
                     kwargs[key] = {line.strip() for line in raw.splitlines() if line.strip()}
                 else:
                     kwargs[key] = set(raw)
+            elif expected == 'list[str]':
+                if isinstance(raw, list):
+                    kwargs[key] = [str(item) for item in raw]
+                elif isinstance(raw, str):
+                    kwargs[key] = [line.strip() for line in raw.splitlines() if line.strip()]
+                else:
+                    kwargs[key] = list(raw)
             else:
                 kwargs[key] = raw
         except (ValueError, TypeError) as e:

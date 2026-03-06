@@ -579,6 +579,36 @@ Imported files are processed by the normal indexing pipeline (thumbnails, embedd
 
 Supported image types include: `.jpg`, `.jpeg`, `.png`, `.gif`, `.bmp`, `.tiff`, `.tif`, `.webp`, and camera RAW formats (`.cr2`, `.cr3`, `.nef`, `.nrw`, `.arw`, `.srf`, `.dng`, `.raf`, `.rw2`, `.orf`, `.pef`, `.srw`, `.x3f`, `.3fr`, `.iiq`, `.rwl`, `.kdc`, `.dcr`, `.erf`). RAW support requires the `rawpy` package. Note that RAW files cannot be rotated within Photonarium. RAW files are also slower to process than standard formats - each file requires full demosaicing of the sensor data, so indexing and opening full-screen images will take a little longer than with JPEGs.
 
+### How Photonarium dates your photos
+
+Every photo in Photonarium has a timestamp that determines where it appears when you sort by date. Getting this right matters -- a wrong date puts a photo in the wrong month or year, which makes it hard to find later. Photonarium uses several sources to figure out when a photo was actually taken, trying them in order of reliability:
+
+1. **Camera metadata (EXIF)** -- Most cameras and phones embed the exact date and time in the image file. When this is available it's almost always correct, so Photonarium uses it first.
+2. **Filename and folder path** -- Many apps and devices encode dates into filenames or folder names. Photonarium can read a wide range of these patterns (see examples below).
+3. **File system dates** -- As a last resort, the file's creation or modification date is used. These are the least reliable since copying files often resets them.
+
+**Filename patterns Photonarium understands:**
+
+Photonarium's filename parser handles far more than just `IMG_20240315.jpg`. It reads dates from both the filename and the folder structure, and combines hints from multiple levels. Some real-world examples:
+
+| Path | Result | How |
+|------|--------|-----|
+| `IMG_20240315_143022.jpg` | 15 Mar 2024, 14:30:22 | Standard camera naming |
+| `WhatsApp Image 2026-01-06 at 12.33.29.jpeg` | 6 Jan 2026, 12:33:29 | WhatsApp timestamp with dot-separated time |
+| `photos/2006/Summer/June-02/img.jpg` | 2 Jun 2006 | Year from folder, season narrows it, month name and day pin it down |
+| `photos/Feb'03/scan001.jpg` | 1 Feb 2003 | Apostrophe-style year with month abbreviation |
+| `photos/early may/IMG_0001.JPG` | 1 May (current year) | "early" sets the day to the 1st |
+| `Xmas 2019/DSC0042.jpg` | 25 Dec 2019 | "Xmas" gives December 25th, year from the same folder |
+| `Holiday 2019/batch_03/DSC0042.jpg` | 1 Jan 2019 | Year from a parent folder; month and day default to January 1st when only a year is found |
+
+**Ambiguous dates (day/month order):**
+
+A date like `07-03-2024` is ambiguous -- it could be 7 March or 3 July, depending on where you live. Photonarium uses the **Date Order** setting (in Settings, under Image Processing) to resolve this. The default is DMY (day-month-year), which interprets `07-03-2024` as 7 March. Change it to MDY if you're in a region that writes the month first. This is a preference, not a hard rule: if the preferred interpretation produces an impossible date (like month 13), Photonarium automatically uses the valid alternative.
+
+**WhatsApp and similar apps:**
+
+Some apps rewrite the camera metadata to the time you *received* the photo rather than when it was *taken*. WhatsApp is the most common example -- the filename `WhatsApp Image 2024-03-15 at 10.30.45.jpeg` contains the real capture time, but the EXIF data says when you downloaded it. Photonarium handles this automatically: filenames matching `WhatsApp Image *` and `WhatsApp Video *` use the filename date instead of EXIF. You can add more patterns in Settings under **Filename Date Overrides** if other apps on your phone behave the same way.
+
 ---
 
 # Docker Installation

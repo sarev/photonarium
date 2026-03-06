@@ -28,13 +28,15 @@ Usage:
 
 from __future__ import annotations
 
+import dataclasses
+import datetime as _dt
 import fnmatch
 import logging
 import os
 import re
 from datetime import datetime
 from pathlib import Path
-from typing import Any
+from typing import Any, Iterator, Sequence
 
 from PIL import Image
 from PIL.ExifTags import IFD, TAGS
@@ -69,6 +71,830 @@ _PATTERN_TIME_6DIGITS = re.compile(r'(\d{6})')
 _PATTERN_TIME_4DIGITS = re.compile(r'(\d{4})')
 # 2-3 groups with separator: HH:MM or HH:MM:SS
 _PATTERN_TIME_SEPARATED = re.compile(r'(\d{2})\D(\d{2})(?:\D(\d{2}))?')
+
+
+# =============================================================================
+# SCORING-BASED FILENAME DATE PARSER
+# =============================================================================
+# A candidate/scoring model for parsing dates from filenames and path
+# components.  Handles human-style dates (e.g. "Summer 2006", "Feb'03",
+# "early May"), resolves DMY/MDY ambiguity via a configurable preference,
+# and merges year/month/day hints from multiple path components.
+#
+# Runs alongside the legacy regex-cascade parser (below).  The scoring
+# parser is tried first; if it doesn't reach min_score, the legacy parser
+# gets a chance.
+
+
+@dataclasses.dataclass(slots=True)
+class _ParsePolicy:
+    """Controls how ambiguous filenames are interpreted.
+
+    Only ``date_order`` is exposed as a user-configurable setting.
+    The remaining fields are sensible defaults documented here for
+    future tuning.
+    """
+
+    # Date order bias for ambiguous numeric triplets (user-configurable).
+    # Supported: "DMY", "MDY", "YMD"
+    date_order: str = 'DMY'
+
+    # If a month is known but day is missing, use this day.
+    default_day: int = 1
+
+    # If a year is missing entirely, allow the current year.
+    assume_current_year: bool = True
+
+    # If a parsed date would be in the future, reject it.
+    forbid_future_dates: bool = True
+
+    # Minimum score required to accept a parse.
+    min_score: float = 3.0
+
+    # Treat seasons as the start of the season by default.
+    season_as_start: bool = True
+
+
+@dataclasses.dataclass(slots=True)
+class _Candidate:
+    """A potential date interpretation with a running score and assumptions log."""
+
+    year: int | None = None
+    month: int | None = None
+    day: int | None = None
+    hour: int = 0
+    minute: int = 0
+    second: int = 0
+    score: float = 0.0
+    assumptions: list[str] = dataclasses.field(default_factory=list)
+
+    def add(self, points: float, reason: str) -> None:
+        """Add score points with a reason for debugging."""
+        self.score += points
+        self.assumptions.append(reason)
+
+    def clone(self) -> _Candidate:
+        """Create an independent copy of this candidate."""
+        return _Candidate(
+            year=self.year,
+            month=self.month,
+            day=self.day,
+            hour=self.hour,
+            minute=self.minute,
+            second=self.second,
+            score=self.score,
+            assumptions=list(self.assumptions),
+        )
+
+
+# ---------------------------------------------------------------------------
+# Scoring parser — lexicon
+# ---------------------------------------------------------------------------
+
+_MONTHS: dict[str, int] = {
+    'jan': 1,
+    'janu': 1,
+    'january': 1,
+    'feb': 2,
+    'febr': 2,
+    'february': 2,
+    'mar': 3,
+    'marc': 3,
+    'march': 3,
+    'apr': 4,
+    'apri': 4,
+    'april': 4,
+    'may': 5,
+    'jun': 6,
+    'june': 6,
+    'jul': 7,
+    'july': 7,
+    'aug': 8,
+    'augu': 8,
+    'august': 8,
+    'sep': 9,
+    'spt': 9,
+    'sept': 9,
+    'september': 9,
+    'oct': 10,
+    'octo': 10,
+    'october': 10,
+    'nov': 11,
+    'nove': 11,
+    'november': 11,
+    'dec': 12,
+    'dece': 12,
+    'december': 12,
+}
+
+# Holidays and seasons mapped to (month, day).  These are used the same way
+# as month words — if a year is found nearby it's attached, otherwise the
+# current year is assumed.
+_HOLIDAYS: dict[str, tuple[int, int]] = {
+    'christmas': (12, 25),
+    'xmas': (12, 25),
+    'halloween': (10, 31),
+    'nye': (12, 31),
+}
+
+_SEASONS: dict[str, tuple[int, int]] = {
+    'spring': (3, 1),
+    'summer': (6, 1),
+    'autumn': (9, 1),
+    'fall': (9, 1),
+    'winter': (12, 1),
+}
+
+_POSITION_DAY: dict[str, int] = {
+    'early': 1,
+    'mid': 15,
+    'late': 25,
+}
+
+
+# ---------------------------------------------------------------------------
+# Scoring parser — helpers
+# ---------------------------------------------------------------------------
+
+
+def _expand_two_digit_year(yy: int, *, today: _dt.date) -> int:
+    """Expand a 2-digit year, preferring 2000s unless that would be future."""
+    year = 2000 + yy
+    if year > today.year:
+        year -= 100
+    return year
+
+
+def _safe_date(year: int, month: int, day: int) -> _dt.date | None:
+    """Return a date if valid, else None — wraps existing _validate_date."""
+    try:
+        return _dt.date(year, month, day)
+    except ValueError:
+        return None
+
+
+def _safe_datetime(
+    year: int,
+    month: int,
+    day: int,
+    hour: int = 0,
+    minute: int = 0,
+    second: int = 0,
+) -> _dt.datetime | None:
+    """Return a datetime if valid, else None."""
+    try:
+        return _dt.datetime(year, month, day, hour, minute, second)
+    except ValueError:
+        return None
+
+
+def _component_weight(component_index: int, total_components: int) -> float:
+    """Weight for coarse-grain signals (year) — earlier path components score higher."""
+    if total_components <= 1:
+        return 1.0
+    frac = component_index / (total_components - 1)
+    return 1.25 - 0.5 * frac
+
+
+def _leaf_weight(component_index: int, total_components: int) -> float:
+    """Weight for fine-grain signals (day/time) — later path components score higher."""
+    if total_components <= 1:
+        return 1.0
+    frac = component_index / (total_components - 1)
+    return 0.75 + 0.5 * frac
+
+
+def _split_words(text: str) -> list[str]:
+    """Split a path component into tokens on non-alnum and case/digit transitions.
+
+    Preserves apostrophes (important for ``Feb'03``-style years).
+    """
+    text = text.strip()
+    # lower->Upper
+    text = re.sub(r'([a-z])([A-Z])', r'\1 \2', text)
+    # alpha<->digit
+    text = re.sub(r'([A-Za-z])(\d)', r'\1 \2', text)
+    text = re.sub(r'(\d)([A-Za-z])', r'\1 \2', text)
+    # non-alnum except apostrophe
+    text = re.sub(r"[^A-Za-z0-9']+", ' ', text)
+    return [tok for tok in text.split() if tok]
+
+
+def _month_from_word(token: str) -> int | None:
+    """Return month number (1-12) if token is a month name/abbreviation."""
+    return _MONTHS.get(token.lower())
+
+
+def _season_from_word(token: str) -> tuple[int, int] | None:
+    """Return (month, day) if token is a season name."""
+    return _SEASONS.get(token.lower())
+
+
+def _position_day_from_word(token: str) -> int | None:
+    """Return day-of-month for positional words (early/mid/late)."""
+    return _POSITION_DAY.get(token.lower())
+
+
+def _holiday_from_word(token: str) -> tuple[int, int] | None:
+    """Return (month, day) if token is a recognised holiday name."""
+    return _HOLIDAYS.get(token.lower())
+
+
+def _parse_hhmm_or_hhmmss(token: str) -> tuple[int, int, int] | None:
+    """Parse a compact time token (HHMM or HHMMSS) to (h, m, s)."""
+    if re.fullmatch(r'\d{4}', token):
+        hh, mm = int(token[:2]), int(token[2:])
+        if 0 <= hh <= 23 and 0 <= mm <= 59:
+            return hh, mm, 0
+        return None
+
+    if re.fullmatch(r'\d{6}', token):
+        hh, mm, ss = int(token[:2]), int(token[2:4]), int(token[4:])
+        if 0 <= hh <= 23 and 0 <= mm <= 59 and 0 <= ss <= 59:
+            return hh, mm, ss
+        return None
+
+    return None
+
+
+# ---------------------------------------------------------------------------
+# Scoring parser — year extraction
+# ---------------------------------------------------------------------------
+
+
+def _extract_year_hints(
+    components: Sequence[str],
+    *,
+    today: _dt.date,
+) -> list[tuple[int, int, float]]:
+    """Extract year hints from path components.
+
+    Returns list of (component_index, year, score).
+    """
+    hints: list[tuple[int, int, float]] = []
+    total = len(components)
+
+    for i, comp in enumerate(components):
+        words = _split_words(comp)
+        if not words:
+            continue
+
+        weight = _component_weight(i, total)
+
+        # Pure 4-digit directory/file stem
+        if len(words) == 1 and re.fullmatch(r'\d{4}', words[0]):
+            y = int(words[0])
+            if 1800 <= y <= today.year:
+                hints.append((i, y, 4.0 * weight))
+                continue
+
+        # Embedded 4-digit year(s)
+        for w in words:
+            if re.fullmatch(r'\d{4}', w):
+                y = int(w)
+                if 1800 <= y <= today.year:
+                    hints.append((i, y, 2.5 * weight))
+
+        # Apostrophe year, eg '03
+        for w in words:
+            m = re.fullmatch(r"'(\d{2})", w)
+            if m:
+                yy = int(m.group(1))
+                y = _expand_two_digit_year(yy, today=today)
+                hints.append((i, y, 1.75 * weight))
+
+    return hints
+
+
+def _nearest_parent_year(
+    component_index: int,
+    year_hints: Sequence[tuple[int, int, float]],
+) -> tuple[int | None, float]:
+    """Find the nearest earlier (or same) component's year hint."""
+    best_year: int | None = None
+    best_score = float('-inf')
+
+    for i, year, score in year_hints:
+        if i <= component_index and score > best_score:
+            best_year = year
+            best_score = score
+
+    if best_year is None:
+        return None, 0.0
+    return best_year, best_score
+
+
+# ---------------------------------------------------------------------------
+# Scoring parser — candidate generators
+# ---------------------------------------------------------------------------
+
+
+def _candidate_from_compact_datetime(
+    token: str,
+    *,
+    today: _dt.date,
+    leaf_bias: float,
+) -> _Candidate | None:
+    """Try to parse a compact date/datetime token (YYYYMMDD, YYYYMMDDHHMM, etc.)."""
+    if re.fullmatch(r'\d{8}', token):
+        y, m, d = int(token[:4]), int(token[4:6]), int(token[6:8])
+        if _safe_date(y, m, d):
+            c = _Candidate(year=y, month=m, day=d)
+            c.add(7.0 * leaf_bias, 'compact yyyymmdd')
+            return c
+        return None
+
+    if re.fullmatch(r'\d{12}', token):
+        y, m, d = int(token[:4]), int(token[4:6]), int(token[6:8])
+        hh, mm = int(token[8:10]), int(token[10:12])
+        if _safe_datetime(y, m, d, hh, mm):
+            c = _Candidate(year=y, month=m, day=d, hour=hh, minute=mm)
+            c.add(8.0 * leaf_bias, 'compact yyyymmddhhmm')
+            return c
+        return None
+
+    if re.fullmatch(r'\d{14}', token):
+        y, m, d = int(token[:4]), int(token[4:6]), int(token[6:8])
+        hh, mm, ss = int(token[8:10]), int(token[10:12]), int(token[12:14])
+        if _safe_datetime(y, m, d, hh, mm, ss):
+            c = _Candidate(year=y, month=m, day=d, hour=hh, minute=mm, second=ss)
+            c.add(8.5 * leaf_bias, 'compact yyyymmddhhmmss')
+            return c
+        return None
+
+    if re.fullmatch(r'\d{6}', token):
+        # Could be YYMMDD, but could also be HHMMSS — lower confidence
+        yy, m, d = int(token[:2]), int(token[2:4]), int(token[4:6])
+        y = _expand_two_digit_year(yy, today=today)
+        if _safe_date(y, m, d):
+            c = _Candidate(year=y, month=m, day=d)
+            c.add(5.0 * leaf_bias, 'compact yymmdd')
+            c.add(-1.0, 'could also be hhmmss')
+            return c
+        return None
+
+    return None
+
+
+def _numeric_triplet_candidates(
+    a: int,
+    b: int,
+    c: int,
+    *,
+    len_a: int,
+    len_b: int,
+    len_c: int,
+    policy: _ParsePolicy,
+    today: _dt.date,
+    coarse_bias: float,
+    fine_bias: float,
+) -> Iterator[_Candidate]:
+    """Generate date candidates for an ambiguous numeric triplet (e.g. 07-03-2024)."""
+    # Strong case: 4-digit leading year
+    if len_a == 4:
+        if _safe_date(a, b, c):
+            cand = _Candidate(year=a, month=b, day=c)
+            cand.add(6.0 * coarse_bias, 'numeric ymd with 4-digit year')
+            yield cand
+        return
+
+    # Strong case: 4-digit trailing year
+    if len_c == 4:
+        valid_dmy = _safe_date(c, b, a)
+        valid_mdy = _safe_date(c, a, b)
+
+        if valid_dmy:
+            cand = _Candidate(year=c, month=b, day=a)
+            cand.add(4.0 * fine_bias, 'numeric dmy with 4-digit year')
+            if policy.date_order == 'DMY':
+                cand.add(1.5, 'policy prefers dmy')
+            elif policy.date_order == 'MDY':
+                cand.add(-1.0, 'policy disfavors dmy')
+            yield cand
+
+        if valid_mdy:
+            cand = _Candidate(year=c, month=a, day=b)
+            cand.add(4.0 * fine_bias, 'numeric mdy with 4-digit year')
+            if policy.date_order == 'MDY':
+                cand.add(1.5, 'policy prefers mdy')
+            elif policy.date_order == 'DMY':
+                cand.add(-1.0, 'policy disfavors mdy')
+            yield cand
+
+        return
+
+    # 2-digit leading year: YY-MM-DD
+    if len_a == 2:
+        y = _expand_two_digit_year(a, today=today)
+        if _safe_date(y, b, c):
+            cand = _Candidate(year=y, month=b, day=c)
+            cand.add(4.5 * fine_bias, 'numeric ymd with 2-digit year')
+            yield cand
+
+    # 2-digit trailing year: DD-MM-YY and MM-DD-YY
+    if len_c == 2:
+        y = _expand_two_digit_year(c, today=today)
+
+        valid_dmy = _safe_date(y, b, a)
+        valid_mdy = _safe_date(y, a, b)
+
+        if valid_dmy:
+            cand = _Candidate(year=y, month=b, day=a)
+            cand.add(3.5 * fine_bias, 'numeric dmy with 2-digit year')
+            if policy.date_order == 'DMY':
+                cand.add(1.25, 'policy prefers dmy')
+            elif policy.date_order == 'MDY':
+                cand.add(-0.75, 'policy disfavors dmy')
+            yield cand
+
+        if valid_mdy:
+            cand = _Candidate(year=y, month=a, day=b)
+            cand.add(3.5 * fine_bias, 'numeric mdy with 2-digit year')
+            if policy.date_order == 'MDY':
+                cand.add(1.25, 'policy prefers mdy')
+            elif policy.date_order == 'DMY':
+                cand.add(-0.75, 'policy disfavors mdy')
+            yield cand
+
+
+def _extract_delimited_numeric_triplets(
+    component: str,
+    *,
+    policy: _ParsePolicy,
+    today: _dt.date,
+    coarse_bias: float,
+    fine_bias: float,
+) -> list[_Candidate]:
+    """Find delimited date-like triplets (e.g. 2024-03-07, 07.03.24, 2024_03_07)."""
+    out: list[_Candidate] = []
+
+    for m in re.finditer(r'(?<!\d)(\d{1,4})[._/\-](\d{1,2})[._/\-](\d{1,4})(?!\d)', component):
+        s1, s2, s3 = m.groups()
+        a, b, c_val = int(s1), int(s2), int(s3)
+        out.extend(
+            _numeric_triplet_candidates(
+                a,
+                b,
+                c_val,
+                len_a=len(s1),
+                len_b=len(s2),
+                len_c=len(s3),
+                policy=policy,
+                today=today,
+                coarse_bias=coarse_bias,
+                fine_bias=fine_bias,
+            )
+        )
+
+    return out
+
+
+def _extract_month_word_candidates(
+    words: Sequence[str],
+    *,
+    component_index: int,
+    total_components: int,
+    policy: _ParsePolicy,
+    today: _dt.date,
+) -> list[_Candidate]:
+    """Handle month/season/holiday words like May, early May, June-02, Feb '03, Xmas 2019."""
+    out: list[_Candidate] = []
+    coarse_bias = _component_weight(component_index, total_components)
+    fine_bias = _leaf_weight(component_index, total_components)
+
+    lower = [w.lower() for w in words]
+
+    for i, tok in enumerate(lower):
+        month = _month_from_word(tok)
+        season = _season_from_word(tok)
+        holiday = _holiday_from_word(tok)
+
+        if month is None and season is None and holiday is None:
+            continue
+
+        c = _Candidate()
+
+        # Month, season, or holiday baseline
+        if holiday is not None:
+            # Holidays provide both month and day — stronger signal than a bare month
+            h_month, h_day = holiday
+            c.month = h_month
+            c.day = h_day
+            c.add(2.5 * fine_bias, 'holiday word')
+        elif month is not None:
+            c.month = month
+            c.add(2.0 * fine_bias, 'month word')
+        else:
+            smonth, sday = season  # type: ignore[misc]
+            if policy.season_as_start:
+                c.month = smonth
+                c.day = sday
+                c.add(1.5 * coarse_bias, 'season word as season start')
+            else:
+                c.month = smonth + 1
+                c.day = 15
+                c.add(1.25 * coarse_bias, 'season word as season midpoint')
+
+        # Look back for early/mid/late
+        if i > 0:
+            pos_day = _position_day_from_word(lower[i - 1])
+            if pos_day is not None:
+                c.day = pos_day
+                c.add(0.75, f'position word {lower[i - 1]}')
+
+        # Look around for an explicit day or year
+        nearby = words[max(0, i - 2) : i + 3]
+
+        found_year = False
+        found_day = False
+
+        for raw in nearby:
+            if re.fullmatch(r'\d{4}', raw):
+                y = int(raw)
+                if 1800 <= y <= today.year:
+                    c.year = y
+                    found_year = True
+                    c.add(2.0 * coarse_bias, 'nearby 4-digit year')
+                    break
+
+        if not found_year:
+            for raw in nearby:
+                m_apos = re.fullmatch(r"'(\d{2})", raw)
+                if m_apos:
+                    yy = int(m_apos.group(1))
+                    c.year = _expand_two_digit_year(yy, today=today)
+                    found_year = True
+                    c.add(1.5 * coarse_bias, 'nearby apostrophe year')
+                    break
+
+        if not found_year:
+            for raw in nearby:
+                if re.fullmatch(r'\d{2}', raw):
+                    val = int(raw)
+                    # If day already implied by early/mid/late, prefer as year
+                    if c.day is not None:
+                        c.year = _expand_two_digit_year(val, today=today)
+                        found_year = True
+                        c.add(1.0, '2-digit year chosen because day already known')
+                        break
+
+        if not found_day:
+            for raw in nearby:
+                if re.fullmatch(r'\d{1,2}', raw):
+                    val = int(raw)
+                    if 1 <= val <= 31 and c.day is None:
+                        c.day = val
+                        found_day = True
+                        c.add(1.0 * fine_bias, 'nearby day-of-month')
+                        break
+
+        # Fallback defaults
+        if c.year is None and policy.assume_current_year:
+            c.year = today.year
+            c.add(0.25, 'assumed current year')
+
+        if c.day is None and c.month is not None:
+            c.day = policy.default_day
+            c.add(0.25, 'default day of month')
+
+        if c.year is not None and c.month is not None and c.day is not None and _safe_date(c.year, c.month, c.day):
+            out.append(c)
+
+    return out
+
+
+def _extract_compact_candidates_from_words(
+    words: Sequence[str],
+    *,
+    today: _dt.date,
+    leaf_bias: float,
+) -> list[_Candidate]:
+    """Extract candidates from compact date/datetime tokens in word list."""
+    out: list[_Candidate] = []
+    for w in words:
+        c = _candidate_from_compact_datetime(w, today=today, leaf_bias=leaf_bias)
+        if c is not None:
+            out.append(c)
+    return out
+
+
+def _extract_time_from_leaf(words: Sequence[str], raw_leaf: str) -> tuple[int, int, int] | None:
+    """Extract time from the leaf (filename) component.
+
+    Tries compact tokens first (HHMM/HHMMSS), then separated patterns
+    (HH:MM:SS, HH.MM.SS, HH_MM_SS) for apps like WhatsApp that use
+    separators in timestamps.
+    """
+    # Compact time tokens — skip digit runs that were originally glued to
+    # letters (e.g. "DSC0042" → word "0042" is a camera sequence number,
+    # not a time).  We detect this by checking whether the digit token
+    # appears directly after a letter in the raw leaf string.
+    for w in words:
+        if re.fullmatch(r'\d{4}', w):
+            val = int(w)
+            # If it looks like a plausible year, skip
+            if 1800 <= val <= 2099:
+                continue
+        if w.isdigit() and re.search(r'[A-Za-z]' + re.escape(w), raw_leaf):
+            continue
+        t = _parse_hhmm_or_hhmmss(w)
+        if t is not None:
+            return t
+
+    # Separated time patterns: HH:MM:SS, HH.MM.SS, HH_MM_SS
+    for match in re.finditer(r'(\d{2})[.:_](\d{2})(?:[.:_](\d{2}))?', raw_leaf):
+        hh, mm = int(match.group(1)), int(match.group(2))
+        ss = int(match.group(3)) if match.group(3) else 0
+        if _validate_time(hh, mm, ss):
+            return (hh, mm, ss)
+
+    return None
+
+
+# ---------------------------------------------------------------------------
+# Scoring parser — resolution and scoring
+# ---------------------------------------------------------------------------
+
+
+def _finalise_candidate(
+    cand: _Candidate,
+    *,
+    component_index: int,
+    year_hints: Sequence[tuple[int, int, float]],
+    total_components: int,
+    today: _dt.date,
+    policy: _ParsePolicy,
+    leaf_time: tuple[int, int, int] | None,
+) -> _Candidate | None:
+    """Fill gaps in a candidate (year from parent, default day) and validate."""
+    c = cand.clone()
+
+    # Fill missing year from nearest parent year
+    if c.year is None:
+        y, y_score = _nearest_parent_year(component_index, year_hints)
+        if y is not None:
+            c.year = y
+            c.add(1.0 + (0.15 * y_score), 'filled year from parent path')
+        elif policy.assume_current_year:
+            c.year = today.year
+            c.add(0.25, 'assumed current year')
+
+    # Fill missing day if month exists
+    if c.month is not None and c.day is None:
+        c.day = policy.default_day
+        c.add(0.25, 'default day of month')
+
+    # If still incomplete, reject
+    if c.year is None or c.month is None or c.day is None:
+        return None
+
+    # Apply leaf time if candidate is date-only
+    if leaf_time is not None and c.hour == 0 and c.minute == 0 and c.second == 0:
+        hh, mm, ss = leaf_time
+        c.hour, c.minute, c.second = hh, mm, ss
+        c.add(0.5 * _leaf_weight(component_index, total_components), 'time from leaf')
+
+    parsed = _safe_datetime(c.year, c.month, c.day, c.hour, c.minute, c.second)
+    if parsed is None:
+        return None
+
+    if policy.forbid_future_dates:
+        now = _dt.datetime.combine(today, _dt.time.max)
+        if parsed > now:
+            return None
+
+    return c
+
+
+def _choose_best(
+    candidates: list[tuple[int, _Candidate]],
+    *,
+    year_hints: Sequence[tuple[int, int, float]],
+    total_components: int,
+    today: _dt.date,
+    policy: _ParsePolicy,
+    leaf_time: tuple[int, int, int] | None,
+) -> _Candidate | None:
+    """Pick the highest-scoring candidate that passes finalisation and min_score."""
+    best: _Candidate | None = None
+
+    for component_index, cand in candidates:
+        final = _finalise_candidate(
+            cand,
+            component_index=component_index,
+            year_hints=year_hints,
+            total_components=total_components,
+            today=today,
+            policy=policy,
+            leaf_time=leaf_time,
+        )
+        if final is None:
+            continue
+        if final.score < policy.min_score:
+            continue
+        if best is None or final.score > best.score:
+            best = final
+
+    return best
+
+
+# ---------------------------------------------------------------------------
+# Scoring parser — internal entry point
+# ---------------------------------------------------------------------------
+
+
+def _parse_timestamp_scoring(
+    path: Path | str,
+    date_order: str = 'DMY',
+) -> tuple[datetime | None, float, list[str]]:
+    """Parse a photo timestamp from a path using the scoring model.
+
+    Args:
+        path: File path to parse.
+        date_order: Preferred date order for ambiguous dates ('DMY', 'MDY', 'YMD').
+
+    Returns:
+        Tuple of (datetime or None, score, list of assumption strings).
+    """
+    today = _dt.date.today()
+    policy = _ParsePolicy(date_order=date_order)
+
+    path_str = str(path)
+    p = Path(path_str)
+
+    components = [part for part in p.parts if part not in ('', '/', '\\')]
+    if not components:
+        return None, 0.0, []
+
+    total = len(components)
+    year_hints = _extract_year_hints(components, today=today)
+
+    # Extract leaf time once — used as a weak augmenting signal
+    leaf_words = _split_words(components[-1])
+    leaf_time = _extract_time_from_leaf(leaf_words, components[-1])
+
+    raw_candidates: list[tuple[int, _Candidate]] = []
+
+    for i, comp in enumerate(components):
+        words = _split_words(comp)
+        coarse_bias = _component_weight(i, total)
+        fine_bias = _leaf_weight(i, total)
+
+        # 1. Compact date/datetime tokens
+        for cand in _extract_compact_candidates_from_words(
+            words,
+            today=today,
+            leaf_bias=fine_bias,
+        ):
+            raw_candidates.append((i, cand))
+
+        # 2. Delimited numeric triplets
+        for cand in _extract_delimited_numeric_triplets(
+            comp,
+            policy=policy,
+            today=today,
+            coarse_bias=coarse_bias,
+            fine_bias=fine_bias,
+        ):
+            raw_candidates.append((i, cand))
+
+        # 3. Month words / seasons
+        for cand in _extract_month_word_candidates(
+            words,
+            component_index=i,
+            total_components=total,
+            policy=policy,
+            today=today,
+        ):
+            raw_candidates.append((i, cand))
+
+    best = _choose_best(
+        raw_candidates,
+        year_hints=year_hints,
+        total_components=total,
+        today=today,
+        policy=policy,
+        leaf_time=leaf_time,
+    )
+
+    if best is None:
+        return None, 0.0, []
+
+    result = datetime(
+        best.year,
+        best.month,
+        best.day,  # type: ignore[arg-type]
+        best.hour,
+        best.minute,
+        best.second,
+    )
+    logger.debug(
+        'Scoring parser: score=%.1f assumptions=%s for %s',
+        best.score,
+        best.assumptions,
+        path,
+    )
+    return result, best.score, best.assumptions
 
 
 # =============================================================================
@@ -1005,6 +1831,10 @@ def _parse_time_from_string(text: str, start_pos: int = 0) -> tuple[int, int, in
 
     # Try 6-digit pattern: HHMMSS
     for match in _PATTERN_TIME_6DIGITS.finditer(search_text):
+        # Skip digit runs directly preceded by a letter — these are typically
+        # camera sequence numbers like DSC004283, not timestamps
+        if match.start() > 0 and search_text[match.start() - 1].isalpha():
+            continue
         digits = match.group(1)
         hour = int(digits[0:2])
         minute = int(digits[2:4])
@@ -1023,6 +1853,9 @@ def _parse_time_from_string(text: str, start_pos: int = 0) -> tuple[int, int, in
 
     # Try 4-digit pattern: HHMM (less reliable, could be other numbers)
     for match in _PATTERN_TIME_4DIGITS.finditer(search_text):
+        # Skip digit runs directly preceded by a letter (camera sequence numbers)
+        if match.start() > 0 and search_text[match.start() - 1].isalpha():
+            continue
         digits = match.group(1)
         hour = int(digits[0:2])
         minute = int(digits[2:4])
@@ -1110,6 +1943,7 @@ def derive_timestamp_with_confidence(
     path: Path | str,
     exif_data: dict[str, str] | None = None,
     filename_date_overrides: list[str] | None = None,
+    date_order: str = 'DMY',
 ) -> tuple[datetime | None, int]:
     """Derive the best timestamp for an image with confidence level.
 
@@ -1136,6 +1970,8 @@ def derive_timestamp_with_confidence(
         filename_date_overrides: Optional list of glob patterns. When the
             basename matches any pattern, the filename-derived timestamp
             is preferred over EXIF.
+        date_order: Preferred date order for ambiguous numeric dates in
+            filenames ('DMY', 'MDY', or 'YMD').
 
     Returns:
         Tuple of (datetime, confidence) where confidence is:
@@ -1152,7 +1988,10 @@ def derive_timestamp_with_confidence(
         basename = path.name
         for pattern in filename_date_overrides:
             if fnmatch.fnmatch(basename, pattern):
-                timestamp = parse_timestamp_from_path(path)
+                # Try scoring parser first, then legacy fallback
+                timestamp, _score, _assumptions = _parse_timestamp_scoring(path, date_order)
+                if not timestamp:
+                    timestamp = parse_timestamp_from_path(path)
                 if timestamp:
                     logger.debug(f'Timestamp from filename (override match "{pattern}"): {timestamp} for {path}')
                     return (timestamp, CONFIDENCE_FILENAME)
@@ -1175,9 +2014,16 @@ def derive_timestamp_with_confidence(
             return (timestamp, CONFIDENCE_EXIF)
 
     # Try parsing from filename/path (before filesystem, as files get copied around)
+    # Scoring parser first — handles month words, seasons, DMY/MDY ambiguity
+    timestamp, score, _assumptions = _parse_timestamp_scoring(path, date_order)
+    if timestamp:
+        logger.debug(f'Timestamp from scoring parser (score={score:.1f}): {timestamp} for {path}')
+        return (timestamp, CONFIDENCE_FILENAME)
+
+    # Legacy regex-cascade fallback
     timestamp = parse_timestamp_from_path(path)
     if timestamp:
-        logger.debug(f'Timestamp from filename: {timestamp} for {path}')
+        logger.debug(f'Timestamp from legacy parser: {timestamp} for {path}')
         return (timestamp, CONFIDENCE_FILENAME)
 
     # Try filesystem timestamp as last resort

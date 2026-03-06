@@ -4928,6 +4928,12 @@ dialog::backdrop {
     max-width: 180px;
 }
 
+/* Select dropdowns for choice fields */
+.settings-select {
+    max-width: 180px;
+    cursor: pointer;
+}
+
 /* Textarea for set-type fields */
 .settings-textarea {
     font-family: 'Consolas', 'Monaco', 'Courier New', monospace;
