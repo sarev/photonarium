@@ -1021,6 +1021,22 @@ const Gallery = {
         });
 
         item.appendChild(thumb);
+
+        // Video overlays: duration badge and play icon
+        if (img.media_type === 'video') {
+            item.classList.add('gallery-item-video');
+            if (img.duration != null) {
+                const badge = App.createElement('span', { className: 'video-duration-badge' });
+                const mins = Math.floor(img.duration / 60);
+                const secs = Math.floor(img.duration % 60);
+                badge.textContent = mins + ':' + String(secs).padStart(2, '0');
+                item.appendChild(badge);
+            }
+            const playOverlay = App.createElement('div', { className: 'video-play-overlay' });
+            playOverlay.innerHTML = App.icon('play_arrow', '▶');
+            item.appendChild(playOverlay);
+        }
+
         item.appendChild(label);
         item.appendChild(groupBtn);
 
@@ -1422,6 +1438,16 @@ const Gallery = {
         const pathTitle = App.isHeadless() ? '' : 'title="Open containing folder"';
         const pathDataId = App.isHeadless() ? '' : `data-image-id="${img.id}"`;
 
+        const isVideo = img.media_type === 'video';
+
+        // Format video duration as M:SS
+        let durationStr = '';
+        if (isVideo && img.duration != null) {
+            const mins = Math.floor(img.duration / 60);
+            const secs = Math.floor(img.duration % 60);
+            durationStr = mins + ':' + String(secs).padStart(2, '0');
+        }
+
         content.innerHTML = `
             <div class="info-section">
                 <p class="info-filename">${App.escapeHtml(img.basename)}<button class="info-copy-btn" title="Copy full path to clipboard" data-copy="${App.escapeHtml(img.path)}"><span class="icon" data-icon="content_copy">\u{1F4CB}</span></button></p>
@@ -1429,18 +1455,31 @@ const Gallery = {
             </div>
 
             <div class="info-section">
+                ${isVideo ? `
+                <div class="info-row">
+                    <span class="info-label">Duration</span>
+                    <span class="info-value">${durationStr}</span>
+                </div>
+                <div class="info-row">
+                    <span class="info-label">Resolution</span>
+                    <span class="info-value">${App.formatDimensions(img.width, img.height)}</span>
+                </div>
+                ` : `
                 <div class="info-row">
                     <span class="info-label">Dimensions</span>
                     <span class="info-value">${App.formatDimensions(img.width, img.height)}</span>
                 </div>
+                `}
                 <div class="info-row">
                     <span class="info-label">File size</span>
                     <span class="info-value">${App.formatFileSize(img.size)}</span>
                 </div>
+                ${!isVideo ? `
                 <div class="info-row info-row-clickable" id="info-metadata-btn" title="View full image metadata" data-image-id="${img.id}">
                     <span class="info-label">Metadata</span>
                     <span class="info-value info-link">View EXIF data \u2192</span>
                 </div>
+                ` : ''}
                 <div class="info-row">
                     <span class="info-label">Date</span>
                     <input type="datetime-local" id="info-timestamp" class="info-input info-timestamp"
@@ -1468,6 +1507,7 @@ const Gallery = {
                 </div>
             </div>
 
+            ${!isVideo ? `
             <div class="info-section info-histogram">
                 <label class="info-label">Histogram</label>
                 <div class="histogram-container" id="histogram-container">
@@ -1482,6 +1522,7 @@ const Gallery = {
                     <button type="button" id="histogram-toggle-b" class="histogram-toggle histogram-toggle-b active" title="Toggle blue channel">B</button>
                 </div>
             </div>
+            ` : ''}
         `;
 
         // Upgrade Unicode fallback icons to Material Symbols if font is loaded

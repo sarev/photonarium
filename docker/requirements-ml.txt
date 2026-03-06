@@ -9,3 +9,4 @@ imagehash
 rawpy
 open_clip_torch
 transformers
+faster-whisper

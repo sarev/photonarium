@@ -142,6 +142,8 @@ const Database = {
             nimaQueueRow: App.$('nima-queue-row'),
             nimaCount: App.$('nima-count'),
             nimaEta: App.$('nima-eta'),
+            videoQueueRow: App.$('video-queue-row'),
+            videoCount: App.$('video-count'),
             trashQueueRow: App.$('trash-queue-row'),
             trashQueueCount: App.$('trash-queue-count'),
             importQueueRow: App.$('import-queue-row'),
@@ -579,6 +581,7 @@ const Database = {
         const embedding = status.embedding_queue || 0;
         const faces = status.face_queue || 0;
         const nima = status.nima_queue || 0;
+        const video = status.video_queue || 0;
 
         // Phase 4 statuses (only present when active)
         const duplicates = status.duplicates;
@@ -611,7 +614,7 @@ const Database = {
         const trashQueue = status.trash_queue || 0;
         const importQueue = status.import_queue || 0;
         const importActive = importQueue > 0 || status.import_progress != null;
-        const hasQueueWork = indexing > 0 || embedding > 0 || faces > 0 || nima > 0 || trashQueue > 0 || importActive;
+        const hasQueueWork = indexing > 0 || embedding > 0 || faces > 0 || nima > 0 || video > 0 || trashQueue > 0 || importActive;
         const hasPhase4Work = duplicates || faceGrouping || faceEmbeddings;
         const hasAnyWork = hasQueueWork || hasPhase4Work;
 
@@ -663,6 +666,16 @@ const Database = {
                     this._els.nimaQueueRow.hidden = true;
                     this._nimaHistory = [];
                     if (this._els.nimaEta) this._els.nimaEta.textContent = '';
+                }
+            }
+
+            // Show/hide video processing row
+            if (this._els.videoQueueRow && this._els.videoCount) {
+                if (video > 0) {
+                    this._els.videoQueueRow.hidden = false;
+                    this._els.videoCount.textContent = video;
+                } else {
+                    this._els.videoQueueRow.hidden = true;
                 }
             }
 
@@ -753,6 +766,7 @@ const Database = {
             this._els.embeddingCount.parentElement.hidden = false;
             if (this._els.faceQueueRow) this._els.faceQueueRow.hidden = true;
             if (this._els.nimaQueueRow) this._els.nimaQueueRow.hidden = true;
+            if (this._els.videoQueueRow) this._els.videoQueueRow.hidden = true;
             if (this._els.trashQueueRow) this._els.trashQueueRow.hidden = true;
             if (this._els.importQueueRow) this._els.importQueueRow.hidden = true;
             if (this._els.duplicatesRow) this._els.duplicatesRow.hidden = true;

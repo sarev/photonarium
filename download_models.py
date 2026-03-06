@@ -248,6 +248,44 @@ def download_nima_model(data_dir: str = '.') -> bool:
         return True  # Non-fatal — app works without it
 
 
+def download_stt_model(model_size: str = 'base') -> bool:
+    """Download a faster-whisper STT model.
+
+    faster-whisper uses CTranslate2 models hosted on HuggingFace. The model
+    is downloaded on first use, but pre-downloading avoids runtime delays.
+
+    Skipped if faster-whisper is not installed.
+
+    Args:
+        model_size: Whisper model size (tiny, base, small, medium, large-v3).
+
+    Returns:
+        True if downloaded (or already present / package missing), False on fatal error.
+    """
+    print(f'\n{"=" * 60}')
+    print(f'Downloading faster-whisper STT model: {model_size}')
+    print('=' * 60)
+
+    try:
+        from faster_whisper import WhisperModel
+    except ImportError:
+        print('faster-whisper not installed — skipping STT model download.')
+        print('Install with: pip install faster-whisper')
+        return True  # Non-fatal
+
+    try:
+        # Loading the model triggers the download from HuggingFace
+        print(f'Downloading model (this may take a while for larger sizes)...')
+        _model = WhisperModel(model_size, device='cpu', compute_type='int8')
+        del _model
+        print('STT model downloaded successfully')
+        return True
+    except Exception as e:
+        print(f'Error downloading STT model: {e}', file=sys.stderr)
+        print('Speech-to-text will be unavailable until the model is downloaded.')
+        return True  # Non-fatal — app works without it
+
+
 def main():
     import argparse
 
@@ -306,6 +344,9 @@ Examples:
 
     print(f'OpenCLIP: {models["openclip"]["model"]} ({models["openclip"]["pretrained"]})')
     print(f'Caption:  {models["caption"]["model"]}')
+    stt_cfg = models.get('stt', {})
+    if stt_cfg.get('enabled'):
+        print(f'STT:      faster-whisper ({stt_cfg.get("model", "base")})')
 
     success = True
 
@@ -339,6 +380,11 @@ Examples:
     # Download FaceNet models (MTCNN + InceptionResnetV1)
     if not download_facenet_models():
         success = False
+
+    # Download STT model (non-fatal if faster-whisper not installed)
+    stt_info = models.get('stt', {})
+    if stt_info and stt_info.get('enabled', False):
+        download_stt_model(model_size=stt_info.get('model', 'base'))
 
     print()
     print('=' * 60)

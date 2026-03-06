@@ -115,6 +115,13 @@ AppState.events = (function() {
                 AppState.images.load();
                 break;
 
+            case 'video_processed':
+                // Video scene detection and embedding complete
+                // data: { processed_count }
+                console.log('[AppState.events] Video processing complete:', data);
+                AppState.images.load();
+                break;
+
             case 'images_indexed':
                 // New images have been ingested and embedded — ready for display.
                 // This fires well before processing_complete (which waits for

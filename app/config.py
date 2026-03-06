@@ -460,6 +460,71 @@ CONFIG_SCHEMA: list[tuple[str, list[tuple[str, list[str]]]]] = [
         ],
     ),
     (
+        'Video Processing',
+        [
+            (
+                'video_extensions',
+                [
+                    'File extensions recognised as video files (lowercase, with leading dot)',
+                ],
+            ),
+            (
+                'video_scene_detection_threshold',
+                [
+                    'Scene change detection threshold (0-100). Higher = fewer scene boundaries.',
+                    'Lower values detect more subtle transitions. Range: 1.0-100.0, recommended: 20-35',
+                ],
+            ),
+            (
+                'video_frame_sample_interval',
+                [
+                    'Seconds between sampled frames within each scene for embedding.',
+                    'Lower values capture more detail but increase processing time.',
+                    'Range: 0.5-30.0, recommended: 1.0-5.0',
+                ],
+            ),
+            (
+                'video_max_scene_frames',
+                [
+                    'Maximum number of frames to extract per scene for embedding.',
+                    'Limits processing time for long scenes. Range: 1-50',
+                ],
+            ),
+        ],
+    ),
+    (
+        'Speech-to-Text (STT)',
+        [
+            (
+                'stt_enabled',
+                [
+                    'Enable speech-to-text transcription of video audio using faster-whisper.',
+                    'Requires the faster-whisper package to be installed.',
+                    'When disabled, scene detection and frame embeddings still work.',
+                ],
+            ),
+            (
+                'stt_model',
+                [
+                    'Whisper model size for transcription. Larger models are more accurate',
+                    'but slower and require more VRAM.',
+                    '  tiny   - fastest, least accurate (~75MB)',
+                    '  base   - good balance (~140MB)',
+                    '  small  - better accuracy (~460MB)',
+                    '  medium - high accuracy (~1.5GB)',
+                    '  large-v3 - best accuracy (~3GB)',
+                ],
+            ),
+            (
+                'stt_language',
+                [
+                    'Language code for transcription (e.g. "en", "fr", "de").',
+                    'Leave empty for automatic language detection.',
+                ],
+            ),
+        ],
+    ),
+    (
         'Slideshow',
         [
             (
@@ -555,6 +620,19 @@ _IMAGE_EXTENSIONS_ORDERED: list[str | tuple[str, str]] = [
 ]
 
 
+# Ordered list of video extensions for the YAML file
+_VIDEO_EXTENSIONS_ORDERED: list[str] = [
+    '.mp4',
+    '.mkv',
+    '.avi',
+    '.mov',
+    '.webm',
+    '.m4v',
+    '.wmv',
+    '.flv',
+]
+
+
 # ---------------------------------------------------------------------------
 # FIELD_CONSTRAINTS — single source of truth for numeric ranges
 # ---------------------------------------------------------------------------
@@ -592,6 +670,9 @@ FIELD_CONSTRAINTS: dict[str, dict[str, int | float | bool]] = {
     'quality_weight_pixels': {'min': 0.0, 'max': 1.0, 'step': 0.01},
     'quality_weight_bpp': {'min': 0.0, 'max': 1.0, 'step': 0.01},
     'quality_alpha': {'min': 0.0, 'max': 1.0, 'step': 0.01},
+    'video_scene_detection_threshold': {'min': 1.0, 'max': 100.0, 'step': 0.5},
+    'video_frame_sample_interval': {'min': 0.5, 'max': 30.0, 'step': 0.5},
+    'video_max_scene_frames': {'min': 1, 'max': 50, 'step': 1},
     'slideshow_interval': {'min': 1.0, 'max': 60.0, 'step': 0.5},
     'import_threads': {'min': 1, 'max': 16, 'step': 1},
     'scan_interval_minutes': {'min': 1, 'max': 1440, 'step': 1, 'special_zero': True},
@@ -605,6 +686,7 @@ FIELD_CONSTRAINTS: dict[str, dict[str, int | float | bool]] = {
 
 FIELD_CHOICES: dict[str, list[str]] = {
     'date_order': ['DMY', 'MDY', 'YMD'],
+    'stt_model': ['tiny', 'base', 'small', 'medium', 'large-v3'],
 }
 
 
@@ -712,6 +794,21 @@ class Config:
     quality_alpha: float = 0.60
     # Whether to show "On This Day" memories on the gallery screen.
     on_this_day_enabled: bool = True
+    # Set of lowercase file extensions to treat as videos.
+    # Derived from _VIDEO_EXTENSIONS_ORDERED to avoid drift.
+    video_extensions: set[str] = field(default_factory=lambda: set(_VIDEO_EXTENSIONS_ORDERED))
+    # Scene change detection threshold (1-100). Higher = fewer scene cuts.
+    video_scene_detection_threshold: float = 27.0
+    # Seconds between sampled frames within each scene for embedding (0.5-30.0).
+    video_frame_sample_interval: float = 2.0
+    # Maximum number of frames to extract per scene for embedding (1-50).
+    video_max_scene_frames: int = 10
+    # Whether to run speech-to-text transcription on video audio.
+    stt_enabled: bool = False
+    # Whisper model size for transcription.
+    stt_model: str = 'base'
+    # Language code for transcription (empty = auto-detect).
+    stt_language: str = ''
     # Seconds each image is displayed during a slideshow (1.0-60.0).
     slideshow_interval: float = 5.0
     # Path to trash directory. Empty string means <data-dir>/trash/.
@@ -754,6 +851,10 @@ class Config:
             raise ValueError('openclip_pretrained must be a non-empty string')
         if not self.caption_model or not isinstance(self.caption_model, str):
             raise ValueError('caption_model must be a non-empty string')
+        if not isinstance(self.stt_model, str) or not self.stt_model:
+            raise ValueError('stt_model must be a non-empty string')
+        if not isinstance(self.stt_language, str):
+            raise ValueError('stt_language must be a string')
 
         # --- Boolean fields ---
         if not isinstance(self.face_detection_enabled, bool):
@@ -764,6 +865,8 @@ class Config:
             raise ValueError('nima_enabled must be a boolean')
         if not isinstance(self.on_this_day_enabled, bool):
             raise ValueError('on_this_day_enabled must be a boolean')
+        if not isinstance(self.stt_enabled, bool):
+            raise ValueError('stt_enabled must be a boolean')
 
         # --- Enumerated choice fields (from FIELD_CHOICES) ---
         for field_name, choices in FIELD_CHOICES.items():
@@ -782,6 +885,13 @@ class Config:
             raise ValueError('image_extensions must be a collection')
         self.image_extensions = {
             ext.lower() if ext.startswith('.') else f'.{ext.lower()}' for ext in self.image_extensions
+        }
+
+        # --- video_extensions: coerce to set of dotted lowercase strings ---
+        if not isinstance(self.video_extensions, (set, list, tuple)):
+            raise ValueError('video_extensions must be a collection')
+        self.video_extensions = {
+            ext.lower() if ext.startswith('.') else f'.{ext.lower()}' for ext in self.video_extensions
         }
 
         # --- Numeric range checks from FIELD_CONSTRAINTS ---
@@ -849,6 +959,13 @@ def _format_yaml_value(value: Any, field_name: str) -> str:
                 lines.append(f'  {comment_text}')
             else:
                 lines.append(f'  - {item}')
+        return '\n'.join(lines)
+
+    if field_name == 'video_extensions':
+        # Use the canonical ordered list for consistent output
+        lines: list[str] = [f'{field_name}:']
+        for ext in _VIDEO_EXTENSIONS_ORDERED:
+            lines.append(f'  - {ext}')
         return '\n'.join(lines)
 
     if isinstance(value, bool):

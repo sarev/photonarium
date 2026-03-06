@@ -218,6 +218,7 @@ const Fullscreen = {
             nextBtn: App.$('fullscreen-next'),
             slideshowBtn: App.$('fullscreen-slideshow'),
             shuffleBtn: App.$('fullscreen-shuffle'),
+            video: App.$('fullscreen-video'),
         };
 
         // Bind button clicks (permanent, not per-session)
@@ -399,6 +400,13 @@ const Fullscreen = {
         // Hide the overlay
         this._hide();
 
+        // Pause and hide video if playing
+        if (this._els.video) {
+            this._els.video.pause();
+            this._els.video.removeAttribute('src');
+            this._els.video.hidden = true;
+        }
+
         // Clear image source to free memory (after transition)
         setTimeout(() => {
             if (!this.state.isOpen) {
@@ -579,21 +587,51 @@ const Fullscreen = {
             ? knownIndex
             : this.state.imageList.findIndex(i => i.id === imageId);
 
-        // Load the full image (with cache-bust if image was recently modified)
-        this._els.image.src = ThumbnailLoader.getFullImageUrl(imageId);
-        this._els.image.alt = img.basename || '';
-
-        // Show filename overlay with dimensions
-        // If imageList entry lacks metadata (e.g., opened from faces screen),
-        // try to get it from AppState.images cache
         const metadata = img.basename ? img : (AppState.images.getById(imageId) || img);
-        this._showFilename(metadata.basename, metadata.width, metadata.height);
+        const isVideo = metadata.media_type === 'video';
 
-        // Disable rotate buttons for RAW files (which cannot be modified)
-        this._updateRotateButtons(metadata);
+        if (isVideo) {
+            // Video: hide image, show and load video element
+            this._els.image.hidden = true;
+            this._els.image.src = '';
+            this._els.video.hidden = false;
+            this._els.video.src = ThumbnailLoader.getFullImageUrl(imageId);
+            this._els.video.load();
 
-        // Preload adjacent images
-        this._preloadAdjacent();
+            // Show filename with duration instead of dimensions
+            this._showFilename(metadata.basename, null, null, metadata.duration);
+
+            // Disable image-only toolbar buttons for videos
+            this._els.taggingBtn.disabled = true;
+            this._els.ignoreBtn.disabled = true;
+            this._els.rotateLeftBtn.disabled = true;
+            this._els.rotateRightBtn.disabled = true;
+        } else {
+            // Image: hide video, show image
+            if (this._els.video) {
+                this._els.video.pause();
+                this._els.video.removeAttribute('src');
+                this._els.video.hidden = true;
+            }
+            this._els.image.hidden = false;
+
+            // Load the full image (with cache-bust if image was recently modified)
+            this._els.image.src = ThumbnailLoader.getFullImageUrl(imageId);
+            this._els.image.alt = img.basename || '';
+
+            // Show filename overlay with dimensions
+            this._showFilename(metadata.basename, metadata.width, metadata.height);
+
+            // Re-enable toolbar buttons
+            this._els.taggingBtn.disabled = false;
+            this._els.ignoreBtn.disabled = false;
+
+            // Disable rotate buttons for RAW files (which cannot be modified)
+            this._updateRotateButtons(metadata);
+
+            // Preload adjacent images
+            this._preloadAdjacent();
+        }
 
         // Notify AppState (triggers face overlay load, selection sync, etc.)
         AppState.nav.setFullscreenImageId(imageId);
@@ -606,12 +644,16 @@ const Fullscreen = {
      * @param {number} [height] - Image height in pixels
      * @private
      */
-    _showFilename(filename, width, height) {
+    _showFilename(filename, width, height, duration) {
         const el = this._els.filename;
 
-        // Build display text with optional dimensions
+        // Build display text with optional dimensions or duration
         let text = filename;
-        if (width && height) {
+        if (duration != null) {
+            const mins = Math.floor(duration / 60);
+            const secs = Math.floor(duration % 60);
+            text += ` (${mins}:${String(secs).padStart(2, '0')})`;
+        } else if (width && height) {
             text += ` (${width} × ${height})`;
         }
         el.textContent = text;
@@ -671,20 +713,28 @@ const Fullscreen = {
         const prevIndex = (currentIndex - 1 + imageList.length) % imageList.length;
         const nextIndex = (currentIndex + 1) % imageList.length;
 
-        // Preload by creating Image objects (with cache-bust for recently rotated images)
-        const preloadPrev = new Image();
-        preloadPrev.src = ThumbnailLoader.getFullImageUrl(imageList[prevIndex].id);
+        // Preload by creating Image objects (with cache-bust for recently rotated images).
+        // Skip video items — new Image() does not work for video preloading.
+        const prevImg = imageList[prevIndex];
+        if (prevImg.media_type !== 'video') {
+            const preloadPrev = new Image();
+            preloadPrev.src = ThumbnailLoader.getFullImageUrl(prevImg.id);
+        }
 
-        const preloadNext = new Image();
-        preloadNext.src = ThumbnailLoader.getFullImageUrl(imageList[nextIndex].id);
+        const nextImg = imageList[nextIndex];
+        if (nextImg.media_type !== 'video') {
+            const preloadNext = new Image();
+            preloadNext.src = ThumbnailLoader.getFullImageUrl(nextImg.id);
+        }
 
         // During shuffle slideshow, the next advance target may differ from
         // the index-adjacent images — preload it too so the cross-fade is smooth.
         if (this._slideshowActive && this._slideshowShuffled) {
             const shuffleNext = this._getNextSlideshowTarget();
-            if (shuffleNext !== prevIndex && shuffleNext !== nextIndex) {
+            const shuffleImg = imageList[shuffleNext];
+            if (shuffleNext !== prevIndex && shuffleNext !== nextIndex && shuffleImg.media_type !== 'video') {
                 const preloadShuffle = new Image();
-                preloadShuffle.src = ThumbnailLoader.getFullImageUrl(imageList[shuffleNext].id);
+                preloadShuffle.src = ThumbnailLoader.getFullImageUrl(shuffleImg.id);
             }
         }
 
@@ -738,6 +788,9 @@ const Fullscreen = {
      */
     _handleWheel(e) {
         e.preventDefault();
+
+        // No zoom for videos
+        if (this._els.video && !this._els.video.hidden) return;
 
         // Show overlays on zoom interaction
         this._showOverlays();
@@ -1749,7 +1802,7 @@ const Fullscreen = {
         if (imageList.length > 1) {
             const targetIndex = this._getNextSlideshowTarget();
             const nextImage = imageList[targetIndex];
-            if (nextImage) {
+            if (nextImage && nextImage.media_type !== 'video') {
                 const img = new Image();
                 img.src = ThumbnailLoader.getFullImageUrl(nextImage.id);
                 this._slideshowPreload = { id: nextImage.id, img };
@@ -1783,6 +1836,45 @@ const Fullscreen = {
 
         const targetImage = imageList[targetIndex];
         if (!targetImage) return;
+
+        const targetMeta = AppState.images.getById(targetImage.id) || targetImage;
+        const isVideo = targetMeta.media_type === 'video';
+
+        if (isVideo) {
+            // Video: navigate directly, play for video duration then advance
+            this._slideshowAdvancing = true;
+            this._navigateToIndex(targetIndex);
+
+            // Wait for video to start playing, then schedule advance after it ends
+            const video = this._els.video;
+            const maxDuration = 30; // Cap slideshow video playback at 30s
+            const onVideoReady = () => {
+                if (!this._slideshowActive) return;
+                const playDuration = Math.min(video.duration || maxDuration, maxDuration);
+                this._slideshowAdvancing = false;
+                this._crossFadeTimer = setTimeout(() => {
+                    if (this._slideshowActive) {
+                        video.pause();
+                        this._slideshowAdvance();
+                    }
+                }, playDuration * 1000);
+            };
+
+            if (video && !video.hidden) {
+                video.addEventListener('canplay', onVideoReady, { once: true });
+                // Fallback timeout in case canplay never fires
+                setTimeout(() => {
+                    if (this._slideshowActive && this._slideshowAdvancing) {
+                        this._slideshowAdvancing = false;
+                        this._scheduleSlideshowAdvance();
+                    }
+                }, 5000);
+            } else {
+                // Video element not ready — just advance
+                this._scheduleSlideshowAdvance();
+            }
+            return;
+        }
 
         // Use the image preloaded during the hold period if it matches,
         // otherwise create a fresh preload (e.g. after manual navigation

@@ -914,6 +914,11 @@ def get_full_image(image_id):
     if not os.path.exists(path):
         return error_response('Image file not found on disk', 404)
 
+    # Videos: serve with conditional=True to support HTTP Range requests
+    # (enables seeking in the browser's native <video> player)
+    if image.get('media_type') == 'video':
+        return send_file(path, conditional=True)
+
     # Browsers cannot render camera RAW formats natively, so we decode
     # the RAW file on the fly and serve it as JPEG
     if is_raw_format(path):
@@ -928,6 +933,43 @@ def get_full_image(image_id):
             return error_response('Failed to decode RAW image', 500)
 
     return send_file(path)
+
+
+@app.route('/api/images/<image_id>/scenes', methods=['GET'])
+def get_image_scenes(image_id):
+    """Get scene list for a video.
+
+    Returns detected scenes with timecodes, keyframe times, and any
+    transcriptions.  Returns an empty list for non-video media.
+
+    Args:
+        image_id: The unique identifier of the video.
+
+    Returns:
+        JSON list of scene objects with start_time, end_time, keyframe_time,
+        transcription, and scene_index.
+    """
+    image = get_db().get_image(image_id)
+    if image is None:
+        return error_response('Image not found', 404)
+
+    if image.get('media_type') != 'video':
+        return success_response([])
+
+    db = get_db()
+    with db._db_lock:
+        cursor = db.conn.execute(
+            """
+            SELECT id, scene_index, start_time, end_time, keyframe_time, transcription
+            FROM scenes
+            WHERE image_id = ?
+            ORDER BY scene_index ASC
+            """,
+            (image_id,),
+        )
+        scenes = [dict(row) for row in cursor.fetchall()]
+
+    return success_response(scenes)
 
 
 def _reveal_path(path):
@@ -4464,6 +4506,10 @@ if __name__ == '__main__':
             'nima': {
                 'enabled': _config.nima_enabled,
                 'data_dir': _data_dir,
+            },
+            'stt': {
+                'enabled': _config.stt_enabled,
+                'model': _config.stt_model,
             },
         }
         print(json.dumps(models))

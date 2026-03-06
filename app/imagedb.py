@@ -185,6 +185,7 @@ from thumbnails import (
     rotate_image_file,
 )
 from trash import move_to_trash, validate_trash_dir
+from video import extract_keyframe_thumbnail, get_video_metadata, is_video_supported
 
 # Configure module logger
 logger = logging.getLogger(__name__)
@@ -270,6 +271,10 @@ _SQL_MIGRATIONS = [
     'ALTER TABLE custom_groups ADD COLUMN damaged INTEGER DEFAULT 0',
     # → No backfill needed (NULL for non-imported images, set by ImportWorker)
     'ALTER TABLE images ADD COLUMN import_name TEXT',
+    # → No backfill needed ('image' for all existing records)
+    "ALTER TABLE images ADD COLUMN media_type TEXT NOT NULL DEFAULT 'image'",
+    # → No backfill needed (NULL for images, populated for videos)
+    'ALTER TABLE images ADD COLUMN duration REAL',
 ]
 
 # SQL schema for the image_metadata table (indexed EXIF key-value pairs for search)
@@ -312,6 +317,34 @@ CREATE TABLE IF NOT EXISTS migrations (
 )
 """
 
+# SQL schema for video scenes (detected scene boundaries within a video)
+_SQL_CREATE_SCENES = """
+CREATE TABLE IF NOT EXISTS scenes (
+    id                      TEXT PRIMARY KEY,
+    image_id                TEXT NOT NULL REFERENCES images(id) ON DELETE CASCADE,
+    scene_index             INTEGER NOT NULL,
+    start_time              REAL NOT NULL,
+    end_time                REAL NOT NULL,
+    keyframe_time           REAL NOT NULL,
+    transcription           TEXT,
+    transcription_embedding BLOB,
+    created_at              TEXT NOT NULL,
+    updated_at              TEXT NOT NULL,
+    UNIQUE (image_id, scene_index)
+)
+"""
+
+# SQL schema for scene frame embeddings (OpenCLIP embeddings of extracted frames)
+_SQL_CREATE_SCENE_EMBEDDINGS = """
+CREATE TABLE IF NOT EXISTS scene_embeddings (
+    id          TEXT PRIMARY KEY,
+    scene_id    TEXT NOT NULL REFERENCES scenes(id) ON DELETE CASCADE,
+    frame_time  REAL NOT NULL,
+    embedding   BLOB NOT NULL,
+    created_at  TEXT NOT NULL
+)
+"""
+
 # SQL schema for storing app metadata (key-value pairs)
 _SQL_CREATE_METADATA = """
 CREATE TABLE IF NOT EXISTS metadata (
@@ -340,6 +373,11 @@ _SQL_CREATE_INDEXES = [
     ' ON custom_groups(source_path) WHERE source_path IS NOT NULL',
     # Index for searching metadata by key+value (e.g. Camera = 'Nikon D850')
     'CREATE INDEX IF NOT EXISTS idx_image_metadata_key_value ON image_metadata(key, value COLLATE NOCASE)',
+    # Video scene and embedding indexes
+    'CREATE INDEX IF NOT EXISTS idx_scenes_image_id ON scenes(image_id)',
+    'CREATE INDEX IF NOT EXISTS idx_scene_embeddings_scene_id ON scene_embeddings(scene_id)',
+    # Index for filtering by media type
+    'CREATE INDEX IF NOT EXISTS idx_images_media_type ON images(media_type)',
 ]
 
 
@@ -398,6 +436,10 @@ def init_database(db_path: Path | str) -> sqlite3.Connection:
 
     # Create image metadata table (EXIF key-value pairs for search)
     conn.execute(_SQL_CREATE_IMAGE_METADATA)
+
+    # Create video scene tables
+    conn.execute(_SQL_CREATE_SCENES)
+    conn.execute(_SQL_CREATE_SCENE_EMBEDDINGS)
 
     # Create log storage table (database-backed log viewer)
     from logdb import SQL_CREATE_LOGS, SQL_CREATE_LOGS_INDEX
@@ -817,7 +859,8 @@ def get_all_images_lightweight(conn: sqlite3.Connection) -> list[dict[str, Any]]
     """
     cursor = conn.execute("""
         SELECT id, path, basename, size, width, height, timestamp, timestamp_confidence,
-               rating, description, aesthetic_laion, aesthetic_nima, laplacian_var
+               rating, description, aesthetic_laion, aesthetic_nima, laplacian_var,
+               media_type, duration
         FROM images
         WHERE deleted = 0
         ORDER BY timestamp DESC
@@ -881,7 +924,7 @@ def get_images_delta(
         """
         SELECT id, path, basename, size, width, height, timestamp, timestamp_confidence,
                rating, description, aesthetic_laion, aesthetic_nima, laplacian_var,
-               deleted, updated_at
+               media_type, duration, deleted, updated_at
         FROM images
         WHERE updated_at > ?
         ORDER BY updated_at ASC
@@ -941,7 +984,7 @@ def get_image(conn: sqlite3.Connection, image_id: str) -> dict[str, Any] | None:
         SELECT id, path, basename, size, width, height, timestamp,
                timestamp_confidence, checksum, perceptual_hash, laplacian_var,
                lossless, description, rating, deleted, created_at, updated_at,
-               mtime
+               mtime, media_type, duration
         FROM images
         WHERE id = ?
     """,
@@ -1025,7 +1068,8 @@ def get_image_by_path(conn: sqlite3.Connection, path: Path | str) -> dict[str, A
         SELECT id, path, basename, size, width, height, timestamp,
                timestamp_confidence, checksum, perceptual_hash, laplacian_var,
                lossless, description, rating, embedding, description_embedding,
-               deleted, created_at, updated_at, mtime, aesthetic_nima, exif_data
+               deleted, created_at, updated_at, mtime, aesthetic_nima, exif_data,
+               media_type, duration
         FROM images
         WHERE path = ?
     """,
@@ -1053,6 +1097,8 @@ def create_image(
     rating: str = '',
     exif_data: dict[str, str] | None = None,
     import_name: str | None = None,
+    media_type: str = 'image',
+    duration: float | None = None,
 ) -> dict[str, Any]:
     """Create a new image record in the database.
 
@@ -1078,6 +1124,8 @@ def create_image(
             renaming).  NULL for non-imported images.  Used by the preflight
             dedup endpoint so clients can match files by their original name
             even when the catalogue copy was renamed to avoid a collision.
+        media_type: 'image' or 'video' (default 'image').
+        duration: Video duration in seconds (None for images).
 
     Returns:
         Dictionary with the created image record.
@@ -1098,8 +1146,8 @@ def create_image(
             id, path, basename, size, width, height, timestamp, timestamp_confidence,
             checksum, perceptual_hash, laplacian_var, lossless, mtime,
             description, rating, embedding, deleted, created_at, updated_at,
-            exif_data, import_name
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, 0, ?, ?, ?, ?)
+            exif_data, import_name, media_type, duration
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, 0, ?, ?, ?, ?, ?, ?)
     """,
         (
             image_id,
@@ -1121,6 +1169,8 @@ def create_image(
             now,
             exif_json,
             import_name,
+            media_type,
+            duration,
         ),
     )
 
@@ -1151,6 +1201,8 @@ def create_image(
         'deleted': 0,
         'created_at': now,
         'updated_at': now,
+        'media_type': media_type,
+        'duration': duration,
     }
 
 
@@ -1840,6 +1892,9 @@ class IngestionThread(threading.Thread):
         import_names_lock: threading.Lock | None = None,
         filename_date_overrides: list[str] | None = None,
         date_order: str = 'DMY',
+        video_queue: queue.Queue[str] | None = None,
+        video_extensions: set[str] | None = None,
+        thumbnail_dir: Path | str = '.thumbnails',
     ):
         """Initialise the ingestion thread.
 
@@ -1863,6 +1918,10 @@ class IngestionThread(threading.Thread):
                 override EXIF (e.g. WhatsApp images).
             date_order: Preferred date order for ambiguous numeric dates in
                 filenames ('DMY', 'MDY', or 'YMD').
+            video_queue: Optional queue for video processing (scene detection,
+                embeddings, STT).
+            video_extensions: Set of lowercase video file extensions.
+            thumbnail_dir: Path to thumbnail cache directory.
         """
         super().__init__(name='IngestionThread', daemon=True)
         self.conn = conn
@@ -1883,6 +1942,9 @@ class IngestionThread(threading.Thread):
         self._import_names_lock = import_names_lock or threading.Lock()
         self._filename_date_overrides = filename_date_overrides
         self._date_order = date_order
+        self._video_queue = video_queue  # Optional video processing queue
+        self._video_extensions = video_extensions or set()
+        self._thumbnail_dir = Path(thumbnail_dir)
         self._pending_count = 0  # Number of items being processed (not just in queue)
         self._pending_lock = threading.Lock()
         self._was_idle = True  # Track idle transitions for debug logging
@@ -2059,10 +2121,11 @@ class IngestionThread(threading.Thread):
 
             if existing['size'] == current_size and existing_mtime == current_mtime:
                 # File unchanged (size and mtime match)
+                is_existing_video = existing.get('media_type') == 'video'
                 needs_embedding = False
 
-                # Check if we need to backfill missing checksum
-                if existing_checksum is None and existing_size > 0:
+                # Check if we need to backfill missing checksum (images only)
+                if not is_existing_video and existing_checksum is None and existing_size > 0:
                     # Missing checksum - need to regenerate metadata
                     logger.info(f'Backfilling missing checksum for: {path}')
                     metadata = extract_image_metadata(
@@ -2101,24 +2164,32 @@ class IngestionThread(threading.Thread):
                     needs_embedding = True
 
                 if needs_embedding:
-                    self.embedding_queue.put(existing['id'])
-                    logger.debug(f'Queued existing image for embedding: {path}')
-                # Queue for NIMA scoring if missing (independent of embedding)
-                if self._nima_queue is not None and existing.get('aesthetic_nima') is None:
-                    self._nima_queue.put(existing['id'])
-                # Backfill EXIF metadata if missing (lightweight I/O, done inline)
-                if existing.get('exif_data') is None:
-                    exif_data = extract_exif_data(path)
-                    exif_json = json.dumps(exif_data) if exif_data else '{}'
-                    with self._db_lock:
-                        self.conn.execute(
-                            'UPDATE images SET exif_data = ?, updated_at = ? WHERE id = ?',
-                            (exif_json, datetime.now().isoformat(), existing['id']),
-                        )
-                        if exif_data:
-                            _upsert_image_metadata(self.conn, existing['id'], exif_data)
-                        self.conn.commit()
-                    logger.debug(f'Backfilled EXIF data for: {path}')
+                    if is_existing_video:
+                        # Videos get their embedding from the video processing thread
+                        if self._video_queue is not None:
+                            self._video_queue.put(existing['id'])
+                            logger.debug(f'Queued existing video for processing: {path}')
+                    else:
+                        self.embedding_queue.put(existing['id'])
+                        logger.debug(f'Queued existing image for embedding: {path}')
+                # Skip NIMA and EXIF for videos (not applicable)
+                if not is_existing_video:
+                    # Queue for NIMA scoring if missing (independent of embedding)
+                    if self._nima_queue is not None and existing.get('aesthetic_nima') is None:
+                        self._nima_queue.put(existing['id'])
+                    # Backfill EXIF metadata if missing (lightweight I/O, done inline)
+                    if existing.get('exif_data') is None:
+                        exif_data = extract_exif_data(path)
+                        exif_json = json.dumps(exif_data) if exif_data else '{}'
+                        with self._db_lock:
+                            self.conn.execute(
+                                'UPDATE images SET exif_data = ?, updated_at = ? WHERE id = ?',
+                                (exif_json, datetime.now().isoformat(), existing['id']),
+                            )
+                            if exif_data:
+                                _upsert_image_metadata(self.conn, existing['id'], exif_data)
+                            self.conn.commit()
+                        logger.debug(f'Backfilled EXIF data for: {path}')
                 # Recompute non-user-assigned timestamps (picks up parser
                 # improvements and config changes like date_order)
                 ts_conf = existing.get('timestamp_confidence')
@@ -2151,107 +2222,249 @@ class IngestionThread(threading.Thread):
                 return
 
             # File has changed (size or mtime differ) - re-extract metadata
-            logger.info(f'Re-ingesting changed image: {path}')
-            metadata = extract_image_metadata(
-                path,
-                self.max_image_dimension,
-                self._filename_date_overrides,
-                self._date_order,
-            )
-            if metadata is None:
-                logger.warning(f'Failed to extract metadata for changed image: {path}')
-                return
+            is_existing_video = existing.get('media_type') == 'video'
 
-            # Update existing record (lock needed - DB write)
-            with self._db_lock:
-                update_image_metadata(
-                    self.conn,
-                    existing['id'],
-                    size=metadata.size,
-                    width=metadata.width,
-                    height=metadata.height,
-                    timestamp=metadata.timestamp,
-                    timestamp_confidence=metadata.timestamp_confidence,
-                    checksum=metadata.checksum,
-                    perceptual_hash=metadata.perceptual_hash,
-                    laplacian_var=metadata.laplacian_var,
-                    lossless=metadata.lossless,
-                    mtime=metadata.mtime,
-                    exif_data=metadata.exif_data,
+            if is_existing_video:
+                # Re-ingest changed video
+                logger.info(f'Re-ingesting changed video: {path}')
+                if not is_video_supported():
+                    logger.warning(f'Skipping video (PyAV not installed): {path}')
+                    return
+                vmeta = get_video_metadata(path)
+                if vmeta is None:
+                    logger.warning(f'Failed to extract video metadata for changed file: {path}')
+                    return
+
+                # Recompute checksum
+                try:
+                    sha256 = hashlib.sha256()
+                    with open(path, 'rb') as f:
+                        while True:
+                            chunk = f.read(1024 * 1024)
+                            if not chunk:
+                                break
+                            sha256.update(chunk)
+                    checksum = sha256.hexdigest()
+                except OSError:
+                    checksum = None
+
+                now_ts = datetime.now().isoformat()
+                with self._db_lock:
+                    self.conn.execute(
+                        """UPDATE images SET size = ?, width = ?, height = ?, duration = ?,
+                           mtime = ?, checksum = ?, embedding = NULL, updated_at = ?
+                           WHERE id = ?""",
+                        (
+                            current_size,
+                            vmeta.width,
+                            vmeta.height,
+                            vmeta.duration,
+                            current_mtime,
+                            checksum,
+                            now_ts,
+                            existing['id'],
+                        ),
+                    )
+                    # Delete old scenes (cascade deletes scene_embeddings)
+                    self.conn.execute('DELETE FROM scenes WHERE image_id = ?', (existing['id'],))
+                    self.conn.commit()
+
+                if checksum:
+                    with self._checksum_cache_lock:
+                        self._checksum_cache[existing['id']] = checksum
+                    poster_offset = min(1.0, vmeta.duration / 2) if vmeta.duration > 0 else 0
+                    for size_px in (200, 400):
+                        thumb_path = get_thumbnail_cache_path(self._thumbnail_dir, checksum, size_px)
+                        if not thumb_path.exists():
+                            extract_keyframe_thumbnail(path, thumb_path, size_px, time_offset=poster_offset)
+
+                if self._video_queue is not None:
+                    self._video_queue.put(existing['id'])
+                logger.debug(f'Queued changed video for reprocessing: {path}')
+
+            else:
+                # Re-ingest changed image
+                logger.info(f'Re-ingesting changed image: {path}')
+                metadata = extract_image_metadata(
+                    path,
+                    self.max_image_dimension,
+                    self._filename_date_overrides,
+                    self._date_order,
                 )
+                if metadata is None:
+                    logger.warning(f'Failed to extract metadata for changed image: {path}')
+                    return
 
-            # Update checksum cache
-            if metadata.checksum:
-                with self._checksum_cache_lock:
-                    self._checksum_cache[existing['id']] = metadata.checksum
+                # Update existing record (lock needed - DB write)
+                with self._db_lock:
+                    update_image_metadata(
+                        self.conn,
+                        existing['id'],
+                        size=metadata.size,
+                        width=metadata.width,
+                        height=metadata.height,
+                        timestamp=metadata.timestamp,
+                        timestamp_confidence=metadata.timestamp_confidence,
+                        checksum=metadata.checksum,
+                        perceptual_hash=metadata.perceptual_hash,
+                        laplacian_var=metadata.laplacian_var,
+                        lossless=metadata.lossless,
+                        mtime=metadata.mtime,
+                        exif_data=metadata.exif_data,
+                    )
 
-            # Generate thumbnail for changed image
-            if metadata.checksum:
-                self._generate_thumbnails(path, metadata.checksum)
+                # Update checksum cache
+                if metadata.checksum:
+                    with self._checksum_cache_lock:
+                        self._checksum_cache[existing['id']] = metadata.checksum
 
-            # Queue for embedding (metadata cleared embedding) and NIMA
-            self.embedding_queue.put(existing['id'])
-            if self._nima_queue is not None:
-                self._nima_queue.put(existing['id'])
-            logger.debug(f'Queued changed image for embedding: {path}')
+                # Generate thumbnail for changed image
+                if metadata.checksum:
+                    self._generate_thumbnails(path, metadata.checksum)
+
+                # Queue for embedding (metadata cleared embedding) and NIMA
+                self.embedding_queue.put(existing['id'])
+                if self._nima_queue is not None:
+                    self._nima_queue.put(existing['id'])
+                logger.debug(f'Queued changed image for embedding: {path}')
 
         else:
-            # New image - extract metadata (no lock - file I/O)
-            metadata = extract_image_metadata(
-                path,
-                self.max_image_dimension,
-                self._filename_date_overrides,
-                self._date_order,
-            )
-            if metadata is None:
-                logger.warning(f'Failed to extract metadata for new image: {path}')
-                return
+            # Determine if this is a video file
+            ext = path.suffix.lower()
+            is_video = ext in self._video_extensions
 
-            # DESIGN: Backend generates image IDs because images are discovered via folder
-            # scanning, which frontend cannot pre-generate IDs for (see design-audit.md 1.11)
-            image_id = str(uuid.uuid4())
+            if is_video:
+                # New video — extract video metadata instead of image metadata
+                if not is_video_supported():
+                    logger.warning(f'Skipping video (PyAV not installed): {path}')
+                    return
 
-            # Check if this file was placed by ImportWorker (has an original
-            # import name that may differ from the on-disk basename due to
-            # collision renaming).
-            path_str_canon = str(canonicalise_path(path))
-            with self._import_names_lock:
-                import_name = self._import_names.pop(path_str_canon, None)
+                vmeta = get_video_metadata(path)
+                if vmeta is None:
+                    logger.warning(f'Failed to extract video metadata: {path}')
+                    return
 
-            # Insert new record (lock needed - DB write)
-            with self._db_lock:
-                create_image(
-                    self.conn,
-                    image_id=image_id,
-                    path=metadata.path,
-                    size=metadata.size,
-                    width=metadata.width,
-                    height=metadata.height,
-                    timestamp=metadata.timestamp,
-                    timestamp_confidence=metadata.timestamp_confidence,
-                    checksum=metadata.checksum,
-                    perceptual_hash=metadata.perceptual_hash,
-                    laplacian_var=metadata.laplacian_var,
-                    lossless=metadata.lossless,
-                    mtime=metadata.mtime,
-                    exif_data=metadata.exif_data,
-                    import_name=import_name,
+                image_id = str(uuid.uuid4())
+
+                # Compute checksum for thumbnail keying (same as images)
+                try:
+                    sha256 = hashlib.sha256()
+                    with open(path, 'rb') as f:
+                        while True:
+                            chunk = f.read(1024 * 1024)
+                            if not chunk:
+                                break
+                            sha256.update(chunk)
+                    checksum = sha256.hexdigest()
+                except OSError as e:
+                    logger.warning(f'Failed to compute checksum for video: {path}: {e}')
+                    checksum = None
+
+                # Derive timestamp from filesystem (videos don't have EXIF)
+                ts, ts_conf = derive_timestamp_with_confidence(
+                    path,
+                    exif_data=None,
+                    filename_date_overrides=self._filename_date_overrides,
+                    date_order=self._date_order,
                 )
 
-            # Add to checksum cache
-            if metadata.checksum:
-                with self._checksum_cache_lock:
-                    self._checksum_cache[image_id] = metadata.checksum
+                path_str_canon = str(canonicalise_path(path))
+                with self._import_names_lock:
+                    import_name = self._import_names.pop(path_str_canon, None)
 
-            # Generate thumbnail for new image
-            if metadata.checksum:
-                self._generate_thumbnails(path, metadata.checksum)
+                with self._db_lock:
+                    create_image(
+                        self.conn,
+                        image_id=image_id,
+                        path=path,
+                        size=current_size,
+                        width=vmeta.width,
+                        height=vmeta.height,
+                        timestamp=ts,
+                        timestamp_confidence=ts_conf,
+                        checksum=checksum,
+                        mtime=current_mtime,
+                        import_name=import_name,
+                        media_type='video',
+                        duration=vmeta.duration,
+                    )
 
-            # Queue for embedding and NIMA scoring
-            self.embedding_queue.put(image_id)
-            if self._nima_queue is not None:
-                self._nima_queue.put(image_id)
-            logger.debug(f'Ingested new image: {path}')
+                # Add to checksum cache
+                if checksum:
+                    with self._checksum_cache_lock:
+                        self._checksum_cache[image_id] = checksum
+
+                # Generate poster-frame thumbnail (extract ~1s in to skip black)
+                if checksum:
+                    poster_offset = min(1.0, vmeta.duration / 2) if vmeta.duration > 0 else 0
+                    for size_px in (200, 400):
+                        thumb_path = get_thumbnail_cache_path(self._thumbnail_dir, checksum, size_px)
+                        if not thumb_path.exists():
+                            extract_keyframe_thumbnail(path, thumb_path, size_px, time_offset=poster_offset)
+
+                # Queue for video processing (scene detection, embeddings, STT)
+                if self._video_queue is not None:
+                    self._video_queue.put(image_id)
+
+                logger.debug(f'Ingested new video: {path}')
+
+            else:
+                # New image - extract metadata (no lock - file I/O)
+                metadata = extract_image_metadata(
+                    path,
+                    self.max_image_dimension,
+                    self._filename_date_overrides,
+                    self._date_order,
+                )
+                if metadata is None:
+                    logger.warning(f'Failed to extract metadata for new image: {path}')
+                    return
+
+                # DESIGN: Backend generates image IDs because images are discovered via folder
+                # scanning, which frontend cannot pre-generate IDs for (see design-audit.md 1.11)
+                image_id = str(uuid.uuid4())
+
+                # Check if this file was placed by ImportWorker (has an original
+                # import name that may differ from the on-disk basename due to
+                # collision renaming).
+                path_str_canon = str(canonicalise_path(path))
+                with self._import_names_lock:
+                    import_name = self._import_names.pop(path_str_canon, None)
+
+                # Insert new record (lock needed - DB write)
+                with self._db_lock:
+                    create_image(
+                        self.conn,
+                        image_id=image_id,
+                        path=metadata.path,
+                        size=metadata.size,
+                        width=metadata.width,
+                        height=metadata.height,
+                        timestamp=metadata.timestamp,
+                        timestamp_confidence=metadata.timestamp_confidence,
+                        checksum=metadata.checksum,
+                        perceptual_hash=metadata.perceptual_hash,
+                        laplacian_var=metadata.laplacian_var,
+                        lossless=metadata.lossless,
+                        mtime=metadata.mtime,
+                        exif_data=metadata.exif_data,
+                        import_name=import_name,
+                    )
+
+                # Add to checksum cache
+                if metadata.checksum:
+                    with self._checksum_cache_lock:
+                        self._checksum_cache[image_id] = metadata.checksum
+
+                # Generate thumbnail for new image
+                if metadata.checksum:
+                    self._generate_thumbnails(path, metadata.checksum)
+
+                # Queue for embedding and NIMA scoring
+                self.embedding_queue.put(image_id)
+                if self._nima_queue is not None:
+                    self._nima_queue.put(image_id)
+                logger.debug(f'Ingested new image: {path}')
 
 
 # =============================================================================
@@ -2528,6 +2741,49 @@ class OpenCLIPModel:
         # Sort by original index
         results.sort(key=lambda x: x[0])
         return results
+
+    def encode_pil_image(self, pil_image: Image.Image) -> np.ndarray | None:
+        """Encode a PIL Image directly to an embedding vector.
+
+        Preprocesses and encodes a single in-memory PIL Image without
+        loading from disk.  Used by the video processing thread for
+        extracted video frames.
+
+        Args:
+            pil_image: PIL Image in RGB mode.
+
+        Returns:
+            Normalised embedding as numpy array, or None on failure.
+        """
+        self._load_model()
+        if self.preprocess is None:
+            return None
+
+        try:
+            rgb = pil_image.convert('RGB')
+            x = self.preprocess(rgb).unsqueeze(0).to(self.device)
+
+            with torch.inference_mode():
+                if self.device == 'cuda':
+                    with torch.amp.autocast('cuda'):
+                        emb = self.model.encode_image(x)
+                else:
+                    emb = self.model.encode_image(x)
+
+                emb = emb / emb.norm(dim=-1, keepdim=True)
+
+            return emb.cpu().numpy().flatten()
+
+        except (MemoryError, RuntimeError) as e:
+            if isinstance(e, MemoryError) or 'out of memory' in str(e).lower():
+                logger.warning(f'OOM encoding PIL image: {e}')
+                if torch.cuda.is_available():
+                    torch.cuda.empty_cache()
+                return None
+            raise
+        except Exception as e:
+            logger.warning(f'Failed to encode PIL image: {e}')
+            return None
 
     def encode_text(self, query: str) -> np.ndarray:
         """Encode a text query to an embedding vector.
@@ -3759,6 +4015,349 @@ class NimaThread(threading.Thread):
                 )
 
 
+# =============================================================================
+# VIDEO PROCESSING THREAD
+# =============================================================================
+
+
+class VideoProcessingThread(threading.Thread):
+    """Background thread for video scene detection, frame embedding, and STT.
+
+    Runs concurrently with EmbeddingThread (like NimaThread — not chained).
+    Delegates heavy work to ``video.py`` and ``stt.py``.
+
+    Per-video pipeline:
+        1. Scene detection → insert ``scenes`` rows
+        2. Frame extraction → PIL Images
+        3. OpenCLIP embedding of frames → insert ``scene_embeddings`` rows
+        4. STT transcription (if enabled) → update ``scenes`` with text
+        5. Representative embedding → average of keyframe embeddings → ``images.embedding``
+    """
+
+    def __init__(
+        self,
+        conn: sqlite3.Connection,
+        video_queue: queue.Queue[str],
+        ingestion_thread: IngestionThread,
+        stop_event: threading.Event,
+        db_lock: threading.RLock,
+        config: Config,
+        data_dir: Path | str = '.',
+        event_queue: EventQueue | None = None,
+    ):
+        super().__init__(name='VideoProcessingThread', daemon=True)
+        self.conn = conn
+        self.video_queue = video_queue
+        self.ingestion_thread = ingestion_thread
+        self.stop_event = stop_event
+        self._db_lock = db_lock
+        self.config = config
+        self._data_dir = Path(data_dir)
+        self._event_queue = event_queue
+        self._clip_model: OpenCLIPModel | None = None
+        self._stt_backend = None
+        self._stt_loaded = False
+        self._processed_count = 0
+        self._error_count = 0
+        self._completion_triggered = False
+
+    def run(self) -> None:
+        """Main thread loop — process videos from the queue."""
+        logger.info('Video processing thread started')
+
+        while not self.stop_event.is_set():
+            try:
+                image_id = self.video_queue.get(timeout=0.5)
+            except queue.Empty:
+                self._check_completion()
+                continue
+
+            try:
+                self._process_video(image_id)
+                self._processed_count += 1
+                self._completion_triggered = False
+            except Exception as e:
+                logger.error(f'Error processing video {image_id}: {e}')
+                self._error_count += 1
+            finally:
+                self.video_queue.task_done()
+
+            time.sleep(0.01)  # Yield GIL
+
+        logger.info('Video processing thread stopped')
+
+    def _check_completion(self) -> None:
+        """Check if all video processing is done and emit event."""
+        if self._completion_triggered:
+            return
+        if not self.ingestion_thread.has_started_processing:
+            return
+        if not self.ingestion_thread.is_idle:
+            return
+        if not self.video_queue.empty():
+            return
+
+        self._completion_triggered = True
+        if self._processed_count > 0 or self._error_count > 0:
+            parts = []
+            if self._processed_count:
+                parts.append(f'{self._processed_count} processed')
+            if self._error_count:
+                parts.append(f'{self._error_count} errors')
+            logger.info(f'Video processing complete — {", ".join(parts)}')
+
+            if self._event_queue:
+                self._event_queue.emit(
+                    EVENT_VIDEO_PROCESSED,
+                    {'processed_count': self._processed_count},
+                )
+
+    def _get_clip_model(self) -> OpenCLIPModel | None:
+        """Get or create the shared OpenCLIP model instance."""
+        if self._clip_model is None:
+            self._clip_model = OpenCLIPModel(
+                model_name=self.config.openclip_model,
+                pretrained=self.config.openclip_pretrained,
+            )
+        return self._clip_model
+
+    def _get_stt_backend(self):
+        """Lazy-load the STT backend."""
+        if not self._stt_loaded:
+            self._stt_loaded = True
+            from stt import get_stt_backend
+
+            self._stt_backend = get_stt_backend(self.config)
+        return self._stt_backend
+
+    def _process_video(self, image_id: str) -> None:
+        """Process a single video: scenes, embeddings, STT.
+
+        Args:
+            image_id: The image ID of the video record.
+        """
+        from video import detect_scenes, extract_scene_frames
+
+        # Look up the video record
+        with self._db_lock:
+            cursor = self.conn.execute(
+                'SELECT path, duration, media_type FROM images WHERE id = ?',
+                (image_id,),
+            )
+            row = cursor.fetchone()
+
+        if row is None:
+            logger.warning(f'Video record not found: {image_id}')
+            return
+
+        if row['media_type'] != 'video':
+            logger.debug(f'Skipping non-video: {image_id}')
+            return
+
+        path = Path(row['path'])
+        if not path.exists():
+            logger.warning(f'Video file not found on disk: {path}')
+            return
+
+        duration = row['duration'] or 0.0
+        logger.info(f'Processing video: {path.name} ({duration:.1f}s)')
+
+        # 1. Scene detection
+        if self.stop_event.is_set():
+            return
+        scenes = detect_scenes(path, threshold=self.config.video_scene_detection_threshold)
+        if not scenes:
+            logger.warning(f'No scenes detected for {path}')
+            return
+
+        # Insert scene records
+        now = datetime.now().isoformat()
+        scene_ids: list[str] = []
+        for idx, (start, end) in enumerate(scenes):
+            scene_id = str(uuid.uuid4())
+            scene_ids.append(scene_id)
+            keyframe_time = start + (end - start) / 2
+            with self._db_lock:
+                self.conn.execute(
+                    """
+                    INSERT OR REPLACE INTO scenes
+                        (id, image_id, scene_index, start_time, end_time,
+                         keyframe_time, created_at, updated_at)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (scene_id, image_id, idx, start, end, keyframe_time, now, now),
+                )
+            if self.stop_event.is_set():
+                return
+
+        with self._db_lock:
+            self.conn.commit()
+
+        # 2. Frame extraction
+        if self.stop_event.is_set():
+            return
+        frame_data = extract_scene_frames(
+            path,
+            scenes,
+            interval=self.config.video_frame_sample_interval,
+            max_per_scene=self.config.video_max_scene_frames,
+        )
+
+        if not frame_data:
+            logger.warning(f'No frames extracted from {path}')
+            return
+
+        # 3. OpenCLIP embedding of frames
+        if self.stop_event.is_set():
+            return
+        clip = self._get_clip_model()
+        if clip is None:
+            logger.warning('OpenCLIP model not available for video embeddings')
+            return
+
+        all_embeddings: list[np.ndarray] = []
+        for scene_idx, frame_time, pil_image in frame_data:
+            if self.stop_event.is_set():
+                return
+
+            try:
+                # Encode single frame through OpenCLIP
+                embedding = clip.encode_pil_image(pil_image)
+                if embedding is None:
+                    continue
+
+                all_embeddings.append(embedding)
+
+                # Store in scene_embeddings
+                scene_id = scene_ids[scene_idx] if scene_idx < len(scene_ids) else None
+                if scene_id:
+                    emb_id = str(uuid.uuid4())
+                    emb_blob = embedding.astype(np.float32).tobytes()
+                    now_ts = datetime.now().isoformat()
+                    with self._db_lock:
+                        self.conn.execute(
+                            """
+                            INSERT INTO scene_embeddings (id, scene_id, frame_time, embedding, created_at)
+                            VALUES (?, ?, ?, ?, ?)
+                            """,
+                            (emb_id, scene_id, frame_time, emb_blob, now_ts),
+                        )
+
+            except (MemoryError, RuntimeError) as e:
+                logger.error(f'OOM during video frame embedding: {e}')
+                try:
+                    torch.cuda.empty_cache()
+                except Exception:
+                    pass
+                continue
+            except Exception as e:
+                logger.error(f'Error embedding frame at {frame_time:.1f}s: {e}')
+                continue
+
+        with self._db_lock:
+            self.conn.commit()
+
+        # 4. Representative embedding (average of all frame embeddings)
+        if all_embeddings:
+            rep_embedding = np.mean(all_embeddings, axis=0)
+            # Normalise for cosine similarity
+            norm = np.linalg.norm(rep_embedding)
+            if norm > 0:
+                rep_embedding = rep_embedding / norm
+            rep_blob = rep_embedding.astype(np.float32).tobytes()
+            now_ts = datetime.now().isoformat()
+            with self._db_lock:
+                self.conn.execute(
+                    'UPDATE images SET embedding = ?, updated_at = ? WHERE id = ?',
+                    (rep_blob, now_ts, image_id),
+                )
+                self.conn.commit()
+
+        # 5. STT transcription (if enabled)
+        if self.stop_event.is_set():
+            return
+        stt = self._get_stt_backend()
+        if stt is not None:
+            self._transcribe_scenes(image_id, path, scenes, scene_ids, clip)
+
+        logger.info(f'Video processed: {path.name} — {len(scenes)} scenes, {len(all_embeddings)} frame embeddings')
+
+    def _transcribe_scenes(
+        self,
+        image_id: str,
+        video_path: Path,
+        scenes: list[tuple[float, float]],
+        scene_ids: list[str],
+        clip: OpenCLIPModel,
+    ) -> None:
+        """Run STT on each scene and store transcriptions.
+
+        Args:
+            image_id: The video's image ID.
+            video_path: Path to the video file.
+            scenes: List of (start, end) scene boundaries.
+            scene_ids: Corresponding scene UUIDs.
+            clip: OpenCLIP model for computing text embeddings.
+        """
+        import tempfile
+
+        from video import extract_audio_segment
+
+        stt = self._stt_backend
+        if stt is None:
+            return
+
+        for idx, ((start, end), scene_id) in enumerate(zip(scenes, scene_ids, strict=False)):
+            if self.stop_event.is_set():
+                return
+
+            try:
+                # Extract audio segment to temp file
+                with tempfile.NamedTemporaryFile(suffix='.wav', delete=True) as tmp:
+                    tmp_path = Path(tmp.name)
+
+                if not extract_audio_segment(video_path, tmp_path, start, end):
+                    continue
+
+                # Transcribe
+                segments = stt.transcribe(tmp_path, language=self.config.stt_language)
+
+                # Clean up temp file
+                try:
+                    tmp_path.unlink(missing_ok=True)
+                except OSError:
+                    pass
+
+                if not segments:
+                    continue
+
+                # Combine segment texts
+                full_text = ' '.join(seg.text for seg in segments).strip()
+                if not full_text:
+                    continue
+
+                # Compute text embedding via OpenCLIP
+                text_emb = clip.encode_text(full_text) if clip else None
+                text_emb_blob = text_emb.astype(np.float32).tobytes() if text_emb is not None else None
+
+                # Store transcription
+                now_ts = datetime.now().isoformat()
+                with self._db_lock:
+                    self.conn.execute(
+                        """
+                        UPDATE scenes SET transcription = ?, transcription_embedding = ?,
+                               updated_at = ?
+                        WHERE id = ?
+                        """,
+                        (full_text, text_emb_blob, now_ts, scene_id),
+                    )
+                    self.conn.commit()
+
+            except Exception as e:
+                logger.error(f'STT failed for scene {idx} of {video_path}: {e}')
+                continue
+
+
 def get_metadata(conn: sqlite3.Connection, key: str) -> str | None:
     """Get a metadata value by key.
 
@@ -4014,6 +4613,7 @@ EVENT_PEOPLE_CHANGED = 'people_changed'
 EVENT_IMAGES_CHANGED = 'images_changed'
 EVENT_GROUPS_CHANGED = 'groups_changed'
 EVENT_IMPORT_COMPLETE = 'import_complete'
+EVENT_VIDEO_PROCESSED = 'video_processed'
 
 
 @dataclass
@@ -4921,6 +5521,7 @@ class ImageDatabase:
         self._nima_queue: queue.Queue[str] = queue.Queue()
         self._trash_queue: queue.Queue[tuple[str, str]] = queue.Queue()  # (image_id, file_path)
         self._import_queue: queue.Queue[str] = queue.Queue()  # source file paths
+        self._video_queue: queue.Queue[str] = queue.Queue()  # video image IDs needing scene/embedding
 
         # Thread references (created when started)
         self._ingestion_thread: IngestionThread | None = None
@@ -4929,6 +5530,7 @@ class ImageDatabase:
         self._nima_thread: NimaThread | None = None
         self._trash_thread: TrashWorker | None = None
         self._import_thread: ImportWorker | None = None
+        self._video_thread: VideoProcessingThread | None = None
         self._scan_timer_thread: ScanTimerThread | None = None
 
         # Phase 4 status tracking (post-processing after queues empty)
@@ -5550,10 +6152,10 @@ class ImageDatabase:
 
             logger.info(f'        Scanning: {folder}')
 
-            # Find all images in folder
+            # Find all images and videos in folder
             for image_path in find_images_in_folder(
                 folder,
-                self.config.image_extensions,
+                self.config.image_extensions | self.config.video_extensions,
                 registered_folders=folder_paths,
             ):
                 path_str = str(image_path)
@@ -5763,6 +6365,9 @@ class ImageDatabase:
             import_names_lock=self._import_names_lock,
             filename_date_overrides=self.config.filename_date_overrides,
             date_order=self.config.date_order,
+            video_queue=self._video_queue,
+            video_extensions=self.config.video_extensions,
+            thumbnail_dir=self.thumbnail_dir,
         )
         self._ingestion_thread.start()
 
@@ -5806,6 +6411,19 @@ class ImageDatabase:
             event_queue=self.event_queue,
         )
         self._nima_thread.start()
+
+        # Start video processing thread (runs concurrently, not chained)
+        self._video_thread = VideoProcessingThread(
+            conn=self.conn,
+            video_queue=self._video_queue,
+            ingestion_thread=self._ingestion_thread,
+            stop_event=self._stop_event,
+            db_lock=self._db_lock,
+            config=self.config,
+            data_dir=self.db_path.parent,
+            event_queue=self.event_queue,
+        )
+        self._video_thread.start()
 
         # Start trash worker thread (moves files asynchronously)
         if getattr(self, '_trash_enabled', False):
@@ -5877,6 +6495,11 @@ class ImageDatabase:
             self._nima_thread.join(timeout=timeout)
             if self._nima_thread.is_alive():
                 logger.warning('NIMA scoring thread did not stop in time')
+
+        if self._video_thread is not None:
+            self._video_thread.join(timeout=timeout)
+            if self._video_thread.is_alive():
+                logger.warning('Video processing thread did not stop in time')
 
         if self._trash_thread is not None:
             self._trash_thread.join(timeout=timeout)
@@ -5988,7 +6611,7 @@ class ImageDatabase:
             count = 0
             for image_path in find_images_in_folder(
                 folder_path,
-                self.config.image_extensions,
+                self.config.image_extensions | self.config.video_extensions,
             ):
                 if self._stop_event.is_set():
                     logger.info(f'Folder scan interrupted by shutdown: {folder_path}')
@@ -6447,10 +7070,12 @@ class ImageDatabase:
         for p in paths:
             path = Path(p)
             if path.is_file():
-                if path.suffix.lower() in self.config.image_extensions:
+                all_extensions = self.config.image_extensions | self.config.video_extensions
+                if path.suffix.lower() in all_extensions:
                     files.append(str(path))
             elif path.is_dir():
-                for child in find_images_in_folder(str(path), self.config.image_extensions):
+                all_ext = self.config.image_extensions | self.config.video_extensions
+                for child in find_images_in_folder(str(path), all_ext):
                     files.append(str(child))
 
         if not files:
@@ -7290,6 +7915,7 @@ class ImageDatabase:
         embedding_count = self._embedding_queue.qsize()
         face_count = self._face_queue.qsize()
         nima_count = self._nima_queue.qsize() if self._nima_queue else 0
+        video_count = self._video_queue.qsize() if self._video_queue else 0
         trash_count = self._trash_queue.qsize()
         import_count = self._import_queue.qsize()
 
@@ -7331,6 +7957,7 @@ class ImageDatabase:
             and embedding_count == 0
             and face_count == 0
             and nima_count == 0
+            and video_count == 0
             and trash_count == 0
             and import_count == 0
             and import_progress is None
@@ -7377,6 +8004,7 @@ class ImageDatabase:
             'import_queue': import_count,
             'face_detection_enabled': self.config.face_detection_enabled,
             'nima_enabled': self.config.nima_enabled,
+            'video_queue': video_count,
         }
 
         # Include import progress if active (total, done, skipped)
