@@ -2095,6 +2095,33 @@ class IngestionThread(threading.Thread):
                             _upsert_image_metadata(self.conn, existing['id'], exif_data)
                         self.conn.commit()
                     logger.debug(f'Backfilled EXIF data for: {path}')
+                # Recompute non-user-assigned timestamps (picks up parser
+                # improvements and config changes like date_order)
+                ts_conf = existing.get('timestamp_confidence')
+                if ts_conf is not None and ts_conf != 0:
+                    exif_data = None
+                    raw_exif = existing.get('exif_data')
+                    if raw_exif:
+                        parsed = json.loads(raw_exif)
+                        if isinstance(parsed, dict) and parsed:
+                            exif_data = parsed
+                    new_ts, new_conf = derive_timestamp_with_confidence(
+                        path,
+                        exif_data=exif_data,
+                        filename_date_overrides=self._filename_date_overrides,
+                        date_order=self._date_order,
+                    )
+                    new_ts_str = new_ts.isoformat() if new_ts else None
+                    old_ts = existing.get('timestamp')
+                    if new_ts_str != old_ts or new_conf != ts_conf:
+                        with self._db_lock:
+                            self.conn.execute(
+                                'UPDATE images SET timestamp = ?, timestamp_confidence = ?, '
+                                'updated_at = ? WHERE id = ?',
+                                (new_ts_str, new_conf, datetime.now().isoformat(), existing['id']),
+                            )
+                            self.conn.commit()
+                        logger.debug(f'Recomputed timestamp for: {path}')
                 if not needs_embedding:
                     logger.debug(f'Skipping unchanged image: {path}')
                 return
@@ -7345,6 +7372,9 @@ class ImageDatabase:
         2. Queue images with missing embeddings
         3. (Automatic) Face detection after embeddings complete
         4. (Automatic) Duplicate grouping and face grouping after face detection
+
+        Timestamp recomputation for non-user-assigned images happens
+        inline in the ingestion thread as each unchanged file is visited.
 
         Called from GUI "Rescan" button - enables all processing phases.
         """
