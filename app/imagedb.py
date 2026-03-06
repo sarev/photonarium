@@ -1885,6 +1885,7 @@ class IngestionThread(threading.Thread):
         self._date_order = date_order
         self._pending_count = 0  # Number of items being processed (not just in queue)
         self._pending_lock = threading.Lock()
+        self._was_idle = True  # Track idle transitions for debug logging
 
     @property
     def processed_count(self) -> int:
@@ -1895,6 +1896,16 @@ class IngestionThread(threading.Thread):
     def error_count(self) -> int:
         """Number of images that failed processing."""
         return self._error_count
+
+    @property
+    def has_started_processing(self) -> bool:
+        """Whether at least one image has been processed or errored.
+
+        Prevents downstream threads from triggering completion callbacks
+        at startup when all queues are momentarily empty but no real work
+        has been done yet.
+        """
+        return self._processed_count > 0 or self._error_count > 0
 
     @property
     def is_idle(self) -> bool:
@@ -1960,6 +1971,19 @@ class IngestionThread(threading.Thread):
                     if remaining > 0:
                         logger.info(f'Indexing progress: {self._processed_count} done, {remaining} remaining')
                     last_progress_time = now
+
+                # Log idle state transitions (not every poll)
+                now_idle = not pending_futures and self.ingestion_queue.empty()
+                if now_idle != self._was_idle:
+                    with self._pending_lock:
+                        pc = self._pending_count
+                    logger.debug(
+                        f'IngestionThread idle={now_idle} '
+                        f'(queue={self.ingestion_queue.qsize()}, '
+                        f'futures={len(pending_futures)}, pending={pc}, '
+                        f'processed={self._processed_count}, errors={self._error_count})'
+                    )
+                    self._was_idle = now_idle
 
                 # Small sleep if no work to prevent busy-waiting
                 if not pending_futures:
@@ -2809,7 +2833,17 @@ class EmbeddingThread(threading.Thread):
                 # Process batch if we have any
                 if batch_ids:
                     self._process_batch(batch_ids, batch_paths)
+                    if self._completion_triggered or self._on_complete_finished:
+                        logger.debug(
+                            'EmbeddingThread: resetting completion flags '
+                            f'(was triggered={self._completion_triggered}, '
+                            f'on_complete_finished={self._on_complete_finished})'
+                        )
                     self._completion_triggered = False  # Reset completion flag
+                    # Reset so FaceDetectionThread waits for this cycle's
+                    # callback rather than seeing a stale True from a
+                    # previous (possibly spurious) completion.
+                    self._on_complete_finished = False
                     time.sleep(0.01)  # Yield GIL briefly for Flask request handling
 
                     # Periodic progress logging
@@ -2880,26 +2914,55 @@ class EmbeddingThread(threading.Thread):
         """Check if all processing is complete and trigger completion callback.
 
         Completion requires:
+        - IngestionThread has processed at least one file (prevents spurious
+          trigger at startup when all queues are momentarily empty)
         - IngestionThread is idle (queue empty AND no pending futures)
         - EmbeddingThread's queue is empty
         """
         if self._completion_triggered:
             return
 
-        # Check if ingestion is truly idle (not just queue empty) and embedding queue empty
-        if self.ingestion_thread.is_idle and self.embedding_queue.empty():
-            self._completion_triggered = True
-            logger.info('All processing complete - triggering completion callback')
+        # Don't fire until ingestion has actually processed files — at startup
+        # all queues are empty and is_idle is True before work is queued.
+        if not self.ingestion_thread.has_started_processing:
+            return
 
-            if self.on_complete:
+        ingestion_idle = self.ingestion_thread.is_idle
+        embedding_empty = self.embedding_queue.empty()
+
+        if not ingestion_idle or not embedding_empty:
+            logger.debug(
+                f'EmbeddingThread completion check: not ready '
+                f'(ingestion_idle={ingestion_idle}, '
+                f'embedding_empty={embedding_empty}, '
+                f'embedding_qsize={self.embedding_queue.qsize()})'
+            )
+            return
+
+        self._completion_triggered = True
+        logger.info(
+            f'All embedding processing complete — triggering callback '
+            f'(ingestion processed={self.ingestion_thread.processed_count})'
+        )
+
+        if self.on_complete:
+            try:
+                self.on_complete()
+            except Exception as e:
+                logger.error(f'Error in completion callback: {e}')
+                # Rollback any uncommitted transaction to release the WAL
+                # write lock — otherwise the stuck lock makes all subsequent
+                # DB operations fail with "database is locked".
                 try:
-                    self.on_complete()
-                except Exception as e:
-                    logger.error(f'Error in completion callback: {e}')
-            # Signal that callback has finished — downstream threads (e.g.
-            # FaceDetectionThread) must wait for this before checking their own
-            # completion, because the callback may populate their work queues.
-            self._on_complete_finished = True
+                    self.conn.rollback()
+                except Exception:
+                    pass
+
+        # Signal that callback has finished — downstream threads (e.g.
+        # FaceDetectionThread) must wait for this before checking their own
+        # completion, because the callback may populate their work queues.
+        self._on_complete_finished = True
+        logger.debug('EmbeddingThread: _on_complete_finished set to True')
 
 
 class FaceDetectionThread(threading.Thread):
@@ -3126,6 +3189,12 @@ class FaceDetectionThread(threading.Thread):
 
                 except Exception as e:
                     logger.error(f'Error in face detection thread: {e}')
+                    # Release any lingering write transaction so the shared
+                    # connection doesn't hold the WAL lock indefinitely.
+                    try:
+                        self.conn.rollback()
+                    except Exception:
+                        pass
                     # If the prefetch future failed, its batch_ids were never
                     # transferred to batch_ids.  Claim them now so the finally
                     # block calls task_done() for them and clear the failed
@@ -3337,6 +3406,8 @@ class FaceDetectionThread(threading.Thread):
         """Check if all processing is complete and trigger completion callback.
 
         Completion requires:
+        - IngestionThread has processed at least one file (prevents spurious
+          trigger at startup when all queues are momentarily empty)
         - EmbeddingThread's on_complete callback has finished (which
           populates the face queue — must check BEFORE testing queue empty)
         - IngestionThread is idle
@@ -3346,11 +3417,16 @@ class FaceDetectionThread(threading.Thread):
         if self._completion_triggered:
             return
 
+        # Don't fire until ingestion has actually processed files.
+        if not self.ingestion_thread.has_started_processing:
+            return
+
         # The embedding thread's on_complete callback populates the face
         # queue.  We must not check face_queue.empty() until that callback
         # has returned, otherwise we race and fire completion before the
         # face queue is populated.
-        if not self.embedding_thread._on_complete_finished:
+        on_complete_finished = self.embedding_thread._on_complete_finished
+        if not on_complete_finished:
             return
 
         # Check all threads are idle
@@ -3358,15 +3434,36 @@ class FaceDetectionThread(threading.Thread):
         ingestion_idle = self.ingestion_thread.is_idle
         face_queue_empty = self.face_queue.empty()
 
-        if ingestion_idle and embedding_idle and face_queue_empty:
-            self._completion_triggered = True
-            logger.info('Face detection complete - triggering completion callback')
+        if not (ingestion_idle and embedding_idle and face_queue_empty):
+            logger.debug(
+                f'FaceDetectionThread completion check: not ready '
+                f'(ingestion_idle={ingestion_idle}, '
+                f'embedding_idle={embedding_idle}, '
+                f'face_queue_empty={face_queue_empty}, '
+                f'face_qsize={self.face_queue.qsize()}, '
+                f'on_complete_finished={on_complete_finished})'
+            )
+            return
 
-            if self.on_complete:
+        self._completion_triggered = True
+        logger.info(
+            f'Face detection complete — triggering completion callback '
+            f'(faces_processed={self._processed_count}, '
+            f'faces_detected={self._faces_detected_count})'
+        )
+
+        if self.on_complete:
+            try:
+                self.on_complete()
+            except Exception as e:
+                logger.error(f'Error in face detection completion callback: {e}')
+                # Rollback any uncommitted transaction to release the WAL
+                # write lock — a stuck lock makes the app unable to access
+                # the database for the rest of the session.
                 try:
-                    self.on_complete()
-                except Exception as e:
-                    logger.error(f'Error in face detection completion callback: {e}')
+                    self.conn.rollback()
+                except Exception:
+                    pass
 
 
 class NimaThread(threading.Thread):
@@ -5562,14 +5659,25 @@ class ImageDatabase:
 
         # Final completion callback (after all processing including faces)
         def on_final_complete():
+            # Each phase is wrapped in try/except so a failure in one
+            # (e.g. transient DB lock) doesn't prevent later phases or
+            # the processing_complete event that unblocks the frontend.
+            logger.debug('on_final_complete: ENTER')
+
             # Sync directory groups — lightweight DB operation that mirrors
             # filesystem folders as browse-able groups. Runs regardless of
             # whether face grouping was requested.
-            self._duplicate_manager.sync_directory_groups(self.conn, self._db_lock)
+            try:
+                logger.debug('on_final_complete: sync_directory_groups START')
+                self._duplicate_manager.sync_directory_groups(self.conn, self._db_lock)
+                logger.debug('on_final_complete: sync_directory_groups DONE')
+            except Exception as e:
+                logger.error(f'Failed to sync directory groups: {e}')
 
             if not self._run_face_grouping:
                 logger.info('Skipping grouping phase (use --group-faces or GUI Rescan)')
                 emit_processing_complete(self.event_queue)
+                logger.debug('on_final_complete: EXIT (no grouping)')
                 return
 
             # --- Face reassessment FIRST (user-visible, latency-sensitive) ---
@@ -5577,24 +5685,52 @@ class ImageDatabase:
             # duplicate/grouping calculations so that newly imported faces
             # get identified as quickly as possible.
             if self.config.face_detection_enabled:
-                # Clean up people with no faces
-                with self._db_lock:
-                    delete_people_without_faces(self.conn)
-                # Match unknown faces against known people (locked faces)
-                self._reassess_faces_with_status()
+                try:
+                    logger.debug('on_final_complete: face reassessment START')
+                    # Clean up people with no faces
+                    with self._db_lock:
+                        delete_people_without_faces(self.conn)
+                    # Match unknown faces against known people (locked faces)
+                    self._reassess_faces_with_status()
+                    logger.debug('on_final_complete: face reassessment DONE')
+                except Exception as e:
+                    logger.error(f'Failed during face reassessment: {e}')
 
             # --- Duplicate and face grouping (slower, less urgent) ---
-            self._compute_duplicates_with_status()
+            try:
+                logger.debug('on_final_complete: compute_duplicates START')
+                self._compute_duplicates_with_status()
+                logger.debug('on_final_complete: compute_duplicates DONE')
+            except Exception as e:
+                logger.error(f'Failed to compute duplicates: {e}')
+
             if self.config.face_detection_enabled:
-                with self._db_lock:
-                    compute_unknown_face_groups(self.conn, threshold=self.config.face_recognition_threshold)
-                # Backfill semantic embeddings for faces that don't have them
-                # (e.g., faces added before this feature existed)
-                self.backfill_face_semantic_embeddings()
+                try:
+                    logger.debug('on_final_complete: compute_unknown_face_groups START')
+                    with self._db_lock:
+                        compute_unknown_face_groups(self.conn, threshold=self.config.face_recognition_threshold)
+                    logger.debug('on_final_complete: compute_unknown_face_groups DONE')
+                except Exception as e:
+                    logger.error(f'Failed to compute unknown face groups: {e}')
+                try:
+                    logger.debug('on_final_complete: backfill_face_semantic_embeddings START')
+                    # Backfill semantic embeddings for faces that don't have them
+                    # (e.g., faces added before this feature existed)
+                    self.backfill_face_semantic_embeddings()
+                    logger.debug('on_final_complete: backfill_face_semantic_embeddings DONE')
+                except Exception as e:
+                    logger.error(f'Failed to backfill face semantic embeddings: {e}')
+
             emit_processing_complete(self.event_queue)
+            logger.debug('on_final_complete: EXIT')
 
         # Callback when embedding completes - queue images for face detection
         def on_embedding_complete():
+            logger.debug(
+                f'on_embedding_complete: ENTER '
+                f'(run_face_detection={self._run_face_detection}, '
+                f'face_detection_enabled={self.config.face_detection_enabled})'
+            )
             # Notify frontend that new images are indexed and ready for display.
             # This fires well before processing_complete, which waits for face
             # detection, reassessment, and duplicate grouping (can take minutes).
@@ -5602,10 +5738,12 @@ class ImageDatabase:
 
             if not self._run_face_detection:
                 logger.info('Skipping face detection (use --detect-faces or GUI Rescan)')
+                logger.debug('on_embedding_complete: EXIT (no face detection)')
                 return
             if self.config.face_detection_enabled:
                 # Queue all images that don't have face detection run yet
                 self._queue_images_for_face_detection()
+                logger.debug(f'on_embedding_complete: EXIT (face_queue_size={self._face_queue.qsize()})')
 
         # Start ingestion thread with configured number of worker threads
         self._ingestion_thread = IngestionThread(
@@ -7399,11 +7537,17 @@ class ImageDatabase:
         if missing_embeddings:
             logger.info(f'{len(missing_embeddings)} images queued for image embedding')
 
-        # Reset completion flags so callbacks fire again
+        # Reset completion flags so callbacks fire again for this cycle.
+        # _on_complete_finished must also be reset so the face detection
+        # thread doesn't see a stale True from the previous cycle and
+        # fire completion before the embedding callback populates its queue.
         if self._embedding_thread:
             self._embedding_thread._completion_triggered = False
+            self._embedding_thread._on_complete_finished = False
+            logger.debug('queue_rescan_all: reset EmbeddingThread completion flags')
         if self._face_thread:
             self._face_thread._completion_triggered = False
+            logger.debug('queue_rescan_all: reset FaceDetectionThread completion flags')
 
     # =========================================================================
     # Public API - Events (SSE)

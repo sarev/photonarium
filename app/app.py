@@ -4326,7 +4326,18 @@ if __name__ == '__main__':
         help='Create/update config at OS default with the given data_dir and exit. '
         'Used by the installer to persist the chosen data directory.',
     )
+    parser.add_argument(
+        '--debug',
+        action='store_true',
+        help='Enable DEBUG-level logging for all application modules',
+    )
     args = parser.parse_args()
+
+    # Apply debug logging early, before anything else runs
+    if args.debug:
+        for module in ['app', '__main__', 'imagedb', 'faces', 'thumbnails', 'duplicates', 'config', 'metadata']:
+            logging.getLogger(module).setLevel(logging.DEBUG)
+        logger.info('Debug logging enabled')
 
     # -------------------------------------------------------------------------
     # Phase 1: Resolve config path and load config
