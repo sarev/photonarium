@@ -91,7 +91,7 @@ $(MODELS_MARKER): app/config.py download_models.py
 	HF_TOKEN=$(HF_TOKEN) \
 	HF_HOME=$(MODELS_DIR)/huggingface \
 	TORCH_HOME=$(MODELS_DIR)/torch \
-	python download_models.py --data-dir $(MODELS_DIR)
+	python3 download_models.py --data-dir $(MODELS_DIR)
 	@mkdir -p $(MARKER_DIR) && touch $@
 	@echo ""
 	@echo "Models downloaded. You can now run 'make base-x64' or 'make build'."
