@@ -1719,12 +1719,15 @@ class ImageMetadata:
 def extract_image_metadata(
     path: Path | str,
     max_dimension: int = 0,
+    filename_date_overrides: list[str] | None = None,
 ) -> ImageMetadata | None:
     """Extract all metadata from an image file.
 
     Args:
         path: Path to the image file.
         max_dimension: Max dimension for phash/laplacian (0 to disable).
+        filename_date_overrides: Optional glob patterns where filename timestamps
+            override EXIF (e.g. WhatsApp images).
 
     Returns:
         ImageMetadata object with all extracted data,
@@ -1769,7 +1772,11 @@ def extract_image_metadata(
     exif_data = extract_exif_data(path)
 
     # Derive timestamp with confidence level, reusing pre-read EXIF data
-    timestamp, timestamp_confidence = derive_timestamp_with_confidence(path, exif_data=exif_data)
+    timestamp, timestamp_confidence = derive_timestamp_with_confidence(
+        path,
+        exif_data=exif_data,
+        filename_date_overrides=filename_date_overrides,
+    )
 
     # Check if lossless format
     lossless = is_lossless_format(path)
@@ -1827,6 +1834,7 @@ class IngestionThread(threading.Thread):
         nima_queue: queue.Queue[str] | None = None,
         import_names: dict[str, str] | None = None,
         import_names_lock: threading.Lock | None = None,
+        filename_date_overrides: list[str] | None = None,
     ):
         """Initialise the ingestion thread.
 
@@ -1846,6 +1854,8 @@ class IngestionThread(threading.Thread):
             import_names: Shared dict mapping catalogue dest path to original
                 filename (populated by ImportWorker, consumed here).
             import_names_lock: Lock protecting the import_names dict.
+            filename_date_overrides: Glob patterns where filename timestamps
+                override EXIF (e.g. WhatsApp images).
         """
         super().__init__(name='IngestionThread', daemon=True)
         self.conn = conn
@@ -1864,6 +1874,7 @@ class IngestionThread(threading.Thread):
         self._nima_queue = nima_queue  # Optional NIMA scoring queue
         self._import_names = import_names or {}  # Shared import name mapping
         self._import_names_lock = import_names_lock or threading.Lock()
+        self._filename_date_overrides = filename_date_overrides
         self._pending_count = 0  # Number of items being processed (not just in queue)
         self._pending_lock = threading.Lock()
 
@@ -2022,7 +2033,11 @@ class IngestionThread(threading.Thread):
                 if existing_checksum is None and existing_size > 0:
                     # Missing checksum - need to regenerate metadata
                     logger.info(f'Backfilling missing checksum for: {path}')
-                    metadata = extract_image_metadata(path, self.max_image_dimension)
+                    metadata = extract_image_metadata(
+                        path,
+                        self.max_image_dimension,
+                        self._filename_date_overrides,
+                    )
                     if metadata is not None:
                         with self._db_lock:
                             update_image_metadata(
@@ -2077,7 +2092,11 @@ class IngestionThread(threading.Thread):
 
             # File has changed (size or mtime differ) - re-extract metadata
             logger.info(f'Re-ingesting changed image: {path}')
-            metadata = extract_image_metadata(path, self.max_image_dimension)
+            metadata = extract_image_metadata(
+                path,
+                self.max_image_dimension,
+                self._filename_date_overrides,
+            )
             if metadata is None:
                 logger.warning(f'Failed to extract metadata for changed image: {path}')
                 return
@@ -2117,7 +2136,11 @@ class IngestionThread(threading.Thread):
 
         else:
             # New image - extract metadata (no lock - file I/O)
-            metadata = extract_image_metadata(path, self.max_image_dimension)
+            metadata = extract_image_metadata(
+                path,
+                self.max_image_dimension,
+                self._filename_date_overrides,
+            )
             if metadata is None:
                 logger.warning(f'Failed to extract metadata for new image: {path}')
                 return
@@ -5560,6 +5583,7 @@ class ImageDatabase:
             nima_queue=self._nima_queue,
             import_names=self._import_names,
             import_names_lock=self._import_names_lock,
+            filename_date_overrides=self.config.filename_date_overrides,
         )
         self._ingestion_thread.start()
 

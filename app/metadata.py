@@ -28,6 +28,7 @@ Usage:
 
 from __future__ import annotations
 
+import fnmatch
 import logging
 import os
 import re
@@ -1108,6 +1109,7 @@ def derive_timestamp(path: Path | str) -> datetime | None:
 def derive_timestamp_with_confidence(
     path: Path | str,
     exif_data: dict[str, str] | None = None,
+    filename_date_overrides: list[str] | None = None,
 ) -> tuple[datetime | None, int]:
     """Derive the best timestamp for an image with confidence level.
 
@@ -1116,6 +1118,11 @@ def derive_timestamp_with_confidence(
     2. EXIF DateTime tag (confidence 1)
     3. Parsed from filename/path (confidence 2)
     4. Filesystem creation/modification time (confidence 3)
+
+    When ``filename_date_overrides`` patterns are provided and the filename
+    matches one of them, the filename-derived timestamp takes priority over
+    EXIF. This handles apps like WhatsApp that rewrite EXIF dates to the
+    download time while encoding the actual capture time in the filename.
 
     When ``exif_data`` is provided (pre-read via ``extract_exif_data()``),
     the timestamp is extracted from it without re-opening the file. This
@@ -1126,6 +1133,9 @@ def derive_timestamp_with_confidence(
         exif_data: Optional pre-extracted EXIF key-value pairs from
             ``extract_exif_data()``. When provided, timestamp is derived
             from the 'Date Taken' key instead of re-reading the file.
+        filename_date_overrides: Optional list of glob patterns. When the
+            basename matches any pattern, the filename-derived timestamp
+            is preferred over EXIF.
 
     Returns:
         Tuple of (datetime, confidence) where confidence is:
@@ -1136,6 +1146,18 @@ def derive_timestamp_with_confidence(
         - 4: none/unknown
     """
     path = Path(path)
+
+    # Check if filename matches an override pattern — if so, try filename first
+    if filename_date_overrides:
+        basename = path.name
+        for pattern in filename_date_overrides:
+            if fnmatch.fnmatch(basename, pattern):
+                timestamp = parse_timestamp_from_path(path)
+                if timestamp:
+                    logger.debug(f'Timestamp from filename (override match "{pattern}"): {timestamp} for {path}')
+                    return (timestamp, CONFIDENCE_FILENAME)
+                # Pattern matched but filename parsing failed — fall through to EXIF
+                break
 
     # Try EXIF first — reuse pre-read data when available to avoid double I/O
     if exif_data is not None:

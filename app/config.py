@@ -137,6 +137,16 @@ CONFIG_SCHEMA: list[tuple[str, list[tuple[str, list[str]]]]] = [
                     'Set to 0 to disable (not recommended). Range: 0 or 1024-65536',
                 ],
             ),
+            (
+                'filename_date_overrides',
+                [
+                    'Filename patterns where the date embedded in the filename takes priority',
+                    'over EXIF metadata for timestamp derivation. Uses glob-style matching.',
+                    'Useful for apps like WhatsApp that rewrite EXIF dates to the download',
+                    'time while encoding the actual capture time in the filename.',
+                    'One pattern per line (e.g. "WhatsApp Image *").',
+                ],
+            ),
         ],
     ),
     (
@@ -582,141 +592,115 @@ FIELD_CONSTRAINTS: dict[str, dict[str, int | float | bool]] = {
 class Config:
     """Application configuration with validation.
 
-    Attributes:
-        data_dir: Directory for user data (database, thumbnails, models).
-            Empty string means use the current working directory. Set by the
-            installer; can be overridden at runtime with ``--data-dir``.
-        server_host: Network interface to bind to ('0.0.0.0' for LAN, '127.0.0.1' for local only).
-        server_port: Port number for the web server (1024-65535).
-        headless: When True, hides desktop-only UI features (folder picker, reveal
-            in file manager). Set automatically by Docker entrypoint.
-        image_extensions: Set of lowercase file extensions to treat as images.
-        thumbnail_quality: JPEG quality for thumbnails (1-100).
-        max_image_dimension: Max width/height before downsampling (0 to disable).
-        openclip_model: OpenCLIP model architecture name.
-        openclip_pretrained: OpenCLIP pretrained weights name.
-        embedding_batch_size: Batch size for embedding computation.
-        perceptual_hash_threshold: Hamming distance threshold for level 1 duplicates.
-        similarity_threshold_level2: Cosine similarity threshold for level 2.
-        similarity_threshold_level3: Cosine similarity threshold for level 3.
-        indexing_threads: Number of threads for parallel image indexing (1-16).
-        trash_threads: Number of threads for parallel file moves when trashing (1-32).
-        max_incremental_duplicates: Max dirty images for incremental duplicate detection.
-            If more images need checking, falls back to full recomputation.
-        incremental_threshold_percent: Percentage of total images that triggers full
-            recomputation instead of incremental (5-50).
-        thumbnail_concurrent_requests: Max concurrent thumbnail fetch requests (1-12).
-        thumbnail_extra_rows: Extra rows above/below viewport to prefetch (1-20).
-        thumbnail_timeout_ms: Timeout for thumbnail fetch requests in ms (1000-60000).
-        thumbnail_scroll_throttle_ms: Scroll event throttle in ms (50-1000).
-        thumbnail_cache_size_mb: RAM cache size for thumbnail bytes in MB (0-1000).
-        face_detection_enabled: Whether to detect faces during image indexing.
-        face_detection_min_confidence: MTCNN confidence threshold (0.0-1.0).
-        face_detection_min_size: Minimum face size in pixels (20-200).
-        face_recognition_threshold: Cosine similarity threshold for auto-matching (0.0-1.0).
-        face_detection_batch_size: Batch size for face detection (1-64).
-        caption_model: BLIP/BLIP-2 model name for captioning.
-        caption_max_length: Maximum caption length in tokens (10-200).
-        caption_min_length: Minimum caption length in tokens (1-50).
-        caption_num_beams: Beam search width for generation (1-10).
-        caption_british_english: Convert US spellings to UK in captions.
-        nima_enabled: Whether to run NIMA aesthetic scoring during indexing.
-        nima_batch_size: Batch size for NIMA scoring (1-64).
-        quality_weight_aesthetic: Weight for aesthetic component in quality sort.
-        quality_weight_sharpness: Weight for sharpness component in quality sort.
-        quality_weight_pixels: Weight for pixel count component in quality sort.
-        quality_weight_bpp: Weight for bits-per-pixel component in quality sort.
-        quality_alpha: Blend ratio for NIMA vs LAION aesthetic scores (0-1).
-        slideshow_interval: Seconds each image is displayed during a slideshow (1.0-60.0).
-        trash_dir: Path to trash directory for deleted images. Empty string means
-            use the default (<data-dir>/trash/). Set to a custom path to move
-            trashed images elsewhere.
-        catalogue_dir: Path to managed catalogue directory for imported images.
-            Empty string means use the default (<data-dir>/catalogue/).
-        import_threads: Number of parallel threads for file copying during import (1-16).
-        scan_interval_minutes: Interval for automatic folder rescans (0 = disabled).
-            Useful for Docker/NAS deployments where photos sync continuously.
-            The timer waits for all processing to complete before starting countdown.
-        log_retention_lines: Maximum number of log lines to retain in the database
-            (100-100000). Viewable from the Management screen. Set to 0 to disable.
+    Field documentation is kept inline with each declaration below.
+    See ``CONFIG_SCHEMA`` for the user-facing help text shown in the
+    settings editor and YAML comments.
     """
 
+    # Directory for user data (database, thumbnails, models).
+    # Empty string means use the current working directory.
+    # Set by the installer; can be overridden at runtime with --data-dir.
     data_dir: str = ''
+    # Network interface to bind to ('0.0.0.0' for LAN, '127.0.0.1' for local only).
     server_host: str = '0.0.0.0'
+    # Port number for the web server (1024-65535).
     server_port: int = 5000
+    # When True, hides desktop-only UI features (folder picker, reveal in
+    # file manager). Set automatically by Docker entrypoint.
     headless: bool = False
+    # Set of lowercase file extensions to treat as images.
+    # Derived from _IMAGE_EXTENSIONS_ORDERED to avoid drift.
     image_extensions: set[str] = field(
-        default_factory=lambda: {
-            '.jpg',
-            '.jpeg',
-            '.png',
-            '.gif',
-            '.bmp',
-            '.tiff',
-            '.tif',
-            '.webp',
-            # Camera RAW formats (require rawpy)
-            '.cr2',
-            '.cr3',
-            '.nef',
-            '.nrw',
-            '.arw',
-            '.srf',
-            '.dng',
-            '.raf',
-            '.rw2',
-            '.orf',
-            '.pef',
-            '.srw',
-            '.x3f',
-            '.3fr',
-            '.iiq',
-            '.rwl',
-            '.kdc',
-            '.dcr',
-            '.erf',
-        }
+        default_factory=lambda: {ext for ext in _IMAGE_EXTENSIONS_ORDERED if isinstance(ext, str)}
     )
+    # JPEG quality for generated thumbnails (1-100).
     thumbnail_quality: int = 85
+    # Max width/height before downsampling (0 to disable).
     max_image_dimension: int = 16384
+    # Glob patterns for filenames where the filename-derived timestamp should
+    # take priority over EXIF (e.g. WhatsApp images that rewrite EXIF dates).
+    filename_date_overrides: list[str] = field(default_factory=lambda: ['WhatsApp Image *', 'WhatsApp Video *'])
+    # OpenCLIP model architecture name.
     openclip_model: str = 'ViT-B-32'
+    # OpenCLIP pretrained weights name.
     openclip_pretrained: str = 'openai'
+    # Batch size for embedding computation.
     embedding_batch_size: int = 16
+    # Hamming distance threshold for level 1 (near-identical) duplicates.
     perceptual_hash_threshold: int = 4
+    # Cosine similarity threshold for level 2 (similar) duplicates.
     similarity_threshold_level2: float = 0.93
+    # Cosine similarity threshold for level 3 (related) duplicates.
     similarity_threshold_level3: float = 0.85
+    # Number of threads for parallel image indexing (1-16).
     indexing_threads: int = 4
+    # Number of threads for parallel file moves when trashing (1-32).
     trash_threads: int = 8
+    # Max dirty images for incremental duplicate detection.
+    # If more images need checking, falls back to full recomputation.
     max_incremental_duplicates: int = 500
+    # Percentage of total images that triggers full recomputation instead
+    # of incremental (5-50).
     incremental_threshold_percent: int = 20
+    # Max concurrent thumbnail fetch requests (1-12).
     thumbnail_concurrent_requests: int = 6
+    # Extra rows above/below viewport to prefetch (1-20).
     thumbnail_extra_rows: int = 5
+    # Timeout for thumbnail fetch requests in ms (1000-60000).
     thumbnail_timeout_ms: int = 10000
+    # Scroll event throttle in ms (50-1000).
     thumbnail_scroll_throttle_ms: int = 250
+    # RAM cache size for thumbnail bytes in MB (0-1000).
     thumbnail_cache_size_mb: int = 100
+    # Whether to detect faces during image indexing.
     face_detection_enabled: bool = True
+    # MTCNN confidence threshold (0.0-1.0).
     face_detection_min_confidence: float = 0.95
+    # Minimum face size in pixels (20-200).
     face_detection_min_size: int = 40
+    # Cosine similarity threshold for auto-matching faces to people (0.0-1.0).
     face_recognition_threshold: float = 0.70
+    # Batch size for face detection (1-64).
     face_detection_batch_size: int = 32
+    # BLIP/BLIP-2 model name for captioning.
     caption_model: str = 'Salesforce/blip-image-captioning-large'
+    # Maximum caption length in tokens (10-200).
     caption_max_length: int = 50
+    # Minimum caption length in tokens (1-50).
     caption_min_length: int = 10
+    # Beam search width for caption generation (1-10).
     caption_num_beams: int = 5
+    # Convert US spellings to UK in captions.
     caption_british_english: bool = False
+    # Whether to run NIMA aesthetic scoring during indexing.
     nima_enabled: bool = True
+    # Batch size for NIMA scoring (1-64).
     nima_batch_size: int = 16
+    # Weight for aesthetic component in quality sort.
     quality_weight_aesthetic: float = 0.60
+    # Weight for sharpness component in quality sort.
     quality_weight_sharpness: float = 0.20
+    # Weight for pixel count component in quality sort.
     quality_weight_pixels: float = 0.15
+    # Weight for bits-per-pixel component in quality sort.
     quality_weight_bpp: float = 0.05
+    # Blend ratio for NIMA vs LAION aesthetic scores (0=LAION only, 1=NIMA only).
     quality_alpha: float = 0.60
+    # Whether to show "On This Day" memories on the gallery screen.
     on_this_day_enabled: bool = True
+    # Seconds each image is displayed during a slideshow (1.0-60.0).
     slideshow_interval: float = 5.0
+    # Path to trash directory. Empty string means <data-dir>/trash/.
     trash_dir: str = ''
+    # Path to managed catalogue directory for imported images.
+    # Empty string means <data-dir>/catalogue/.
     catalogue_dir: str = ''
+    # Number of parallel threads for file copying during import (1-16).
     import_threads: int = 4
+    # Interval in minutes for automatic folder rescans (0 = disabled).
+    # Useful for Docker/NAS deployments where photos sync continuously.
     scan_interval_minutes: int = 0
+    # Maximum log lines to retain in the database (0 = disabled, 100-100000).
     log_retention_lines: int = 1000
 
     def __post_init__(self) -> None:
@@ -756,6 +740,12 @@ class Config:
             raise ValueError('nima_enabled must be a boolean')
         if not isinstance(self.on_this_day_enabled, bool):
             raise ValueError('on_this_day_enabled must be a boolean')
+
+        # --- filename_date_overrides: must be a list of strings ---
+        if not isinstance(self.filename_date_overrides, (list, tuple)):
+            raise ValueError('filename_date_overrides must be a list')
+        if not all(isinstance(p, str) for p in self.filename_date_overrides):
+            raise ValueError('filename_date_overrides entries must be strings')
 
         # --- image_extensions: coerce to set of dotted lowercase strings ---
         if not isinstance(self.image_extensions, (set, list, tuple)):
@@ -910,6 +900,7 @@ _TYPE_MAP: dict[str, str] = {
     'float': 'number',
     'bool': 'boolean',
     'set[str]': 'set',
+    'list[str]': 'list',
 }
 
 

@@ -171,12 +171,12 @@ const Settings = {
             return row;
         }
 
-        if (field.type === 'set') {
-            // Textarea — one extension per line
+        if (field.type === 'set' || field.type === 'list') {
+            // Textarea — one entry per line
             const ta = document.createElement('textarea');
             ta.className = 'dialog-input settings-textarea';
             ta.dataset.key = field.key;
-            ta.dataset.type = 'set';
+            ta.dataset.type = field.type;
             ta.rows = 4;
             // Value is an array of strings
             ta.value = Array.isArray(field.value)
