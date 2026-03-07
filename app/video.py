@@ -326,11 +326,20 @@ def detect_scenes(
     threshold: float = 27.0,
     min_scene_duration: float = 1.0,
 ) -> list[tuple[float, float]]:
-    """Detect scene boundaries in a video using FFmpeg's scene detection.
+    """Detect scene boundaries in a video file.
 
-    Uses `ffprobe` with the `select` filter to find frames where the
-    scene change score exceeds the threshold.  Falls back to uniform
-    segmentation if detection fails or the video is very short.
+    Tries two strategies in order:
+
+    1. **ffmpeg select filter** — runs ``ffmpeg -i`` with the ``select``
+       filter to find frames whose scene-change score exceeds *threshold*.
+       Uses ``-i`` for input so paths are handled natively on all platforms
+       (the previous ``-f lavfi movie=`` approach broke on Windows paths).
+    2. **PyAV frame differencing** — decodes keyframes and computes
+       per-channel mean-absolute-difference to detect cuts.  Slower than
+       strategy 1 but requires no system ffmpeg binary.
+
+    Falls back to uniform ~30 s segments if both strategies fail or the
+    video contains no detectable scene changes.
 
     Args:
         path: Path to the video file.
@@ -353,45 +362,12 @@ def detect_scenes(
     if duration < 3.0:
         return [(0.0, duration)]
 
-    # Use ffprobe to detect scene changes via the select filter.
-    # This avoids fully decoding the video and is much faster than
-    # frame-by-frame analysis in Python.
-    try:
-        cmd = [
-            'ffprobe',
-            '-v',
-            'quiet',
-            '-show_entries',
-            'frame=pts_time',
-            '-of',
-            'csv=p=0',
-            '-f',
-            'lavfi',
-            f"movie='{str(path).replace(chr(39), chr(39) + chr(92) + chr(39) + chr(39))}',"
-            f"select='gt(scene,{threshold / 100.0})'",
-        ]
-        result = subprocess.run(
-            cmd,
-            capture_output=True,
-            text=True,
-            timeout=120,
-        )
+    # Strategy 1: ffmpeg select filter (fast, uses system ffmpeg binary)
+    scene_times = _detect_scenes_ffmpeg(path, threshold, min_scene_duration)
 
-        scene_times: list[float] = [0.0]
-        if result.returncode == 0 and result.stdout.strip():
-            for line in result.stdout.strip().split('\n'):
-                line = line.strip()
-                if line:
-                    try:
-                        t = float(line)
-                        if t > scene_times[-1] + min_scene_duration:
-                            scene_times.append(t)
-                    except ValueError:
-                        continue
-
-    except (FileNotFoundError, subprocess.TimeoutExpired) as e:
-        logger.debug(f'ffprobe scene detection unavailable ({e}), using uniform segments')
-        scene_times = [0.0]
+    # Strategy 2: PyAV frame differencing (no system binary needed)
+    if len(scene_times) <= 1:
+        scene_times = _detect_scenes_pyav(path, threshold, min_scene_duration, duration)
 
     # Build scene list from boundary timestamps
     scenes: list[tuple[float, float]] = []
@@ -405,6 +381,124 @@ def detect_scenes(
         return _uniform_scenes(duration)
 
     return scenes
+
+
+def _detect_scenes_ffmpeg(
+    path: Path,
+    threshold: float,
+    min_scene_duration: float,
+) -> list[float]:
+    """Detect scene boundaries using ``ffmpeg -i`` with the select filter.
+
+    Returns a list of scene-start timestamps (always starts with 0.0).
+    Returns ``[0.0]`` (i.e. no cuts found) on any failure.
+    """
+    import re
+    import shutil
+
+    ffmpeg_bin = shutil.which('ffmpeg')
+    if not ffmpeg_bin:
+        return [0.0]
+
+    threshold_frac = threshold / 100.0
+    try:
+        # Use showinfo to emit pts_time for every frame that passes the
+        # scene-change threshold.  Output goes to stderr.
+        cmd = [
+            ffmpeg_bin,
+            '-i', str(path),
+            '-filter:v', f"select='gt(scene,{threshold_frac})',showinfo",
+            '-vsync', 'vfr',
+            '-an',
+            '-f', 'null',
+            '-',
+        ]
+        result = subprocess.run(
+            cmd,
+            capture_output=True,
+            text=True,
+            timeout=120,
+        )
+
+        scene_times: list[float] = [0.0]
+        if result.returncode == 0:
+            # showinfo writes to stderr: "... pts_time:12.345 ..."
+            for line in result.stderr.split('\n'):
+                m = re.search(r'pts_time:\s*([0-9.]+)', line)
+                if m:
+                    t = float(m.group(1))
+                    if t > scene_times[-1] + min_scene_duration:
+                        scene_times.append(t)
+
+        if len(scene_times) > 1:
+            logger.debug(
+                f'ffmpeg scene detection found {len(scene_times) - 1} cut(s) '
+                f'in {path.name}'
+            )
+        return scene_times
+
+    except (FileNotFoundError, subprocess.TimeoutExpired, OSError) as e:
+        logger.debug(f'ffmpeg scene detection failed ({e})')
+        return [0.0]
+
+
+def _detect_scenes_pyav(
+    path: Path,
+    threshold: float,
+    min_scene_duration: float,
+    duration: float,
+) -> list[float]:
+    """Detect scene boundaries by comparing consecutive frames via PyAV.
+
+    Decodes only keyframes (much faster than full decode) and computes
+    per-channel mean absolute difference.  A score above *threshold* / 100
+    (as a fraction of maximum pixel difference) indicates a scene cut.
+
+    Returns a list of scene-start timestamps (always starts with 0.0).
+    """
+    try:
+        import av
+        import numpy as np
+    except ImportError:
+        return [0.0]
+
+    threshold_frac = threshold / 100.0
+    scene_times: list[float] = [0.0]
+
+    try:
+        with av.open(str(path)) as container:
+            stream = container.streams.video[0]
+            # Decode only keyframes for speed — still catches hard cuts
+            stream.codec_context.skip_frame = 'NONKEY'
+
+            prev_array = None
+            for frame in container.decode(stream):
+                ts = float(frame.pts * stream.time_base) if frame.pts is not None else 0.0
+
+                # Downsample to small size for fast comparison
+                small = frame.reformat(width=160, height=120).to_ndarray(format='rgb24')
+
+                if prev_array is not None:
+                    # Mean absolute difference normalised to 0-1
+                    diff = np.mean(np.abs(
+                        small.astype(np.float32) - prev_array.astype(np.float32)
+                    )) / 255.0
+
+                    if diff > threshold_frac and ts > scene_times[-1] + min_scene_duration:
+                        scene_times.append(ts)
+
+                prev_array = small
+
+    except Exception as e:
+        logger.debug(f'PyAV scene detection failed ({e})')
+        return [0.0]
+
+    if len(scene_times) > 1:
+        logger.debug(
+            f'PyAV scene detection found {len(scene_times) - 1} cut(s) '
+            f'in {path.name}'
+        )
+    return scene_times
 
 
 def _uniform_scenes(duration: float, target_length: float = 30.0) -> list[tuple[float, float]]:
