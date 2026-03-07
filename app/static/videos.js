@@ -145,6 +145,11 @@ const Videos = {
                 // into a hidden (zero-size) container produces empty layout
                 if (AppState.nav.getScreen() === 'videos') {
                     this._refreshGrid();
+                    // 'cleared' resets selectedVideoId to null — re-render
+                    // the timeline so heatmap overlays are removed
+                    if (event.property === 'cleared') {
+                        this._renderTimeline();
+                    }
                 } else {
                     this._needsRefresh = true;
                 }
@@ -196,6 +201,17 @@ const Videos = {
      * Called when entering the videos screen.
      */
     onEnter() {
+        // If there's an active text filter from a non-video search (e.g.
+        // "all" mode), automatically execute a video search so the user
+        // sees heatmaps and score badges rather than an unfiltered list.
+        if (!AppState.videos.isSearchMode() && AppState.filter.isActive()) {
+            const filter = AppState.filter.get();
+            if (filter?.text && filter.searchMode !== 'videos') {
+                this._applyFilterToVideos(filter);
+                return;
+            }
+        }
+
         // In browse mode (no search), load all videos
         if (!AppState.videos.isSearchMode()) {
             AppState.videos.loadAll();
@@ -204,6 +220,36 @@ const Videos = {
         // Always do a full refresh on enter — the grid may have been
         // rendered while the screen was hidden (zero-size container),
         // which produces an empty layout.
+        this._refreshGrid();
+        this._renderTimeline();
+    },
+
+    /**
+     * Execute a video search using an existing filter's text query.
+     * Called when the user navigates to Videos while a non-video text
+     * filter is active (e.g. from an "all" mode search on the Gallery).
+     * @param {Object} filter - The active filter object (must have .text)
+     * @private
+     */
+    async _applyFilterToVideos(filter) {
+        const threshold = filter.threshold || 0.25;
+        AppState.loading.show('video-search', 'Searching videos\u2026');
+        try {
+            const response = await App.apiPost('/search/videos', {
+                query: filter.text,
+                threshold,
+                limit: 200,
+            });
+            if (response?.data?.results) {
+                AppState.videos.setSearchResults(response.data.results, filter.text);
+            }
+        } catch (error) {
+            console.error('Video search failed:', error);
+            // Fall back to showing all videos without search
+            AppState.videos.loadAll();
+        } finally {
+            AppState.loading.hide('video-search');
+        }
         this._refreshGrid();
         this._renderTimeline();
     },

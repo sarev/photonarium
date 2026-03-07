@@ -219,6 +219,7 @@ def navigate_to(page, screen):
         'duplicates': 'btn-duplicates',
         'faces': 'btn-faces',
         'search': 'btn-filter',
+        'videos': 'btn-videos',
     }
     click_toolbar(page, btn_map[screen])
     page.wait_for_selector(f'#screen-{screen}', state='visible', timeout=5000)
@@ -1548,7 +1549,134 @@ def step_extras_smaller_thumbnails(page, ctx):
 
 
 # =========================================================================
-# Section 9: USE IT ANYWHERE
+# Section 9: VIDEOS
+# =========================================================================
+section('videos')
+
+
+@step('videos-in-gallery')
+def step_videos_in_gallery(page, ctx):
+    """Show videos alongside photos in the Gallery with duration badges."""
+    # Ensure we're on the gallery with all content visible
+    page.keyboard.press('Escape')
+    page.wait_for_timeout(300)
+    try:
+        click_toolbar(page, 'btn-clear-filter')
+        page.wait_for_timeout(500)
+    except Exception:
+        pass
+    navigate_to(page, 'gallery')
+    # Reset thumbnail size to default for a fresh view
+    page.evaluate('() => AppState.view.setThumbnailSize(200)')
+    page.wait_for_timeout(500)
+    wait_for_thumbnails(page)
+    # Highlight a video duration badge so it stands out
+    highlight_element(page, '.video-duration-badge')
+
+
+@step('videos-opening')
+def step_videos_opening(page, ctx):
+    """Navigate to the Videos screen."""
+    navigate_to(page, 'videos')
+    page.wait_for_selector('.video-card img[src]', timeout=10000)
+    page.wait_for_timeout(500)
+    # Highlight the Videos nav button
+    highlight_element(page, '#btn-videos')
+
+
+@step('videos-selecting')
+def step_videos_selecting(page, ctx):
+    """Click the first video card to populate the timeline."""
+    page.locator('.video-card').first.click()
+    page.wait_for_selector('.timeline-scene', timeout=10000)
+    page.wait_for_timeout(500)
+
+
+@step('videos-timeline')
+def step_videos_timeline(page, ctx):
+    """Show the scene timeline with keyframe thumbnails."""
+    # Timeline is already visible from previous step — highlight it
+    highlight_element(page, '#videos-timeline-section')
+    # Hover a middle scene to show the brightness effect
+    scenes = page.locator('.timeline-scene')
+    count = scenes.count()
+    if count > 1:
+        scenes.nth(count // 2).hover()
+        ctx['_keep_hover'] = True
+
+
+@step('videos-preferred')
+def step_videos_preferred(page, ctx):
+    """Click a non-first star to set a new preferred scene."""
+    ctx.pop('_keep_hover', None)
+    stars = page.locator('.timeline-star')
+    count = stars.count()
+    # Pick a non-first star to show a visible change
+    target = min(1, count - 1) if count > 1 else 0
+    stars.nth(target).click()
+    page.wait_for_timeout(500)
+    # Wait for the star to become preferred
+    page.wait_for_selector('.timeline-star.preferred', timeout=5000)
+    # Highlight the new preferred star
+    highlight_element(page, '.timeline-star.preferred')
+
+
+@step('videos-fullscreen')
+def step_videos_fullscreen(page, ctx):
+    """Double-click a scene to open the video in fullscreen."""
+    scenes = page.locator('.timeline-scene')
+    count = scenes.count()
+    target = min(1, count - 1) if count > 1 else 0
+    scenes.nth(target).dblclick()
+    # Wait for fullscreen viewer to appear with video element
+    page.wait_for_selector('#fullscreen-container', state='visible', timeout=5000)
+    page.wait_for_timeout(1000)
+
+
+@step('videos-search-opening')
+def step_videos_search_opening(page, ctx):
+    """Open Search, switch to Videos mode, and enter a query."""
+    # Close fullscreen first
+    page.keyboard.press('Escape')
+    page.wait_for_timeout(500)
+    navigate_to(page, 'search')
+    # Switch to Videos mode
+    page.locator('.search-mode-toggle button[data-mode="videos"]').click()
+    page.wait_for_timeout(300)
+    # Type a search query
+    search_input = page.locator('#filter-description')
+    search_input.fill('flowers')
+    page.wait_for_timeout(300)
+    # Highlight the mode toggle
+    highlight_element(page, '.search-mode-toggle')
+
+
+@step('videos-search-results')
+def step_videos_search_results(page, ctx):
+    """Apply the filter and show results with score badges and heatmap."""
+    click_toolbar(page, 'btn-apply-filter')
+    # The search navigates to the Videos screen automatically
+    page.wait_for_selector('#screen-videos', state='visible', timeout=10000)
+    page.wait_for_selector('.video-card', timeout=10000)
+    page.wait_for_timeout(1000)
+    # Click the first result to show the heatmap timeline
+    page.locator('.video-card').first.click()
+    page.wait_for_selector('.timeline-scene', timeout=10000)
+    page.wait_for_timeout(500)
+
+
+@step('videos-clearing')
+def step_videos_clearing(page, ctx):
+    """Clear the filter to return to normal browsing."""
+    click_toolbar(page, 'btn-clear-filter')
+    page.wait_for_timeout(500)
+    # Verify we're still on Videos screen without score badges
+    page.wait_for_selector('.video-card', timeout=5000)
+    page.wait_for_timeout(500)
+
+
+# =========================================================================
+# Section 10: USE IT ANYWHERE
 # =========================================================================
 section('anywhere')
 
@@ -1701,14 +1829,20 @@ def _wait_for_processing(timeout=600, stable_count=3):
                 'face_queue',
                 'nima_queue',
                 'trash_queue',
+                'video_queue',
             )
         }
         # Phase-4 operations are signalled by their key being present
         phase4 = [k for k in ('duplicates', 'face_grouping', 'face_embeddings', 'face_reassess') if k in data]
+        # Video progress means a video is actively being processed even if
+        # the queue count has already dropped to 0
+        video_active = 'video_progress' in data
 
         total_queued = sum(queues.values())
         elapsed = int(time.time() - start)
         parts = [f'{k}={v}' for k, v in queues.items() if v]
+        if video_active:
+            parts.append('video_progress=active')
         queue_str = ', '.join(parts) if parts else 'all clear'
         phase4_str = f', active: {", ".join(phase4)}' if phase4 else ''
         idle_str = f'  (idle {consecutive_idle}/{stable_count})' if consecutive_idle else ''
@@ -1718,7 +1852,7 @@ def _wait_for_processing(timeout=600, stable_count=3):
             flush=True,
         )
 
-        if status == 'up_to_date' and total_queued == 0 and not phase4:
+        if status == 'up_to_date' and total_queued == 0 and not phase4 and not video_active:
             consecutive_idle += 1
             if consecutive_idle >= stable_count:
                 print()  # newline after progress
@@ -1892,6 +2026,22 @@ def run_setup():
             except urllib.error.HTTPError as e:
                 body = e.read().decode(errors='replace')
                 raise RuntimeError(f'Failed to add folder ({e.code}): {body}') from e
+
+            # (g2) Add videos folder via API
+            videos_dir = str((SCRIPT_DIR / 'videos').resolve())
+            req = urllib.request.Request(
+                f'{SERVER_URL}/api/folders',
+                data=json.dumps({'path': videos_dir}).encode(),
+                headers={'Content-Type': 'application/json'},
+                method='POST',
+            )
+            try:
+                resp = urllib.request.urlopen(req, timeout=10)
+                body = json.loads(resp.read())
+                print(f'  Added folder: {videos_dir} -> {body}')
+            except urllib.error.HTTPError as e:
+                body = e.read().decode(errors='replace')
+                raise RuntimeError(f'Failed to add videos folder ({e.code}): {body}') from e
 
             # Tell the frontend to refresh its folder list (don't reload
             # the page — a full reload after images exist would land on

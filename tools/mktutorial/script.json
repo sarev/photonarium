@@ -37,6 +37,10 @@
             "title": "Gallery extras"
         },
         {
+            "key": "videos",
+            "title": "Videos \u2014 Browsing and searching video content"
+        },
+        {
             "key": "anywhere",
             "title": "Use it anywhere in your home"
         }
@@ -345,6 +349,42 @@
         "smaller-thumbnails": {
             "title": "Smaller thumbnails",
             "caption": "Click the Smaller thumbnails button to shrink them back down. You can see more photos at once this way."
+        },
+        "videos-in-gallery": {
+            "title": "Videos in the Gallery",
+            "caption": "After adding a folder containing videos, they appear alongside your photos in the Gallery. Each video shows a thumbnail of its preferred scene, with a duration badge so you can tell them apart from images at a glance."
+        },
+        "videos-opening": {
+            "title": "The Videos screen",
+            "caption": "Click the Videos button in the toolbar to open the dedicated Videos screen. The top panel shows a grid of all your videos. The bottom panel shows a scene timeline for whichever video you select."
+        },
+        "videos-selecting": {
+            "title": "Selecting a video",
+            "caption": "Click a video in the grid to select it. The timeline below populates with scene thumbnails, each proportionally sized by duration \u2014 longer scenes take up more space."
+        },
+        "videos-timeline": {
+            "title": "The scene timeline",
+            "caption": "Each scene shows a keyframe thumbnail, a timecode label, and a star button. Scenes brighten on hover so you can tell them apart. If the video has many scenes, the timeline scrolls horizontally with gradient indicators at the edges."
+        },
+        "videos-preferred": {
+            "title": "Setting a preferred scene",
+            "caption": "Click the star on any scene to make it the video\u2019s preferred scene \u2014 the star turns gold. This scene\u2019s keyframe becomes the thumbnail shown in the Gallery and Videos grid."
+        },
+        "videos-fullscreen": {
+            "title": "Opening a video",
+            "caption": "Double-click a scene to open the video in the full-screen viewer, seeked to that scene\u2019s start time. The video starts paused with playback controls visible, so you can decide when to play. In slideshow mode, videos play automatically."
+        },
+        "videos-search-opening": {
+            "title": "Searching for videos",
+            "caption": "Open the Search screen and switch to Videos mode using the toggle at the top. Type a description of what you\u2019re looking for \u2014 the search analyses every scene in every video independently."
+        },
+        "videos-search-results": {
+            "title": "Search results",
+            "caption": "The Videos screen shows matching videos sorted by relevance, with score badges on each card. Select a video to see the heatmap overlay on its timeline \u2014 colours range from blue (weak match) through yellow to red (strong match), showing exactly which scenes match your query."
+        },
+        "videos-clearing": {
+            "title": "Clearing the filter",
+            "caption": "Clear the filter to return to browsing all your videos. The heatmap disappears and the timeline shows scenes with thumbnails and timecodes only."
         },
         "mobile-landscape": {
             "title": "Mobile \u2014 landscape",

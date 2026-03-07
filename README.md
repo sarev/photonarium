@@ -163,7 +163,21 @@ Photonarium is built on the shoulders of some remarkable open-source AI/ML work:
 
 Thanks to the broader Python community -- Flask, Pillow, NumPy, OpenCV, and countless other libraries -- for making a project like this feasible for a small team.
 
-The tutorial example images come from [Lorem Picsum](https://picsum.photos), which serves freely usable photos from [Unsplash](https://unsplash.com).
+The tutorial example images come from [Lorem Picsum](https://picsum.photos), which serves freely usable photos from [Unsplash](https://unsplash.com) and the example videos were created using downloads from [pexels](https://www.pexels.com/):
+
+- Flowers
+  - [Rahime Gül](https://www.pexels.com/video/vibrant-tulips-in-bloom-during-spring-snowfall-31251228/)
+  - [Md Misbah](https://www.pexels.com/video/close-up-view-of-pink-flower-and-green-leaves-5590004/)
+  - [Leeloo The First](https://www.pexels.com/video/close-up-video-of-flowers-5228886/)
+- Cars
+  - [Taryn Elliott](https://www.pexels.com/video/close-up-video-of-an-aston-martin-car-interior-5309353/)
+  - [Martina Tomšič](https://www.pexels.com/video/sunrise-colors-reflecting-on-a-car-s-side-mirror-4066597/)
+  - [Dimitar Germanov](https://www.pexels.com/video/traveling-a-road-with-tunnels-by-car-3233144/)
+  - [Kelly Lacy](https://www.pexels.com/video/footage-of-white-car-857263/)
+- Football
+  - [Matthias Groeneveld](https://www.pexels.com/video/a-soccer-field-with-a-green-field-and-a-soccer-ball-20488160/)
+  - [Tima Miroshnichenko](https://www.pexels.com/video/drone-footage-of-an-indoor-football-field-6079616/)
+  - [Tima Miroshnichenko](https://www.pexels.com/video/back-view-of-football-player-taking-penalty-kick-6078261/)
 
 Finally, thanks to [Anthropic](https://www.anthropic.com) and [Claude Code](https://claude.ai/code) for doing a lot of the grunt work.
 
