@@ -3,8 +3,8 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Photonarium — AI-Powered Local Image Catalogue</title>
-    <meta name="description" content="Photonarium is a local image catalogue and management tool with AI-powered search, face recognition, and duplicate detection. 100% offline, 100% private.">
+    <title>Photonarium — AI-Powered Local Photo &amp; Video Catalogue</title>
+    <meta name="description" content="Photonarium is a local photo and video catalogue with AI-powered search, face recognition, and duplicate detection. Search within videos at the scene level. 100% offline, 100% private.">
     <link rel="icon" type="image/png" href="favicon.png">
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -63,15 +63,15 @@
 <section class="hero" id="hero">
     <div class="hero-inner">
         <img src="images/logo.png" alt="Photonarium" class="hero-logo">
-        <h1 class="hero-headline">Your images. Your machine. Your&nbsp;rules.</h1>
+        <h1 class="hero-headline">Your photos &amp; videos.<br>Your machine, your&nbsp;rules.</h1>
         <p class="hero-beta">
             <span class="beta-badge">Public Beta</span>
             Photonarium is under active development. Features may change and bugs may occur.
         </p>
         <p class="hero-sub">
-            AI-powered local image catalogue with semantic search, face recognition,
-            and duplicate detection. Runs entirely on your machine &mdash; no cloud,
-            no accounts, no&nbsp;tracking.
+            AI-powered local photo and video catalogue with semantic search, face recognition,
+            and duplicate detection. Search within videos at the scene level. Runs entirely
+            on your machine &mdash; no cloud, no accounts, no&nbsp;tracking.
         </p>
         <div class="hero-ctas">
             <a href="https://hub.docker.com/r/7thsw/photonarium" class="btn btn-primary" target="_blank" rel="noopener">
@@ -125,7 +125,7 @@
                     </svg>
                 </div>
                 <h3>100% Offline &amp; Private</h3>
-                <p>Runs entirely on your machine. No cloud, no accounts, no tracking. Your images never leave your computer.</p>
+                <p>Runs entirely on your machine. No cloud, no accounts, no tracking. Your photos and videos never leave your computer.</p>
             </div>
 
             <div class="feature-card">
@@ -169,7 +169,7 @@
                     </svg>
                 </div>
                 <h3>AI-Powered Search</h3>
-                <p>Describe what you're looking for in natural language &mdash; Photonarium understands the content of your images.</p>
+                <p>Describe what you're looking for in natural language. Search images, or find specific moments within videos with scene-level semantic&nbsp;search.</p>
             </div>
 
             <div class="feature-card">
@@ -211,14 +211,20 @@
 
             <div class="feature-card">
                 <div class="feature-icon">
-                    <!-- Camera icon -->
+                    <!-- Image/film icon -->
                     <svg viewBox="0 0 24 24" width="32" height="32" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
-                        <path d="M23 19a2 2 0 01-2 2H3a2 2 0 01-2-2V8a2 2 0 012-2h4l2-3h6l2 3h4a2 2 0 012 2z"/>
-                        <circle cx="12" cy="13" r="4"/>
+                        <rect x="2" y="2" width="20" height="20" rx="2.18" ry="2.18"/>
+                        <line x1="7" y1="2" x2="7" y2="22"/>
+                        <line x1="17" y1="2" x2="17" y2="22"/>
+                        <line x1="2" y1="12" x2="22" y2="12"/>
+                        <line x1="2" y1="7" x2="7" y2="7"/>
+                        <line x1="2" y1="17" x2="7" y2="17"/>
+                        <line x1="17" y1="7" x2="22" y2="7"/>
+                        <line x1="17" y1="17" x2="22" y2="17"/>
                     </svg>
                 </div>
-                <h3>Camera Support</h3>
-                <p>Native camera RAW support for 20+ formats. Full EXIF extraction &mdash; search by camera, lens, ISO, aperture, and more.</p>
+                <h3>Photos &amp; Videos</h3>
+                <p>Images, camera RAW (20+ formats), and video side by side. Automatic scene detection, keyframe extraction, and speech&nbsp;transcription.</p>
             </div>
 
             <div class="feature-card">
@@ -232,7 +238,7 @@
                     </svg>
                 </div>
                 <h3>Multi-Device Sync</h3>
-                <p>Use Photonarium from multiple devices at once. Changes made on one &mdash; naming faces, rating photos &mdash; appear on all others within seconds.</p>
+                <p>Use Photonarium from multiple devices at once. Changes made on one &mdash; naming faces, rating media &mdash; appear on all others within seconds.</p>
             </div>
 
         </div>
@@ -255,7 +261,7 @@
         <div class="carousel" id="carousel">
             <figure class="carousel-slide">
                 <img src="images/gallery.png" alt="Gallery view showing a grid of image thumbnails" loading="lazy">
-                <figcaption>Gallery &mdash; browse your collection with a rich thumbnail grid</figcaption>
+                <figcaption>Gallery &mdash; browse your photos and videos with a rich thumbnail grid</figcaption>
             </figure>
             <figure class="carousel-slide">
                 <img src="images/fullscreen.png" alt="Fullscreen image viewer with zoom controls" loading="lazy">
@@ -263,7 +269,7 @@
             </figure>
             <figure class="carousel-slide">
                 <img src="images/info-panel.png" alt="Info panel showing EXIF metadata and image details" loading="lazy">
-                <figcaption>Info Panel &mdash; image details, EXIF metadata, histogram</figcaption>
+                <figcaption>Info Panel &mdash; file details, EXIF metadata, histogram</figcaption>
             </figure>
             <figure class="carousel-slide">
                 <img src="images/duplicates.png" alt="Duplicate detection showing groups of similar images" loading="lazy">
@@ -317,14 +323,14 @@
                 <div class="step-number">2</div>
                 <div class="step-content">
                     <h3>Start the container</h3>
-                    <p>Mount your config directory and photo library, then run the container. See the <a href="https://github.com/sarev/photonarium#docker-installation" target="_blank" rel="noopener">Docker guide</a> for full setup.</p>
+                    <p>Mount your config directory and media library, then run the container. See the <a href="https://github.com/sarev/photonarium/blob/master/docs/installation.md#docker-installation" target="_blank" rel="noopener">Docker guide</a> for full setup.</p>
                 </div>
             </div>
             <div class="step">
                 <div class="step-number">3</div>
                 <div class="step-content">
                     <h3>Browse</h3>
-                    <p>Open <code>http://your-nas:5000</code> in your browser. Your photos will start indexing automatically.</p>
+                    <p>Open <code>http://your-nas:5000</code> in your browser. Your photos and videos will start indexing automatically.</p>
                 </div>
             </div>
         </div>
@@ -368,7 +374,7 @@
                 <div class="step-number">3</div>
                 <div class="step-content">
                     <h3>Launch</h3>
-                    <p>Activate the virtual environment, run <code>python app/app.py</code>, and open <code>http://localhost:5000</code> in your browser. Add your image folders and start exploring.</p>
+                    <p>Activate the virtual environment, run <code>python app/app.py</code>, and open <code>http://localhost:5000</code> in your browser. Add your media folders and start exploring.</p>
                 </div>
             </div>
         </div>

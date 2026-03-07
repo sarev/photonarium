@@ -6,7 +6,7 @@ This document is opinionated, but hopefully fair!
 
 My motivations for creating Photonarium were two-fold:
 
-1. Build my dream photo organiser.
+1. Build my dream photo and video organiser.
 2. See if I could build it using an LLM, rather than me writing most of the code.
 
 The more practical motivation was born of looking at the pre-existing solutions and coming away feeling dissatisfied. Your options broadly divide into three camps:
@@ -17,7 +17,7 @@ The more practical motivation was born of looking at the pre-existing solutions 
 
 I was looking for some key features:
 
-a) Be able to search through my images semantically
+a) Be able to search through my images and videos semantically
 
 b) Be able to find specific people (ideally with automated face tagging)
 
@@ -26,6 +26,8 @@ c) Be able to easily find duplicates and near duplicates, groups of related imag
 d) Not have my privacy invaded - my data doesn't leave my machine
 
 e) Not have to shell out loads of money!
+
+f) Manage videos alongside photos - not as an afterthought, but with proper scene-level understanding
 
 ## Commercial Trade-offs
  
@@ -107,7 +109,7 @@ The problems are significant. Face recognition is widely criticised for quality 
 
 ## Comparison Table
 
-The five key criteria from above: **(a)** semantic search, **(b)** face recognition, **(c)** duplicate/similarity detection, **(d)** data privacy, **(e)** free/affordable.
+The six key criteria from above: **(a)** semantic search, **(b)** face recognition, **(c)** duplicate/similarity detection, **(d)** data privacy, **(e)** free/affordable, **(f)** video management.
 
 | | Photonarium | digiKam | Immich | PhotoPrism | darktable | XnView MP | Google Photos | Apple Photos | Adobe Bridge | Synology Photos | UGREEN Photos | QNAP QuMagie |
 |---|---|---|---|---|---|---|---|---|---|---|---|---|
@@ -124,10 +126,12 @@ The five key criteria from above: **(a)** semantic search, **(b)** face recognit
 | **Phone backup** | No | No | Yes | No | No | No | Yes | Yes | No | Yes | Yes | Yes |
 | **Multi-user** | No | No | Yes | Paid tier | No | No | Yes | Yes (Family) | No | Yes | Yes | Yes |
 | **Install complexity** | Low (Docker or pip) | Medium (KDE) | Medium-high (Docker) | Medium-high (Docker) | Low-medium | Low | None (cloud) | None (bundled) | Low | None (bundled) | None (bundled) | None (bundled) |
+| **(f) Video management** | Yes (scene-level) | Basic (playback) | Yes (timeline) | Yes (transcoding) | No | Basic (playback) | Yes | Yes | Basic (preview) | Yes (timeline) | Yes | Yes |
+| **Scene-level video search** | Yes | No | No | No | No | No | No | No | No | No | No | No |
 | **RAW support** | Good | Excellent | Good | Good | Excellent | Excellent | Good | Good | Excellent | Good | Good | Good |
 | **Non-destructive editing** | No | Yes | Basic | Yes | No | No | Yes | Yes | No | No | No | No |
 
-\* These apps offer semantic search but do not support negative terms (e.g. "beach -sunset") to exclude concepts from results. Photonarium does.
+\* These apps offer semantic search but do not support negative terms (e.g. "beach -sunset") to exclude concepts from results. Photonarium does. None of them support scene-level video search (searching *within* videos to find specific moments).
 
 [1] digiKam: core library is local; map/geolocation views may use external map/tile services.
 
@@ -141,15 +145,17 @@ The five key criteria from above: **(a)** semantic search, **(b)** face recognit
 
 ### Where Photonarium Fits
 
-Photonarium occupies a niche that none of the above quite covers: a lightweight, fully offline tool that combines CLIP semantic search, face detection and recognition, multi-level duplicate detection, and BLIP image captioning - all accessible via a browser-based UI, without requiring a database server, KDE frameworks, a cloud account, or specific NAS hardware. It runs on Windows, Mac, and Linux with zero telemetry under a permissive Apache-2.0 license.
+Photonarium occupies a niche that none of the above quite covers: a lightweight, fully offline tool that combines CLIP semantic search, face detection and recognition, multi-level duplicate detection, BLIP image captioning, and scene-level video search - all accessible via a browser-based UI, without requiring a database server, KDE frameworks, a cloud account, or specific NAS hardware. It runs on Windows, Mac, and Linux with zero telemetry under a permissive Apache-2.0 license.
 
 For desktop use, it is among the simplest installs of any AI-powered option (just Python and pip). For NAS and server deployments, pre-built Docker images are available for Synology, QNAP, Unraid, TrueNAS, and any system with Docker support - with variants for CPU-only, NVIDIA GPU (CUDA 11.8, 12.6, 12.8), Intel iGPU, and ARM64 (Raspberry Pi, Apple Silicon). This makes Photonarium a vendor-neutral alternative to the proprietary NAS-bundled apps: you get the same privacy benefits (all processing stays local) without being locked to a single vendor's ecosystem or hardware restrictions.
 
-The NAS-bundled tools are worth a special mention because they get the privacy story right and the barrier to entry is low if you already own the hardware. But their AI features are typically restricted to specific (expensive) models, their duplicate detection is shallow, none of them support negative terms in semantic search, none of them offer image captioning or quality scoring, and you are locked into a single vendor's closed ecosystem with no ability to fix or extend anything. If the vendor decides your NAS model is end-of-life, the software stops improving. Photonarium's Docker images work on any NAS that supports Docker containers, regardless of vendor.
+The NAS-bundled tools are worth a special mention because they get the privacy story right and the barrier to entry is low if you already own the hardware. But their AI features are typically restricted to specific (expensive) models, their duplicate detection is shallow, none of them support negative terms in semantic search, none of them offer image captioning or quality scoring, and none of them can search *within* videos at the scene level. You are locked into a single vendor's closed ecosystem with no ability to fix or extend anything. If the vendor decides your NAS model is end-of-life, the software stops improving. Photonarium's Docker images work on any NAS that supports Docker containers, regardless of vendor.
 
-The trade-offs are: no multi-user support and no non-destructive editing. Photonarium also has no built-in phone backup - but this is arguably a feature, not a gap. If you run Photonarium on a NAS, you can use whatever sync tools you already have (Synology Cloud Sync, QNAP HybridMount, or native apps for Apple Photos, Google Photos, OneDrive, Dropbox, etc.) to get photos onto the NAS, and Photonarium simply indexes them. No need to replace a workflow that already works. The web UI is fully responsive, so browsing your library from a phone or tablet works well - you just don't need a dedicated app.
+The trade-offs are: no multi-user support and no non-destructive editing. Photonarium also has no built-in phone backup - but this is arguably a feature, not a gap. If you run Photonarium on a NAS, you can use whatever sync tools you already have (Synology Cloud Sync, QNAP HybridMount, or native apps for Apple Photos, Google Photos, OneDrive, Dropbox, etc.) to get photos and videos onto the NAS, and Photonarium simply indexes them. No need to replace a workflow that already works. The web UI is fully responsive, so browsing your library from a phone or tablet works well - you just don't need a dedicated app.
 
-It is also new so has a much smaller community than the established projects! But if what you want is to point a tool at your photo folders and quickly start searching them semantically, finding duplicates, and tagging faces - all without sending a single byte off your machine - Photonarium is designed for exactly that.
+The video story deserves emphasis because it is genuinely novel. Most photo management tools treat videos as second-class citizens - they store them, maybe generate a poster frame, maybe let you play them back. Photonarium goes further: it automatically detects scene boundaries, extracts a representative keyframe from each scene, generates AI embeddings for each keyframe, and (where audio is present) transcribes speech and embeds the transcript text. This means you can search for a concept like "birthday cake" and find the specific *scene* within a two-hour family video where the cake appears, not just the video itself. The Videos screen shows search results as a heatmap overlay on the scene timeline, so you can see at a glance which moments match and how strongly. As far as I can tell, no other offline photo/video management tool offers this.
+
+It is also new so has a much smaller community than the established projects! But if what you want is to point a tool at your photo and video folders and quickly start searching them semantically, finding duplicates, and tagging faces - all without sending a single byte off your machine - Photonarium is designed for exactly that.
 
 ## The Great 'AI' Debate
 

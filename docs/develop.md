@@ -834,7 +834,7 @@ The following rules apply to all submissions to the Photonarium codebase:
 12. Any 'thready' backend code must be correctly integrated with the 'graceful shutdown' code.
 13. Care should be taken to avoid race conditions.
 14. Never use SSE (server-side events) for passing info from backend to frontend, as they don't play well with Waitress. Use the existing event polling mechanism instead.
-15. Ensure key documents are kept up-to-date (`README.md` and `DEVELOP.md`) and GUI elements have helpful, non-technical tooltips (`title` strings).
+15. Ensure key documents are kept up-to-date (`README.md` and `docs/develop.md`) and GUI elements have helpful, non-technical tooltips (`title` strings).
 16. Schema changes need proper SQLite migrations so existing databases aren't broken on upgrade.
 17. Avoid adding new dependencies without strong justification, prefer stdlib/existing dependencies.
 18. Handle low-memory/OOM conditions gracefully. Model loads, batch inference, and large allocations must catch `MemoryError`/`RuntimeError` and degrade (retry with a smaller batch, skip, or disable the feature) rather than crash the processing thread.
