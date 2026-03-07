@@ -1493,63 +1493,7 @@ def step_tagging_ignoring(page, ctx):
 
 
 # =========================================================================
-# Section 8: GALLERY EXTRAS
-# =========================================================================
-section('gallery-extras')
-
-
-@step('sorting-by-people')
-def step_extras_sorting_by_people(page, ctx):
-    # Close fullscreen if open
-    page.keyboard.press('Escape')
-    page.wait_for_timeout(300)
-    # Clear filter first
-    try:
-        click_toolbar(page, 'btn-clear-filter')
-        page.wait_for_timeout(500)
-    except Exception:
-        pass
-    click_toolbar(page, 'btn-sort-people')
-    page.wait_for_timeout(1000)
-    wait_for_thumbnails(page)
-
-
-@step('switching-themes')
-def step_extras_switching_themes(page, ctx):
-    # Bypass AppState and set theme directly via DOM + localStorage.
-    # AppState.view.setTheme() has an early-return guard that can silently
-    # no-op if its internal _theme variable is out of sync with the DOM.
-    page.evaluate("""() => {
-        document.getElementById('app').dataset.theme = 'light';
-        localStorage.setItem('photonarium-theme', '"light"');
-    }""")
-    page.wait_for_timeout(500)
-    wait_for_thumbnails(page)
-    # Highlight the toggle button
-    highlight_element(page, '#btn-theme')
-
-
-@step('larger-thumbnails')
-def step_extras_larger_thumbnails(page, ctx):
-    # Make thumbnails larger by clicking the larger button a few times
-    click_toolbar(page, 'btn-thumb-larger')
-    click_toolbar(page, 'btn-thumb-larger')
-    click_toolbar(page, 'btn-thumb-larger')
-    page.wait_for_timeout(500)
-    wait_for_thumbnails(page)
-
-
-@step('smaller-thumbnails')
-def step_extras_smaller_thumbnails(page, ctx):
-    # Make thumbnails smaller — go back past default to show a denser grid
-    for _ in range(6):
-        click_toolbar(page, 'btn-thumb-smaller')
-    page.wait_for_timeout(500)
-    wait_for_thumbnails(page)
-
-
-# =========================================================================
-# Section 9: VIDEOS
+# Section 8: VIDEOS
 # =========================================================================
 section('videos')
 
@@ -1582,12 +1526,16 @@ def step_videos_in_gallery(page, ctx):
     # Wait for video indexing + scene detection + embeddings to complete
     _wait_for_processing(timeout=300)
 
-    # Refresh the frontend so it picks up the new videos
-    page.evaluate('() => AppState.images.load()')
+    # Force a full reload so the frontend picks up the new videos.
+    # A delta load (load()) may no-op if the event poller already
+    # consumed the changes, leaving the Gallery's image count unchanged
+    # and skipping the re-render.
+    page.evaluate('() => AppState.images.reload()')
     page.wait_for_timeout(1000)
 
-    # We're already on Gallery after section 8 — just reset thumbnail
-    # size and wait for the new content (including video cards)
+    # Ensure we're on Gallery (Escape from fullscreen lands here, but
+    # navigate_to would fail if the Gallery button is already disabled)
+    page.wait_for_selector('#screen-gallery', state='visible', timeout=5000)
     page.evaluate('() => AppState.view.setThumbnailSize(200)')
     page.wait_for_timeout(500)
     wait_for_thumbnails(page)
@@ -1694,6 +1642,63 @@ def step_videos_clearing(page, ctx):
     # Verify we're still on Videos screen without score badges
     page.wait_for_selector('.video-card', timeout=5000)
     page.wait_for_timeout(500)
+
+
+# =========================================================================
+# Section 9: GALLERY EXTRAS
+# =========================================================================
+section('gallery-extras')
+
+
+@step('sorting-by-people')
+def step_extras_sorting_by_people(page, ctx):
+    # Close fullscreen if open, return to gallery
+    page.keyboard.press('Escape')
+    page.wait_for_timeout(300)
+    # Clear filter first
+    try:
+        click_toolbar(page, 'btn-clear-filter')
+        page.wait_for_timeout(500)
+    except Exception:
+        pass
+    navigate_to(page, 'gallery')
+    click_toolbar(page, 'btn-sort-people')
+    page.wait_for_timeout(1000)
+    wait_for_thumbnails(page)
+
+
+@step('switching-themes')
+def step_extras_switching_themes(page, ctx):
+    # Bypass AppState and set theme directly via DOM + localStorage.
+    # AppState.view.setTheme() has an early-return guard that can silently
+    # no-op if its internal _theme variable is out of sync with the DOM.
+    page.evaluate("""() => {
+        document.getElementById('app').dataset.theme = 'light';
+        localStorage.setItem('photonarium-theme', '"light"');
+    }""")
+    page.wait_for_timeout(500)
+    wait_for_thumbnails(page)
+    # Highlight the toggle button
+    highlight_element(page, '#btn-theme')
+
+
+@step('larger-thumbnails')
+def step_extras_larger_thumbnails(page, ctx):
+    # Make thumbnails larger by clicking the larger button a few times
+    click_toolbar(page, 'btn-thumb-larger')
+    click_toolbar(page, 'btn-thumb-larger')
+    click_toolbar(page, 'btn-thumb-larger')
+    page.wait_for_timeout(500)
+    wait_for_thumbnails(page)
+
+
+@step('smaller-thumbnails')
+def step_extras_smaller_thumbnails(page, ctx):
+    # Make thumbnails smaller — go back past default to show a denser grid
+    for _ in range(6):
+        click_toolbar(page, 'btn-thumb-smaller')
+    page.wait_for_timeout(500)
+    wait_for_thumbnails(page)
 
 
 # =========================================================================

@@ -33,12 +33,12 @@
             "title": "Fullscreen face tagging"
         },
         {
-            "key": "gallery-extras",
-            "title": "Gallery extras"
-        },
-        {
             "key": "videos",
             "title": "Videos \u2014 Browsing and searching video content"
+        },
+        {
+            "key": "gallery-extras",
+            "title": "Gallery extras"
         },
         {
             "key": "anywhere",
