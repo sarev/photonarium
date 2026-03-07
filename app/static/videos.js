@@ -95,6 +95,7 @@ const Videos = {
             onSelectionChanged: (ids) => {
                 // Feed selection into App so toolbar button states update
                 App.setSelectedImages(ids);
+                this._updateContentSortButton(ids);
 
                 // Single selection: show timeline for the selected video
                 if (ids.length === 1) {
@@ -139,7 +140,6 @@ const Videos = {
 
         // Subscribe to AppState.videos changes
         this._unsubs.push(AppState.videos.onChanged((event) => {
-            console.log('[TIMELINE DEBUG] videos changed:', event.property, 'screen:', AppState.nav.getScreen(), 'selectedId:', AppState.videos.getSelectedVideoId());
             if (event.property === 'searchResults' || event.property === 'allVideos'
                     || event.property === 'cleared') {
                 // Only render if the Videos screen is active — rendering
@@ -174,7 +174,6 @@ const Videos = {
 
         // When the filter is cleared, exit search mode and return to browse
         this._unsubs.push(AppState.filter.onChanged(() => {
-            console.log('[TIMELINE DEBUG] filter changed, active:', AppState.filter.isActive(), 'isSearch:', AppState.videos.isSearchMode(), 'screen:', AppState.nav.getScreen());
             if (!AppState.filter.isActive() && AppState.videos.isSearchMode()) {
                 AppState.videos.clear();
                 if (AppState.nav.getScreen() === 'videos') {
@@ -193,7 +192,14 @@ const Videos = {
             }
             if (event.property === 'videoThumbnailSize' && this._grid) {
                 this._grid.render();
-            } else if (event.property === 'sortBy' || event.property === 'sortDirection') {
+            } else if (event.property === 'sortBy') {
+                const { by } = AppState.view.getSort();
+                if (by === 'content' && !AppState.videos.isSearchMode()) {
+                    this._loadContentSimilarities();
+                    return;
+                }
+                this._refreshGrid();
+            } else if (event.property === 'sortDirection') {
                 this._refreshGrid();
             }
         }));
@@ -203,14 +209,12 @@ const Videos = {
      * Called when entering the videos screen.
      */
     onEnter() {
-        console.log('[TIMELINE DEBUG] onEnter, isSearch:', AppState.videos.isSearchMode(), 'filterActive:', AppState.filter.isActive(), 'selectedId:', AppState.videos.getSelectedVideoId());
         // If there's an active text filter from a non-video search (e.g.
         // "all" mode), automatically execute a video search so the user
         // sees heatmaps and score badges rather than an unfiltered list.
         if (!AppState.videos.isSearchMode() && AppState.filter.isActive()) {
             const filter = AppState.filter.get();
             if (filter?.text && filter.searchMode !== 'videos') {
-                console.log('[TIMELINE DEBUG] onEnter: applying filter to videos');
                 this._applyFilterToVideos(filter);
                 return;
             }
@@ -230,7 +234,6 @@ const Videos = {
         // (selection callback won't fire since the selection hasn't changed)
         const selectedId = AppState.videos.getSelectedVideoId();
         if (selectedId) {
-            console.log('[TIMELINE DEBUG] onEnter: loading scenes for', selectedId);
             this._loadScenesIfNeeded(selectedId);
         } else {
             // Auto-select the first video if none is selected (e.g. after
@@ -240,7 +243,6 @@ const Videos = {
             const videos = this._getVideoList();
             if (videos?.length > 0) {
                 const firstId = videos[0].id;
-                console.log('[TIMELINE DEBUG] onEnter: auto-selecting first video', firstId);
                 AppState.videos.selectVideo(firstId);
                 this._loadScenesIfNeeded(firstId);
                 if (this._selection) {
@@ -290,6 +292,50 @@ const Videos = {
     },
 
     // =========================================================================
+    // SORTING
+    // =========================================================================
+
+    /**
+     * Enable/disable the "Sort by content similarity" button based on
+     * whether exactly one video is selected.
+     * @param {string[]} selection - Currently selected video IDs
+     * @private
+     */
+    _updateContentSortButton(selection) {
+        const btn = document.getElementById('btn-vid-sort-content');
+        if (btn) btn.disabled = selection.length !== 1;
+    },
+
+    /**
+     * Load content similarity data for the selected video.
+     * Mirrors Gallery._loadContentSimilarities().
+     * @private
+     */
+    async _loadContentSimilarities() {
+        const selected = App.getSelectedImages();
+        if (selected.length === 0) {
+            App.showError('Select a video first to sort by visual similarity.');
+            App.setSortBy('date');
+            return;
+        }
+
+        const referenceId = selected[0];
+
+        try {
+            await AppState.images.loadSimilarities(referenceId);
+            this._refreshGrid();
+        } catch (error) {
+            console.error('Failed to load content similarities:', error);
+            if (error.message && error.message.includes('404')) {
+                App.showError('This video is still being processed. Please wait.');
+            } else {
+                App.showError('Could not load similarity data.');
+            }
+            App.setSortBy('date');
+        }
+    },
+
+    // =========================================================================
     // GRID
     // =========================================================================
 
@@ -313,14 +359,14 @@ const Videos = {
             let cmp = 0;
             switch (by) {
                 case 'content':
-                    // In search mode, sort by match score; browse mode has no scores
-                    cmp = (a.combined_score || 0) - (b.combined_score || 0);
+                    if (isSearch) {
+                        cmp = (a.combined_score || 0) - (b.combined_score || 0);
+                    } else {
+                        cmp = AppState.images.getSimilarity(a.id) - AppState.images.getSimilarity(b.id);
+                    }
                     break;
                 case 'rating':
                     cmp = (a.rating || '').localeCompare(b.rating || '');
-                    break;
-                case 'quality':
-                    cmp = (a.aesthetic_nima || 0) - (b.aesthetic_nima || 0);
                     break;
                 case 'date':
                 default:
@@ -457,13 +503,11 @@ const Videos = {
         if (!container) return;
 
         const videoId = AppState.videos.getSelectedVideoId();
-        console.log('[TIMELINE DEBUG] _renderTimeline, videoId:', videoId);
         if (!videoId) {
             container.innerHTML = '';
             if (this._els.timelineEmpty) {
                 this._els.timelineEmpty.hidden = false;
             }
-            console.log('[TIMELINE DEBUG] _renderTimeline: no videoId, cleared');
             return;
         }
 
@@ -474,11 +518,8 @@ const Videos = {
         const scenes = AppState.videos.getScenes(videoId);
         if (!scenes || scenes.length === 0) {
             container.innerHTML = '<div class="empty-state">Loading scenes...</div>';
-            console.log('[TIMELINE DEBUG] _renderTimeline: no scenes for', videoId, '(showing loading)');
             return;
         }
-        console.log('[TIMELINE DEBUG] _renderTimeline: rendering', scenes.length, 'scenes for', videoId);
-
         const isSearch = AppState.videos.isSearchMode();
         const video = AppState.videos.getSelectedVideo();
         const preferredSceneId = video?.preferred_scene_id;

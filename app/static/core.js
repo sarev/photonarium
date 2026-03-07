@@ -1169,7 +1169,6 @@ const App = {
         this._bindBtn('btn-vid-sort-date', () => this.setSortBy('date'));
         this._bindBtn('btn-vid-sort-rating', () => this.setSortBy('rating'));
         this._bindBtn('btn-vid-sort-content', () => this.setSortBy('content', { force: true }));
-        this._bindBtn('btn-vid-sort-quality', () => this.setSortBy('quality'));
         this._bindBtn('btn-vid-sort-direction', () => this.toggleSortDirection());
 
         // Similarity slider
