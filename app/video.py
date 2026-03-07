@@ -27,6 +27,8 @@ from typing import TYPE_CHECKING
 
 from PIL import Image, ImageFilter
 
+from thumbnails import sharpen_thumbnail
+
 if TYPE_CHECKING:
     pass
 
@@ -177,9 +179,13 @@ def _get_video_rotation(path: Path) -> int:
     try:
         result = subprocess.run(
             [
-                ffprobe_bin, '-v', 'quiet',
-                '-print_format', 'json',
-                '-show_streams', str(path),
+                ffprobe_bin,
+                '-v',
+                'quiet',
+                '-print_format',
+                'json',
+                '-show_streams',
+                str(path),
             ],
             capture_output=True,
             text=True,
@@ -303,8 +309,8 @@ def extract_keyframe_thumbnail(
         # Resize preserving aspect ratio (same as thumbnails.py)
         frame.thumbnail((size, size), Image.LANCZOS)
 
-        # Apply sharpening (matches the image thumbnail pipeline)
-        frame = frame.filter(ImageFilter.UnsharpMask(radius=1.0, percent=40, threshold=3))
+        # Apply sharpening (shared with the image thumbnail pipeline)
+        frame = sharpen_thumbnail(frame, video=True)
 
         # Ensure destination directory exists
         dest_path.parent.mkdir(parents=True, exist_ok=True)
@@ -404,11 +410,15 @@ def _detect_scenes_ffmpeg(
         # scene-change threshold.  Output goes to stderr.
         cmd = [
             ffmpeg_bin,
-            '-i', str(path),
-            '-filter:v', f"select='gt(scene,{threshold_frac})',showinfo",
-            '-vsync', 'vfr',
+            '-i',
+            str(path),
+            '-filter:v',
+            f"select='gt(scene,{threshold_frac})',showinfo",
+            '-vsync',
+            'vfr',
             '-an',
-            '-f', 'null',
+            '-f',
+            'null',
             '-',
         ]
         result = subprocess.run(
@@ -429,10 +439,7 @@ def _detect_scenes_ffmpeg(
                         scene_times.append(t)
 
         if len(scene_times) > 1:
-            logger.debug(
-                f'ffmpeg scene detection found {len(scene_times) - 1} cut(s) '
-                f'in {path.name}'
-            )
+            logger.debug(f'ffmpeg scene detection found {len(scene_times) - 1} cut(s) in {path.name}')
         return scene_times
 
     except (FileNotFoundError, subprocess.TimeoutExpired, OSError) as e:
@@ -601,9 +608,7 @@ def _fit_frame_to_16_9(frame: Image.Image, size: int) -> Image.Image:
 
     # Background: stretch to fill 16:9, blur, darken
     background = frame.resize((target_w, target_h), Image.Resampling.LANCZOS)
-    background = background.filter(
-        ImageFilter.GaussianBlur(radius=_SCENE_THUMB_BG_BLUR_RADIUS)
-    )
+    background = background.filter(ImageFilter.GaussianBlur(radius=_SCENE_THUMB_BG_BLUR_RADIUS))
     darkener = Image.new('RGB', (target_w, target_h), (0, 0, 0))
     background = Image.blend(background, darkener, _SCENE_THUMB_BG_DARKEN_ALPHA)
 
@@ -655,7 +660,7 @@ def generate_scene_thumbnails(
         dest.parent.mkdir(parents=True, exist_ok=True)
         try:
             thumb = _fit_frame_to_16_9(frame, size)
-            thumb = thumb.filter(ImageFilter.UnsharpMask(radius=1.0, percent=40, threshold=3))
+            thumb = sharpen_thumbnail(thumb, video=True)
             thumb.save(str(dest), 'JPEG', quality=quality)
         except Exception as e:
             logger.error(f'Failed to create scene thumbnail ({size}px) for {scene_id}: {e}')

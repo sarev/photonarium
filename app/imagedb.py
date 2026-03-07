@@ -4198,8 +4198,7 @@ class VideoProcessingThread(threading.Thread):
 
         with self._db_lock:
             existing_scenes = self.conn.execute(
-                'SELECT id, scene_index, start_time, end_time FROM scenes '
-                'WHERE image_id = ? ORDER BY scene_index',
+                'SELECT id, scene_index, start_time, end_time FROM scenes WHERE image_id = ? ORDER BY scene_index',
                 (image_id,),
             ).fetchall()
 
@@ -4228,9 +4227,7 @@ class VideoProcessingThread(threading.Thread):
                 scene_id = str(uuid.uuid4())
                 scene_ids.append(scene_id)
                 keyframe_time = (start + end) / 2
-                insert_params.append(
-                    (scene_id, image_id, idx, start, end, keyframe_time, now, now)
-                )
+                insert_params.append((scene_id, image_id, idx, start, end, keyframe_time, now, now))
 
             if self.stop_event.is_set():
                 return
@@ -5759,7 +5756,9 @@ class ImageDatabase:
         self._stop_event = threading.Event()
         self._pause_event = threading.Event()
 
-        # Create locks for thread safety
+        # Create locks for thread safety.
+        # LOCK ORDERING: always acquire _db_lock before any subsidiary lock
+        # (_image_locks_lock, _checksum_cache_lock, etc.) to prevent deadlocks.
         self._db_lock = threading.RLock()  # Reentrant lock for nested calls
         self._image_locks: dict[str, threading.Lock] = {}  # Per-image locks for rotation
         self._image_locks_lock = threading.Lock()  # Lock for the locks dict
@@ -8218,14 +8217,10 @@ class ImageDatabase:
 
     def get_stats(self) -> dict[str, Any]:
         """Get database statistics."""
-        cursor = self.conn.execute(
-            "SELECT COUNT(*) as count FROM images WHERE deleted = 0 AND media_type = 'image'"
-        )
+        cursor = self.conn.execute("SELECT COUNT(*) as count FROM images WHERE deleted = 0 AND media_type = 'image'")
         total_images = cursor.fetchone()['count']
 
-        cursor = self.conn.execute(
-            "SELECT COUNT(*) as count FROM images WHERE deleted = 0 AND media_type = 'video'"
-        )
+        cursor = self.conn.execute("SELECT COUNT(*) as count FROM images WHERE deleted = 0 AND media_type = 'video'")
         total_videos = cursor.fetchone()['count']
 
         cursor = self.conn.execute('SELECT COUNT(*) as count FROM folders')
@@ -8269,11 +8264,7 @@ class ImageDatabase:
         face_count = self._face_queue.qsize()
         nima_count = self._nima_queue.qsize() if self._nima_queue else 0
         video_count = self._video_queue.qsize() if self._video_queue else 0
-        video_progress = (
-            self._video_thread._current_video
-            if self._video_thread is not None
-            else None
-        )
+        video_progress = self._video_thread._current_video if self._video_thread is not None else None
         trash_count = self._trash_queue.qsize()
         import_count = self._import_queue.qsize()
 
@@ -8327,14 +8318,10 @@ class ImageDatabase:
         status = 'up_to_date' if (queues_empty and phase4_idle) else 'updating'
 
         # Get counts for live updates during processing
-        cursor = self.conn.execute(
-            "SELECT COUNT(*) as count FROM images WHERE deleted = 0 AND media_type = 'image'"
-        )
+        cursor = self.conn.execute("SELECT COUNT(*) as count FROM images WHERE deleted = 0 AND media_type = 'image'")
         total_images = cursor.fetchone()['count']
 
-        cursor = self.conn.execute(
-            "SELECT COUNT(*) as count FROM images WHERE deleted = 0 AND media_type = 'video'"
-        )
+        cursor = self.conn.execute("SELECT COUNT(*) as count FROM images WHERE deleted = 0 AND media_type = 'video'")
         total_videos = cursor.fetchone()['count']
 
         # people/faces tables are created by FaceDB, which may not have
@@ -8644,9 +8631,10 @@ def register_signal_handlers(db: ImageDatabase) -> None:
     global _active_database
     _active_database = db
 
-    # Register signal handlers
+    # Register signal handlers (SIGTERM may not exist on all platforms)
     signal.signal(signal.SIGINT, _signal_handler)
-    signal.signal(signal.SIGTERM, _signal_handler)
+    if hasattr(signal, 'SIGTERM'):
+        signal.signal(signal.SIGTERM, _signal_handler)
 
     # Register atexit handler for normal exit
     atexit.register(_atexit_handler)

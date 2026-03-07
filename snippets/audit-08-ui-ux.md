@@ -54,11 +54,11 @@ User-facing labels: "Identical", "Near-identical", "Similar", "Related", "Direct
 
 ## Status
 
-**Mostly Compliant**
+**Compliant** (after fix)
 
 ## Actions
 
-- **P2**: Replace "Face Search Index" (`index.html:590`) with "Preparing Faces" or "Building face database"
-- **P2**: Replace "Grouping Faces" (`index.html:588`) with "Organizing unknown faces" or "Clustering faces"
-- **P3**: Replace "Matching Faces" (`index.html:589`) with "Finding matches" or "Identifying faces"
-- **P3**: Consider replacing "Aesthetic" (`index.html:583`) with "Quality scoring" or "Rating quality"
+- ~~**P2**: Replace "Face Search Index"~~ — **FIXED**: now "Preparing Faces"
+- ~~**P2**: Replace "Grouping Faces"~~ — **FIXED**: now "Organizing Faces"
+- ~~**P3**: Replace "Matching Faces"~~ — **FIXED**: now "Finding Matches"
+- ~~**P3**: Replace "Aesthetic"~~ — **FIXED**: now "Quality Scoring"

@@ -580,14 +580,14 @@
                             <p><span class="queue-label">Indexing:</span> <span id="indexing-count">0</span> remaining<span id="indexing-eta" class="queue-eta"></span></p>
                             <p><span class="queue-label">Classifying:</span> <span id="embedding-count">0</span> remaining<span id="embedding-eta" class="queue-eta"></span></p>
                             <p id="face-queue-row" hidden><span class="queue-label">Face Detection:</span> <span id="face-count">0</span> remaining<span id="face-eta" class="queue-eta"></span></p>
-                            <p id="nima-queue-row" hidden><span class="queue-label">Aesthetic:</span> <span id="nima-count">0</span> remaining<span id="nima-eta" class="queue-eta"></span></p>
+                            <p id="nima-queue-row" hidden><span class="queue-label">Quality Scoring:</span> <span id="nima-count">0</span> remaining<span id="nima-eta" class="queue-eta"></span></p>
                             <p id="video-queue-row" hidden><span class="queue-label">Video:</span> <span id="video-count">0</span> remaining<span id="video-step" class="queue-eta"></span></p>
                             <p id="trash-queue-row" hidden><span class="queue-label">Trashing:</span> <span id="trash-queue-count">0</span> remaining</p>
                             <p id="import-queue-row" hidden><span class="queue-label">Importing:</span> <span id="import-queue-count">0</span> remaining (<span id="import-skipped-count">0</span> skipped)</p>
                             <p id="duplicates-row" hidden><span class="queue-label">Finding Duplicates:</span> <span id="duplicates-status">level 0</span></p>
-                            <p id="face-grouping-row" hidden><span class="queue-label">Grouping Faces:</span> <span id="face-grouping-status">computing</span></p>
-                            <p id="face-reassess-row" hidden><span class="queue-label">Matching Faces:</span> <span id="face-reassess-status">computing</span></p>
-                            <p id="face-embeddings-row" hidden><span class="queue-label">Face Search Index:</span> <span id="face-embeddings-status">0/0</span></p>
+                            <p id="face-grouping-row" hidden><span class="queue-label">Organizing Faces:</span> <span id="face-grouping-status">computing</span></p>
+                            <p id="face-reassess-row" hidden><span class="queue-label">Finding Matches:</span> <span id="face-reassess-status">computing</span></p>
+                            <p id="face-embeddings-row" hidden><span class="queue-label">Preparing Faces:</span> <span id="face-embeddings-status">0/0</span></p>
                         </div>
                     </div>
                     <div class="scan-controls">
@@ -694,7 +694,7 @@
 
                     <!-- Filter actions -->
                     <div class="filter-actions">
-                        <button id="btn-clear-filter-action" class="action-btn">
+                        <button id="btn-clear-filter-action" class="action-btn" title="Clear all filter criteria">
                             <span class="icon" data-icon="clear">&#x2715;</span>
                             Clear Filter
                         </button>
@@ -702,7 +702,7 @@
                             <span class="icon" data-icon="bookmark_add">&#x2606;</span>
                             Save as Smart Group
                         </button>
-                        <button id="btn-apply-filter" class="action-btn primary">
+                        <button id="btn-apply-filter" class="action-btn primary" title="Apply filter to gallery">
                             <span class="icon" data-icon="search">&#x1F50D;</span>
                             Apply Filter
                         </button>

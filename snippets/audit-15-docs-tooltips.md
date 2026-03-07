@@ -60,9 +60,9 @@ Out of ~75 buttons in `index.html`, **71 have `title=` attributes** with clear d
 
 ## Status
 
-**Mostly Compliant**
+**Compliant** (after fix)
 
 ## Actions
 
-- **P3**: Add `title=` tooltip to `btn-clear-filter-action` and `btn-apply-filter` buttons
+- ~~**P3**: Add `title=` tooltip to `btn-clear-filter-action` and `btn-apply-filter` buttons~~ — **FIXED**: tooltips added ("Clear all filter criteria", "Apply filter to gallery")
 - **P3**: Consider adding `aria-label` attributes to icon-only buttons for screen reader accessibility

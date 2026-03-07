@@ -70,9 +70,9 @@ No explicit size limits checked before opening, but the subsequent `resize()` ca
 
 ## Status
 
-**Mostly Compliant**
+**Compliant** (after fix)
 
 ## Actions
 
-- **P2**: Add try/except for `MemoryError`/`RuntimeError` around `np.vstack(embeddings)` in `faces.py:2649` — on failure, log error and skip face grouping rather than crashing
-- **P3**: Consider adding OOM protection directly in `nima.py:228-244` rather than relying on the caller — would make the module self-contained and consistent with the other model modules
+- ~~**P2**: Add OOM guard for face grouping vstack~~ — **FIXED**: `faces.py` `np.vstack(embeddings)` wrapped in try/except, logs error and returns 0 on OOM
+- ~~**P3**: Add OOM protection in `nima.py`~~ — **FIXED**: `score_images()` now has full two-tier OOM fallback (batch → single-item) with `torch.cuda.empty_cache()`, matching the pattern in `imagedb.py` and `faces.py`

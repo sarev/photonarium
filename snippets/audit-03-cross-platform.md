@@ -49,8 +49,8 @@
 
 ## Status
 
-**Mostly Compliant**
+**Compliant** (after fix)
 
 ## Actions
 
-- **P3**: Add defensive guard around `signal.SIGTERM` registration at `imagedb.py:8649` — wrap in `hasattr(signal, 'SIGTERM')` or try/except for robustness on unusual platforms
+- ~~**P3**: Add defensive guard around `signal.SIGTERM` registration at `imagedb.py:8649`~~ — **FIXED**: wrapped in `hasattr(signal, 'SIGTERM')` guard

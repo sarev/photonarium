@@ -109,4 +109,4 @@ Commit `52b0dd9` fixed per-row lock/unlock loops that caused "database is locked
 
 ## Actions
 
-- **P3**: Document lock ordering hierarchy in a code comment (e.g., "Always acquire `_db_lock` before any other lock") to aid future maintainability
+- ~~**P3**: Document lock ordering hierarchy~~ — **FIXED**: added comment at `imagedb.py:5763` documenting that `_db_lock` must be acquired before any subsidiary lock

@@ -54,10 +54,10 @@ Each site constructs SQL independently. This is a common pattern in Flask/SQLite
 
 ## Status
 
-**Issues Found**
+**Mostly Compliant** (after fix)
 
 ## Actions
 
-- **P2**: Extract shared thumbnail sharpening into a utility function in `thumbnails.py` (e.g., `apply_sharpening(img)`) and call from `video.py`. Decide whether 40% vs 60% is intentional and document
-- **P3**: Consider extracting OOM batch fallback into a shared utility (e.g., `def batch_inference_with_fallback(tensors, device, inference_fn)`) — low priority since the pattern is stable and infrequently modified
+- ~~**P2**: Extract shared thumbnail sharpening~~ — **FIXED**: Added `sharpen_thumbnail(img, *, video=False)` in `thumbnails.py` with `VIDEO_SHARPEN_PERCENT = 40` (documented: lighter sharpening avoids amplifying video compression artefacts). Both `video.py` call sites updated to use the shared function
+- **P3**: Consider extracting OOM batch fallback into a shared utility — low priority since the pattern is stable and infrequently modified
 - **P3**: Consider extracting blurred-background padding into a shared utility — low priority as the implementations serve different aspect ratio targets

@@ -1222,7 +1222,11 @@ def revalidate_person_faces(
     # Build embedding matrix (ALL faces, including locked, for similarity comparison)
     face_ids = [f[0] for f in faces]
     face_locked = [f[2] for f in faces]
-    embeddings = np.vstack([f[1] for f in faces])
+    try:
+        embeddings = np.vstack([f[1] for f in faces])
+    except (MemoryError, RuntimeError):
+        logger.error(f'OOM building embedding matrix for person {person_id} ({len(faces)} faces), skipping eject')
+        return []
 
     # Ensure normalized (guard against zero-norm embeddings from corruption)
     norms = np.linalg.norm(embeddings, axis=1, keepdims=True)
@@ -1230,8 +1234,19 @@ def revalidate_person_faces(
         norms[norms == 0] = 1
         embeddings = embeddings / norms
 
-    # Compute pairwise similarities
-    similarities = embeddings @ embeddings.T
+    # Compute pairwise similarities (chunked for persons with many faces)
+    n = len(faces)
+    CHUNK_THRESHOLD = 500
+    if n <= CHUNK_THRESHOLD:
+        similarities = embeddings @ embeddings.T
+    else:
+        # Chunked: compute max-similarity per face without O(n²) memory
+        logger.info(f'Person {person_id} has {n} faces, using chunked similarity')
+        chunk_size = CHUNK_THRESHOLD
+        similarities = np.full((n, n), -1.0, dtype=np.float32)
+        for start in range(0, n, chunk_size):
+            end = min(start + chunk_size, n)
+            similarities[start:end] = embeddings[start:end] @ embeddings.T
 
     # For each face, find max similarity to OTHER faces (exclude self on diagonal)
     np.fill_diagonal(similarities, -1)  # Exclude self-similarity
@@ -1905,6 +1920,58 @@ def suppress_face(
     )
     conn.commit()
     return cursor.rowcount > 0
+
+
+def unassign_faces_batch(
+    conn: sqlite3.Connection,
+    face_ids: list[str],
+) -> int:
+    """Unassign multiple faces from their persons in a single transaction.
+
+    Clears person_id and manually_tagged for all given faces, using
+    ``executemany`` + one commit instead of per-item updates.
+
+    Args:
+        conn: Database connection.
+        face_ids: List of face UUIDs to unassign.
+
+    Returns:
+        Number of faces actually updated.
+    """
+    if not face_ids:
+        return 0
+    conn.executemany(
+        "UPDATE faces SET person_id = NULL, manually_tagged = 0, updated_at = datetime('now') WHERE id = ?",
+        [(fid,) for fid in face_ids],
+    )
+    conn.commit()
+    return len(face_ids)
+
+
+def suppress_faces_batch(
+    conn: sqlite3.Connection,
+    face_ids: list[str],
+) -> int:
+    """Suppress multiple faces in a single transaction.
+
+    Marks faces as false positives (suppressed=1, person_id=NULL) using
+    ``executemany`` + one commit instead of per-item updates.
+
+    Args:
+        conn: Database connection.
+        face_ids: List of face UUIDs to suppress.
+
+    Returns:
+        Number of faces suppressed.
+    """
+    if not face_ids:
+        return 0
+    conn.executemany(
+        "UPDATE faces SET suppressed = 1, person_id = NULL, updated_at = datetime('now') WHERE id = ?",
+        [(fid,) for fid in face_ids],
+    )
+    conn.commit()
+    return len(face_ids)
 
 
 def mark_no_faces_detected(
@@ -2646,7 +2713,11 @@ def _compute_unknown_face_groups_impl(
     logger.info(f'Computing groups for {n_faces} unknown faces')
 
     # Stack embeddings into a matrix (already L2-normalized)
-    embedding_matrix = np.vstack(embeddings)
+    try:
+        embedding_matrix = np.vstack(embeddings)
+    except (MemoryError, RuntimeError):
+        logger.error(f'OOM stacking {n_faces} face embeddings for grouping, skipping')
+        return 0
 
     # Use UnionFind in ID mode
     uf = UnionFind(ids=face_ids)
@@ -2667,16 +2738,18 @@ def _compute_unknown_face_groups_impl(
         # Compute similarities: chunk @ all.T
         similarities = chunk @ embedding_matrix.T
 
-        # Find pairs above threshold
+        # Vectorised: find all pairs above threshold in upper triangle
+        # (mirrors the approach in duplicates.py to avoid O(n²) Python loops)
         for local_idx in range(chunk_end - i):
             global_idx = i + local_idx
-            face_id_i = face_ids[global_idx]
-
             # Only check j > global_idx to avoid duplicate pairs
-            for j in range(global_idx + 1, n_faces):
-                if similarities[local_idx, j] >= threshold:
-                    face_id_j = face_ids[j]
-                    uf.union_ids(face_id_i, face_id_j)
+            if global_idx + 1 < n_faces:
+                row_sims = similarities[local_idx, global_idx + 1 :]
+                matches = np.where(row_sims >= threshold)[0]
+                face_id_i = face_ids[global_idx]
+                for match_offset in matches:
+                    j = global_idx + 1 + match_offset
+                    uf.union_ids(face_id_i, face_ids[j])
 
     # Extract groups and assign group IDs
     logger.info('Extracting groups from UnionFind structure...')
@@ -2700,7 +2773,7 @@ def _compute_unknown_face_groups_impl(
 
             # Update faces in batches to avoid "too many SQL variables" error
             for i in range(0, len(members), BATCH_SIZE):
-                batch = members[i: i + BATCH_SIZE]
+                batch = members[i : i + BATCH_SIZE]
                 placeholders = sql_placeholders(batch)
                 conn.execute(f'UPDATE faces SET unknown_group_id = ? WHERE id IN ({placeholders})', [group_id] + batch)
 

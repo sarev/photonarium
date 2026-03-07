@@ -231,14 +231,39 @@ def score_images_batch(
         if img.mode != 'RGB':
             img = img.convert('RGB')
         tensors.append(NIMA_TRANSFORM(img))
-    batch = torch.stack(tensors).to(device)
 
-    # Inference (no gradient computation needed)
-    with torch.no_grad():
-        probs = model(batch)  # (N, 10)
+    try:
+        batch = torch.stack(tensors).to(device)
 
-    # Weighted mean: sum(prob[i] * (i+1) for i in range(10))
-    ratings = torch.arange(1, 11, dtype=torch.float32, device=device)
-    scores = (probs * ratings).sum(dim=1)
+        # Inference (no gradient computation needed)
+        with torch.no_grad():
+            probs = model(batch)  # (N, 10)
 
-    return scores.cpu().tolist()
+        # Weighted mean: sum(prob[i] * (i+1) for i in range(10))
+        ratings = torch.arange(1, 11, dtype=torch.float32, device=device)
+        scores = (probs * ratings).sum(dim=1)
+
+        return scores.cpu().tolist()
+    except (MemoryError, RuntimeError) as e:
+        if not isinstance(e, MemoryError) and 'out of memory' not in str(e).lower():
+            raise
+        logger.warning(f'OOM scoring batch of {len(tensors)} images, falling back to single-item')
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+
+        # Single-item fallback
+        results = []
+        ratings = torch.arange(1, 11, dtype=torch.float32, device=device)
+        for t in tensors:
+            try:
+                single = t.unsqueeze(0).to(device)
+                with torch.no_grad():
+                    probs = model(single)
+                score = (probs * ratings).sum(dim=1)
+                results.append(score.item())
+            except (MemoryError, RuntimeError):
+                logger.warning('OOM on single NIMA image, skipping')
+                if torch.cuda.is_available():
+                    torch.cuda.empty_cache()
+                results.append(0.0)
+        return results

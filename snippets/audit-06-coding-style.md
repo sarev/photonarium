@@ -48,8 +48,8 @@ Config (`tools/eslint.config.mjs`): 4-space indentation, single quotes, always s
 
 ## Status
 
-**Mostly Compliant**
+**Compliant** (after fix)
 
 ## Actions
 
-- **P2**: Run `ruff format --config tools/ruff.toml app/video.py app/faces.py app/imagedb.py app/thumbnails.py` to fix all auto-fixable formatting issues
+- ~~**P2**: Run `ruff format` on affected files~~ — **FIXED**: `ruff format` and `ruff check --fix` applied to `video.py`, `faces.py`, `imagedb.py`, `thumbnails.py`, `nima.py`, `app.py`. All checks pass

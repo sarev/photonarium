@@ -116,6 +116,12 @@ from faces import (
     update_face_person,
     update_person,
 )
+from faces import (
+    suppress_faces_batch as _suppress_faces_batch,
+)
+from faces import (
+    unassign_faces_batch as _unassign_faces_batch,
+)
 from imagedb import (
     EVENT_FACES_CHANGED,
     EVENT_GROUPS_CHANGED,
@@ -3414,14 +3420,9 @@ def unassign_faces_simple():
     db = get_db()
 
     with db._db_lock:
-        unassigned_count = 0
-        for face_id in face_ids:
-            face = get_face(db.conn, face_id)
-            if face is None:
-                continue
-            # Clear person_id and manually_tagged (face returns to unknown pool)
-            update_face_person(db.conn, face_id, None, manually_tagged=False)
-            unassigned_count += 1
+        # Filter to faces that actually exist before batch update
+        valid_ids = [fid for fid in face_ids if get_face(db.conn, fid) is not None]
+        unassigned_count = _unassign_faces_batch(db.conn, valid_ids)
 
     # Broadcast for other clients
     if unassigned_count > 0:
@@ -3466,13 +3467,9 @@ def suppress_faces_batch():
     db = get_db()
 
     with db._db_lock:
-        suppressed_count = 0
-        for face_id in face_ids:
-            face = get_face(db.conn, face_id)
-            if face is None:
-                continue
-            suppress_face(db.conn, face_id)
-            suppressed_count += 1
+        # Filter to faces that actually exist before batch update
+        valid_ids = [fid for fid in face_ids if get_face(db.conn, fid) is not None]
+        suppressed_count = _suppress_faces_batch(db.conn, valid_ids)
 
     # Broadcast for other clients
     if suppressed_count > 0:
@@ -4211,21 +4208,20 @@ def unassign_faces_batch():
 
     # Use lock to avoid conflicts with background threads
     with db._db_lock:
-        # Phase 1: Unassign all faces and track affected persons
+        # Phase 1: Identify valid faces and track affected persons
+        faces_to_unassign = []
         for face_id in face_ids:
             face = get_face(db.conn, face_id)
             if face is None:
                 continue
-
             old_person_id = face.get('person_id')
             if not old_person_id:
                 continue
-
             affected_person_ids.add(old_person_id)
+            faces_to_unassign.append(face_id)
 
-            # Unlink face from person (clear manual flag since no longer assigned)
-            update_face_person(db.conn, face_id, None, manually_tagged=False)
-            unassigned_count += 1
+        # Batch unassign (single executemany + one commit)
+        unassigned_count = _unassign_faces_batch(db.conn, faces_to_unassign)
 
         # DESIGN: Data integrity invariant - person must have valid preferred_face_id for
         # thumbnails, so auto-select if current preferred was removed (see design-audit.md 1.2)

@@ -60,10 +60,10 @@ Bounded EventQueue ring buffer (`imagedb.py:4913-4936`): `MAX_EVENTS = 200`, aut
 
 ## Status
 
-**Issues Found**
+**Compliant** (after fix)
 
 ## Actions
 
-- **P1**: Refactor `faces.py:2671-2679` to use vectorised `np.where()` comparison (matching the pattern at `duplicates.py:911`) instead of nested Python loops. This eliminates the O(n²) bottleneck in face grouping
-- **P2**: Add bounds check in `faces.py:1220-1235` (`eject_low_quality_faces()`) — chunk the similarity computation if person face count exceeds a threshold (e.g., 500 faces)
-- **P3**: Consider chunked loading of unknown face embeddings in `faces.py:2649` for extreme-scale datasets
+- ~~**P1**: Refactor `faces.py:2671-2679` to use vectorised `np.where()` comparison~~ — **FIXED**: inner loop now slices `similarities[local_idx, global_idx + 1:]` and uses `np.where(row_sims >= threshold)` matching the `duplicates.py` pattern
+- ~~**P2**: Add bounds check in `faces.py:1220-1235` (`eject_low_quality_faces()`)~~ — **FIXED**: chunked similarity computation for persons with >500 faces, with OOM guard on `np.vstack`
+- **P3**: Consider chunked loading of unknown face embeddings in `faces.py:2649` for extreme-scale datasets (OOM guard added; full chunking deferred)

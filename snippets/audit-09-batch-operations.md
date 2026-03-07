@@ -57,12 +57,11 @@ These endpoints do it right:
 
 ## Status
 
-**Issues Found**
+**Mostly Compliant** (after fix)
 
 ## Actions
 
-- **P2**: Refactor `/api/faces/unassign` (`app.py:3418-3424`) to batch all face updates into a single `executemany()` + one commit
-- **P2**: Refactor `/api/faces/suppress` (`app.py:3470-3487`) similarly
-- **P2**: Refactor `/api/faces/unassign-batch` (`app.py:4184-4240`) to use actual batch operations matching its name
+- ~~**P2**: Refactor `/api/faces/unassign`~~ — **FIXED**: now uses `unassign_faces_batch()` (`executemany` + single commit)
+- ~~**P2**: Refactor `/api/faces/suppress`~~ — **FIXED**: now uses `suppress_faces_batch()` (`executemany` + single commit)
+- ~~**P2**: Refactor `/api/faces/unassign-batch`~~ — **FIXED**: now uses `_unassign_faces_batch()` for Phase 1
 - **P3**: Refactor `/api/faces/<face_id>/toggle-manual` to batch when multiple face IDs provided
-- **P3**: Audit `update_face_person()` in `faces.py` — consider adding a batch variant that accepts a list of `(face_id, person_id)` tuples

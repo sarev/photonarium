@@ -66,11 +66,38 @@ THUMBNAIL_SHARPEN_RADIUS = 1.0
 THUMBNAIL_SHARPEN_PERCENT = 60
 THUMBNAIL_SHARPEN_THRESHOLD = 3
 
+# Lighter sharpening for video frames (lower percent avoids amplifying
+# compression artefacts that are common in decoded video)
+VIDEO_SHARPEN_PERCENT = 40
+
 # Skip draft mode for source images below this dimension (px)
 THUMBNAIL_MAX_SOURCE_DIM = 16384
 
 # Quality used when saving rotated full-size images
 ROTATION_SAVE_QUALITY = 95
+
+
+def sharpen_thumbnail(img: Image.Image, *, video: bool = False) -> Image.Image:
+    """Apply post-downscale sharpening to a thumbnail.
+
+    Centralises the UnsharpMask parameters so that image and video
+    thumbnail pipelines stay consistent.
+
+    Args:
+        img: PIL Image to sharpen (mutated in-place via filter).
+        video: If True, use lighter sharpening suited to video frames.
+
+    Returns:
+        Sharpened PIL Image.
+    """
+    percent = VIDEO_SHARPEN_PERCENT if video else THUMBNAIL_SHARPEN_PERCENT
+    return img.filter(
+        ImageFilter.UnsharpMask(
+            radius=THUMBNAIL_SHARPEN_RADIUS,
+            percent=percent,
+            threshold=THUMBNAIL_SHARPEN_THRESHOLD,
+        )
+    )
 
 
 def _move_with_retry(src: Path, dst: Path, max_retries: int = 5, delay: float = 0.1) -> None:
@@ -213,13 +240,7 @@ def generate_thumbnail(
             img.thumbnail((size, size), Image.Resampling.LANCZOS)
 
             # Apply subtle sharpening to counteract downscale blur
-            img = img.filter(
-                ImageFilter.UnsharpMask(
-                    radius=THUMBNAIL_SHARPEN_RADIUS,
-                    percent=THUMBNAIL_SHARPEN_PERCENT,
-                    threshold=THUMBNAIL_SHARPEN_THRESHOLD,
-                )
-            )
+            img = sharpen_thumbnail(img)
 
             # Save as JPEG
             img.save(dest_path, 'JPEG', quality=quality, optimize=True)
@@ -325,19 +346,19 @@ def _reset_exif_orientation(path: Path) -> bool:
                 pos += 2
                 continue
 
-            seg_length = int.from_bytes(data[pos + 2: pos + 4], 'big')
+            seg_length = int.from_bytes(data[pos + 2 : pos + 4], 'big')
 
             if marker_type == 0xE1:  # APP1
                 app1_data_start = pos + 4  # After marker (2) and length (2)
 
                 # Verify this is an EXIF APP1 (not XMP or other APP1 usage)
-                if data[app1_data_start: app1_data_start + 6] != b'Exif\x00\x00':
+                if data[app1_data_start : app1_data_start + 6] != b'Exif\x00\x00':
                     pos += 2 + seg_length
                     continue
 
                 # Parse the TIFF header within the EXIF segment
                 tiff_start = app1_data_start + 6
-                byte_order = bytes(data[tiff_start: tiff_start + 2])
+                byte_order = bytes(data[tiff_start : tiff_start + 2])
                 if byte_order == b'MM':
                     endian = 'big'
                 elif byte_order == b'II':
@@ -346,25 +367,25 @@ def _reset_exif_orientation(path: Path) -> bool:
                     return True  # Unknown byte order, skip
 
                 # First IFD offset (relative to tiff_start)
-                ifd_offset = int.from_bytes(data[tiff_start + 4: tiff_start + 8], endian)
+                ifd_offset = int.from_bytes(data[tiff_start + 4 : tiff_start + 8], endian)
                 ifd_pos = tiff_start + ifd_offset
 
                 # Read number of IFD0 entries
-                num_entries = int.from_bytes(data[ifd_pos: ifd_pos + 2], endian)
+                num_entries = int.from_bytes(data[ifd_pos : ifd_pos + 2], endian)
 
                 # Scan IFD0 entries for the orientation tag
                 for i in range(num_entries):
                     entry_pos = ifd_pos + 2 + i * 12
-                    tag = int.from_bytes(data[entry_pos: entry_pos + 2], endian)
+                    tag = int.from_bytes(data[entry_pos : entry_pos + 2], endian)
                     if tag == ORIENTATION_TAG:
                         # Type is SHORT (3), count is 1, value is inline
                         # at entry_pos + 8 (2 bytes)
-                        val = int.from_bytes(data[entry_pos + 8: entry_pos + 10], endian)
+                        val = int.from_bytes(data[entry_pos + 8 : entry_pos + 10], endian)
                         if val == 1:
                             return True  # Already normal
 
                         # Overwrite with orientation = 1
-                        data[entry_pos + 8: entry_pos + 10] = (1).to_bytes(2, endian)
+                        data[entry_pos + 8 : entry_pos + 10] = (1).to_bytes(2, endian)
 
                         # Write atomically via temp file
                         with tempfile.NamedTemporaryFile(
