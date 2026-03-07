@@ -380,7 +380,7 @@ echo "--- Installing OpenCLIP ---"
 
 echo ""
 echo "--- Installing remaining dependencies ---"
-"$VENV_PIP" install pillow opencv-python imagehash numpy pyyaml flask waitress orjson requests transformers rawpy exifread
+"$VENV_PIP" install pillow opencv-python imagehash numpy pyyaml flask waitress orjson requests transformers rawpy exifread av ffmpeg-binaries faster-whisper
 
 # Install facenet-pytorch last with --no-deps to avoid its overly strict
 # version bounds on torch/numpy/pillow.  Suppress stderr so users don't

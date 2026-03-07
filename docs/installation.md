@@ -423,7 +423,7 @@ If you prefer to install manually, or the installer script doesn't suit your set
 
    # Other dependencies
    pip install open_clip_torch
-   pip install pillow numpy pyyaml opencv-python imagehash flask waitress requests orjson transformers rawpy exifread
+   pip install pillow numpy pyyaml opencv-python imagehash flask waitress requests orjson transformers rawpy exifread av ffmpeg-binaries faster-whisper
 
    # Install facenet-pytorch last with --no-deps to avoid its overly strict
    # version bounds on torch/numpy/pillow (the package is unmaintained)

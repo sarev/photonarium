@@ -14,7 +14,7 @@ The HTTP layer. Receives requests from the frontend and delegates to the
 backend modules for database operations and image processing. Uses the waitress
 WSGI server in production.
 
-**Routes (74):**
+**Routes (82):**
 
 Mutation endpoints prefer batch format (arrays, not single items).
 
@@ -25,7 +25,7 @@ Mutation endpoints prefer batch format (arrays, not single items).
 - Backend validates and stores, doesn't compute application logic
 - Derived values (face_count) computed via SQL JOIN, not stored
 
-#### Images (11 routes)
+#### Images (12 routes)
 
 | Method | Endpoint | Description |
 |--------|----------|-------------|
@@ -33,6 +33,7 @@ Mutation endpoints prefer batch format (arrays, not single items).
 | GET | `/api/images/:id` | Get single image metadata |
 | POST | `/api/images/:id` | Update image (description, rating) |
 | GET | `/api/images/:id/exif` | Get EXIF metadata for an image |
+| GET | `/api/images/:id/scenes` | Get scene list for a video `?query=` for scored results |
 | POST | `/api/images/trash` | Move images to trash `{image_ids: []}` |
 | GET | `/api/images/:id/thumbnail?size=N` | Get thumbnail (snapped to 200 or 400px) |
 | GET | `/api/images/:id/full` | Get full-resolution image |
@@ -50,11 +51,12 @@ Mutation endpoints prefer batch format (arrays, not single items).
 | DELETE | `/api/folders/:path` | Remove folder and its images |
 | POST | `/api/pick-folder` | Open native folder picker dialog |
 
-#### Search & Similarity (2 routes)
+#### Search & Similarity (3 routes)
 
 | Method | Endpoint | Description |
 |--------|----------|-------------|
 | POST | `/api/search` | Semantic search `{text, threshold}` |
+| POST | `/api/search/videos` | Scene-level video search `{query, threshold, limit}` |
 | GET | `/api/similar/:id` | Get images similar to a given image |
 
 #### Metadata (3 routes)
@@ -65,7 +67,7 @@ Mutation endpoints prefer batch format (arrays, not single items).
 | GET | `/api/metadata-keys` | All distinct metadata keys in the database |
 | GET | `/api/metadata-values?key=X` | Distinct values for a key (autocomplete) |
 
-#### Status & Config (5 routes)
+#### Status & Config (8 routes)
 
 | Method | Endpoint | Description |
 |--------|----------|-------------|
@@ -74,6 +76,9 @@ Mutation endpoints prefer batch format (arrays, not single items).
 | GET | `/api/config` | Get frontend-relevant configuration values |
 | GET | `/api/config/schema` | Full config schema for the settings editor |
 | POST | `/api/config/save` | Save config values `{values: {key: value}}` |
+| GET | `/api/health` | Health check endpoint |
+| POST | `/api/restart` | Restart the server process |
+| GET | `/api/logs` | Get recent log entries from the database |
 
 #### Duplicates (3 routes)
 
@@ -116,6 +121,13 @@ Mutation endpoints prefer batch format (arrays, not single items).
 |--------|----------|-------------|
 | GET | `/api/events` | Fetch and clear pending events |
 | GET | `/api/events/count` | Get count of pending events (lightweight) |
+
+#### Scenes (2 routes)
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| GET | `/api/scenes/:id/thumbnail` | Get scene keyframe thumbnail |
+| PUT | `/api/images/:id/preferred-scene` | Set preferred scene for a video `{scene_id}` |
 
 #### Utility (1 route)
 
@@ -209,14 +221,19 @@ background processing in threads.
 8. Thumbnail generation stubs
 9. Event queue (cursor-based, multi-client)
 10. Import worker (copies files into catalogue directory, organised by date)
-11. `ImageDatabase` public API wrapper
-12. Graceful shutdown helpers
+11. Video processing thread (scene detection, keyframe extraction, embeddings,
+    transcription — delegates to `video.py`)
+12. NIMA scoring thread (aesthetic quality scoring)
+13. Scan timer thread (periodic rescans at configurable intervals)
+14. `ImageDatabase` public API wrapper
+15. Graceful shutdown helpers
 
-**Threading:** Four worker threads run by default (ingestion, embedding, face
-detection, import). Work is coordinated through `queue.Queue` instances. The
-database connection is shared and protected by `threading.RLock`. Embedding and
-face detection threads yield the GIL periodically (10ms sleep between batches)
-to prevent blocking Flask request handling.
+**Threading:** Six worker threads run by default (ingestion, embedding, face
+detection, NIMA scoring, video processing, scan timer). Work is coordinated
+through `queue.Queue` instances. The database connection is shared and protected
+by `threading.RLock`. Embedding and face detection threads yield the GIL
+periodically (10ms sleep between batches) to prevent blocking Flask request
+handling.
 
 ### `app/faces.py` - Face Detection and Recognition
 
@@ -346,6 +363,23 @@ truskovskiyk/nima.pytorch (MIT licence) trained on the AVA dataset (~255k
 images). The MobileNetV2 backbone is lightweight (~9MB) and runs efficiently on
 both GPU and CPU. Standalone implementation using only torch and torchvision
 (already installed for OpenCLIP and facenet-pytorch).
+
+### `app/video.py` - Video Processing
+
+Video I/O and processing utilities using PyAV (`av`) and ffmpeg-binaries. All
+video support flows through this module.
+
+**Capabilities:**
+
+- Video metadata extraction (duration, dimensions, codec, creation time)
+- Scene boundary detection via ffmpeg's `select` filter with automatic
+  subdivision of long scenes at configurable intervals
+- Keyframe thumbnail generation (same sharpening/JPEG pipeline as images)
+- Multi-frame extraction per scene for OpenCLIP embedding
+- Audio segment extraction for speech-to-text (via faster-whisper)
+
+All functions degrade gracefully if PyAV is not installed — the module-level
+`is_video_supported()` check lets callers skip video processing cleanly.
 
 ### `download_models.py` - Model Downloader
 
@@ -571,6 +605,21 @@ VirtualGrid. All mutations go through AppState APIs. Refresh flags
 (`needsRefresh`, `needsRerender`, `reloadPending`) coordinate updates without
 full reloads.
 
+### `videos.js` - Videos Screen
+
+Dedicated screen for browsing and managing video content.
+
+- **Video grid** via VirtualGrid with 16:9 aspect ratio cells, using preferred
+  scene thumbnails
+- **Scene timeline** with proportionally-sized keyframe thumbnails, timecodes,
+  preferred scene stars, and heatmap overlays in search mode
+- **Timeline minimap** with time ticks, draggable viewport indicator, and
+  heatmap gradient for search results
+- **Drag-to-scroll** on the timeline track
+- **Sorting** by date, rating, or content similarity (browse mode); match score
+  (search mode)
+- **Transcriptions** displayed below the timeline when available
+
 ### `faceThumbnails.js` - Face Thumbnail Cache-Busting
 
 Manages cache-busting for face thumbnail URLs. When images are modified
@@ -618,7 +667,7 @@ at startup.
 ```
 core.js -> view.js -> nav.js -> filter.js -> selection.js -> status.js ->
 search.js -> folders.js -> duplicates.js -> identity.js -> images.js ->
-loading.js -> events.js -> index.js
+videos.js -> loading.js -> events.js -> index.js
 ```
 
 **Dependencies:**
@@ -646,7 +695,8 @@ Business logic and core application state in the frontend is handled by `app/sta
 | `identity.js` | faces, people | Backend | Face cache (full or partial), person identities, identification, assignment, merge, dissolve, revalidation |
 | `images.js` | images | Backend | Image metadata cache with delta sync (epoch-based), display list (lazily recomputed from images + sort + filter) |
 | `loading.js` | loading | Memory | Loading overlay with ownership tracking (only the current owner can hide it) |
-| `events.js` | events | N/A | Cursor-based polling of `/api/events` every 2s with stale detection. Dispatches backend events (`faces_reassessed`, `folder_added/removed`, `processing_complete`, `image_ingested`, `nima_complete`, `images_modified`, `import_complete`, `error`) and multi-client mutation events (`faces_changed`, `people_changed`, `images_changed`, `groups_changed`) to relevant domains via incremental cache updates |
+| `videos.js` | videos | Memory | Video browse/search state: search results with per-scene scores, selected video, scene cache, preferred scene management |
+| `events.js` | events | N/A | Cursor-based polling of `/api/events` every 2s with stale detection. Dispatches backend events (`faces_reassessed`, `folder_added/removed`, `processing_complete`, `image_ingested`, `nima_complete`, `images_modified`, `import_complete`, `video_processed`, `error`) and multi-client mutation events (`faces_changed`, `people_changed`, `images_changed`, `groups_changed`) to relevant domains via incremental cache updates |
 
 ---
 
