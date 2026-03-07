@@ -1556,8 +1556,8 @@ section('videos')
 
 @step('videos-in-gallery')
 def step_videos_in_gallery(page, ctx):
-    """Show videos alongside photos in the Gallery with duration badges."""
-    # Ensure we're on the gallery with all content visible
+    """Add the videos folder mid-tutorial, wait for processing, then show Gallery."""
+    # Ensure clean state — clear any filter, dismiss overlays
     page.keyboard.press('Escape')
     page.wait_for_timeout(300)
     try:
@@ -1565,8 +1565,29 @@ def step_videos_in_gallery(page, ctx):
         page.wait_for_timeout(500)
     except Exception:
         pass
-    navigate_to(page, 'gallery')
-    # Reset thumbnail size to default for a fresh view
+
+    # Add the videos folder via API (must not be present earlier or
+    # videos would pollute all the preceding Gallery screenshots)
+    videos_dir = str((SCRIPT_DIR / 'videos').resolve())
+    req = urllib.request.Request(
+        f'{SERVER_URL}/api/folders',
+        data=json.dumps({'path': videos_dir}).encode(),
+        headers={'Content-Type': 'application/json'},
+        method='POST',
+    )
+    resp = urllib.request.urlopen(req, timeout=10)
+    body = json.loads(resp.read())
+    print(f'    Added videos folder: {videos_dir} -> {body}')
+
+    # Wait for video indexing + scene detection + embeddings to complete
+    _wait_for_processing(timeout=300)
+
+    # Refresh the frontend so it picks up the new videos
+    page.evaluate('() => AppState.images.load()')
+    page.wait_for_timeout(1000)
+
+    # We're already on Gallery after section 8 — just reset thumbnail
+    # size and wait for the new content (including video cards)
     page.evaluate('() => AppState.view.setThumbnailSize(200)')
     page.wait_for_timeout(500)
     wait_for_thumbnails(page)
@@ -2026,22 +2047,6 @@ def run_setup():
             except urllib.error.HTTPError as e:
                 body = e.read().decode(errors='replace')
                 raise RuntimeError(f'Failed to add folder ({e.code}): {body}') from e
-
-            # (g2) Add videos folder via API
-            videos_dir = str((SCRIPT_DIR / 'videos').resolve())
-            req = urllib.request.Request(
-                f'{SERVER_URL}/api/folders',
-                data=json.dumps({'path': videos_dir}).encode(),
-                headers={'Content-Type': 'application/json'},
-                method='POST',
-            )
-            try:
-                resp = urllib.request.urlopen(req, timeout=10)
-                body = json.loads(resp.read())
-                print(f'  Added folder: {videos_dir} -> {body}')
-            except urllib.error.HTTPError as e:
-                body = e.read().decode(errors='replace')
-                raise RuntimeError(f'Failed to add videos folder ({e.code}): {body}') from e
 
             # Tell the frontend to refresh its folder list (don't reload
             # the page — a full reload after images exist would land on
