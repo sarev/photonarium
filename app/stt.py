@@ -3,11 +3,11 @@ Pluggable speech-to-text (STT) interface for Photonarium.
 
 Provides an abstract base class for STT backends and a concrete implementation
 using faster-whisper.  The module is designed for graceful degradation: if
-faster-whisper is not installed, ``get_stt_backend()`` returns None and the
+faster-whisper is not installed, `get_stt_backend()` returns None and the
 caller simply skips transcription.
 
-OOM protection follows the project-wide pattern: ``_load_failed`` flag prevents
-retry loops after a failed model load, and ``torch.cuda.empty_cache()`` is
+OOM protection follows the project-wide pattern: `_load_failed` flag prevents
+retry loops after a failed model load, and `torch.cuda.empty_cache()` is
 called on GPU OOM.
 """
 
@@ -66,7 +66,7 @@ class FasterWhisperBackend(STTBackend):
 
     The model is loaded lazily on the first transcription call.  OOM
     protection: if the model fails to load (MemoryError or RuntimeError),
-    ``_load_failed`` is set and subsequent calls return early without
+    `_load_failed` is set and subsequent calls return early without
     retrying.
     """
 
@@ -89,7 +89,7 @@ class FasterWhisperBackend(STTBackend):
         """Lazy-load the Whisper model.
 
         Uses the project-wide OOM protection pattern: double-checked
-        locking with a ``_load_failed`` flag to prevent retry loops.
+        locking with a `_load_failed` flag to prevent retry loops.
 
         Returns:
             True if the model is ready, False otherwise.

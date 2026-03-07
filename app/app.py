@@ -54,6 +54,7 @@ import base64
 import io
 import logging
 import os
+import shutil
 import subprocess
 import sys
 import threading
@@ -774,7 +775,13 @@ def get_thumbnail(image_id):
         if info is None:
             abort(404)
         _, source_path = info
-        if not generate_thumbnail(
+        source_ext = Path(source_path).suffix.lower()
+        if source_ext in db.config.video_extensions:
+            # Video thumbnails are generated during scanning/video processing.
+            # Don't do expensive frame extraction in a request thread — it
+            # blocks waitress workers and can lock up the server.
+            abort(404)
+        elif not generate_thumbnail(
             source_path, thumbnail_path, size, db.config.thumbnail_quality, db.config.max_image_dimension
         ):
             abort(404)
@@ -831,6 +838,8 @@ def get_histogram_images(image_id):
                 if info is None:
                     abort(404)
                 _, source_path = info
+                if Path(source_path).suffix.lower() in db.config.video_extensions:
+                    abort(404)
                 if not generate_thumbnail(
                     source_path, thumbnail_path, size, db.config.thumbnail_quality, db.config.max_image_dimension
                 ):
@@ -937,37 +946,90 @@ def get_full_image(image_id):
 
 @app.route('/api/images/<image_id>/scenes', methods=['GET'])
 def get_image_scenes(image_id):
-    """Get scene list for a video.
+    """Get scene list for a video, optionally with per-scene search scores.
 
     Returns detected scenes with timecodes, keyframe times, and any
     transcriptions.  Returns an empty list for non-video media.
 
+    When the ``query`` parameter is provided, computes per-scene visual
+    and transcript similarity scores against the query embedding.
+
     Args:
         image_id: The unique identifier of the video.
 
+    Query params:
+        query: (optional) Text query for per-scene scoring.
+
     Returns:
         JSON list of scene objects with start_time, end_time, keyframe_time,
-        transcription, and scene_index.
+        transcription, scene_index, and (when query given) score fields.
     """
-    image = get_db().get_image(image_id)
+    db = get_db()
+    image = db.get_image(image_id)
     if image is None:
         return error_response('Image not found', 404)
 
     if image.get('media_type') != 'video':
         return success_response([])
 
-    db = get_db()
+    query = request.args.get('query', '').strip()
+
     with db._db_lock:
+        cols = 'id, scene_index, start_time, end_time, keyframe_time, transcription'
+        if query:
+            cols += ', embedding, transcription_embedding'
         cursor = db.conn.execute(
-            """
-            SELECT id, scene_index, start_time, end_time, keyframe_time, transcription
+            f"""
+            SELECT {cols}
             FROM scenes
             WHERE image_id = ?
             ORDER BY scene_index ASC
             """,
             (image_id,),
         )
-        scenes = [dict(row) for row in cursor.fetchall()]
+        rows = cursor.fetchall()
+
+    scenes = []
+    if query:
+        import numpy as np
+
+        TRANSCRIPT_BOOST = 0.15
+        query_embedding = db._get_clip_model().encode_semantic_query(query)
+
+        for row in rows:
+            scene = {
+                'id': row['id'],
+                'scene_index': row['scene_index'],
+                'start_time': row['start_time'],
+                'end_time': row['end_time'],
+                'keyframe_time': row['keyframe_time'],
+                'transcription': row['transcription'],
+            }
+
+            vis_score = 0.0
+            if row['embedding']:
+                emb = np.frombuffer(row['embedding'], dtype=np.float32)
+                vis_score = float(np.dot(query_embedding, emb))
+
+            trans_score = 0.0
+            if row['transcription_embedding']:
+                temb = np.frombuffer(row['transcription_embedding'], dtype=np.float32)
+                trans_score = float(np.dot(query_embedding, temb))
+
+            scene['visual_score'] = vis_score
+            scene['transcript_score'] = trans_score
+            scene['combined_score'] = vis_score + TRANSCRIPT_BOOST * trans_score
+            scenes.append(scene)
+
+        # Normalise across this video's scenes
+        if scenes:
+            scores = [s['combined_score'] for s in scenes]
+            s_min, s_max = min(scores), max(scores)
+            s_range = s_max - s_min
+            for s in scenes:
+                s['normalised_score'] = (s['combined_score'] - s_min) / s_range if s_range > 0 else 0.0
+    else:
+        scenes = [dict(row) for row in rows]
 
     return success_response(scenes)
 
@@ -991,16 +1053,27 @@ def _reveal_path(path):
             subprocess.run(['explorer', path], check=False)
         elif sys.platform == 'darwin':
             subprocess.run(['open', path], check=True)
-        else:
+        elif shutil.which('xdg-open'):
             subprocess.run(['xdg-open', path], check=True)
+        elif shutil.which('explorer.exe'):
+            # WSL2: use Windows explorer via interop
+            subprocess.run(['explorer.exe', path], check=False)
+        else:
+            raise FileNotFoundError('No file manager found (xdg-open or explorer.exe)')
     else:
         if sys.platform == 'win32':
             subprocess.run(['explorer', '/select,', path], check=False)
         elif sys.platform == 'darwin':
             subprocess.run(['open', '-R', path], check=True)
-        else:
+        elif shutil.which('xdg-open'):
             folder = os.path.dirname(path)
             subprocess.run(['xdg-open', folder], check=True)
+        elif shutil.which('explorer.exe'):
+            # WSL2: use Windows explorer via interop
+            folder = os.path.dirname(path)
+            subprocess.run(['explorer.exe', folder], check=False)
+        else:
+            raise FileNotFoundError('No file manager found (xdg-open or explorer.exe)')
 
 
 @app.route('/api/reveal', methods=['POST'])
@@ -1556,6 +1629,7 @@ def get_config():
             'trash_dir': str(db.trash_dir),
             'catalogue_dir': str(db.catalogue_dir),
             'image_extensions': sorted(config.image_extensions),
+            'video_extensions': sorted(config.video_extensions),
             'version': _app_version,
         }
     )
@@ -2286,6 +2360,182 @@ def search_images():
     except Exception as e:
         logger.exception('Search failed')
         return error_response(f'Search failed: {e!s}', 500)
+
+
+@app.route('/api/search/videos', methods=['POST'])
+def search_videos():
+    """Scene-level semantic search across videos.
+
+    Takes a text query and returns per-video results with per-scene
+    visual and transcript similarity scores for heatmap display.
+
+    Request Body:
+        JSON object with:
+            - query: Text query to search for
+            - threshold: (optional) Minimum combined score (default 0.15)
+            - limit: (optional) Maximum video results (default 50)
+
+    Returns:
+        JSON object with:
+            - results: Array of per-video dicts with nested scene scores
+    """
+    data = request.get_json()
+    if not data or 'query' not in data:
+        return error_response('Query is required')
+
+    query = data['query'].strip()
+    if not query:
+        return error_response('Query cannot be empty')
+
+    threshold = data.get('threshold', 0.15)
+    limit = data.get('limit', 50)
+
+    try:
+        results = get_db().search_videos(query, threshold=threshold, limit=limit)
+        return success_response({'results': results})
+    except Exception as e:
+        logger.exception('Video search failed')
+        return error_response(f'Video search failed: {e!s}', 500)
+
+
+@app.route('/api/scenes/<scene_id>/thumbnail', methods=['GET'])
+def get_scene_thumbnail(scene_id):
+    """Serve a scene thumbnail image.
+
+    Returns the pre-generated scene thumbnail at the requested size
+    (200px or 400px, snapped at 300px threshold). Falls back to
+    on-demand generation if the thumbnail doesn't exist yet.
+
+    Thumbnails are served from the shared RAM cache when available,
+    using scene_id as the cache key (same LRU cache as image thumbnails).
+
+    Args:
+        scene_id: UUID of the scene.
+
+    Query params:
+        size: Requested thumbnail size in pixels (snapped to 200 or 400).
+
+    Returns:
+        JPEG image file.
+    """
+    requested_size = request.args.get('size', 200, type=int)
+    size = 400 if requested_size > 300 else 200
+
+    # Fast path: check RAM cache (scene_id used as cache key)
+    cache = get_thumbnail_cache()
+    cached_bytes = cache.get(scene_id, size)
+    if cached_bytes is not None:
+        return Response(cached_bytes, mimetype='image/jpeg')
+
+    db = get_db()
+    thumbnail_dir = db.thumbnail_dir
+    prefix = scene_id[:2]
+    thumb_path = thumbnail_dir / 'scenes' / str(size) / prefix / f'{scene_id}.jpg'
+
+    if thumb_path.exists():
+        try:
+            with open(thumb_path, 'rb') as f:
+                data = f.read()
+            cache.put(scene_id, size, data)
+            return Response(data, mimetype='image/jpeg')
+        except OSError:
+            abort(404)
+
+    # On-demand fallback: look up scene, generate thumbnail
+    with db._db_lock:
+        cursor = db.conn.execute(
+            'SELECT image_id, keyframe_time FROM scenes WHERE id = ?',
+            (scene_id,),
+        )
+        row = cursor.fetchone()
+
+    if row is None:
+        return error_response('Scene not found', 404)
+
+    image = db.get_image(row['image_id'])
+    if image is None:
+        return error_response('Video not found', 404)
+
+    video_path = Path(image['path'])
+    if not video_path.exists():
+        return error_response('Video file not found', 404)
+
+    from video import generate_scene_thumbnails
+
+    generate_scene_thumbnails(
+        video_path,
+        scene_id,
+        row['keyframe_time'],
+        thumbnail_dir,
+        quality=db.config.thumbnail_quality,
+    )
+
+    if thumb_path.exists():
+        try:
+            with open(thumb_path, 'rb') as f:
+                data = f.read()
+            cache.put(scene_id, size, data)
+            return Response(data, mimetype='image/jpeg')
+        except OSError:
+            abort(404)
+
+    return error_response('Failed to generate scene thumbnail', 500)
+
+
+@app.route('/api/images/<image_id>/preferred-scene', methods=['PUT'])
+def update_preferred_scene(image_id):
+    """Update the preferred scene for a video.
+
+    Sets ``images.preferred_scene_id`` and copies the scene's embedding
+    to ``images.embedding`` so gallery search uses the preferred scene.
+
+    Request Body:
+        JSON object with:
+            - scene_id: UUID of the scene to set as preferred
+
+    Returns:
+        Success response.
+    """
+    data = request.get_json()
+    if not data or 'scene_id' not in data:
+        return error_response('scene_id is required')
+
+    scene_id = data['scene_id']
+    db = get_db()
+
+    image = db.get_image(image_id)
+    if image is None:
+        return error_response('Image not found', 404)
+
+    if image.get('media_type') != 'video':
+        return error_response('Not a video', 400)
+
+    # Get the scene's embedding
+    with db._db_lock:
+        cursor = db.conn.execute(
+            'SELECT embedding FROM scenes WHERE id = ? AND image_id = ?',
+            (scene_id, image_id),
+        )
+        row = cursor.fetchone()
+
+    if row is None:
+        return error_response('Scene not found for this video', 404)
+
+    # Update images table
+    from datetime import datetime as dt
+
+    now = dt.now().isoformat()
+    with db._db_lock:
+        db.conn.execute(
+            'UPDATE images SET preferred_scene_id = ?, embedding = ?, updated_at = ? WHERE id = ?',
+            (scene_id, row['embedding'], now, image_id),
+        )
+        db.conn.commit()
+
+    # Emit event so other clients sync
+    db.event_queue.emit('images_changed', {'image_ids': [image_id]})
+
+    return success_response({'preferred_scene_id': scene_id})
 
 
 @app.route('/api/similar/<image_id>', methods=['GET'])

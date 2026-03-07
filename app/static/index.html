@@ -181,6 +181,31 @@
                     </button>
                 </div>
 
+                <!-- Videos controls (visible when data-screen="videos") -->
+                <div class="toolbar-group" data-for-screen="videos">
+                    <button id="btn-vid-thumb-smaller" class="toolbar-btn" title="Smaller thumbnails">
+                        <span class="icon" data-icon="remove">−</span>
+                    </button>
+                    <button id="btn-vid-thumb-larger" class="toolbar-btn" title="Larger thumbnails">
+                        <span class="icon" data-icon="add">✚</span>
+                    </button>
+                    <button id="btn-vid-fullscreen" class="toolbar-btn" title="View full-screen" disabled>
+                        <span class="icon" data-icon="fullscreen">⛶</span>
+                    </button>
+                    <button id="btn-vid-slideshow" class="toolbar-btn" title="Slideshow" disabled>
+                        <span class="icon" data-icon="play_arrow">&#x25B6;</span>
+                    </button>
+                    <button id="btn-vid-shuffle" class="toolbar-btn" title="Shuffle slideshow" disabled>
+                        <span class="icon" data-icon="shuffle">&#x21C4;</span>
+                    </button>
+                    <button id="btn-vid-reveal-folder" class="toolbar-btn" title="Open containing folder" disabled>
+                        <span class="icon" data-icon="folder_open">📂</span>
+                    </button>
+                    <button id="btn-vid-trash" class="toolbar-btn" title="Move to trash" disabled>
+                        <span class="icon" data-icon="delete">🗑</span>
+                    </button>
+                </div>
+
                 <!-- Duplicates controls (visible when data-screen="duplicates") -->
                 <div class="toolbar-group" data-for-screen="duplicates">
                     <button id="btn-dup-thumb-smaller" class="toolbar-btn" title="Smaller thumbnails">
@@ -268,6 +293,9 @@
                 <button id="btn-back-gallery" class="toolbar-btn" title="Gallery (Ctrl+G)">
                     <span class="icon" data-icon="photo_library">🏞️</span>
                 </button>
+                <button id="btn-videos" class="toolbar-btn" title="Videos">
+                    <span class="icon" data-icon="videocam">🎬</span>
+                </button>
                 <button id="btn-duplicates" class="toolbar-btn" title="Groups (Ctrl+D)">
                     <span class="icon" data-icon="copy_all">⧉</span>
                 </button>
@@ -321,6 +349,34 @@
                         <span class="icon" data-icon="select_all">▣</span>
                     </button>
                     <button id="btn-clear-selection" class="toolbar-btn" title="Clear selection">
+                        <span class="icon" data-icon="deselect">▢</span>
+                    </button>
+                </div>
+
+                <!-- Videos right controls (visible when data-screen="videos") -->
+                <div class="toolbar-group" data-for-screen="videos">
+                    <div class="sort-controls">
+                        <button id="btn-vid-sort-date" class="toolbar-btn active" title="Sort by date">
+                            <span class="icon" data-icon="calendar_month">📅</span>
+                        </button>
+                        <button id="btn-vid-sort-rating" class="toolbar-btn" title="Sort by rating">
+                            <span class="icon" data-icon="star">★</span>
+                        </button>
+                        <button id="btn-vid-sort-content" class="toolbar-btn" title="Sort by content similarity" disabled>
+                            <span class="icon" data-icon="image_search">🔗</span>
+                        </button>
+                        <button id="btn-vid-sort-quality" class="toolbar-btn" title="Sort by quality">
+                            <span class="icon" data-icon="stars">✦</span>
+                        </button>
+                        <button id="btn-vid-sort-direction" class="toolbar-btn" title="Toggle sort direction">
+                            <span class="icon" data-icon="arrow_downward">↓</span>
+                        </button>
+                    </div>
+                    <div class="toolbar-separator"></div>
+                    <button id="btn-vid-select-all" class="toolbar-btn" title="Select all">
+                        <span class="icon" data-icon="select_all">▣</span>
+                    </button>
+                    <button id="btn-vid-clear-selection" class="toolbar-btn" title="Clear selection">
                         <span class="icon" data-icon="deselect">▢</span>
                     </button>
                 </div>
@@ -456,10 +512,10 @@
             <div class="database-container">
                 <!-- Import section — visible only when catalogue_dir is configured -->
                 <section id="import-section" class="database-section" hidden>
-                    <h2>Import Images <small class="section-hint">copies photos into your catalogue, organised by date</small></h2>
-                    <div id="import-drop-zone" class="import-drop-zone" title="Drag photos or folders here to copy them into your catalogue">
+                    <h2>Import <small class="section-hint">copies photos and videos into your catalogue, organised by date</small></h2>
+                    <div id="import-drop-zone" class="import-drop-zone" title="Drag photos, videos, or folders here to copy them into your catalogue">
                         <span class="icon import-drop-icon" data-icon="cloud_upload">⬆</span>
-                        <p class="import-drop-text desktop-only">Drag and drop images or folders here to import</p>
+                        <p class="import-drop-text desktop-only">Drag and drop files or folders here to import</p>
                         <p class="import-hint desktop-only">or</p>
                         <div class="import-buttons">
                             <button id="btn-import-folder" class="action-btn desktop-only" title="Pick a folder to import images from">
@@ -502,6 +558,7 @@
                     <div id="db-status" class="db-status">
                         <table class="stats-table">
                             <tr><td>Images</td><td id="status-total">0</td></tr>
+                            <tr><td>Videos</td><td id="status-videos">0</td></tr>
                             <tr><td>People</td><td id="status-people">0</td></tr>
                             <tr><td>Faces</td><td id="status-faces">0</td></tr>
                             <tr>
@@ -527,7 +584,7 @@
                             <p><span class="queue-label">Classifying:</span> <span id="embedding-count">0</span> remaining<span id="embedding-eta" class="queue-eta"></span></p>
                             <p id="face-queue-row" hidden><span class="queue-label">Face Detection:</span> <span id="face-count">0</span> remaining<span id="face-eta" class="queue-eta"></span></p>
                             <p id="nima-queue-row" hidden><span class="queue-label">Aesthetic:</span> <span id="nima-count">0</span> remaining<span id="nima-eta" class="queue-eta"></span></p>
-                            <p id="video-queue-row" hidden><span class="queue-label">Video:</span> <span id="video-count">0</span> remaining</p>
+                            <p id="video-queue-row" hidden><span class="queue-label">Video:</span> <span id="video-count">0</span> remaining<span id="video-step" class="queue-eta"></span></p>
                             <p id="trash-queue-row" hidden><span class="queue-label">Trashing:</span> <span id="trash-queue-count">0</span> remaining</p>
                             <p id="import-queue-row" hidden><span class="queue-label">Importing:</span> <span id="import-queue-count">0</span> remaining (<span id="import-skipped-count">0</span> skipped)</p>
                             <p id="duplicates-row" hidden><span class="queue-label">Finding Duplicates:</span> <span id="duplicates-status">level 0</span></p>
@@ -566,6 +623,13 @@
             <div class="search-container">
                 <section class="search-section">
                     <h2>Search Filters</h2>
+
+                    <!-- Search mode toggle -->
+                    <div class="search-mode-toggle" title="Choose what to search">
+                        <button data-mode="all" class="active">All</button>
+                        <button data-mode="images">Images</button>
+                        <button data-mode="videos">Videos</button>
+                    </div>
 
                     <!-- Text description search -->
                     <div class="filter-group">
@@ -667,6 +731,26 @@
                     <p class="empty-state-hint">Faces are detected automatically when images are indexed.</p>
                 </div>
 
+            </div>
+        </main>
+
+        <!-- ============================================================
+             VIDEOS SCREEN
+             Browse and search videos with scene timeline.
+             ============================================================ -->
+        <main id="screen-videos" class="screen">
+            <div class="videos-container">
+                <div id="videos-grid-section" class="videos-section grid">
+                    <div id="videos-grid" class="videos-grid"></div>
+                </div>
+                <div class="videos-divider"></div>
+                <div id="videos-timeline-section" class="videos-section timeline">
+                    <div id="videos-timeline" class="videos-timeline">
+                        <div id="videos-timeline-empty" class="empty-state">
+                            Select a video above to see its scene timeline
+                        </div>
+                    </div>
+                </div>
             </div>
         </main>
 
@@ -978,6 +1062,7 @@
     <script src="appstate/duplicates.js"></script>
     <script src="appstate/identity.js"></script>
     <script src="appstate/images.js"></script>
+    <script src="appstate/videos.js"></script>
     <script src="appstate/loading.js"></script>
     <script src="appstate/events.js"></script>
     <script src="appstate/index.js"></script>
@@ -991,6 +1076,7 @@
     <script src="search.js"></script>
     <script src="duplicates.js"></script>
     <script src="faces.js"></script>
+    <script src="videos.js"></script>
     <script src="onthisday.js"></script>
 </body>
 </html>

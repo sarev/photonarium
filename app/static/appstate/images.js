@@ -256,9 +256,13 @@ AppState.images = (function() {
         const filterEmoji = currentFilter.rating ? [...currentFilter.rating] : null;
         const peopleImageIds = (currentFilter.people && currentFilter.peopleImageIds) || null;
         const metadataImageIds = currentFilter.metadataImageIds || null;
+        const searchMode = currentFilter.searchMode || 'all';
 
         // Single pass through all images
         const filtered = images.filter(img => {
+            // Media type filtering based on search mode
+            if (searchMode === 'images' && img.media_type === 'video') return false;
+            if (searchMode === 'videos' && img.media_type !== 'video') return false;
             if (idSet && !idSet.has(String(img.id))) return false;
             if (textLower) {
                 const desc = (img.description || '').toLowerCase();

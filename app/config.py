@@ -475,21 +475,6 @@ CONFIG_SCHEMA: list[tuple[str, list[tuple[str, list[str]]]]] = [
                     'Lower values detect more subtle transitions. Range: 1.0-100.0, recommended: 20-35',
                 ],
             ),
-            (
-                'video_frame_sample_interval',
-                [
-                    'Seconds between sampled frames within each scene for embedding.',
-                    'Lower values capture more detail but increase processing time.',
-                    'Range: 0.5-30.0, recommended: 1.0-5.0',
-                ],
-            ),
-            (
-                'video_max_scene_frames',
-                [
-                    'Maximum number of frames to extract per scene for embedding.',
-                    'Limits processing time for long scenes. Range: 1-50',
-                ],
-            ),
         ],
     ),
     (
@@ -671,8 +656,6 @@ FIELD_CONSTRAINTS: dict[str, dict[str, int | float | bool]] = {
     'quality_weight_bpp': {'min': 0.0, 'max': 1.0, 'step': 0.01},
     'quality_alpha': {'min': 0.0, 'max': 1.0, 'step': 0.01},
     'video_scene_detection_threshold': {'min': 1.0, 'max': 100.0, 'step': 0.5},
-    'video_frame_sample_interval': {'min': 0.5, 'max': 30.0, 'step': 0.5},
-    'video_max_scene_frames': {'min': 1, 'max': 50, 'step': 1},
     'slideshow_interval': {'min': 1.0, 'max': 60.0, 'step': 0.5},
     'import_threads': {'min': 1, 'max': 16, 'step': 1},
     'scan_interval_minutes': {'min': 1, 'max': 1440, 'step': 1, 'special_zero': True},
@@ -799,10 +782,6 @@ class Config:
     video_extensions: set[str] = field(default_factory=lambda: set(_VIDEO_EXTENSIONS_ORDERED))
     # Scene change detection threshold (1-100). Higher = fewer scene cuts.
     video_scene_detection_threshold: float = 27.0
-    # Seconds between sampled frames within each scene for embedding (0.5-30.0).
-    video_frame_sample_interval: float = 2.0
-    # Maximum number of frames to extract per scene for embedding (1-50).
-    video_max_scene_frames: int = 10
     # Whether to run speech-to-text transcription on video audio.
     stt_enabled: bool = False
     # Whisper model size for transcription.

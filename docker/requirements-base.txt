@@ -11,3 +11,4 @@ orjson
 requests
 exifread
 av
+ffmpeg-binaries

@@ -1009,6 +1009,28 @@ const VirtualGrid = {
             },
 
             /**
+             * Invalidate a rendered item so its thumbnail is re-fetched.
+             * Revokes the stale blob URL, removes the DOM element, and
+             * triggers an update so the item is re-requested from the
+             * ThumbnailLoader with a fresh URL.
+             * @param {string} id - Item ID to invalidate
+             */
+            invalidateItem(id) {
+                const state = this._state;
+                if (!state) return;
+                const entry = state.renderedItems.get(id);
+                if (entry) {
+                    if (entry.blobUrl) URL.revokeObjectURL(entry.blobUrl);
+                    entry.el.remove();
+                    state.renderedItems.delete(id);
+                }
+                state.pendingItems.delete(id);
+                if (this._bound) {
+                    this._updateVisibleItems(this._config.container.scrollTop);
+                }
+            },
+
+            /**
              * Scrolls to show item at given index.
              * @param {number} index - Index in items array
              * @param {string} [behavior='smooth'] - Scroll behavior

@@ -28,6 +28,9 @@ AppState.view = (function() {
     /** @type {number} Thumbnail size in pixels (100-400) */
     let _thumbnailSize = storage.get('thumbnailSize', 200);
 
+    /** @type {number} Video thumbnail size in pixels (100-400), independent of image thumbs */
+    let _videoThumbnailSize = storage.get('videoThumbnailSize', 200);
+
     /** @type {string} Sort field: 'date', 'rating', 'content', 'people', 'quality' */
     let _sortBy = storage.get('sortBy', 'date');
 
@@ -143,6 +146,29 @@ AppState.view = (function() {
             _thumbnailSize = size;
             storage.set('thumbnailSize', size);
             broadcast({ type: 'changed', property: 'thumbnailSize' });
+        },
+
+        // --- Video Thumbnail Size ---
+
+        /**
+         * Get current video thumbnail size (independent of image thumbnails).
+         * @returns {number} Size in pixels (100-400)
+         */
+        getVideoThumbnailSize() {
+            return _videoThumbnailSize;
+        },
+
+        /**
+         * Set video thumbnail size.
+         * @param {number} size - Size in pixels (clamped to 100-400)
+         */
+        setVideoThumbnailSize(size) {
+            size = Math.max(100, Math.min(400, Number(size) || 200));
+            if (_videoThumbnailSize === size) return;
+
+            _videoThumbnailSize = size;
+            storage.set('videoThumbnailSize', size);
+            broadcast({ type: 'changed', property: 'videoThumbnailSize' });
         },
 
         // --- Sort Settings ---

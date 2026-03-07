@@ -336,6 +336,14 @@ const Gallery = {
             getItemId: (img) => img.id,
             createItem: (img, index, blobUrl) => this._createThumbnailItem(img, blobUrl),
             getThumbnailId: (img) => img.id,
+            // Use preferred scene thumbnails for videos
+            getThumbnailUrl: (thumbId) => {
+                const img = AppState.images.getById(thumbId);
+                if (img && img.media_type === 'video' && img.preferred_scene_id) {
+                    return `/api/scenes/${img.preferred_scene_id}/thumbnail`;
+                }
+                return App.thumbnailUrl(thumbId);
+            },
             itemSelector: '.gallery-item',
             onItemCreated: (id, el) => {
                 // Sync selection state when item is added to DOM
@@ -939,7 +947,10 @@ const Gallery = {
             if (this._selection) this._selection.unbind();
             if (this._grid) this._grid.unbind();
             ThumbnailLoader.clear();
-            grid.innerHTML = `<div class="empty-state">${App.icon('photo_library', '\u{1F3DE}')}<p>No images to display</p></div>`;
+            const emptyMsg = AppState.filter.isActive()
+                ? 'No images match the current filter'
+                : 'No images in library';
+            grid.innerHTML = `<div class="empty-state">${App.icon('photo_library', '\u{1F3DE}')}<p>${emptyMsg}</p></div>`;
             return;
         }
 
@@ -1099,6 +1110,14 @@ const Gallery = {
                 this._applyInfoPanelCollapsed(AppState.view.isInfoPanelCollapsed());
                 // Let CSS reflow, then recalculate the virtual grid layout
                 setTimeout(() => this._grid._onResize(), 0);
+            }
+        }));
+
+        // When a video's preferred scene changes, invalidate its gallery
+        // thumbnail so VirtualGrid re-fetches the new scene thumbnail URL.
+        this._unsubs.push(AppState.videos.onChanged((event) => {
+            if (event.property === 'preferredScene' && event.imageId && this._grid) {
+                this._grid.invalidateItem(event.imageId);
             }
         }));
 
@@ -1876,6 +1895,10 @@ const Gallery = {
         // Debounce: wait 200ms before fetching
         this._histogramTimer = setTimeout(async () => {
             this._histogramTimer = null;
+
+            // Videos don't have histograms — skip the request
+            const img = AppState.images.getById(imageId);
+            if (img?.media_type === 'video') return;
 
             const container = App.$('histogram-container');
             const loading = container?.querySelector('.histogram-loading');

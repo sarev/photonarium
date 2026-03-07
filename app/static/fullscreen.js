@@ -318,6 +318,9 @@ const Fullscreen = {
             return;
         }
 
+        // Store seek-to time for video playback
+        this._pendingSeekTo = options.seekTo ?? null;
+
         // Reset zoom/pan state
         this._resetTransform();
 
@@ -596,6 +599,15 @@ const Fullscreen = {
             this._els.image.src = '';
             this._els.video.hidden = false;
             this._els.video.src = ThumbnailLoader.getFullImageUrl(imageId);
+
+            // Seek to requested time on load (from scene timeline or search)
+            const seekTo = this._pendingSeekTo;
+            this._pendingSeekTo = null;
+            if (seekTo != null && seekTo > 0) {
+                this._els.video.addEventListener('loadedmetadata', () => {
+                    this._els.video.currentTime = seekTo;
+                }, { once: true });
+            }
             this._els.video.load();
 
             // Show filename with duration instead of dimensions
@@ -622,7 +634,7 @@ const Fullscreen = {
             // Show filename overlay with dimensions
             this._showFilename(metadata.basename, metadata.width, metadata.height);
 
-            // Re-enable toolbar buttons
+            // Re-enable toolbar buttons for images
             this._els.taggingBtn.disabled = false;
             this._els.ignoreBtn.disabled = false;
 
@@ -1861,7 +1873,12 @@ const Fullscreen = {
             };
 
             if (video && !video.hidden) {
-                video.addEventListener('canplay', onVideoReady, { once: true });
+                video.addEventListener('canplay', () => {
+                    if (this._slideshowActive) {
+                        video.play().catch(() => {});
+                    }
+                    onVideoReady();
+                }, { once: true });
                 // Fallback timeout in case canplay never fires
                 setTimeout(() => {
                     if (this._slideshowActive && this._slideshowAdvancing) {

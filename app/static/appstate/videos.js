@@ -1,0 +1,234 @@
+/**
+ * AppState Videos Domain - Video Browse & Search State
+ * =====================================================
+ *
+ * Manages video-specific state for the Videos screen:
+ * - Search results with per-scene scores (from video search)
+ * - Browse mode (all videos)
+ * - Selected video and its scene data
+ * - Preferred scene management
+ *
+ * Memory only (not persisted).
+ *
+ * @fileoverview Videos domain for AppState.
+ */
+
+'use strict';
+
+AppState.videos = (function() {
+    const { createSubscriberSystem, transaction, queueTransaction } = AppState;
+    const { subscribe, broadcast, notify } = createSubscriberSystem();
+
+    // =========================================================================
+    // STATE
+    // =========================================================================
+
+    /** @type {Array|null} Video search results (from POST /api/search/videos) */
+    let _searchResults = null;
+
+    /** @type {string|null} Active search query */
+    let _query = null;
+
+    /** @type {string|null} Currently selected video ID in the grid */
+    let _selectedVideoId = null;
+
+    /** @type {Array|null} All videos (browse mode) */
+    let _allVideos = null;
+
+    /** @type {Object<string, Array>} Cached scene data per video ID */
+    const _sceneCache = {};
+
+    // =========================================================================
+    // PUBLIC API
+    // =========================================================================
+
+    return {
+        /** @type {string} Domain name for transaction system */
+        _name: 'videos',
+        /** @type {Function} Notify function for transaction system */
+        _notify: notify,
+
+        /**
+         * Subscribe to videos state changes.
+         * @param {Function} callback - Called with event on changes
+         * @returns {Function} Unsubscribe function
+         */
+        onChanged: subscribe,
+
+        /**
+         * Store video search results from the API.
+         * @param {Array} results - Per-video result dicts with nested scenes
+         * @param {string} query - The search query that produced these results
+         */
+        setSearchResults(results, query) {
+            _searchResults = results;
+            _query = query;
+            _selectedVideoId = null;
+
+            // Pre-populate scene cache from search results
+            for (const vr of results) {
+                if (vr.scenes) {
+                    _sceneCache[vr.id] = vr.scenes;
+                }
+            }
+
+            broadcast({ type: 'changed', property: 'searchResults' });
+        },
+
+        /**
+         * Get current search results.
+         * @returns {Array|null}
+         */
+        getSearchResults() {
+            return _searchResults;
+        },
+
+        /**
+         * Get the active search query.
+         * @returns {string|null}
+         */
+        getQuery() {
+            return _query;
+        },
+
+        /**
+         * Whether we're in search mode (vs browse mode).
+         * @returns {boolean}
+         */
+        isSearchMode() {
+            return _searchResults !== null;
+        },
+
+        /**
+         * Get the selected video ID.
+         * @returns {string|null}
+         */
+        getSelectedVideoId() {
+            return _selectedVideoId;
+        },
+
+        /**
+         * Get the selected video's data.
+         * @returns {Object|null}
+         */
+        getSelectedVideo() {
+            if (!_selectedVideoId) return null;
+
+            // Check search results first
+            if (_searchResults) {
+                return _searchResults.find(v => v.id === _selectedVideoId) || null;
+            }
+
+            // Browse mode: look up in AppState.images
+            const img = AppState.images.getById(_selectedVideoId);
+            return img || null;
+        },
+
+        /**
+         * Select a video in the grid (triggers timeline render).
+         * @param {string|null} videoId
+         */
+        selectVideo(videoId) {
+            if (_selectedVideoId === videoId) return;
+            _selectedVideoId = videoId;
+            broadcast({ type: 'changed', property: 'selectedVideo' });
+        },
+
+        /**
+         * Get cached scene data for a video.
+         * @param {string} videoId
+         * @returns {Array|null}
+         */
+        getScenes(videoId) {
+            return _sceneCache[videoId] || null;
+        },
+
+        /**
+         * Cache scene data for a video.
+         * @param {string} videoId
+         * @param {Array} scenes
+         */
+        setScenes(videoId, scenes) {
+            _sceneCache[videoId] = scenes;
+            if (_selectedVideoId === videoId) {
+                broadcast({ type: 'changed', property: 'scenes' });
+            }
+        },
+
+        /**
+         * Load all videos for browse mode.
+         * Filters AppState.images to videos only.
+         */
+        loadAll() {
+            const all = AppState.images.getAll();
+            _allVideos = all.filter(img => img.media_type === 'video');
+            _searchResults = null;
+            _query = null;
+            broadcast({ type: 'changed', property: 'allVideos' });
+        },
+
+        /**
+         * Get all videos (browse mode).
+         * @returns {Array}
+         */
+        getAll() {
+            if (_allVideos === null) {
+                this.loadAll();
+            }
+            return _allVideos || [];
+        },
+
+        /**
+         * Update the preferred scene for a video (two-phase optimistic).
+         * @param {string} videoId
+         * @param {string} sceneId
+         * @returns {Promise<void>}
+         */
+        setPreferredScene(videoId, sceneId) {
+            // PHASE 1: Synchronous optimistic update
+            const img = AppState.images.getById(videoId);
+            const prevSceneId = img?.preferred_scene_id;
+            transaction(() => {
+                if (img) {
+                    img.preferred_scene_id = sceneId;
+                }
+                broadcast({
+                    type: 'changed', property: 'preferredScene',
+                    imageId: videoId,
+                });
+            });
+
+            // PHASE 2: Persist to backend (rollback on error)
+            return queueTransaction(async () => {
+                try {
+                    await App.apiPut(`/images/${videoId}/preferred-scene`, {
+                        scene_id: sceneId,
+                    });
+                } catch (err) {
+                    console.error('[AppState.videos.setPreferredScene] Persist failed:', err);
+                    transaction(() => {
+                        if (img) {
+                            img.preferred_scene_id = prevSceneId;
+                        }
+                        broadcast({
+                            type: 'changed', property: 'preferredScene',
+                            imageId: videoId,
+                        });
+                    });
+                    throw err;
+                }
+            });
+        },
+
+        /**
+         * Clear all videos state.
+         */
+        clear() {
+            _searchResults = null;
+            _query = null;
+            _selectedVideoId = null;
+            _allVideos = null;
+            broadcast({ type: 'changed', property: 'cleared' });
+        },
+    };
+})();

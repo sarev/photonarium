@@ -381,10 +381,9 @@ Examples:
     if not download_facenet_models():
         success = False
 
-    # Download STT model (non-fatal if faster-whisper not installed)
+    # Download STT model (always attempt — non-fatal if faster-whisper not installed)
     stt_info = models.get('stt', {})
-    if stt_info and stt_info.get('enabled', False):
-        download_stt_model(model_size=stt_info.get('model', 'base'))
+    download_stt_model(model_size=stt_info.get('model', 'base') if stt_info else 'base')
 
     print()
     print('=' * 60)

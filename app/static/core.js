@@ -417,6 +417,7 @@ const App = {
      */
     clearSelection() {
         AppState.selection.clear('gallery');
+        this.emit('clearSelection');
     },
 
     /* ----------------------------------------------------------------------
@@ -553,7 +554,7 @@ const App = {
      * @type {Array<string>}
      * @constant
      */
-    SCREENS: ['gallery', 'database', 'search', 'duplicates', 'faces'],
+    SCREENS: ['gallery', 'database', 'search', 'duplicates', 'faces', 'videos'],
 
     /**
      * Navigation history stack for back-button functionality.
@@ -719,6 +720,7 @@ const App = {
             'duplicates': 'btn-duplicates',
             'search': 'btn-filter',
             'faces': 'btn-faces',
+            'videos': 'btn-videos',
         };
 
         for (const [screen, btnId] of Object.entries(screenButtons)) {
@@ -739,6 +741,7 @@ const App = {
                 search: 'Search',
                 duplicates: 'Groups',
                 faces: 'Faces',
+                videos: 'Videos',
             };
             mobileTitle.textContent = screenNames[activeScreen] || '';
         }
@@ -788,6 +791,13 @@ const App = {
      */
     showGallery() {
         this.navigateTo('gallery');
+    },
+
+    /**
+     * Navigates to the Videos screen.
+     */
+    showVideos() {
+        this.navigateTo('videos');
     },
 
     /**
@@ -928,6 +938,19 @@ const App = {
     },
 
     /**
+     * PUT request helper.
+     * @param {string} endpoint - API endpoint
+     * @param {Object} data - Request body
+     * @returns {Promise<*>} Response data
+     */
+    async apiPut(endpoint, data) {
+        return this.api(endpoint, {
+            method: 'PUT',
+            body: JSON.stringify(data),
+        });
+    },
+
+    /**
      * PATCH request helper.
      * @param {string} endpoint - API endpoint
      * @param {Object} data - Request body
@@ -975,6 +998,9 @@ const App = {
             this._onThisDayEnabled = data.on_this_day_enabled ?? true;
             // Slideshow interval (seconds per image, read by Fullscreen module)
             this._slideshowInterval = data.slideshow_interval ?? 5;
+            // Accepted file extensions for import (from config, kept in sync)
+            this._imageExtensions = new Set(data.image_extensions || []);
+            this._videoExtensions = new Set(data.video_extensions || []);
             // Quality scoring weights (used by AppState.images for Quality sort)
             this._qualityConfig = {
                 weightAesthetic: data.quality_weight_aesthetic ?? 0.60,
@@ -1033,6 +1059,16 @@ const App = {
         return this._headless ?? false;
     },
 
+    /**
+     * Check whether a file extension is accepted for import.
+     * Uses the backend's configured image + video extensions.
+     * @param {string} ext - Lowercase extension with leading dot (e.g. '.jpg')
+     * @returns {boolean}
+     */
+    isImportableExtension(ext) {
+        return (this._imageExtensions?.has(ext) || this._videoExtensions?.has(ext)) ?? false;
+    },
+
     /* ----------------------------------------------------------------------
        Image Cache (delegated to AppState.images)
        ---------------------------------------------------------------------- */
@@ -1087,6 +1123,7 @@ const App = {
         this._bindBtn('btn-filter', () => this._handleFilterClick());
         this._bindBtn('btn-clear-filter', () => this._handleClearFilterClick());
         this._bindBtn('btn-back-gallery', () => this.showGallery());
+        this._bindBtn('btn-videos', () => this.showVideos());
 
         // Gallery controls
         this._bindBtn('btn-thumb-smaller', () => this.setThumbnailSize(AppState.view.getThumbnailSize() - 50));
@@ -1112,6 +1149,28 @@ const App = {
         // Duplicates controls
         this._bindBtn('btn-dup-thumb-smaller', () => this.setThumbnailSize(AppState.view.getThumbnailSize() - 50));
         this._bindBtn('btn-dup-thumb-larger', () => this.setThumbnailSize(AppState.view.getThumbnailSize() + 50));
+
+        // Videos controls (mirror gallery controls with vid- prefix)
+        this._bindBtn('btn-vid-thumb-smaller', () => {
+            AppState.view.setVideoThumbnailSize(AppState.view.getVideoThumbnailSize() - 50);
+        });
+        this._bindBtn('btn-vid-thumb-larger', () => {
+            AppState.view.setVideoThumbnailSize(AppState.view.getVideoThumbnailSize() + 50);
+        });
+        this._bindBtn('btn-vid-fullscreen', () => this._handleFullscreenClick());
+        this._bindBtn('btn-vid-slideshow', () => this._startGallerySlideshow(false));
+        this._bindBtn('btn-vid-shuffle', () => this._startGallerySlideshow(true));
+        this._bindBtn('btn-vid-reveal-folder', () => this._handleRevealFolderClick());
+        this._bindBtn('btn-vid-trash', () => this.emit('trashSelected'));
+        this._bindBtn('btn-vid-select-all', () => this.emit('selectAll'));
+        this._bindBtn('btn-vid-clear-selection', () => this.clearSelection());
+
+        // Videos sort controls
+        this._bindBtn('btn-vid-sort-date', () => this.setSortBy('date'));
+        this._bindBtn('btn-vid-sort-rating', () => this.setSortBy('rating'));
+        this._bindBtn('btn-vid-sort-content', () => this.setSortBy('content', { force: true }));
+        this._bindBtn('btn-vid-sort-quality', () => this.setSortBy('quality'));
+        this._bindBtn('btn-vid-sort-direction', () => this.toggleSortDirection());
 
         // Similarity slider
         const slider = document.getElementById('similarity-slider');
@@ -1373,6 +1432,18 @@ const App = {
             || AppState.images.getDisplayList().length > 1;
         if (slideshowBtn) slideshowBtn.disabled = !canSlideshow;
         if (shuffleBtn) shuffleBtn.disabled = !canSlideshow;
+
+        // Videos toolbar buttons (same semantics, vid- prefixed IDs)
+        const vidFullscreen = document.getElementById('btn-vid-fullscreen');
+        if (vidFullscreen) vidFullscreen.disabled = selCount !== 1;
+        const vidReveal = document.getElementById('btn-vid-reveal-folder');
+        if (vidReveal) vidReveal.disabled = selCount !== 1;
+        const vidTrash = document.getElementById('btn-vid-trash');
+        if (vidTrash) vidTrash.disabled = selCount === 0;
+        const vidSlideshow = document.getElementById('btn-vid-slideshow');
+        const vidShuffle = document.getElementById('btn-vid-shuffle');
+        if (vidSlideshow) vidSlideshow.disabled = !canSlideshow;
+        if (vidShuffle) vidShuffle.disabled = !canSlideshow;
     },
 
     /**
@@ -1383,21 +1454,22 @@ const App = {
         const sortBy = AppState.view.getSortBy();
         const direction = AppState.view.getSortDirection();
 
-        // Update active states
+        // Update active states (gallery + videos sort buttons)
         ['date', 'rating', 'content', 'people', 'quality'].forEach(type => {
             const btn = document.getElementById(`btn-sort-${type}`);
-            if (btn) {
-                btn.classList.toggle('active', sortBy === type);
-            }
+            if (btn) btn.classList.toggle('active', sortBy === type);
+            const vidBtn = document.getElementById(`btn-vid-sort-${type}`);
+            if (vidBtn) vidBtn.classList.toggle('active', sortBy === type);
         });
 
-        // Update direction icon
+        // Update direction icon (gallery + videos)
+        const dirIcon = direction === 'asc'
+            ? this.icon('arrow_upward', '\u2191')
+            : this.icon('arrow_downward', '\u2193');
         const dirBtn = document.getElementById('btn-sort-direction');
-        if (dirBtn) {
-            dirBtn.innerHTML = direction === 'asc'
-                ? this.icon('arrow_upward', '\u2191')
-                : this.icon('arrow_downward', '\u2193');
-        }
+        if (dirBtn) dirBtn.innerHTML = dirIcon;
+        const vidDirBtn = document.getElementById('btn-vid-sort-direction');
+        if (vidDirBtn) vidDirBtn.innerHTML = dirIcon;
     },
 
     /**

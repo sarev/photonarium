@@ -153,7 +153,7 @@ AppState.events = (function() {
                 }
 
                 const parts = [];
-                if (imported > 0) parts.push(`${imported} new image${imported !== 1 ? 's' : ''} imported`);
+                if (imported > 0) parts.push(`${imported} new file${imported !== 1 ? 's' : ''} imported`);
                 if (skipped > 0) parts.push(`${skipped} already present`);
                 if (parts.length > 0) App.showInfo(`Import complete: ${parts.join(', ')}.`);
                 break;

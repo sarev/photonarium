@@ -125,6 +125,7 @@ const Database = {
             addFolderBtn: App.$('btn-add-folder'),
             rescanBtn: App.$('btn-rescan'),
             statusTotal: App.$('status-total'),
+            statusVideos: App.$('status-videos'),
             statusPeople: App.$('status-people'),
             statusFaces: App.$('status-faces'),
             statusTrashed: App.$('status-trashed'),
@@ -144,6 +145,7 @@ const Database = {
             nimaEta: App.$('nima-eta'),
             videoQueueRow: App.$('video-queue-row'),
             videoCount: App.$('video-count'),
+            videoStep: App.$('video-step'),
             trashQueueRow: App.$('trash-queue-row'),
             trashQueueCount: App.$('trash-queue-count'),
             importQueueRow: App.$('import-queue-row'),
@@ -198,6 +200,9 @@ const Database = {
                     if (stats) {
                         if (typeof stats.totalImages === 'number') {
                             this._els.statusTotal.textContent = String(stats.totalImages);
+                        }
+                        if (typeof stats.totalVideos === 'number') {
+                            this._els.statusVideos.textContent = String(stats.totalVideos);
                         }
                         if (typeof stats.totalPeople === 'number') {
                             this._els.statusPeople.textContent = String(stats.totalPeople);
@@ -432,7 +437,7 @@ const Database = {
      * @private
      */
     async _removeFolder(path) {
-        const ok = await App.confirm('Remove folder?', `Remove "${path}" and all its images from the database?`);
+        const ok = await App.confirm('Remove folder?', `Remove "${path}" and all its contents from the database?`);
         if (!ok) {
             return;
         }
@@ -471,14 +476,15 @@ const Database = {
 
             const countEl = document.createElement('span');
             countEl.className = 'folder-count';
-            countEl.textContent = `${folder.count || 0} images`;
+            const n = folder.count || 0;
+            countEl.textContent = `${n} ${n === 1 ? 'item' : 'items'}`;
 
             // Show a "catalogue" badge after the image count
             if (isCatalogue) {
                 const badge = document.createElement('span');
                 badge.className = 'folder-catalogue-badge';
                 badge.textContent = 'catalogue';
-                badge.title = 'Managed import directory \u2014 images are copied here when you use Import';
+                badge.title = 'Managed import directory \u2014 files are copied here when you use Import';
                 countEl.appendChild(badge);
             }
 
@@ -582,6 +588,7 @@ const Database = {
         const faces = status.face_queue || 0;
         const nima = status.nima_queue || 0;
         const video = status.video_queue || 0;
+        const videoProgress = status.video_progress || null;
 
         // Phase 4 statuses (only present when active)
         const duplicates = status.duplicates;
@@ -599,6 +606,9 @@ const Database = {
         if (typeof status.total_images === 'number') {
             this._els.statusTotal.textContent = String(status.total_images);
         }
+        if (typeof status.total_videos === 'number') {
+            this._els.statusVideos.textContent = String(status.total_videos);
+        }
         if (typeof status.total_people === 'number') {
             this._els.statusPeople.textContent = String(status.total_people);
         }
@@ -614,7 +624,7 @@ const Database = {
         const trashQueue = status.trash_queue || 0;
         const importQueue = status.import_queue || 0;
         const importActive = importQueue > 0 || status.import_progress != null;
-        const hasQueueWork = indexing > 0 || embedding > 0 || faces > 0 || nima > 0 || video > 0 || trashQueue > 0 || importActive;
+        const hasQueueWork = indexing > 0 || embedding > 0 || faces > 0 || nima > 0 || video > 0 || videoProgress || trashQueue > 0 || importActive;
         const hasPhase4Work = duplicates || faceGrouping || faceEmbeddings;
         const hasAnyWork = hasQueueWork || hasPhase4Work;
 
@@ -669,13 +679,22 @@ const Database = {
                 }
             }
 
-            // Show/hide video processing row
+            // Show/hide video processing row — show when queued OR actively processing
             if (this._els.videoQueueRow && this._els.videoCount) {
-                if (video > 0) {
+                if (video > 0 || videoProgress) {
                     this._els.videoQueueRow.hidden = false;
-                    this._els.videoCount.textContent = video;
+                    // Count includes the currently-processing video
+                    const totalActive = video + (videoProgress ? 1 : 0);
+                    this._els.videoCount.textContent = totalActive;
+                    // Show step detail when a video is being processed
+                    if (this._els.videoStep) {
+                        this._els.videoStep.textContent = videoProgress
+                            ? ` \u2014 ${videoProgress.label} (${videoProgress.step}/${videoProgress.total_steps})`
+                            : '';
+                    }
                 } else {
                     this._els.videoQueueRow.hidden = true;
+                    if (this._els.videoStep) this._els.videoStep.textContent = '';
                 }
             }
 
@@ -1004,13 +1023,12 @@ const Database = {
             }
 
             // Set the file picker's accept filter from the backend's
-            // image_extensions list so RAW formats are included too.
-            const exts = response?.data?.image_extensions;
-            if (exts?.length && this._els.importFileInput) {
-                // Combine image/* (for standard types) with explicit extensions
-                // (for RAW formats that browsers don't recognise as images)
+            // configured extensions so RAW and video formats are included.
+            const imgExts = response?.data?.image_extensions || [];
+            const vidExts = response?.data?.video_extensions || [];
+            if ((imgExts.length || vidExts.length) && this._els.importFileInput) {
                 this._els.importFileInput.accept =
-                    ['image/*', ...exts].join(',');
+                    ['image/*', 'video/*', ...imgExts, ...vidExts].join(',');
             }
         } catch {
             // Config load failures are non-fatal — import section stays hidden
@@ -1105,9 +1123,9 @@ const Database = {
             const response = await App.apiPost('/import', { paths: [path] });
             const queued = response?.data?.queued || 0;
             if (queued > 0) {
-                App.showInfo(`Import started: ${queued} image${queued !== 1 ? 's' : ''} queued.`);
+                App.showInfo(`Import started: ${queued} file${queued !== 1 ? 's' : ''} queued.`);
             } else {
-                App.showInfo('No new images found to import.');
+                App.showInfo('No new files found to import.');
             }
         } catch (error) {
             console.error('Error starting import:', error);
@@ -1129,19 +1147,17 @@ const Database = {
         const files = [...fileList];
         if (files.length === 0) return;
 
-        // Filter to image files only (by MIME type or extension)
-        const imageFiles = files.filter(f => {
-            if (f.type && f.type.startsWith('image/')) return true;
-            // Fallback: check extension for camera RAW files that lack MIME types
+        // Filter to image and video files (by MIME type or configured extension)
+        const mediaFiles = files.filter(f => {
+            if (f.type && (f.type.startsWith('image/') || f.type.startsWith('video/'))) return true;
+            // Fallback: check against backend-configured extensions (handles
+            // camera RAW and video files that lack browser MIME types)
             const ext = '.' + f.name.split('.').pop().toLowerCase();
-            return ['.jpg', '.jpeg', '.png', '.gif', '.bmp', '.tiff', '.tif', '.webp',
-                '.cr2', '.cr3', '.nef', '.nrw', '.arw', '.srf', '.dng', '.raf',
-                '.rw2', '.orf', '.pef', '.srw', '.x3f', '.3fr', '.iiq',
-                '.rwl', '.kdc', '.dcr', '.erf'].includes(ext);
+            return App.isImportableExtension(ext);
         });
 
-        if (imageFiles.length === 0) {
-            App.showInfo('No image files found in selection.');
+        if (mediaFiles.length === 0) {
+            App.showInfo('No image or video files found in selection.');
             return;
         }
 
@@ -1152,24 +1168,24 @@ const Database = {
             // (catches files already in watched folders).  This is instant (no
             // file reading, no crypto), works on plain HTTP.  The backend's
             // SHA-256 dedup in ImportWorker catches any remaining edge cases.
-            this._setImportStatus(`Checking ${imageFiles.length} file${imageFiles.length !== 1 ? 's' : ''} for duplicates...`);
+            this._setImportStatus(`Checking ${mediaFiles.length} file${mediaFiles.length !== 1 ? 's' : ''} for duplicates...`);
 
-            const fileMeta = imageFiles.map(f => ({ name: f.name, size: f.size }));
+            const fileMeta = mediaFiles.map(f => ({ name: f.name, size: f.size }));
             const preflight = await App.apiPost('/import/preflight', { files: fileMeta });
             const known = preflight?.data?.known || [];
-            const newFiles = imageFiles.filter((_, i) => !known[i]);
-            const skippedCount = imageFiles.length - newFiles.length;
+            const newFiles = mediaFiles.filter((_, i) => !known[i]);
+            const skippedCount = mediaFiles.length - newFiles.length;
 
             if (newFiles.length === 0) {
                 this._setImportStatus(null);
-                const n = imageFiles.length;
-                App.showInfo(`${n} image${n !== 1 ? 's' : ''} checked, all already in your library.`);
+                const n = mediaFiles.length;
+                App.showInfo(`${n} file${n !== 1 ? 's' : ''} checked, all already in your library.`);
                 return;
             }
 
-            const total = imageFiles.length;
+            const total = mediaFiles.length;
             this._setImportStatus(
-                `Uploading ${newFiles.length} of ${total} image${total !== 1 ? 's' : ''}...`,
+                `Uploading ${newFiles.length} of ${total} file${total !== 1 ? 's' : ''}...`,
             );
 
             // Upload files via multipart with a generous timeout so the UI
@@ -1197,7 +1213,7 @@ const Database = {
                     // response was lost.  Show a non-fatal message instead of
                     // an error since the import may still proceed server-side.
                     this._setImportStatus(null);
-                    App.showInfo('Upload timed out, but the server may still be processing your images.');
+                    App.showInfo('Upload timed out, but the server may still be processing your files.');
                     return;
                 }
                 throw uploadErr;

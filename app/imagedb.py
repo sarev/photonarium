@@ -275,6 +275,12 @@ _SQL_MIGRATIONS = [
     "ALTER TABLE images ADD COLUMN media_type TEXT NOT NULL DEFAULT 'image'",
     # → No backfill needed (NULL for images, populated for videos)
     'ALTER TABLE images ADD COLUMN duration REAL',
+    # → Video schema simplification: collapse scene_embeddings into scenes
+    'ALTER TABLE scenes ADD COLUMN embedding BLOB',
+    # → FK (semantic) to scenes.id; gallery thumbnail = preferred scene thumbnail
+    'ALTER TABLE images ADD COLUMN preferred_scene_id TEXT',
+    # → Drop obsolete scene_embeddings table (data now lives in scenes.embedding)
+    'DROP TABLE IF EXISTS scene_embeddings',
 ]
 
 # SQL schema for the image_metadata table (indexed EXIF key-value pairs for search)
@@ -328,20 +334,10 @@ CREATE TABLE IF NOT EXISTS scenes (
     keyframe_time           REAL NOT NULL,
     transcription           TEXT,
     transcription_embedding BLOB,
+    embedding               BLOB,
     created_at              TEXT NOT NULL,
     updated_at              TEXT NOT NULL,
     UNIQUE (image_id, scene_index)
-)
-"""
-
-# SQL schema for scene frame embeddings (OpenCLIP embeddings of extracted frames)
-_SQL_CREATE_SCENE_EMBEDDINGS = """
-CREATE TABLE IF NOT EXISTS scene_embeddings (
-    id          TEXT PRIMARY KEY,
-    scene_id    TEXT NOT NULL REFERENCES scenes(id) ON DELETE CASCADE,
-    frame_time  REAL NOT NULL,
-    embedding   BLOB NOT NULL,
-    created_at  TEXT NOT NULL
 )
 """
 
@@ -373,9 +369,8 @@ _SQL_CREATE_INDEXES = [
     ' ON custom_groups(source_path) WHERE source_path IS NOT NULL',
     # Index for searching metadata by key+value (e.g. Camera = 'Nikon D850')
     'CREATE INDEX IF NOT EXISTS idx_image_metadata_key_value ON image_metadata(key, value COLLATE NOCASE)',
-    # Video scene and embedding indexes
+    # Video scene index
     'CREATE INDEX IF NOT EXISTS idx_scenes_image_id ON scenes(image_id)',
-    'CREATE INDEX IF NOT EXISTS idx_scene_embeddings_scene_id ON scene_embeddings(scene_id)',
     # Index for filtering by media type
     'CREATE INDEX IF NOT EXISTS idx_images_media_type ON images(media_type)',
 ]
@@ -437,9 +432,8 @@ def init_database(db_path: Path | str) -> sqlite3.Connection:
     # Create image metadata table (EXIF key-value pairs for search)
     conn.execute(_SQL_CREATE_IMAGE_METADATA)
 
-    # Create video scene tables
+    # Create video scene table
     conn.execute(_SQL_CREATE_SCENES)
-    conn.execute(_SQL_CREATE_SCENE_EMBEDDINGS)
 
     # Create log storage table (database-backed log viewer)
     from logdb import SQL_CREATE_LOGS, SQL_CREATE_LOGS_INDEX
@@ -860,7 +854,7 @@ def get_all_images_lightweight(conn: sqlite3.Connection) -> list[dict[str, Any]]
     cursor = conn.execute("""
         SELECT id, path, basename, size, width, height, timestamp, timestamp_confidence,
                rating, description, aesthetic_laion, aesthetic_nima, laplacian_var,
-               media_type, duration
+               media_type, duration, preferred_scene_id
         FROM images
         WHERE deleted = 0
         ORDER BY timestamp DESC
@@ -886,7 +880,7 @@ def get_images_for_thumbnail_generation(
     cursor = conn.execute("""
         SELECT id, basename, path, checksum
         FROM images
-        WHERE deleted = 0 AND checksum IS NOT NULL
+        WHERE deleted = 0 AND checksum IS NOT NULL AND media_type = 'image'
         ORDER BY path ASC
     """)
 
@@ -924,7 +918,7 @@ def get_images_delta(
         """
         SELECT id, path, basename, size, width, height, timestamp, timestamp_confidence,
                rating, description, aesthetic_laion, aesthetic_nima, laplacian_var,
-               media_type, duration, deleted, updated_at
+               media_type, duration, preferred_scene_id, deleted, updated_at
         FROM images
         WHERE updated_at > ?
         ORDER BY updated_at ASC
@@ -984,7 +978,7 @@ def get_image(conn: sqlite3.Connection, image_id: str) -> dict[str, Any] | None:
         SELECT id, path, basename, size, width, height, timestamp,
                timestamp_confidence, checksum, perceptual_hash, laplacian_var,
                lossless, description, rating, deleted, created_at, updated_at,
-               mtime, media_type, duration
+               mtime, media_type, duration, preferred_scene_id
         FROM images
         WHERE id = ?
     """,
@@ -1069,7 +1063,7 @@ def get_image_by_path(conn: sqlite3.Connection, path: Path | str) -> dict[str, A
                timestamp_confidence, checksum, perceptual_hash, laplacian_var,
                lossless, description, rating, embedding, description_embedding,
                deleted, created_at, updated_at, mtime, aesthetic_nima, exif_data,
-               media_type, duration
+               media_type, duration, preferred_scene_id
         FROM images
         WHERE path = ?
     """,
@@ -1099,6 +1093,7 @@ def create_image(
     import_name: str | None = None,
     media_type: str = 'image',
     duration: float | None = None,
+    preferred_scene_id: str | None = None,
 ) -> dict[str, Any]:
     """Create a new image record in the database.
 
@@ -1126,6 +1121,7 @@ def create_image(
             even when the catalogue copy was renamed to avoid a collision.
         media_type: 'image' or 'video' (default 'image').
         duration: Video duration in seconds (None for images).
+        preferred_scene_id: UUID of the preferred scene (for videos).
 
     Returns:
         Dictionary with the created image record.
@@ -1146,8 +1142,8 @@ def create_image(
             id, path, basename, size, width, height, timestamp, timestamp_confidence,
             checksum, perceptual_hash, laplacian_var, lossless, mtime,
             description, rating, embedding, deleted, created_at, updated_at,
-            exif_data, import_name, media_type, duration
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, 0, ?, ?, ?, ?, ?, ?)
+            exif_data, import_name, media_type, duration, preferred_scene_id
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, 0, ?, ?, ?, ?, ?, ?, ?)
     """,
         (
             image_id,
@@ -1171,6 +1167,7 @@ def create_image(
             import_name,
             media_type,
             duration,
+            preferred_scene_id,
         ),
     )
 
@@ -1203,6 +1200,7 @@ def create_image(
         'updated_at': now,
         'media_type': media_type,
         'duration': duration,
+        'preferred_scene_id': preferred_scene_id,
     }
 
 
@@ -2274,7 +2272,7 @@ class IngestionThread(threading.Thread):
                         self._checksum_cache[existing['id']] = checksum
                     poster_offset = min(1.0, vmeta.duration / 2) if vmeta.duration > 0 else 0
                     for size_px in (200, 400):
-                        thumb_path = get_thumbnail_cache_path(self._thumbnail_dir, checksum, size_px)
+                        thumb_path = get_thumbnail_cache_path(checksum, size_px, thumbnail_dir=self._thumbnail_dir)
                         if not thumb_path.exists():
                             extract_keyframe_thumbnail(path, thumb_path, size_px, time_offset=poster_offset)
 
@@ -2398,7 +2396,7 @@ class IngestionThread(threading.Thread):
                 if checksum:
                     poster_offset = min(1.0, vmeta.duration / 2) if vmeta.duration > 0 else 0
                     for size_px in (200, 400):
-                        thumb_path = get_thumbnail_cache_path(self._thumbnail_dir, checksum, size_px)
+                        thumb_path = get_thumbnail_cache_path(checksum, size_px, thumbnail_dir=self._thumbnail_dir)
                         if not thumb_path.exists():
                             extract_keyframe_thumbnail(path, thumb_path, size_px, time_offset=poster_offset)
 
@@ -4028,10 +4026,11 @@ class VideoProcessingThread(threading.Thread):
 
     Per-video pipeline:
         1. Scene detection → insert ``scenes`` rows
-        2. Frame extraction → PIL Images
-        3. OpenCLIP embedding of frames → insert ``scene_embeddings`` rows
-        4. STT transcription (if enabled) → update ``scenes`` with text
-        5. Representative embedding → average of keyframe embeddings → ``images.embedding``
+        2. Extract ONE keyframe per scene at midpoint
+        3. Generate 200px + 400px scene thumbnails
+        4. OpenCLIP-embed each keyframe → store in ``scenes.embedding``
+        5. Set ``preferred_scene_id`` = scene 0, ``images.embedding`` = preferred embedding
+        6. STT transcription (whole-clip-then-chop by scene boundaries)
     """
 
     def __init__(
@@ -4044,6 +4043,7 @@ class VideoProcessingThread(threading.Thread):
         config: Config,
         data_dir: Path | str = '.',
         event_queue: EventQueue | None = None,
+        clip_model: OpenCLIPModel | None = None,
     ):
         super().__init__(name='VideoProcessingThread', daemon=True)
         self.conn = conn
@@ -4054,12 +4054,14 @@ class VideoProcessingThread(threading.Thread):
         self.config = config
         self._data_dir = Path(data_dir)
         self._event_queue = event_queue
-        self._clip_model: OpenCLIPModel | None = None
+        self._clip_model = clip_model  # Shared with EmbeddingThread (A6)
         self._stt_backend = None
         self._stt_loaded = False
         self._processed_count = 0
         self._error_count = 0
         self._completion_triggered = False
+        # Progress tracking for status endpoint — read by get_processing_status()
+        self._current_video: dict[str, Any] | None = None
 
     def run(self) -> None:
         """Main thread loop — process videos from the queue."""
@@ -4080,6 +4082,7 @@ class VideoProcessingThread(threading.Thread):
                 logger.error(f'Error processing video {image_id}: {e}')
                 self._error_count += 1
             finally:
+                self._current_video = None
                 self.video_queue.task_done()
 
             time.sleep(0.01)  # Yield GIL
@@ -4113,7 +4116,11 @@ class VideoProcessingThread(threading.Thread):
                 )
 
     def _get_clip_model(self) -> OpenCLIPModel | None:
-        """Get or create the shared OpenCLIP model instance."""
+        """Get the shared OpenCLIP model instance.
+
+        Falls back to creating a new instance if no shared model was
+        provided (shouldn't happen in normal operation).
+        """
         if self._clip_model is None:
             self._clip_model = OpenCLIPModel(
                 model_name=self.config.openclip_model,
@@ -4130,13 +4137,26 @@ class VideoProcessingThread(threading.Thread):
             self._stt_backend = get_stt_backend(self.config)
         return self._stt_backend
 
+    def _set_step(self, step: int, label: str, basename: str) -> None:
+        """Update current video progress for status reporting."""
+        self._current_video = {
+            'step': step,
+            'total_steps': 6,
+            'label': label,
+            'basename': basename,
+        }
+
     def _process_video(self, image_id: str) -> None:
-        """Process a single video: scenes, embeddings, STT.
+        """Process a single video: scenes, keyframes, embeddings, STT.
 
         Args:
             image_id: The image ID of the video record.
         """
-        from video import detect_scenes, extract_scene_frames
+        from video import (
+            detect_scenes,
+            extract_scene_keyframes,
+            generate_scene_thumbnails,
+        )
 
         # Look up the video record
         with self._db_lock:
@@ -4160,87 +4180,115 @@ class VideoProcessingThread(threading.Thread):
             return
 
         duration = row['duration'] or 0.0
-        logger.info(f'Processing video: {path.name} ({duration:.1f}s)')
+        basename = path.name
+        logger.info(f'Processing video: {basename} ({duration:.1f}s)')
+        self._set_step(1, 'Detecting scenes', basename)
 
-        # 1. Scene detection
+        # 1. Scene detection — reuse existing scenes if already in DB
+        #    (handles restart after interrupted processing)
         if self.stop_event.is_set():
             return
-        scenes = detect_scenes(path, threshold=self.config.video_scene_detection_threshold)
-        if not scenes:
-            logger.warning(f'No scenes detected for {path}')
-            return
-
-        # Insert scene records
-        now = datetime.now().isoformat()
-        scene_ids: list[str] = []
-        for idx, (start, end) in enumerate(scenes):
-            scene_id = str(uuid.uuid4())
-            scene_ids.append(scene_id)
-            keyframe_time = start + (end - start) / 2
-            with self._db_lock:
-                self.conn.execute(
-                    """
-                    INSERT OR REPLACE INTO scenes
-                        (id, image_id, scene_index, start_time, end_time,
-                         keyframe_time, created_at, updated_at)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-                    """,
-                    (scene_id, image_id, idx, start, end, keyframe_time, now, now),
-                )
-            if self.stop_event.is_set():
-                return
 
         with self._db_lock:
-            self.conn.commit()
+            existing_scenes = self.conn.execute(
+                'SELECT id, scene_index, start_time, end_time FROM scenes '
+                'WHERE image_id = ? ORDER BY scene_index',
+                (image_id,),
+            ).fetchall()
 
-        # 2. Frame extraction
+        if existing_scenes:
+            logger.debug(f'  [1/6] Reusing {len(existing_scenes)} existing scene(s)')
+            scenes = [(row['start_time'], row['end_time']) for row in existing_scenes]
+            scene_ids = [row['id'] for row in existing_scenes]
+        else:
+            logger.debug(f'  [1/6] Detecting scenes in {path.name}...')
+            scenes = detect_scenes(path, threshold=self.config.video_scene_detection_threshold)
+            if not scenes:
+                logger.warning(f'No scenes detected for {path}')
+                return
+            logger.debug(f'  [1/6] Detected {len(scenes)} scene(s)')
+
+            # Insert scene records
+            now = datetime.now().isoformat()
+            scene_ids = []
+            for idx, (start, end) in enumerate(scenes):
+                scene_id = str(uuid.uuid4())
+                scene_ids.append(scene_id)
+                keyframe_time = (start + end) / 2
+                with self._db_lock:
+                    self.conn.execute(
+                        """
+                        INSERT OR REPLACE INTO scenes
+                            (id, image_id, scene_index, start_time, end_time,
+                             keyframe_time, created_at, updated_at)
+                        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                        """,
+                        (scene_id, image_id, idx, start, end, keyframe_time, now, now),
+                    )
+                if self.stop_event.is_set():
+                    return
+
+            with self._db_lock:
+                self.conn.commit()
+
+        # 2. Extract ONE keyframe per scene at midpoint
         if self.stop_event.is_set():
             return
-        frame_data = extract_scene_frames(
-            path,
-            scenes,
-            interval=self.config.video_frame_sample_interval,
-            max_per_scene=self.config.video_max_scene_frames,
-        )
+        self._set_step(2, 'Extracting keyframes', basename)
+        logger.debug(f'  [2/6] Extracting keyframes from {len(scenes)} scene(s)...')
+        keyframes = extract_scene_keyframes(path, scenes)
 
-        if not frame_data:
-            logger.warning(f'No frames extracted from {path}')
+        if not keyframes:
+            logger.warning(f'No keyframes extracted from {path}')
             return
 
-        # 3. OpenCLIP embedding of frames
+        # 3. Generate scene thumbnails (200px + 400px)
+        self._set_step(3, 'Generating thumbnails', basename)
+        logger.debug('  [3/6] Generating scene thumbnails...')
+        thumbnail_dir = self._data_dir / '.thumbnails'
+        for scene_idx, midpoint, _pil in keyframes:
+            if self.stop_event.is_set():
+                return
+            if scene_idx < len(scene_ids):
+                generate_scene_thumbnails(
+                    path,
+                    scene_ids[scene_idx],
+                    midpoint,
+                    thumbnail_dir,
+                    quality=self.config.thumbnail_quality,
+                )
+
+        # 4. OpenCLIP-embed each keyframe → store in scenes.embedding
         if self.stop_event.is_set():
             return
+        self._set_step(4, 'Computing embeddings', basename)
+        logger.debug(f'  [4/6] Computing CLIP embeddings for {len(keyframes)} keyframe(s)...')
         clip = self._get_clip_model()
         if clip is None:
             logger.warning('OpenCLIP model not available for video embeddings')
             return
 
-        all_embeddings: list[np.ndarray] = []
-        for scene_idx, frame_time, pil_image in frame_data:
+        scene_embeddings: dict[int, np.ndarray] = {}  # scene_idx -> embedding
+        for scene_idx, frame_time, pil_image in keyframes:
             if self.stop_event.is_set():
                 return
 
             try:
-                # Encode single frame through OpenCLIP
                 embedding = clip.encode_pil_image(pil_image)
                 if embedding is None:
                     continue
 
-                all_embeddings.append(embedding)
+                scene_embeddings[scene_idx] = embedding
 
-                # Store in scene_embeddings
+                # Store in scenes.embedding
                 scene_id = scene_ids[scene_idx] if scene_idx < len(scene_ids) else None
                 if scene_id:
-                    emb_id = str(uuid.uuid4())
                     emb_blob = embedding.astype(np.float32).tobytes()
                     now_ts = datetime.now().isoformat()
                     with self._db_lock:
                         self.conn.execute(
-                            """
-                            INSERT INTO scene_embeddings (id, scene_id, frame_time, embedding, created_at)
-                            VALUES (?, ?, ?, ?, ?)
-                            """,
-                            (emb_id, scene_id, frame_time, emb_blob, now_ts),
+                            'UPDATE scenes SET embedding = ?, updated_at = ? WHERE id = ?',
+                            (emb_blob, now_ts, scene_id),
                         )
 
             except (MemoryError, RuntimeError) as e:
@@ -4251,36 +4299,37 @@ class VideoProcessingThread(threading.Thread):
                     pass
                 continue
             except Exception as e:
-                logger.error(f'Error embedding frame at {frame_time:.1f}s: {e}')
+                logger.error(f'Error embedding keyframe at {frame_time:.1f}s: {e}')
                 continue
 
         with self._db_lock:
             self.conn.commit()
 
-        # 4. Representative embedding (average of all frame embeddings)
-        if all_embeddings:
-            rep_embedding = np.mean(all_embeddings, axis=0)
-            # Normalise for cosine similarity
-            norm = np.linalg.norm(rep_embedding)
-            if norm > 0:
-                rep_embedding = rep_embedding / norm
-            rep_blob = rep_embedding.astype(np.float32).tobytes()
+        # 5. Set preferred_scene_id and images.embedding from preferred scene
+        self._set_step(5, 'Setting preferred scene', basename)
+        logger.debug('  [5/6] Setting preferred scene...')
+        preferred_scene_id = scene_ids[0] if scene_ids else None
+        preferred_emb = scene_embeddings.get(0)
+        if preferred_emb is not None and preferred_scene_id:
+            rep_blob = preferred_emb.astype(np.float32).tobytes()
             now_ts = datetime.now().isoformat()
             with self._db_lock:
                 self.conn.execute(
-                    'UPDATE images SET embedding = ?, updated_at = ? WHERE id = ?',
-                    (rep_blob, now_ts, image_id),
+                    'UPDATE images SET embedding = ?, preferred_scene_id = ?, updated_at = ? WHERE id = ?',
+                    (rep_blob, preferred_scene_id, now_ts, image_id),
                 )
                 self.conn.commit()
 
-        # 5. STT transcription (if enabled)
+        # 6. STT transcription (if enabled) — whole-clip-then-chop
+        self._set_step(6, 'Transcribing audio', basename)
         if self.stop_event.is_set():
             return
+        logger.debug('  [6/6] STT transcription...')
         stt = self._get_stt_backend()
         if stt is not None:
             self._transcribe_scenes(image_id, path, scenes, scene_ids, clip)
 
-        logger.info(f'Video processed: {path.name} — {len(scenes)} scenes, {len(all_embeddings)} frame embeddings')
+        logger.info(f'Video processed: {path.name} — {len(scenes)} scenes, {len(scene_embeddings)} embedded')
 
     def _transcribe_scenes(
         self,
@@ -4290,7 +4339,14 @@ class VideoProcessingThread(threading.Thread):
         scene_ids: list[str],
         clip: OpenCLIPModel,
     ) -> None:
-        """Run STT on each scene and store transcriptions.
+        """Transcribe the entire video and assign text to scenes by overlap.
+
+        Fixes two bugs from the original per-scene approach:
+        - Bug 1 (tempfile): Uses ``NamedTemporaryFile(delete=False)`` and
+          manually unlinks after use.
+        - Bug 2 (timing): Transcribes the full clip in one pass (Whisper
+          gets better context) and uses returned segment timestamps to
+          assign text to scenes by overlap.
 
         Args:
             image_id: The video's image ID.
@@ -4307,40 +4363,62 @@ class VideoProcessingThread(threading.Thread):
         if stt is None:
             return
 
-        for idx, ((start, end), scene_id) in enumerate(zip(scenes, scene_ids, strict=False)):
-            if self.stop_event.is_set():
+        if self.stop_event.is_set():
+            return
+
+        try:
+            # Extract audio for the entire clip to a temp file
+            tmp_fd, tmp_name = tempfile.mkstemp(suffix='.wav')
+            os.close(tmp_fd)
+            tmp_path = Path(tmp_name)
+
+            total_start = scenes[0][0] if scenes else 0.0
+            total_end = scenes[-1][1] if scenes else 0.0
+
+            if not extract_audio_segment(video_path, tmp_path, total_start, total_end):
+                tmp_path.unlink(missing_ok=True)
                 return
 
+            # Transcribe the whole clip in one pass for better context
+            stt_segments = stt.transcribe(tmp_path, language=self.config.stt_language)
+
+            # Clean up temp file
             try:
-                # Extract audio segment to temp file
-                with tempfile.NamedTemporaryFile(suffix='.wav', delete=True) as tmp:
-                    tmp_path = Path(tmp.name)
+                tmp_path.unlink(missing_ok=True)
+            except OSError:
+                pass
 
-                if not extract_audio_segment(video_path, tmp_path, start, end):
+            if not stt_segments:
+                return
+
+            # Assign STT segments to scenes by temporal overlap.
+            # Each STT segment has .start, .end (seconds), .text attributes.
+            for _scene_idx, ((scene_start, scene_end), scene_id) in enumerate(zip(scenes, scene_ids, strict=False)):
+                if self.stop_event.is_set():
+                    return
+
+                # Collect text from STT segments that overlap this scene
+                scene_texts: list[str] = []
+                for seg in stt_segments:
+                    seg_start = getattr(seg, 'start', 0.0)
+                    seg_end = getattr(seg, 'end', 0.0)
+                    # Check overlap: segment overlaps scene if
+                    # seg_start < scene_end AND seg_end > scene_start
+                    if seg_start < scene_end and seg_end > scene_start:
+                        text = getattr(seg, 'text', '').strip()
+                        if text:
+                            scene_texts.append(text)
+
+                if not scene_texts:
                     continue
 
-                # Transcribe
-                segments = stt.transcribe(tmp_path, language=self.config.stt_language)
+                full_text = ' '.join(scene_texts)
 
-                # Clean up temp file
-                try:
-                    tmp_path.unlink(missing_ok=True)
-                except OSError:
-                    pass
-
-                if not segments:
-                    continue
-
-                # Combine segment texts
-                full_text = ' '.join(seg.text for seg in segments).strip()
-                if not full_text:
-                    continue
-
-                # Compute text embedding via OpenCLIP
+                # Compute transcription embedding via OpenCLIP text encoder
                 text_emb = clip.encode_text(full_text) if clip else None
                 text_emb_blob = text_emb.astype(np.float32).tobytes() if text_emb is not None else None
 
-                # Store transcription
+                # Store transcription and embedding
                 now_ts = datetime.now().isoformat()
                 with self._db_lock:
                     self.conn.execute(
@@ -4353,9 +4431,8 @@ class VideoProcessingThread(threading.Thread):
                     )
                     self.conn.commit()
 
-            except Exception as e:
-                logger.error(f'STT failed for scene {idx} of {video_path}: {e}')
-                continue
+        except Exception as e:
+            logger.error(f'STT failed for video {video_path}: {e}')
 
 
 def get_metadata(conn: sqlite3.Connection, key: str) -> str | None:
@@ -4522,6 +4599,171 @@ def semantic_search(
     results.sort(key=lambda x: x['score'], reverse=True)
 
     return results
+
+
+def video_search(
+    conn: sqlite3.Connection,
+    query_embedding: np.ndarray,
+    threshold: float = 0.15,
+    limit: int = 50,
+) -> list[dict[str, Any]]:
+    """Scene-level semantic search across all videos.
+
+    Computes per-scene visual and transcript similarity scores against the
+    query embedding, combines them, normalises across the corpus, groups
+    by video, and returns per-video results with nested per-scene scores
+    for heatmap display.
+
+    Args:
+        conn: Database connection.
+        query_embedding: Normalised query embedding vector.
+        threshold: Minimum combined score for inclusion. Defaults to 0.15.
+        limit: Maximum number of video results. Defaults to 50.
+
+    Returns:
+        List of per-video result dicts, each containing nested scene scores.
+    """
+    TRANSCRIPT_BOOST = 0.15
+
+    # 1. Fetch all scenes from non-deleted videos
+    cursor = conn.execute("""
+        SELECT s.id, s.image_id, s.scene_index, s.start_time, s.end_time,
+               s.embedding, s.transcription_embedding
+        FROM scenes s
+        JOIN images i ON s.image_id = i.id
+        WHERE i.deleted = 0 AND i.media_type = 'video'
+        ORDER BY s.image_id, s.scene_index
+    """)
+    rows = cursor.fetchall()
+    if not rows:
+        return []
+
+    # 2. Build numpy arrays for vectorised computation
+    embedding_dim = len(query_embedding)
+    scene_data: list[dict] = []
+    visual_embs: list[np.ndarray] = []
+    transcript_embs: list[np.ndarray] = []
+    has_visual: list[bool] = []
+    has_transcript: list[bool] = []
+
+    for row in rows:
+        scene_data.append(
+            {
+                'scene_id': row['id'],
+                'image_id': row['image_id'],
+                'scene_index': row['scene_index'],
+                'start_time': row['start_time'],
+                'end_time': row['end_time'],
+            }
+        )
+
+        if row['embedding']:
+            visual_embs.append(np.frombuffer(row['embedding'], dtype=np.float32))
+            has_visual.append(True)
+        else:
+            visual_embs.append(np.zeros(embedding_dim, dtype=np.float32))
+            has_visual.append(False)
+
+        if row['transcription_embedding']:
+            transcript_embs.append(np.frombuffer(row['transcription_embedding'], dtype=np.float32))
+            has_transcript.append(True)
+        else:
+            transcript_embs.append(np.zeros(embedding_dim, dtype=np.float32))
+            has_transcript.append(False)
+
+    # 3. Vectorised dot products (chunked to cap peak memory ~20MB/chunk)
+    n = len(visual_embs)
+    chunk_size = 10000
+    vis_scores = np.empty(n, dtype=np.float32)
+    trans_scores = np.empty(n, dtype=np.float32)
+    has_vis_arr = np.array(has_visual)
+    has_trans_arr = np.array(has_transcript)
+
+    for start in range(0, n, chunk_size):
+        end = min(start + chunk_size, n)
+        vis_chunk = np.vstack(visual_embs[start:end])
+        trans_chunk = np.vstack(transcript_embs[start:end])
+        vis_scores[start:end] = vis_chunk @ query_embedding
+        trans_scores[start:end] = trans_chunk @ query_embedding
+
+    vis_scores = np.where(has_vis_arr, vis_scores, 0.0)
+    trans_scores = np.where(has_trans_arr, trans_scores, 0.0)
+
+    combined_scores = vis_scores + TRANSCRIPT_BOOST * trans_scores
+
+    # 4. Corpus-wide min-max normalisation
+    score_min = float(np.min(combined_scores))
+    score_max = float(np.max(combined_scores))
+    score_range = score_max - score_min
+    if score_range > 0:
+        normalised_scores = (combined_scores - score_min) / score_range
+    else:
+        normalised_scores = np.zeros_like(combined_scores)
+
+    # 5. Group by video, rank by best scene's combined score
+    video_scenes: dict[str, list[dict]] = {}
+    for i, sd in enumerate(scene_data):
+        vid_id = sd['image_id']
+        scene_result = {
+            'scene_id': sd['scene_id'],
+            'scene_index': sd['scene_index'],
+            'start_time': sd['start_time'],
+            'end_time': sd['end_time'],
+            'visual_score': float(vis_scores[i]),
+            'transcript_score': float(trans_scores[i]),
+            'combined_score': float(combined_scores[i]),
+            'normalised_score': float(normalised_scores[i]),
+        }
+        if vid_id not in video_scenes:
+            video_scenes[vid_id] = []
+        video_scenes[vid_id].append(scene_result)
+
+    # 6. Build per-video results with best scene info
+    video_results: list[dict] = []
+    for vid_id, scene_list in video_scenes.items():
+        best_scene = max(scene_list, key=lambda s: s['combined_score'])
+        best_combined = best_scene['combined_score']
+
+        if best_combined < threshold:
+            continue
+
+        video_results.append(
+            {
+                'id': vid_id,
+                'combined_score': best_combined,
+                'normalised_score': best_scene['normalised_score'],
+                'visual_score': best_scene['visual_score'],
+                'transcript_score': best_scene['transcript_score'],
+                'best_scene_id': best_scene['scene_id'],
+                'scenes': scene_list,
+            }
+        )
+
+    # Sort by combined score descending and apply limit
+    video_results.sort(key=lambda x: x['combined_score'], reverse=True)
+    video_results = video_results[:limit]
+
+    # 7. Fetch video metadata for top results
+    if video_results:
+        vid_ids = [v['id'] for v in video_results]
+        placeholders = sql_placeholders(vid_ids)
+        cursor = conn.execute(
+            f"""
+            SELECT id, basename, duration, preferred_scene_id
+            FROM images
+            WHERE id IN ({placeholders})
+            """,
+            vid_ids,
+        )
+        meta_map = {row['id']: dict(row) for row in cursor.fetchall()}
+
+        for vr in video_results:
+            meta = meta_map.get(vr['id'], {})
+            vr['basename'] = meta.get('basename', '')
+            vr['duration'] = meta.get('duration', 0.0)
+            vr['preferred_scene_id'] = meta.get('preferred_scene_id')
+
+    return video_results
 
 
 def get_images_by_similarity(
@@ -5150,7 +5392,7 @@ class ImportWorker(threading.Thread):
                         self._progress['done'] += 1
                 return
 
-            # Validate it's a supported image extension
+            # Validate it's a supported image or video extension
             if src.suffix.lower() not in self._image_extensions:
                 logger.debug(f'ImportWorker: skipping unsupported extension: {src.suffix}')
                 with self._progress_lock:
@@ -5522,6 +5764,9 @@ class ImageDatabase:
         self._trash_queue: queue.Queue[tuple[str, str]] = queue.Queue()  # (image_id, file_path)
         self._import_queue: queue.Queue[str] = queue.Queue()  # source file paths
         self._video_queue: queue.Queue[str] = queue.Queue()  # video image IDs needing scene/embedding
+
+        # Shared OpenCLIP model instance (used by EmbeddingThread and VideoProcessingThread)
+        self._shared_clip_model: OpenCLIPModel | None = None
 
         # Thread references (created when started)
         self._ingestion_thread: IngestionThread | None = None
@@ -6194,6 +6439,7 @@ class ImageDatabase:
                 FROM images i
                 WHERE i.deleted = 0
                   AND i.embedding IS NOT NULL
+                  AND i.media_type != 'video'
                   AND NOT EXISTS (
                       SELECT 1 FROM faces f WHERE f.image_id = i.id
                   )
@@ -6371,7 +6617,14 @@ class ImageDatabase:
         )
         self._ingestion_thread.start()
 
-        # Start embedding thread
+        # Create shared OpenCLIP model (lazy-loaded on first use, thread-safe)
+        self._shared_clip_model = OpenCLIPModel(
+            model_name=self.config.openclip_model,
+            pretrained=self.config.openclip_pretrained,
+            max_dimension=self.config.max_image_dimension,
+        )
+
+        # Start embedding thread (uses shared CLIP model)
         self._embedding_thread = EmbeddingThread(
             conn=self.conn,
             embedding_queue=self._embedding_queue,
@@ -6382,6 +6635,7 @@ class ImageDatabase:
             data_dir=self.db_path.parent,
             on_complete=on_embedding_complete,
         )
+        self._embedding_thread._clip_model = self._shared_clip_model
         self._embedding_thread.start()
 
         # Start face detection thread
@@ -6412,7 +6666,8 @@ class ImageDatabase:
         )
         self._nima_thread.start()
 
-        # Start video processing thread (runs concurrently, not chained)
+        # Start video processing thread (runs concurrently, not chained).
+        # Shares the EmbeddingThread's OpenCLIP model to avoid duplicate loads (A6).
         self._video_thread = VideoProcessingThread(
             conn=self.conn,
             video_queue=self._video_queue,
@@ -6422,6 +6677,7 @@ class ImageDatabase:
             config=self.config,
             data_dir=self.db_path.parent,
             event_queue=self.event_queue,
+            clip_model=self._shared_clip_model,
         )
         self._video_thread.start()
 
@@ -6448,12 +6704,16 @@ class ImageDatabase:
                 progress_lock=self._import_progress_lock,
                 checksum_cache=self._checksum_cache,
                 checksum_cache_lock=self._checksum_cache_lock,
-                image_extensions=self.config.image_extensions,
+                image_extensions=self.config.image_extensions | self.config.video_extensions,
                 import_names=self._import_names,
                 import_names_lock=self._import_names_lock,
                 on_complete=self._on_import_complete,
             )
             self._import_thread.start()
+
+        # Queue unprocessed videos — videos in the DB that have no scenes
+        # (e.g. imported under a buggy version, or processing was interrupted).
+        self._queue_unprocessed_videos()
 
         # Start scan timer thread for scheduled rescans (headless/Docker mode)
         if self.config.scan_interval_minutes > 0:
@@ -7639,6 +7899,29 @@ class ImageDatabase:
         # Perform semantic search
         return semantic_search(self.conn, query_embedding, threshold, limit)
 
+    def search_videos(
+        self,
+        query: str,
+        threshold: float = 0.15,
+        limit: int = 50,
+    ) -> list[dict[str, Any]]:
+        """Scene-level semantic search across videos.
+
+        Encodes the query via OpenCLIP (supports ``-negative`` terms) and
+        delegates to ``video_search()`` for scene-level scoring with
+        corpus-wide normalisation.
+
+        Args:
+            query: Text query to search for.
+            threshold: Minimum combined score. Defaults to 0.15.
+            limit: Maximum number of video results. Defaults to 50.
+
+        Returns:
+            List of per-video result dicts with nested per-scene scores.
+        """
+        query_embedding = self._get_clip_model().encode_semantic_query(query)
+        return video_search(self.conn, query_embedding, threshold, limit)
+
     def get_semantic_scores_for_images(
         self,
         query: str,
@@ -7719,21 +8002,53 @@ class ImageDatabase:
         return get_images_by_similarity(self.conn, reference_embedding)
 
     def _get_clip_model(self) -> OpenCLIPModel:
-        """Get or create the OpenCLIP model for search operations."""
-        if self._embedding_thread is not None:
-            return self._embedding_thread.clip_model
-        # Fallback: create a new model if embedding thread not running
-        if not hasattr(self, '_clip_model_fallback'):
-            self._clip_model_fallback = OpenCLIPModel(
-                model_name=self.config.openclip_model,
-                pretrained=self.config.openclip_pretrained,
-                max_dimension=self.config.max_image_dimension,
-            )
-        return self._clip_model_fallback
+        """Get the shared OpenCLIP model for search operations."""
+        if self._shared_clip_model is not None:
+            return self._shared_clip_model
+        # Fallback: create a new model if not yet initialised
+        self._shared_clip_model = OpenCLIPModel(
+            model_name=self.config.openclip_model,
+            pretrained=self.config.openclip_pretrained,
+            max_dimension=self.config.max_image_dimension,
+        )
+        return self._shared_clip_model
 
     # =========================================================================
     # Public API - Thumbnails
     # =========================================================================
+
+    def _queue_unprocessed_videos(self) -> None:
+        """Queue videos that need processing or reprocessing.
+
+        Catches both videos with no scenes at all AND videos where
+        processing was interrupted (scenes exist but no embedding or
+        preferred_scene_id — meaning steps 2-6 of the pipeline never
+        completed).
+
+        Called at startup to recover from interrupted processing or
+        imports that occurred under buggy code.
+        """
+        with self._db_lock:
+            cursor = self.conn.execute("""
+                SELECT i.id, i.basename
+                FROM images i
+                WHERE i.deleted = 0
+                  AND i.media_type = 'video'
+                  AND (
+                      -- No scenes at all (never started)
+                      NOT EXISTS (SELECT 1 FROM scenes s WHERE s.image_id = i.id)
+                      -- Or scenes exist but pipeline didn't finish (no embedding/preferred)
+                      OR i.preferred_scene_id IS NULL
+                      OR i.embedding IS NULL
+                  )
+            """)
+            rows = cursor.fetchall()
+
+        if rows:
+            logger.info(f'Found {len(rows)} unprocessed video(s), queueing for processing')
+            for row in rows:
+                self._video_queue.put(row['id'])
+                logger.debug(f'  Queued unprocessed video: {row["basename"]}')
 
     def _generate_thumbnails(self, source_path: Path, checksum: str) -> bool:
         """Generate and cache thumbnails for an image at standard sizes.
@@ -7742,7 +8057,9 @@ class ImageDatabase:
         200px and 400px sizes. The frontend uses CSS to resize whichever
         is closest to the current display size.
 
-        Skips generation for sizes that already exist in cache.
+        Skips generation for sizes that already exist in cache.  Video
+        thumbnails are handled separately by the video processing pipeline
+        (scene thumbnails), so videos are skipped here.
 
         Args:
             source_path: Path to the source image file.
@@ -7751,6 +8068,10 @@ class ImageDatabase:
         Returns:
             True if all thumbnails were generated or already exist.
         """
+        # Video thumbnails are generated by the video pipeline, not here
+        if source_path.suffix.lower() in self.config.video_extensions:
+            return True
+
         success = True
         for size in (200, 400):
             cache_path = get_thumbnail_cache_path(checksum, size=size, thumbnail_dir=self.thumbnail_dir)
@@ -7873,8 +8194,15 @@ class ImageDatabase:
 
     def get_stats(self) -> dict[str, Any]:
         """Get database statistics."""
-        cursor = self.conn.execute('SELECT COUNT(*) as count FROM images WHERE deleted = 0')
+        cursor = self.conn.execute(
+            "SELECT COUNT(*) as count FROM images WHERE deleted = 0 AND media_type = 'image'"
+        )
         total_images = cursor.fetchone()['count']
+
+        cursor = self.conn.execute(
+            "SELECT COUNT(*) as count FROM images WHERE deleted = 0 AND media_type = 'video'"
+        )
+        total_videos = cursor.fetchone()['count']
 
         cursor = self.conn.execute('SELECT COUNT(*) as count FROM folders')
         total_folders = cursor.fetchone()['count']
@@ -7899,6 +8227,7 @@ class ImageDatabase:
 
         return {
             'totalImages': total_images,
+            'totalVideos': total_videos,
             'totalFolders': total_folders,
             'totalPeople': total_people,
             'totalFaces': total_faces,
@@ -7916,6 +8245,11 @@ class ImageDatabase:
         face_count = self._face_queue.qsize()
         nima_count = self._nima_queue.qsize() if self._nima_queue else 0
         video_count = self._video_queue.qsize() if self._video_queue else 0
+        video_progress = (
+            self._video_thread._current_video
+            if self._video_thread is not None
+            else None
+        )
         trash_count = self._trash_queue.qsize()
         import_count = self._import_queue.qsize()
 
@@ -7958,6 +8292,7 @@ class ImageDatabase:
             and face_count == 0
             and nima_count == 0
             and video_count == 0
+            and video_progress is None
             and trash_count == 0
             and import_count == 0
             and import_progress is None
@@ -7968,8 +8303,15 @@ class ImageDatabase:
         status = 'up_to_date' if (queues_empty and phase4_idle) else 'updating'
 
         # Get counts for live updates during processing
-        cursor = self.conn.execute('SELECT COUNT(*) as count FROM images WHERE deleted = 0')
+        cursor = self.conn.execute(
+            "SELECT COUNT(*) as count FROM images WHERE deleted = 0 AND media_type = 'image'"
+        )
         total_images = cursor.fetchone()['count']
+
+        cursor = self.conn.execute(
+            "SELECT COUNT(*) as count FROM images WHERE deleted = 0 AND media_type = 'video'"
+        )
+        total_videos = cursor.fetchone()['count']
 
         # people/faces tables are created by FaceDB, which may not have
         # initialised yet when the frontend first polls /api/status.
@@ -7997,6 +8339,7 @@ class ImageDatabase:
             'face_queue': face_count,
             'nima_queue': nima_count,
             'total_images': total_images,
+            'total_videos': total_videos,
             'total_people': total_people,
             'total_faces': total_faces,
             'trash_queue': trash_count,
@@ -8006,6 +8349,10 @@ class ImageDatabase:
             'nima_enabled': self.config.nima_enabled,
             'video_queue': video_count,
         }
+
+        # Include per-video progress if a video is currently being processed
+        if video_progress is not None:
+            result['video_progress'] = video_progress
 
         # Include import progress if active (total, done, skipped)
         if import_progress is not None:

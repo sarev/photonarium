@@ -136,5 +136,13 @@ AppState.filter = (function() {
         getPeople() {
             return _filter?.people || null;
         },
+
+        /**
+         * Get the search mode.
+         * @returns {'images'|'videos'|'all'}
+         */
+        getSearchMode() {
+            return _filter?.searchMode || 'all';
+        },
     };
 })();

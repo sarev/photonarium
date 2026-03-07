@@ -136,6 +136,13 @@ const Search = {
     },
 
     /**
+     * Current search mode: 'images', 'videos', or 'all'.
+     * @type {string}
+     * @private
+     */
+    _searchMode: 'all',
+
+    /**
      * Whether face detection is enabled.
      * @type {boolean}
      * @private
@@ -182,6 +189,9 @@ const Search = {
 
         // Bind button events
         this._bindEvents();
+
+        // Initialise search mode toggle
+        this._initSearchModeToggle();
 
         // Subscribe to AppState.people for deletions and dialog updates
         AppState.people.onChanged(() => {
@@ -851,6 +861,36 @@ const Search = {
      * Populates form fields from the current filter state.
      * @private
      */
+    /**
+     * Initialise the search mode toggle buttons.
+     * @private
+     */
+    _initSearchModeToggle() {
+        const toggle = document.querySelector('.search-mode-toggle');
+        if (!toggle) return;
+
+        const buttons = toggle.querySelectorAll('[data-mode]');
+        buttons.forEach(btn => {
+            btn.addEventListener('click', () => {
+                this._searchMode = btn.dataset.mode;
+                this._updateSearchModeToggle();
+            });
+        });
+    },
+
+    /**
+     * Update the visual state of the search mode toggle buttons.
+     * @private
+     */
+    _updateSearchModeToggle() {
+        const toggle = document.querySelector('.search-mode-toggle');
+        if (!toggle) return;
+
+        toggle.querySelectorAll('[data-mode]').forEach(btn => {
+            btn.classList.toggle('active', btn.dataset.mode === this._searchMode);
+        });
+    },
+
     _populateForm() {
         const filter = App.getFilter();
 
@@ -883,6 +923,10 @@ const Search = {
                 this._selectedMetadata = {};
             }
             this._renderMetadataChips();
+
+            // Restore search mode
+            this._searchMode = filter.searchMode || 'all';
+            this._updateSearchModeToggle();
         } else {
             this._clearForm();
         }
@@ -905,6 +949,8 @@ const Search = {
         this._renderPeopleChips();
         this._selectedMetadata = {};
         this._renderMetadataChips();
+        this._searchMode = 'all';
+        this._updateSearchModeToggle();
     },
 
     /**
@@ -934,6 +980,7 @@ const Search = {
             rating: rating || null,
             people: people,
             metadata: metadata,
+            searchMode: this._searchMode,
             // Persist auto-added tracking so it survives screen navigation
             autoAddedPeopleIds: this._autoAddedPeopleIds.size > 0
                 ? [...this._autoAddedPeopleIds] : null,
@@ -1033,6 +1080,33 @@ const Search = {
                 );
             }
             searchText = searchText.replace(/\s{2,}/g, ' ').trim();
+        }
+
+        // Videos mode: search videos and navigate to Videos screen
+        if (this._searchMode === 'videos' && filter && searchText) {
+            AppState.loading.show('search', 'Searching videos…');
+            try {
+                const response = await App.apiPost('/search/videos', {
+                    query: searchText,
+                    threshold,
+                    limit: 200,
+                });
+                if (response?.data?.results) {
+                    AppState.videos.setSearchResults(response.data.results, searchText);
+                }
+            } catch (error) {
+                console.error('Video search failed:', error);
+                App.showError('Video search failed. Please try again.');
+            } finally {
+                AppState.loading.hide('search');
+            }
+            // Set filter for media type tracking, then navigate to Videos
+            if (filter) {
+                filter.searchMode = 'videos';
+                App.setFilter(filter);
+            }
+            App.navigateTo('videos');
+            return;
         }
 
         // Navigate to gallery immediately for responsive UX
