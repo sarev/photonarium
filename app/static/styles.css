@@ -3940,9 +3940,68 @@ a:hover {
     height: 100%;
     gap: 2px;
     border-radius: 4px;
-    overflow-x: auto;
+    overflow-x: hidden;
     overflow-y: hidden;
-    scrollbar-width: thin;
+    cursor: grab;
+}
+.timeline-track.dragging {
+    cursor: grabbing;
+    user-select: none;
+}
+
+/* Timeline minimap — thin bar below the track showing full duration */
+.timeline-minimap {
+    position: relative;
+    height: 20px;
+    background: var(--color-bg-tertiary);
+    border: 1px solid var(--color-border);
+    border-radius: 3px;
+    cursor: pointer;
+    user-select: none;
+    overflow: hidden;
+    flex-shrink: 0;
+    margin-top: 4px;
+}
+.timeline-minimap.hidden {
+    display: none;
+}
+.timeline-minimap-heatmap {
+    position: absolute;
+    inset: 0;
+    pointer-events: none;
+    border-radius: inherit;
+}
+.timeline-minimap-viewport {
+    position: absolute;
+    top: 0;
+    bottom: 0;
+    background: var(--color-accent-light);
+    border: 1.5px solid var(--color-accent);
+    border-radius: 2px;
+    cursor: grab;
+    z-index: 1;
+    min-width: 12px;
+}
+.timeline-minimap-viewport.dragging {
+    cursor: grabbing;
+    border-color: var(--color-accent-hover);
+}
+.timeline-minimap-tick {
+    position: absolute;
+    top: 0;
+    bottom: 0;
+    width: 1px;
+    background: var(--color-border);
+    pointer-events: none;
+}
+.timeline-minimap-tick-label {
+    position: absolute;
+    bottom: 1px;
+    left: 2px;
+    font-size: 0.55rem;
+    color: var(--color-text-muted);
+    white-space: nowrap;
+    pointer-events: none;
 }
 
 .timeline-scene {
@@ -4047,6 +4106,12 @@ a:hover {
 @media (max-width: 768px) {
     .videos-section.timeline {
         min-height: 100px;
+    }
+    .timeline-minimap {
+        height: 16px;
+    }
+    .timeline-minimap-tick-label {
+        display: none;
     }
 }
 

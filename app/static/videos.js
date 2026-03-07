@@ -530,6 +530,13 @@ const Videos = {
         wrapper.appendChild(track);
         container.appendChild(wrapper);
 
+        // Drag-to-scroll on the timeline track
+        this._initTrackDrag(track);
+
+        // Minimap below the track
+        const minimap = this._buildMinimap(scenes, track, isSearch, totalDuration);
+        container.appendChild(minimap);
+
         // Update scroll indicators on scroll and after layout
         const updateIndicators = () => {
             const scrollLeft = track.scrollLeft;
@@ -537,9 +544,36 @@ const Videos = {
             indicatorLeft.classList.toggle('visible', scrollLeft > 4);
             indicatorRight.classList.toggle('visible', maxScroll - scrollLeft > 4);
         };
-        track.addEventListener('scroll', updateIndicators, { passive: true });
-        // Initial check after layout settles
-        requestAnimationFrame(updateIndicators);
+
+        // Sync minimap viewport on scroll (RAF-throttled)
+        let rafPending = false;
+        track.addEventListener('scroll', () => {
+            updateIndicators();
+            if (!rafPending) {
+                rafPending = true;
+                requestAnimationFrame(() => {
+                    rafPending = false;
+                    this._syncMinimapViewport(minimap, track);
+                });
+            }
+        }, { passive: true });
+
+        // Initial layout check — show/hide minimap based on overflow
+        requestAnimationFrame(() => {
+            updateIndicators();
+            const overflows = track.scrollWidth > track.clientWidth + 4;
+            minimap.classList.toggle('hidden', !overflows);
+            this._syncMinimapViewport(minimap, track);
+        });
+
+        // Re-check on resize (window resize or divider drag)
+        const ro = new ResizeObserver(() => {
+            const overflows = track.scrollWidth > track.clientWidth + 4;
+            minimap.classList.toggle('hidden', !overflows);
+            this._syncMinimapViewport(minimap, track);
+            updateIndicators();
+        });
+        ro.observe(track);
 
         // Transcription text below timeline
         const hasTranscriptions = scenes.some(s => s.transcription);
@@ -620,6 +654,232 @@ const Videos = {
         } catch (err) {
             App.showError(`Failed to move ${noun} to trash: ${err.message}`);
         }
+    },
+
+    // =========================================================================
+    // TIMELINE MINIMAP & DRAG-TO-SCROLL
+    // =========================================================================
+
+    /**
+     * Enable click-and-drag horizontal scrolling on the timeline track.
+     * Suppresses click events after a real drag to avoid selecting scenes.
+     * @param {HTMLElement} track
+     * @private
+     */
+    _initTrackDrag(track) {
+        let dragging = false;
+        let startX = 0;
+        let startScrollLeft = 0;
+        let hasDragged = false;
+
+        track.addEventListener('mousedown', (e) => {
+            // Don't hijack clicks on interactive elements (stars, buttons)
+            if (e.target.closest('button, a, input')) return;
+            dragging = true;
+            hasDragged = false;
+            startX = e.clientX;
+            startScrollLeft = track.scrollLeft;
+            track.classList.add('dragging');
+            e.preventDefault();
+
+            const onMove = (/** @type {MouseEvent} */ ev) => {
+                if (!dragging) return;
+                const dx = ev.clientX - startX;
+                if (Math.abs(dx) > 3) hasDragged = true;
+                track.scrollLeft = startScrollLeft - dx;
+            };
+            const onUp = () => {
+                dragging = false;
+                track.classList.remove('dragging');
+                document.removeEventListener('mousemove', onMove);
+                document.removeEventListener('mouseup', onUp);
+            };
+            document.addEventListener('mousemove', onMove);
+            document.addEventListener('mouseup', onUp);
+        });
+
+        // Suppress click after a drag so scenes aren't accidentally selected
+        track.addEventListener('click', (e) => {
+            if (hasDragged) {
+                e.stopPropagation();
+                hasDragged = false;
+            }
+        }, { capture: true });
+    },
+
+    /**
+     * Build the minimap bar element for the timeline.
+     * Shows time ticks, a draggable viewport indicator, and an optional
+     * heatmap gradient when in search mode.
+     * @param {Array} scenes - Scene list
+     * @param {HTMLElement} track - The timeline track element
+     * @param {boolean} isSearch - Whether search mode is active
+     * @param {number} totalDuration - Total video duration in seconds
+     * @returns {HTMLElement} The minimap container
+     * @private
+     */
+    _buildMinimap(scenes, track, isSearch, totalDuration) {
+        const minimap = App.createElement('div', { className: 'timeline-minimap' });
+
+        // Heatmap gradient layer (search mode only)
+        if (isSearch) {
+            const heatmap = App.createElement('div', { className: 'timeline-minimap-heatmap' });
+            heatmap.style.background = this._buildHeatmapGradient(scenes, totalDuration);
+            minimap.appendChild(heatmap);
+        }
+
+        // Time ticks
+        const ticks = this._computeTickIntervals(totalDuration);
+        for (const tickTime of ticks) {
+            const pct = (tickTime / totalDuration) * 100;
+            const tickEl = App.createElement('div', { className: 'timeline-minimap-tick' });
+            tickEl.style.left = pct + '%';
+            const label = App.createElement('span', { className: 'timeline-minimap-tick-label' });
+            label.textContent = this._formatTime(tickTime);
+            tickEl.appendChild(label);
+            minimap.appendChild(tickEl);
+        }
+
+        // Draggable viewport indicator
+        const viewport = App.createElement('div', { className: 'timeline-minimap-viewport' });
+        minimap.appendChild(viewport);
+        minimap._viewport = viewport;
+
+        this._initMinimapDrag(minimap, viewport, track);
+
+        return minimap;
+    },
+
+    /**
+     * Wire drag interactions on the minimap: viewport drag and
+     * background click-to-jump.
+     * @param {HTMLElement} minimap
+     * @param {HTMLElement} viewport
+     * @param {HTMLElement} track
+     * @private
+     */
+    _initMinimapDrag(minimap, viewport, track) {
+        let dragging = false;
+        let startX = 0;
+        let startScrollLeft = 0;
+
+        // Viewport drag — proportionally scrolls the track
+        viewport.addEventListener('mousedown', (e) => {
+            dragging = true;
+            startX = e.clientX;
+            startScrollLeft = track.scrollLeft;
+            viewport.classList.add('dragging');
+            e.preventDefault();
+            e.stopPropagation();
+
+            const onMove = (/** @type {MouseEvent} */ ev) => {
+                if (!dragging) return;
+                const minimapWidth = minimap.clientWidth;
+                const dx = ev.clientX - startX;
+                const scrollDelta = (dx / minimapWidth) * track.scrollWidth;
+                track.scrollLeft = startScrollLeft + scrollDelta;
+            };
+            const onUp = () => {
+                dragging = false;
+                viewport.classList.remove('dragging');
+                document.removeEventListener('mousemove', onMove);
+                document.removeEventListener('mouseup', onUp);
+            };
+            document.addEventListener('mousemove', onMove);
+            document.addEventListener('mouseup', onUp);
+        });
+
+        // Click on minimap background — jump viewport center to click position
+        minimap.addEventListener('mousedown', (e) => {
+            if (e.target === viewport || dragging) return;
+            const rect = minimap.getBoundingClientRect();
+            const clickPct = (e.clientX - rect.left) / rect.width;
+            // Center the viewport around the click
+            const targetScroll = clickPct * track.scrollWidth - track.clientWidth / 2;
+            track.scrollLeft = Math.max(0, targetScroll);
+
+            // Start dragging from this position
+            dragging = true;
+            startX = e.clientX;
+            startScrollLeft = track.scrollLeft;
+            viewport.classList.add('dragging');
+            e.preventDefault();
+
+            const onMove = (/** @type {MouseEvent} */ ev) => {
+                if (!dragging) return;
+                const minimapWidth = minimap.clientWidth;
+                const dx = ev.clientX - startX;
+                const scrollDelta = (dx / minimapWidth) * track.scrollWidth;
+                track.scrollLeft = startScrollLeft + scrollDelta;
+            };
+            const onUp = () => {
+                dragging = false;
+                viewport.classList.remove('dragging');
+                document.removeEventListener('mousemove', onMove);
+                document.removeEventListener('mouseup', onUp);
+            };
+            document.addEventListener('mousemove', onMove);
+            document.addEventListener('mouseup', onUp);
+        });
+    },
+
+    /**
+     * Update the minimap viewport position and width to reflect the
+     * current scroll state of the track.
+     * @param {HTMLElement} minimap
+     * @param {HTMLElement} track
+     * @private
+     */
+    _syncMinimapViewport(minimap, track) {
+        const viewport = minimap._viewport;
+        if (!viewport) return;
+        const sw = track.scrollWidth;
+        if (sw <= 0) return;
+        viewport.style.width = (track.clientWidth / sw * 100) + '%';
+        viewport.style.left = (track.scrollLeft / sw * 100) + '%';
+    },
+
+    /**
+     * Build a CSS linear-gradient string representing the search score
+     * heatmap across the full video duration.
+     * @param {Array} scenes - Scene list with normalised_score
+     * @param {number} totalDuration - Total video duration in seconds
+     * @returns {string} CSS gradient value
+     * @private
+     */
+    _buildHeatmapGradient(scenes, totalDuration) {
+        if (!totalDuration || scenes.length === 0) return 'transparent';
+        const stops = [];
+        for (const scene of scenes) {
+            const midTime = (scene.start_time + scene.end_time) / 2;
+            const pct = (midTime / totalDuration * 100).toFixed(2);
+            const color = this._scoreToColor(scene.normalised_score ?? 0);
+            stops.push(`${color} ${pct}%`);
+        }
+        return `linear-gradient(to right, ${stops.join(', ')})`;
+    },
+
+    /**
+     * Compute "nice" tick intervals for the minimap time axis.
+     * Aims for roughly 10 ticks across the duration. Returns an array
+     * of tick positions in seconds (excludes 0 and end).
+     * @param {number} totalDuration - Total duration in seconds
+     * @returns {number[]}
+     * @private
+     */
+    _computeTickIntervals(totalDuration) {
+        if (totalDuration <= 0) return [];
+        const intervals = [5, 10, 15, 30, 60, 120, 300, 600, 900, 1800, 3600];
+        const targetTicks = 10;
+        let best = intervals[0];
+        for (const iv of intervals) {
+            if (totalDuration / iv >= targetTicks * 0.4) best = iv;
+        }
+        const ticks = [];
+        for (let t = best; t < totalDuration; t += best) {
+            ticks.push(t);
+        }
+        return ticks;
     },
 
     // =========================================================================
