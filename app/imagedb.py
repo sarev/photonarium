@@ -4080,6 +4080,13 @@ class VideoProcessingThread(threading.Thread):
                 self._completion_triggered = False
             except Exception as e:
                 logger.error(f'Error processing video {image_id}: {e}')
+                # Rollback any uncommitted transaction to release the WAL
+                # write lock — otherwise the stuck lock makes all subsequent
+                # DB operations fail with "database is locked".
+                try:
+                    self.conn.rollback()
+                except Exception:
+                    pass
                 self._error_count += 1
             finally:
                 self._current_video = None
@@ -4212,27 +4219,32 @@ class VideoProcessingThread(threading.Thread):
                 return
             logger.debug(f'  [1/6] Detected {len(scenes)} scene(s)')
 
-            # Insert scene records
+            # Insert scene records — batch all inserts into a single
+            # executemany + commit to avoid per-row lock contention.
             now = datetime.now().isoformat()
             scene_ids = []
+            insert_params: list[tuple] = []
             for idx, (start, end) in enumerate(scenes):
                 scene_id = str(uuid.uuid4())
                 scene_ids.append(scene_id)
                 keyframe_time = (start + end) / 2
-                with self._db_lock:
-                    self.conn.execute(
-                        """
-                        INSERT OR REPLACE INTO scenes
-                            (id, image_id, scene_index, start_time, end_time,
-                             keyframe_time, created_at, updated_at)
-                        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-                        """,
-                        (scene_id, image_id, idx, start, end, keyframe_time, now, now),
-                    )
-                if self.stop_event.is_set():
-                    return
+                insert_params.append(
+                    (scene_id, image_id, idx, start, end, keyframe_time, now, now)
+                )
+
+            if self.stop_event.is_set():
+                return
 
             with self._db_lock:
+                self.conn.executemany(
+                    """
+                    INSERT OR REPLACE INTO scenes
+                        (id, image_id, scene_index, start_time, end_time,
+                         keyframe_time, created_at, updated_at)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    insert_params,
+                )
                 self.conn.commit()
 
         # 2. Extract ONE keyframe per scene at midpoint
@@ -4273,6 +4285,7 @@ class VideoProcessingThread(threading.Thread):
             return
 
         scene_embeddings: dict[int, np.ndarray] = {}  # scene_idx -> embedding
+        embedding_updates: list[tuple] = []  # (emb_blob, now_ts, scene_id)
         for scene_idx, frame_time, pil_image in keyframes:
             if self.stop_event.is_set():
                 return
@@ -4284,16 +4297,12 @@ class VideoProcessingThread(threading.Thread):
 
                 scene_embeddings[scene_idx] = embedding
 
-                # Store in scenes.embedding
+                # Collect embedding update for batch write
                 scene_id = scene_ids[scene_idx] if scene_idx < len(scene_ids) else None
                 if scene_id:
                     emb_blob = embedding.astype(np.float32).tobytes()
                     now_ts = datetime.now().isoformat()
-                    with self._db_lock:
-                        self.conn.execute(
-                            'UPDATE scenes SET embedding = ?, updated_at = ? WHERE id = ?',
-                            (emb_blob, now_ts, scene_id),
-                        )
+                    embedding_updates.append((emb_blob, now_ts, scene_id))
 
             except (MemoryError, RuntimeError) as e:
                 logger.error(f'OOM during video frame embedding: {e}')
@@ -4306,8 +4315,14 @@ class VideoProcessingThread(threading.Thread):
                 logger.error(f'Error embedding keyframe at {frame_time:.1f}s: {e}')
                 continue
 
-        with self._db_lock:
-            self.conn.commit()
+        # Batch-write all embedding updates in a single lock acquisition
+        if embedding_updates:
+            with self._db_lock:
+                self.conn.executemany(
+                    'UPDATE scenes SET embedding = ?, updated_at = ? WHERE id = ?',
+                    embedding_updates,
+                )
+                self.conn.commit()
 
         # 5. Set preferred_scene_id and images.embedding from preferred scene
         self._set_step(5, 'Setting preferred scene', basename)
@@ -4397,6 +4412,8 @@ class VideoProcessingThread(threading.Thread):
 
             # Assign STT segments to scenes by temporal overlap.
             # Each STT segment has .start, .end (seconds), .text attributes.
+            # Collect all updates, then batch-write in a single lock acquisition.
+            transcription_updates: list[tuple] = []
             for _scene_idx, ((scene_start, scene_end), scene_id) in enumerate(zip(scenes, scene_ids, strict=False)):
                 if self.stop_event.is_set():
                     return
@@ -4422,16 +4439,19 @@ class VideoProcessingThread(threading.Thread):
                 text_emb = clip.encode_text(full_text) if clip else None
                 text_emb_blob = text_emb.astype(np.float32).tobytes() if text_emb is not None else None
 
-                # Store transcription and embedding
                 now_ts = datetime.now().isoformat()
+                transcription_updates.append((full_text, text_emb_blob, now_ts, scene_id))
+
+            # Batch-write all transcription updates in a single lock acquisition
+            if transcription_updates:
                 with self._db_lock:
-                    self.conn.execute(
+                    self.conn.executemany(
                         """
                         UPDATE scenes SET transcription = ?, transcription_embedding = ?,
                                updated_at = ?
                         WHERE id = ?
                         """,
-                        (full_text, text_emb_blob, now_ts, scene_id),
+                        transcription_updates,
                     )
                     self.conn.commit()
 
