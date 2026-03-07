@@ -74,6 +74,7 @@
     --color-accent: #796a57;
     --color-accent-hover: #695b4a;
     --color-accent-light: rgba(121, 106, 87, 0.15);
+    --color-accent-medium: rgba(121, 106, 87, 0.3);
 
     --color-selection: rgba(121, 106, 87, 0.35);
     --color-selection-border: #5d5040;
@@ -185,6 +186,7 @@
     --color-accent: #a19078;
     --color-accent-hover: #b5a38b;
     --color-accent-light: rgba(161, 144, 120, 0.2);
+    --color-accent-medium: rgba(161, 144, 120, 0.35);
 
     --color-selection: rgba(161, 144, 120, 0.3);
     --color-selection-border: #a19078;
@@ -3878,7 +3880,7 @@ a:hover {
 .video-card-label {
     margin-top: 0.5rem;
     font-size: 0.8rem;
-    color: var(--color-pastel-blue-fg);
+    color: var(--color-pastel-orange-fg);
     text-align: center;
     max-width: 100%;
     overflow: hidden;
@@ -3975,7 +3977,7 @@ a:hover {
     position: absolute;
     top: 0;
     bottom: 0;
-    background: var(--color-accent-light);
+    background: var(--color-accent-medium);
     border: 1.5px solid var(--color-accent);
     border-radius: 2px;
     cursor: grab;
@@ -3998,10 +4000,15 @@ a:hover {
     position: absolute;
     bottom: 1px;
     left: 2px;
-    font-size: 0.55rem;
-    color: var(--color-text-muted);
+    font-size: 0.65rem;
+    color: var(--color-pastel-orange-fg);
     white-space: nowrap;
     pointer-events: none;
+    text-shadow:
+        -1px 0 0 var(--color-overlay-bg-solid),
+        1px 0 0 var(--color-overlay-bg-solid),
+        0 -1px 0 var(--color-overlay-bg-solid),
+        0 1px 0 var(--color-overlay-bg-solid);
 }
 
 .timeline-scene {
