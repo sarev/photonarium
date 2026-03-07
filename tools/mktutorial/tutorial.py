@@ -1523,19 +1523,35 @@ def step_videos_in_gallery(page, ctx):
     body = json.loads(resp.read())
     print(f'    Added videos folder: {videos_dir} -> {body}')
 
+    # Wait for the backend to start processing before calling
+    # _wait_for_processing — the scan thread runs in the background,
+    # so status may still read 'up_to_date' for a moment.  Poll until
+    # we see it flip to 'updating' (non-zero queue or active phase-4),
+    # then wait for it to finish.
+    _deadline = time.time() + 30
+    while time.time() < _deadline:
+        try:
+            _resp = urllib.request.urlopen(f'{SERVER_URL}/api/status', timeout=5)
+            _data = json.loads(_resp.read()).get('data', {})
+            if _data.get('status') != 'up_to_date':
+                break
+        except Exception:
+            pass
+        time.sleep(1)
+
     # Wait for video indexing + scene detection + embeddings to complete
     _wait_for_processing(timeout=300)
 
-    # Force a full reload so the frontend picks up the new videos.
-    # A delta load (load()) may no-op if the event poller already
-    # consumed the changes, leaving the Gallery's image count unchanged
-    # and skipping the re-render.
-    page.evaluate('() => AppState.images.reload()')
+    # Hard-reload the page so all AppState caches are rebuilt from
+    # scratch with the newly indexed videos included.  Incremental
+    # approaches (reload(), delta sync) are unreliable here because
+    # the event poller may have already consumed changes during
+    # _wait_for_processing, leaving caches in an indeterminate state.
+    page.reload()
+    page.wait_for_load_state('networkidle')
     page.wait_for_timeout(1000)
-
-    # Ensure we're on Gallery (Escape from fullscreen lands here, but
-    # navigate_to would fail if the Gallery button is already disabled)
-    page.wait_for_selector('#screen-gallery', state='visible', timeout=5000)
+    # Page reload lands on Gallery (the default screen)
+    page.wait_for_selector('#screen-gallery', state='visible', timeout=10000)
     page.evaluate('() => AppState.view.setThumbnailSize(200)')
     page.wait_for_timeout(500)
     wait_for_thumbnails(page)
@@ -1784,6 +1800,7 @@ def start_server():
         str(TUTORIALS_DIR),
         '--port',
         str(SERVER_PORT),
+        '--debug',
     ]
     proc = subprocess.Popen(
         cmd,
@@ -1966,6 +1983,7 @@ def run_setup():
         str(SCRIPT_DIR),
         '--port',
         str(SERVER_PORT),
+        '--debug',
     ]
     server = subprocess.Popen(
         cmd,
