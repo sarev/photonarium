@@ -23,7 +23,9 @@ The grid works like the Gallery's thumbnail grid, with all the same selection co
 
 ### Sorting
 
-When no search filter is active, videos are sorted by the same criteria as the Gallery (date, rating, quality). When a search is active, they're sorted by match score so the most relevant videos appear first.
+When no search filter is active, videos can be sorted by date, rating, or content similarity. **Sort by similarity** works just like in the Gallery: select a video, then click the similarity button to re-order all videos by visual similarity to the selected one.
+
+When a search is active, videos are sorted by match score so the most relevant videos appear first.
 
 The thumbnail size can be adjusted independently from the Gallery using the +/- buttons in the Videos toolbar.
 
@@ -66,6 +68,10 @@ The minimap hides automatically when the timeline fits without scrolling. Each s
 - **Single click** highlights a scene.
 - **Double click** opens the video in the full-screen viewer, seeked to that scene's start time, and begins playback automatically.
 - **Click the star** to make that scene the video's preferred scene (updates the thumbnail in the Gallery and Videos grid immediately).
+
+## Transcriptions
+
+When a video has audio, Photonarium automatically transcribes speech during processing. The transcription text appears below the scene timeline, with each segment labelled by its timecode. Transcriptions are semantically searchable -- searching for a phrase someone said in a video will find matching scenes.
 
 ## Browse mode vs search mode
 

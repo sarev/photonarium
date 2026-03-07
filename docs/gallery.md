@@ -14,10 +14,10 @@ The Gallery is where you spend most of your time: browsing your library quickly,
 
 ## Sorting
 
-Sort changes the order of the Gallery. Three especially useful modes:
+The toolbar has sort buttons for date, rating, content similarity, people, and quality. Date and rating are straightforward; the others are worth knowing about:
 
-- **Sort by quality**: appears when viewing a duplicate group or custom group. Ranks images by aesthetic quality, sharpness, and resolution so the best version is at the top.
-- **Sort by content**: select an image and this button then groups visually similar images, handy for finding related shots.
+- **Sort by content similarity**: select one image, then click the similarity button. Photonarium compares every image in the library against the selected one using AI embeddings (OpenCLIP) and re-orders the Gallery by visual similarity. The most visually similar images appear first (or last, if you flip the sort direction). This is a powerful way to find related shots, variants of the same scene, or images with a similar mood or composition -- even when they don't share any text, tags, or metadata.
+- **Sort by quality**: ranks images by a weighted combination of aesthetic quality (AI-scored), sharpness, and resolution. Especially useful when viewing a duplicate group or custom group, where you want the best version at the top.
 - **Sort by people**: groups images based on who appears in them (after face detection has run).
 
 ## Opening full-screen
@@ -49,6 +49,7 @@ When you select an image or video, the info panel shows basic details and lets y
 
 Descriptions and ratings help when you search later.
 
+- **Histogram** -- for images, a colour histogram is displayed in the info panel showing the distribution of red, green, and blue channels. This gives a quick visual summary of exposure and colour balance.
 - **Metadata** opens a dialog showing EXIF data extracted from the file (camera, lens, focal length, aperture, shutter speed, ISO, and so on). If any field looks interesting, click the filter icon next to it to select it. You can select several fields, then click **Done** to jump straight to Search with those values pre-filled as metadata filters. (EXIF metadata is primarily available for images; video files may have limited metadata.)
 
 ## Videos in the Gallery
