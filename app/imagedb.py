@@ -1955,6 +1955,11 @@ class IngestionThread(threading.Thread):
         self._thread_local = threading.local()
         self._worker_conns: list[sqlite3.Connection] = []
         self._worker_conns_lock = threading.Lock()
+        # Retry tracking for transient "database is locked" errors — items
+        # are re-queued up to _max_retries times before being counted as
+        # permanent failures.
+        self._retry_counts: dict[Path, int] = {}
+        self._max_retries = 5
 
     @property
     def processed_count(self) -> int:
@@ -2045,9 +2050,22 @@ class IngestionThread(threading.Thread):
                         try:
                             future.result()  # Raises exception if worker failed
                             self._processed_count += 1
+                            # Clear retry count on success
+                            self._retry_counts.pop(path, None)
                         except Exception as e:
-                            logger.error(f'Error processing {path}: {e}')
-                            self._error_count += 1
+                            retries = self._retry_counts.get(path, 0)
+                            if 'database is locked' in str(e) and retries < self._max_retries:
+                                # Re-queue for retry — transient DB lock contention
+                                self._retry_counts[path] = retries + 1
+                                self.ingestion_queue.put(path)
+                                logger.debug(
+                                    f'Re-queued {path} after "database is locked" '
+                                    f'(attempt {retries + 1}/{self._max_retries})'
+                                )
+                            else:
+                                logger.error(f'Error processing {path}: {e}')
+                                self._retry_counts.pop(path, None)
+                                self._error_count += 1
                         finally:
                             self.ingestion_queue.task_done()
                             with self._pending_lock:
