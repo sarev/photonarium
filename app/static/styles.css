@@ -2955,6 +2955,15 @@ a:hover {
     margin-top: 0.15rem;
 }
 
+.folder-rescan {
+    color: var(--color-text-secondary);
+}
+
+.folder-rescan:hover {
+    color: var(--color-primary);
+    background-color: var(--color-primary-light);
+}
+
 .folder-remove {
     color: var(--color-danger);
 }

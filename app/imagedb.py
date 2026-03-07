@@ -8672,6 +8672,99 @@ class ImageDatabase:
             self._face_thread._completion_triggered = False
             logger.debug('queue_rescan_all: reset FaceDetectionThread completion flags')
 
+    def queue_rescan_folder(self, folder_path: str) -> None:
+        """Queue a single folder for rescanning and processing.
+
+        Like ``queue_rescan_all()`` but limited to one folder.  Walks only
+        the specified folder, marks missing files under it as deleted,
+        queues new/changed images for ingestion and embedding, then resets
+        processing-thread completion flags.
+
+        Args:
+            folder_path: Absolute path of the folder to rescan.
+        """
+        logger.info(f'Queueing rescan of folder: {folder_path}')
+
+        self._run_face_detection = True
+        self._run_face_grouping = True
+
+        self._rescan_folder(folder_path)
+
+        # Queue images under this folder that need embedding
+        with self._db_lock:
+            cursor = self.conn.execute(
+                "SELECT id, path FROM images WHERE deleted = 0 AND embedding IS NULL AND path LIKE ? || '%'",
+                (folder_path.rstrip('/\\') + '/',),
+            )
+            missing_embeddings = rows_to_dicts(cursor.fetchall())
+
+        for image in missing_embeddings:
+            self._embedding_queue.put(image['id'])
+        if missing_embeddings:
+            logger.info(f'{len(missing_embeddings)} images queued for image embedding')
+
+        # Reset completion flags so callbacks fire again for this cycle
+        if self._embedding_thread:
+            self._embedding_thread._completion_triggered = False
+            self._embedding_thread._on_complete_finished = False
+            logger.debug('queue_rescan_folder: reset EmbeddingThread completion flags')
+        if self._face_thread:
+            self._face_thread._completion_triggered = False
+            logger.debug('queue_rescan_folder: reset FaceDetectionThread completion flags')
+
+    def _rescan_folder(self, folder_path: str) -> None:
+        """Rescan a single folder for new/changed/deleted files.
+
+        Walks the specified folder using ``find_images_in_folder()``, queues
+        discovered files for ingestion, and marks images under this folder
+        that are no longer on disk as deleted.
+
+        Args:
+            folder_path: Absolute path of the folder to rescan.
+        """
+        folder = Path(folder_path)
+        if not folder.exists():
+            logger.warning(f'Folder does not exist: {folder_path}')
+            return
+
+        logger.info(f'        Scanning: {folder}')
+
+        # Get all registered folder paths (for sub-folder skip logic)
+        all_folders = get_folders(self.conn)
+        all_folder_paths = [f['path'] for f in all_folders]
+
+        found_paths: set[str] = set()
+        for image_path in find_images_in_folder(
+            folder,
+            self.config.image_extensions | self.config.video_extensions,
+            registered_folders=all_folder_paths,
+        ):
+            path_str = str(image_path)
+            found_paths.add(path_str)
+            self._ingestion_queue.put(image_path)
+
+        # Mark missing files under this folder as deleted
+        with self._db_lock:
+            cursor = self.conn.execute(
+                "SELECT path FROM images WHERE deleted = 0 AND path LIKE ? || '%'",
+                (folder_path.rstrip('/\\') + '/',),
+            )
+            known_paths = {row['path'] for row in cursor.fetchall()}
+
+        missing_paths = known_paths - found_paths
+        if missing_paths:
+            logger.info(f'Marking {len(missing_paths)} missing images as deleted')
+            now = datetime.now().isoformat()
+            with self._db_lock:
+                for path in missing_paths:
+                    self.conn.execute(
+                        'UPDATE images SET deleted = 1, updated_at = ? WHERE path = ? AND deleted = 0',
+                        (now, path),
+                    )
+                self.conn.commit()
+
+        logger.info(f'        Found {len(found_paths)} images')
+
     # =========================================================================
     # Public API - Events (SSE)
     # =========================================================================

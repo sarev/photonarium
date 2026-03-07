@@ -488,6 +488,13 @@ const Database = {
                 countEl.appendChild(badge);
             }
 
+            const rescanBtn = document.createElement('button');
+            rescanBtn.type = 'button';
+            rescanBtn.className = 'toolbar-btn folder-rescan';
+            rescanBtn.title = 'Rescan this folder';
+            rescanBtn.innerHTML = App.icon('refresh', '\u21BB');
+            rescanBtn.addEventListener('click', () => this._rescanFolder(folder.path));
+
             const removeBtn = document.createElement('button');
             removeBtn.type = 'button';
             removeBtn.className = 'toolbar-btn folder-remove';
@@ -508,6 +515,7 @@ const Database = {
             infoEl.appendChild(countEl);
 
             li.appendChild(infoEl);
+            li.appendChild(rescanBtn);
             li.appendChild(removeBtn);
 
             list.appendChild(li);
@@ -536,6 +544,20 @@ const Database = {
         } catch (error) {
             console.error('Error loading database status:', error);
             App.showError('Could not load database status.');
+        }
+    },
+
+    /**
+     * Triggers a rescan of a single folder.
+     * @param {string} path - Absolute path of the folder to rescan
+     * @private
+     */
+    async _rescanFolder(path) {
+        try {
+            await AppState.folders.rescanFolder(path);
+        } catch (error) {
+            console.error('Error initiating folder rescan:', error);
+            App.showError('Could not start folder rescan.');
         }
     },
 

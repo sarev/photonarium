@@ -166,6 +166,26 @@ AppState.folders = (function() {
         },
 
         /**
+         * Trigger a rescan of a single folder.
+         *
+         * @param {string} path - Absolute path of the folder to rescan
+         */
+        async rescanFolder(path) {
+            try {
+                const response = await App.apiPost('/rescan-folder', { path });
+                if (response && response.success === false) {
+                    throw new Error(response.error || 'Failed to start folder rescan');
+                }
+                broadcast({ type: 'rescanStarted' });
+
+            } catch (err) {
+                console.error('[AppState.folders.rescanFolder] Error:', err);
+                broadcastError(err.message || 'Failed to start folder rescan');
+                throw err;
+            }
+        },
+
+        /**
          * Optimistically adjust a folder's cached image count.
          *
          * Used by the ``import_complete`` event handler to bump the

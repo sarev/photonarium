@@ -1774,6 +1774,24 @@ def rescan_folders():
     return success_response(message='Rescan queued')
 
 
+@app.route('/api/rescan-folder', methods=['POST'])
+def rescan_folder():
+    """Trigger a rescan of a single registered folder.
+
+    Request Body:
+        path (str): Absolute path of the folder to rescan.
+
+    Returns:
+        Success response confirming folder rescan has been queued.
+    """
+    data = request.get_json(silent=True) or {}
+    folder_path = data.get('path', '').strip()
+    if not folder_path:
+        return error_response('Missing folder path', 400)
+    get_db().queue_rescan_folder(folder_path)
+    return success_response(message='Folder rescan queued')
+
+
 # =============================================================================
 # Duplicates Endpoints
 # =============================================================================
