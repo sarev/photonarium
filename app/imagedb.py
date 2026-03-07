@@ -4094,10 +4094,12 @@ class VideoProcessingThread(threading.Thread):
         data_dir: Path | str = '.',
         event_queue: EventQueue | None = None,
         clip_model: OpenCLIPModel | None = None,
+        transcribe_queue: queue.Queue[str] | None = None,
     ):
         super().__init__(name='VideoProcessingThread', daemon=True)
         self.conn = conn
         self.video_queue = video_queue
+        self._transcribe_queue = transcribe_queue or queue.Queue()
         self.ingestion_thread = ingestion_thread
         self.stop_event = stop_event
         self._db_lock = db_lock
@@ -4109,6 +4111,7 @@ class VideoProcessingThread(threading.Thread):
         self._stt_loaded = False
         self._processed_count = 0
         self._error_count = 0
+        self._transcribe_count = 0
         self._completion_triggered = False
         # Progress tracking for status endpoint — read by get_processing_status()
         self._current_video: dict[str, Any] | None = None
@@ -4147,7 +4150,11 @@ class VideoProcessingThread(threading.Thread):
         logger.info('Video processing thread stopped')
 
     def _check_completion(self) -> None:
-        """Check if all video processing is done and emit event."""
+        """Check if all video processing is done and emit event.
+
+        After the main video queue drains, processes any pending
+        transcribe-only items before emitting the completion event.
+        """
         if self._completion_triggered:
             return
         if not self.ingestion_thread.has_started_processing:
@@ -4157,11 +4164,40 @@ class VideoProcessingThread(threading.Thread):
         if not self.video_queue.empty():
             return
 
+        # Drain transcribe-only queue after full video processing finishes.
+        # This avoids DB lock contention — transcription runs sequentially
+        # after the heavier video pipeline is done.
+        while not self._transcribe_queue.empty() and not self.stop_event.is_set():
+            try:
+                image_id = self._transcribe_queue.get_nowait()
+            except queue.Empty:
+                break
+            try:
+                self._transcribe_video(image_id)
+                self._transcribe_count += 1
+            except Exception as e:
+                logger.error(f'Error transcribing video {image_id}: {e}')
+                try:
+                    self.conn.rollback()
+                except Exception:
+                    pass
+                self._error_count += 1
+            finally:
+                self._current_video = None
+                self._transcribe_queue.task_done()
+
+        # Don't trigger completion if there are still transcribe items
+        if not self._transcribe_queue.empty():
+            return
+
         self._completion_triggered = True
-        if self._processed_count > 0 or self._error_count > 0:
+        total_processed = self._processed_count + self._transcribe_count
+        if total_processed > 0 or self._error_count > 0:
             parts = []
             if self._processed_count:
                 parts.append(f'{self._processed_count} processed')
+            if self._transcribe_count:
+                parts.append(f'{self._transcribe_count} transcribed')
             if self._error_count:
                 parts.append(f'{self._error_count} errors')
             logger.info(f'Video processing complete — {", ".join(parts)}')
@@ -4169,8 +4205,55 @@ class VideoProcessingThread(threading.Thread):
             if self._event_queue:
                 self._event_queue.emit(
                     EVENT_VIDEO_PROCESSED,
-                    {'processed_count': self._processed_count},
+                    {'processed_count': total_processed},
                 )
+
+    def _transcribe_video(self, image_id: str) -> None:
+        """Run STT transcription only for a previously-processed video.
+
+        Loads existing scene boundaries from the DB and calls
+        ``_transcribe_scenes()`` without re-running scene detection,
+        keyframe extraction, or embedding generation.
+
+        Args:
+            image_id: The video's image ID (must already have scenes).
+        """
+        with self._db_lock:
+            row = self.conn.execute(
+                'SELECT path, basename FROM images WHERE id = ? AND deleted = 0',
+                (image_id,),
+            ).fetchone()
+            if not row:
+                logger.warning(f'Transcribe-only: image {image_id} not found or deleted, skipping')
+                return
+
+            scene_rows = self.conn.execute(
+                'SELECT id, start_time, end_time FROM scenes WHERE image_id = ? ORDER BY scene_index',
+                (image_id,),
+            ).fetchall()
+
+        if not scene_rows:
+            logger.warning(f'Transcribe-only: {row["basename"]} has no scenes, skipping (needs full processing)')
+            return
+
+        video_path = Path(row['path'])
+        if not video_path.exists():
+            logger.warning(f'Transcribe-only: {row["basename"]} file missing, skipping')
+            return
+
+        scenes = [(r['start_time'], r['end_time']) for r in scene_rows]
+        scene_ids = [r['id'] for r in scene_rows]
+
+        self._current_video = {
+            'basename': row['basename'],
+            'step': 'transcribing',
+            'step_index': 6,
+            'total_steps': 6,
+        }
+
+        logger.info(f'Transcribing {row["basename"]} ({len(scenes)} scenes)')
+        clip = self._get_clip_model()
+        self._transcribe_scenes(image_id, video_path, scenes, scene_ids, clip)
 
     def _get_clip_model(self) -> OpenCLIPModel | None:
         """Get the shared OpenCLIP model instance.
@@ -5837,6 +5920,7 @@ class ImageDatabase:
         self._trash_queue: queue.Queue[tuple[str, str]] = queue.Queue()  # (image_id, file_path)
         self._import_queue: queue.Queue[str] = queue.Queue()  # source file paths
         self._video_queue: queue.Queue[str] = queue.Queue()  # video image IDs needing scene/embedding
+        self._transcribe_queue: queue.Queue[str] = queue.Queue()  # video IDs needing STT only
 
         # Shared OpenCLIP model instance (used by EmbeddingThread and VideoProcessingThread)
         self._shared_clip_model: OpenCLIPModel | None = None
@@ -6758,6 +6842,7 @@ class ImageDatabase:
             data_dir=self.db_path.parent,
             event_queue=self.event_queue,
             clip_model=self._shared_clip_model,
+            transcribe_queue=self._transcribe_queue,
         )
         self._video_thread.start()
 
@@ -8205,6 +8290,48 @@ class ImageDatabase:
 
         return len(rows)
 
+    def queue_transcribe_videos(self) -> int:
+        """Queue already-processed videos that are missing STT transcriptions.
+
+        Unlike ``reprocess_broken_videos()``, this does NOT delete scene data
+        or re-run the full video pipeline.  It only queues videos whose scenes
+        already exist but have at least one NULL transcription, so that only
+        step 6 (STT) runs.
+
+        Returns:
+            Number of videos queued for transcription.
+        """
+        with self._db_lock:
+            cursor = self.conn.execute("""
+                SELECT DISTINCT i.id, i.basename
+                FROM images i
+                JOIN scenes s ON s.image_id = i.id
+                WHERE i.deleted = 0
+                  AND i.media_type = 'video'
+                  AND s.transcription IS NULL
+                  -- Only pick fully-processed videos (have embedding + preferred scene)
+                  AND i.preferred_scene_id IS NOT NULL
+                  AND i.embedding IS NOT NULL
+                  AND NOT EXISTS (
+                      SELECT 1 FROM scenes s2
+                      WHERE s2.image_id = i.id AND s2.embedding IS NULL
+                  )
+            """)
+            rows = cursor.fetchall()
+
+        if not rows:
+            return 0
+
+        for row in rows:
+            self._transcribe_queue.put(row['id'])
+            logger.debug(f'  Queued video for transcription: {row["basename"]}')
+
+        # Reset completion flag so the thread picks up the new work
+        if self._video_thread is not None:
+            self._video_thread._completion_triggered = False
+
+        return len(rows)
+
     def _generate_thumbnails(self, source_path: Path, checksum: str) -> bool:
         """Generate and cache thumbnails for an image at standard sizes.
 
@@ -8395,7 +8522,9 @@ class ImageDatabase:
         embedding_count = self._embedding_queue.qsize()
         face_count = self._face_queue.qsize()
         nima_count = self._nima_queue.qsize() if self._nima_queue else 0
-        video_count = self._video_queue.qsize() if self._video_queue else 0
+        video_count = (self._video_queue.qsize() if self._video_queue else 0) + (
+            self._transcribe_queue.qsize() if self._transcribe_queue else 0
+        )
         video_progress = self._video_thread._current_video if self._video_thread is not None else None
         trash_count = self._trash_queue.qsize()
         import_count = self._import_queue.qsize()

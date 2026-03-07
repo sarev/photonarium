@@ -1792,6 +1792,23 @@ def rescan_folder():
     return success_response(message='Folder rescan queued')
 
 
+@app.route('/api/transcribe-videos', methods=['POST'])
+def transcribe_videos():
+    """Queue already-processed videos for STT transcription only.
+
+    Runs step 6 (speech-to-text) without re-detecting scenes or
+    regenerating thumbnails.  Requires ``stt_enabled`` in config.
+
+    Returns:
+        JSON with ``count`` of videos queued for transcription.
+    """
+    db = get_db()
+    if not db.config.stt_enabled:
+        return error_response('STT is not enabled in configuration', 400)
+    count = db.queue_transcribe_videos()
+    return success_response(count=count, message=f'Queued {count} video(s) for transcription')
+
+
 # =============================================================================
 # Duplicates Endpoints
 # =============================================================================
@@ -4678,6 +4695,12 @@ if __name__ == '__main__':
         'Deletes scene data and re-queues for processing, then starts the server.',
     )
     parser.add_argument(
+        '--transcribe-videos',
+        action='store_true',
+        help='Transcribe already-processed videos that are missing STT. '
+        'Only runs step 6 (speech-to-text) — does not re-detect scenes or regenerate thumbnails.',
+    )
+    parser.add_argument(
         '--debug',
         action='store_true',
         help='Enable DEBUG-level logging for all application modules',
@@ -4929,6 +4952,17 @@ if __name__ == '__main__':
             logger.info(f'Queued {count} video(s) for reprocessing')
         else:
             logger.info('No videos found needing reprocessing')
+
+    # Handle transcribe-only mode (after DB init, before server start)
+    if args.transcribe_videos:
+        if not db.config.stt_enabled:
+            logger.warning('--transcribe-videos requires stt_enabled=true in config, skipping')
+        else:
+            count = db.queue_transcribe_videos()
+            if count:
+                logger.info(f'Queued {count} video(s) for transcription')
+            else:
+                logger.info('No videos found needing transcription')
 
     # Resolve server host/port: CLI --port overrides config, config overrides defaults
     server_host = db.config.server_host
