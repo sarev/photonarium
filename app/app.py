@@ -4651,6 +4651,15 @@ if __name__ == '__main__':
         'Used by the installer to persist the chosen data directory.',
     )
     parser.add_argument(
+        '--reprocess-videos',
+        nargs='?',
+        const='broken',
+        default=None,
+        metavar='MODE',
+        help='Reprocess broken videos (default) or all videos if "all" is given. '
+        'Deletes scene data and re-queues for processing, then starts the server.',
+    )
+    parser.add_argument(
         '--debug',
         action='store_true',
         help='Enable DEBUG-level logging for all application modules',
@@ -4891,6 +4900,17 @@ if __name__ == '__main__':
 
     # Initialise database before starting server
     get_db()
+
+    # Handle video reprocessing (after DB init, before server start)
+    if args.reprocess_videos is not None:
+        force_all = args.reprocess_videos.lower() == 'all'
+        mode_label = 'all' if force_all else 'broken'
+        logger.info(f'Reprocessing {mode_label} videos...')
+        count = db.reprocess_broken_videos(force_all=force_all)
+        if count:
+            logger.info(f'Queued {count} video(s) for reprocessing')
+        else:
+            logger.info('No videos found needing reprocessing')
 
     # Resolve server host/port: CLI --port overrides config, config overrides defaults
     server_host = db.config.server_host

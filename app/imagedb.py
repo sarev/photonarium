@@ -8063,6 +8063,11 @@ class ImageDatabase:
                       -- Or scenes exist but pipeline didn't finish (no embedding/preferred)
                       OR i.preferred_scene_id IS NULL
                       OR i.embedding IS NULL
+                      -- Or any scene is missing its embedding (step 4 never completed)
+                      OR EXISTS (
+                          SELECT 1 FROM scenes s2
+                          WHERE s2.image_id = i.id AND s2.embedding IS NULL
+                      )
                   )
             """)
             rows = cursor.fetchall()
@@ -8072,6 +8077,76 @@ class ImageDatabase:
             for row in rows:
                 self._video_queue.put(row['id'])
                 logger.debug(f'  Queued unprocessed video: {row["basename"]}')
+
+    def reprocess_broken_videos(self, force_all: bool = False) -> int:
+        """Delete scene data for broken (or all) videos and queue for reprocessing.
+
+        For broken videos, "broken" means the same conditions checked by
+        _queue_unprocessed_videos: no scenes, null preferred_scene_id/embedding,
+        or any scene with a null embedding.
+
+        When force_all is True, ALL videos are wiped and reprocessed regardless
+        of their current state.
+
+        Scenes are deleted so the video pipeline re-detects them from scratch.
+        The images table fields (preferred_scene_id, embedding) are also cleared
+        so the video shows as unprocessed.
+
+        Args:
+            force_all: If True, reprocess every video; if False, only broken ones.
+
+        Returns:
+            Number of videos queued for reprocessing.
+        """
+        with self._db_lock:
+            if force_all:
+                cursor = self.conn.execute("""
+                    SELECT id, basename FROM images
+                    WHERE deleted = 0 AND media_type = 'video'
+                """)
+            else:
+                cursor = self.conn.execute("""
+                    SELECT i.id, i.basename
+                    FROM images i
+                    WHERE i.deleted = 0
+                      AND i.media_type = 'video'
+                      AND (
+                          NOT EXISTS (SELECT 1 FROM scenes s WHERE s.image_id = i.id)
+                          OR i.preferred_scene_id IS NULL
+                          OR i.embedding IS NULL
+                          OR EXISTS (
+                              SELECT 1 FROM scenes s2
+                              WHERE s2.image_id = i.id AND s2.embedding IS NULL
+                          )
+                      )
+                """)
+            rows = cursor.fetchall()
+
+            if not rows:
+                return 0
+
+            video_ids = [row['id'] for row in rows]
+
+            # Delete all scenes for these videos (forces clean re-detection)
+            placeholders = ','.join('?' * len(video_ids))
+            self.conn.execute(
+                f'DELETE FROM scenes WHERE image_id IN ({placeholders})',
+                video_ids,
+            )
+
+            # Clear preferred_scene_id and embedding so they look fully unprocessed
+            self.conn.execute(
+                f'UPDATE images SET preferred_scene_id = NULL, embedding = NULL WHERE id IN ({placeholders})',
+                video_ids,
+            )
+            self.conn.commit()
+
+        # Queue each video for the processing thread
+        for row in rows:
+            self._video_queue.put(row['id'])
+            logger.debug(f'  Queued video for reprocessing: {row["basename"]}')
+
+        return len(rows)
 
     def _generate_thumbnails(self, source_path: Path, checksum: str) -> bool:
         """Generate and cache thumbnails for an image at standard sizes.
