@@ -4202,7 +4202,11 @@ class VideoProcessingThread(threading.Thread):
             scene_ids = [row['id'] for row in existing_scenes]
         else:
             logger.debug(f'  [1/6] Detecting scenes in {path.name}...')
-            scenes = detect_scenes(path, threshold=self.config.video_scene_detection_threshold)
+            scenes = detect_scenes(
+                path,
+                threshold=self.config.video_scene_detection_threshold,
+                max_scene_duration=self.config.video_max_scene_duration,
+            )
             if not scenes:
                 logger.warning(f'No scenes detected for {path}')
                 return

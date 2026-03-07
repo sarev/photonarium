@@ -325,21 +325,19 @@ def detect_scenes(
     path: Path,
     threshold: float = 27.0,
     min_scene_duration: float = 1.0,
+    max_scene_duration: float = 8.0,
 ) -> list[tuple[float, float]]:
     """Detect scene boundaries in a video file.
 
-    Tries two strategies in order:
+    Uses ``ffmpeg -i`` with the ``select`` filter to find frames whose
+    scene-change score exceeds *threshold*.  This delegates all the
+    heavy lifting to FFmpeg's highly-optimised C pipeline (with
+    hardware-accelerated decoders where available).
 
-    1. **ffmpeg select filter** — runs ``ffmpeg -i`` with the ``select``
-       filter to find frames whose scene-change score exceeds *threshold*.
-       Uses ``-i`` for input so paths are handled natively on all platforms
-       (the previous ``-f lavfi movie=`` approach broke on Windows paths).
-    2. **PyAV frame differencing** — decodes keyframes and computes
-       per-channel mean-absolute-difference to detect cuts.  Slower than
-       strategy 1 but requires no system ffmpeg binary.
-
-    Falls back to uniform ~30 s segments if both strategies fail or the
-    video contains no detectable scene changes.
+    Any scene longer than *max_scene_duration* is automatically
+    subdivided into uniform segments of that length — so even videos
+    with no detectable cuts (e.g. a single continuous shot) get
+    meaningful scene breakpoints.
 
     Args:
         path: Path to the video file.
@@ -347,6 +345,8 @@ def detect_scenes(
             fewer scene changes.  Recommended: 20-35.
         min_scene_duration: Minimum scene duration in seconds. Scenes
             shorter than this are merged with the previous scene.
+        max_scene_duration: Maximum scene duration in seconds. Scenes
+            longer than this are subdivided into uniform segments.
 
     Returns:
         List of (start_time, end_time) tuples in seconds. Always returns
@@ -358,16 +358,12 @@ def detect_scenes(
 
     duration = meta.duration
 
-    # For very short videos (< 3s), just use one scene
-    if duration < 3.0:
+    # For very short videos, just use one scene
+    if duration <= max_scene_duration:
         return [(0.0, duration)]
 
-    # Strategy 1: ffmpeg select filter (fast, uses system ffmpeg binary)
+    # Use ffmpeg's select filter for scene change detection
     scene_times = _detect_scenes_ffmpeg(path, threshold, min_scene_duration)
-
-    # Strategy 2: PyAV frame differencing (no system binary needed)
-    if len(scene_times) <= 1:
-        scene_times = _detect_scenes_pyav(path, threshold, min_scene_duration, duration)
 
     # Build scene list from boundary timestamps
     scenes: list[tuple[float, float]] = []
@@ -376,9 +372,10 @@ def detect_scenes(
         end = scene_times[i + 1] if i + 1 < len(scene_times) else duration
         scenes.append((start, end))
 
-    # If no scene changes were detected, fall back to uniform segments
-    if len(scenes) <= 1:
-        return _uniform_scenes(duration)
+    # Subdivide any scenes that exceed max_scene_duration — this also
+    # handles the "no cuts detected" case where the entire video is one
+    # scene, giving us uniform segments as a natural fallback.
+    scenes = _subdivide_long_scenes(scenes, max_scene_duration)
 
     return scenes
 
@@ -398,6 +395,7 @@ def _detect_scenes_ffmpeg(
 
     ffmpeg_bin = shutil.which('ffmpeg')
     if not ffmpeg_bin:
+        logger.debug('ffmpeg not found on PATH, skipping scene detection')
         return [0.0]
 
     threshold_frac = threshold / 100.0
@@ -442,66 +440,27 @@ def _detect_scenes_ffmpeg(
         return [0.0]
 
 
-def _detect_scenes_pyav(
-    path: Path,
-    threshold: float,
-    min_scene_duration: float,
-    duration: float,
-) -> list[float]:
-    """Detect scene boundaries by comparing consecutive frames via PyAV.
-
-    Decodes only keyframes (much faster than full decode) and computes
-    per-channel mean absolute difference.  A score above *threshold* / 100
-    (as a fraction of maximum pixel difference) indicates a scene cut.
-
-    Returns a list of scene-start timestamps (always starts with 0.0).
-    """
-    try:
-        import av
-        import numpy as np
-    except ImportError:
-        return [0.0]
-
-    threshold_frac = threshold / 100.0
-    scene_times: list[float] = [0.0]
-
-    try:
-        with av.open(str(path)) as container:
-            stream = container.streams.video[0]
-            # Decode only keyframes for speed — still catches hard cuts
-            stream.codec_context.skip_frame = 'NONKEY'
-
-            prev_array = None
-            for frame in container.decode(stream):
-                ts = float(frame.pts * stream.time_base) if frame.pts is not None else 0.0
-
-                # Downsample to small size for fast comparison
-                small = frame.reformat(width=160, height=120).to_ndarray(format='rgb24')
-
-                if prev_array is not None:
-                    # Mean absolute difference normalised to 0-1
-                    diff = np.mean(np.abs(
-                        small.astype(np.float32) - prev_array.astype(np.float32)
-                    )) / 255.0
-
-                    if diff > threshold_frac and ts > scene_times[-1] + min_scene_duration:
-                        scene_times.append(ts)
-
-                prev_array = small
-
-    except Exception as e:
-        logger.debug(f'PyAV scene detection failed ({e})')
-        return [0.0]
-
-    if len(scene_times) > 1:
-        logger.debug(
-            f'PyAV scene detection found {len(scene_times) - 1} cut(s) '
-            f'in {path.name}'
-        )
-    return scene_times
+def _subdivide_long_scenes(
+    scenes: list[tuple[float, float]],
+    max_duration: float,
+) -> list[tuple[float, float]]:
+    """Split any scenes longer than *max_duration* into uniform sub-segments."""
+    result: list[tuple[float, float]] = []
+    for start, end in scenes:
+        length = end - start
+        if length <= max_duration:
+            result.append((start, end))
+        else:
+            n = max(1, round(length / max_duration))
+            seg_len = length / n
+            for j in range(n):
+                s = start + j * seg_len
+                e = min(start + (j + 1) * seg_len, end)
+                result.append((s, e))
+    return result
 
 
-def _uniform_scenes(duration: float, target_length: float = 30.0) -> list[tuple[float, float]]:
+def _uniform_scenes(duration: float, target_length: float = 8.0) -> list[tuple[float, float]]:
     """Split a video into uniform segments of approximately `target_length`.
 
     Used as a fallback when scene detection finds no boundaries.

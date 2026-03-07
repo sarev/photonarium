@@ -475,6 +475,13 @@ CONFIG_SCHEMA: list[tuple[str, list[tuple[str, list[str]]]]] = [
                     'Lower values detect more subtle transitions. Range: 1.0-100.0, recommended: 20-35',
                 ],
             ),
+            (
+                'video_max_scene_duration',
+                [
+                    'Maximum scene duration in seconds.',
+                    'Scenes longer than this are subdivided. Also the fallback when no cuts are detected.',
+                ],
+            ),
         ],
     ),
     (
@@ -656,6 +663,7 @@ FIELD_CONSTRAINTS: dict[str, dict[str, int | float | bool]] = {
     'quality_weight_bpp': {'min': 0.0, 'max': 1.0, 'step': 0.01},
     'quality_alpha': {'min': 0.0, 'max': 1.0, 'step': 0.01},
     'video_scene_detection_threshold': {'min': 1.0, 'max': 100.0, 'step': 0.5},
+    'video_max_scene_duration': {'min': 2.0, 'max': 60.0, 'step': 0.5},
     'slideshow_interval': {'min': 1.0, 'max': 60.0, 'step': 0.5},
     'import_threads': {'min': 1, 'max': 16, 'step': 1},
     'scan_interval_minutes': {'min': 1, 'max': 1440, 'step': 1, 'special_zero': True},
@@ -782,6 +790,10 @@ class Config:
     video_extensions: set[str] = field(default_factory=lambda: set(_VIDEO_EXTENSIONS_ORDERED))
     # Scene change detection threshold (1-100). Higher = fewer scene cuts.
     video_scene_detection_threshold: float = 27.0
+    # Maximum scene duration in seconds. Scenes longer than this are
+    # subdivided into uniform segments. Also used as the fallback segment
+    # length when scene detection finds no cuts.
+    video_max_scene_duration: float = 8.0
     # Whether to run speech-to-text transcription on video audio.
     stt_enabled: bool = False
     # Whisper model size for transcription.
