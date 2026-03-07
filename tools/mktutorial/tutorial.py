@@ -1554,6 +1554,31 @@ def step_videos_in_gallery(page, ctx):
     page.wait_for_selector('#screen-gallery', state='visible', timeout=10000)
     page.evaluate('() => AppState.view.setThumbnailSize(200)')
     page.wait_for_timeout(500)
+
+    # Sort by date (newest first) so the just-added videos appear near
+    # the top of the gallery rather than at some arbitrary scroll offset.
+    click_toolbar(page, 'btn-sort-date')
+    page.wait_for_timeout(300)
+    # Ensure descending order (newest first) — the direction button
+    # toggles, so check the current state and flip if needed.
+    is_asc = page.evaluate(
+        '() => AppState.view.getSortDirection() === "asc"'
+    )
+    if is_asc:
+        click_toolbar(page, 'btn-sort-direction')
+        page.wait_for_timeout(300)
+
+    wait_for_thumbnails(page)
+
+    # Scroll to a video card so at least one is visible in the viewport
+    page.evaluate("""() => {
+        const badge = document.querySelector('.video-duration-badge');
+        if (badge) {
+            const item = badge.closest('.gallery-item');
+            if (item) item.scrollIntoView({ block: 'center' });
+        }
+    }""")
+    page.wait_for_timeout(500)
     wait_for_thumbnails(page)
     # Highlight a video duration badge so it stands out
     highlight_element(page, '.video-duration-badge')
@@ -1573,7 +1598,27 @@ def step_videos_opening(page, ctx):
 def step_videos_selecting(page, ctx):
     """Click the first video card to populate the timeline."""
     page.locator('.video-card').first.click()
-    page.wait_for_selector('.timeline-scene', timeout=10000)
+    page.wait_for_timeout(500)
+
+    # Scene loading is async — _loadScenesIfNeeded() fetches from the
+    # API, stores in AppState, then _renderTimeline() creates the DOM
+    # elements.  If the click didn't trigger selection (e.g. click
+    # landed on a child element before GridSelection registered it),
+    # fall back to programmatic selection + scene loading.
+    try:
+        page.wait_for_selector('.timeline-scene', timeout=10000)
+    except Exception:
+        print('    Falling back to programmatic scene loading')
+        page.evaluate("""async () => {
+            const videos = AppState.videos.getAll();
+            if (videos.length === 0) return;
+            const videoId = videos[0].id;
+            AppState.videos.selectVideo(videoId);
+            const resp = await fetch('/api/images/' + videoId + '/scenes');
+            const json = await resp.json();
+            if (json?.data) AppState.videos.setScenes(videoId, json.data);
+        }""")
+        page.wait_for_selector('.timeline-scene', timeout=10000)
     page.wait_for_timeout(500)
 
 
@@ -1625,11 +1670,16 @@ def step_videos_search_opening(page, ctx):
     page.keyboard.press('Escape')
     page.wait_for_timeout(500)
     navigate_to(page, 'search')
+    # Wait for the search form to be fully ready
+    page.wait_for_selector('#filter-description', state='visible', timeout=5000)
+    page.wait_for_timeout(300)
     # Switch to Videos mode
     page.locator('.search-mode-toggle button[data-mode="videos"]').click()
     page.wait_for_timeout(300)
-    # Type a search query
+    # Click the input to focus it, then type the search query
     search_input = page.locator('#filter-description')
+    search_input.click()
+    page.wait_for_timeout(200)
     search_input.fill('flowers')
     page.wait_for_timeout(300)
     # Highlight the mode toggle
@@ -1640,19 +1690,40 @@ def step_videos_search_opening(page, ctx):
 def step_videos_search_results(page, ctx):
     """Apply the filter and show results with score badges and heatmap."""
     click_toolbar(page, 'btn-apply-filter')
-    # The search navigates to the Videos screen automatically
-    page.wait_for_selector('#screen-videos', state='visible', timeout=10000)
+    # In videos mode, search.js calls App.navigateTo('videos') after
+    # posting to /search/videos — wait for the Videos screen to appear
+    page.wait_for_selector('#screen-videos', state='visible', timeout=15000)
     page.wait_for_selector('.video-card', timeout=10000)
     page.wait_for_timeout(1000)
     # Click the first result to show the heatmap timeline
     page.locator('.video-card').first.click()
-    page.wait_for_selector('.timeline-scene', timeout=10000)
+    page.wait_for_timeout(500)
+    # Wait for scenes (with heatmap overlays) — use fallback if needed
+    try:
+        page.wait_for_selector('.timeline-scene', timeout=10000)
+    except Exception:
+        print('    Falling back to programmatic scene loading (search)')
+        page.evaluate("""async () => {
+            const videos = AppState.videos.getSearchResults();
+            if (!videos || videos.length === 0) return;
+            const videoId = videos[0].id;
+            AppState.videos.selectVideo(videoId);
+            const query = AppState.videos.getQuery();
+            const url = '/api/images/' + videoId + '/scenes'
+                + (query ? '?query=' + encodeURIComponent(query) : '');
+            const resp = await fetch(url);
+            const json = await resp.json();
+            if (json?.data) AppState.videos.setScenes(videoId, json.data);
+        }""")
+        page.wait_for_selector('.timeline-scene', timeout=10000)
     page.wait_for_timeout(500)
 
 
 @step('videos-clearing')
 def step_videos_clearing(page, ctx):
     """Clear the filter to return to normal browsing."""
+    # Ensure we're on the Videos screen before clearing
+    page.wait_for_selector('#screen-videos', state='visible', timeout=5000)
     click_toolbar(page, 'btn-clear-filter')
     page.wait_for_timeout(500)
     # Verify we're still on Videos screen without score badges
@@ -1677,7 +1748,15 @@ def step_extras_sorting_by_people(page, ctx):
         page.wait_for_timeout(500)
     except Exception:
         pass
-    navigate_to(page, 'gallery')
+    # Navigate to gallery — check if already there to avoid clicking
+    # a disabled nav button
+    on_gallery = page.evaluate(
+        '() => document.getElementById("screen-gallery")?.offsetParent !== null'
+    )
+    if not on_gallery:
+        navigate_to(page, 'gallery')
+    else:
+        page.wait_for_selector('#screen-gallery', state='visible', timeout=5000)
     click_toolbar(page, 'btn-sort-people')
     page.wait_for_timeout(1000)
     wait_for_thumbnails(page)
