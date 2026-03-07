@@ -244,8 +244,8 @@ const Database = {
      */
     onEnter() {
         this._refresh();
-        // Start status polling via AppState
-        AppState.status.startPolling(1000);
+        // Start status polling via AppState (adaptive: fast when processing, slow when idle)
+        AppState.status.startPolling();
 
         // Bind Escape key to return to gallery
         this._escapeHandler = (e) => {

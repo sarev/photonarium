@@ -41,6 +41,15 @@ AppState.status = (function() {
     /** @type {number|null} Polling interval timer */
     let _pollTimer = null;
 
+    /** @type {number} Current polling interval in ms */
+    let _currentInterval = 0;
+
+    /** @type {number} Fast interval when backend is processing (ms) */
+    const POLL_FAST_MS = 1000;
+
+    /** @type {number} Slow interval when backend is idle (ms) */
+    const POLL_SLOW_MS = 5000;
+
     /** @type {boolean} Whether a load is in progress */
     let _loading = false;
 
@@ -91,6 +100,16 @@ AppState.status = (function() {
                             AppState.faces.load(true);
                         }
                     }, 0);
+                }
+
+                // Adapt polling speed: fast when processing, slow when idle
+                if (_pollTimer) {
+                    const desired = _status.status === 'updating' ? POLL_FAST_MS : POLL_SLOW_MS;
+                    if (desired !== _currentInterval) {
+                        clearInterval(_pollTimer);
+                        _currentInterval = desired;
+                        _pollTimer = setInterval(() => this.load(), desired);
+                    }
                 }
 
                 broadcast({ type: 'changed' });
@@ -156,14 +175,16 @@ AppState.status = (function() {
         /**
          * Start polling for status updates.
          * Safe to call multiple times - only starts one timer.
-         * @param {number} [intervalMs=1000] - Polling interval in ms
+         * Starts at the fast interval; load() automatically switches to
+         * the slow interval once the backend reports idle.
          */
-        startPolling(intervalMs = 1000) {
+        startPolling() {
             if (_pollTimer) return;
 
-            console.log('[AppState.status.startPolling] interval:', intervalMs);
-            this.load(); // Initial load
-            _pollTimer = setInterval(() => this.load(), intervalMs);
+            _currentInterval = POLL_FAST_MS;
+            console.log('[AppState.status.startPolling] interval:', _currentInterval);
+            this.load(); // Initial load (may adjust interval via adaptive logic)
+            _pollTimer = setInterval(() => this.load(), _currentInterval);
         },
 
         /**
@@ -174,6 +195,7 @@ AppState.status = (function() {
                 console.log('[AppState.status.stopPolling]');
                 clearInterval(_pollTimer);
                 _pollTimer = null;
+                _currentInterval = 0;
             }
         },
 

@@ -5806,6 +5806,12 @@ class ImageDatabase:
         self._face_embedding_status: dict[str, Any] = {'status': 'idle'}
         self._face_reassess_status: dict[str, Any] | None = None
 
+        # Cached status counts (total images/videos/people/faces) to avoid
+        # running COUNT queries on every /api/status poll.  Recomputed at most
+        # once per _STATUS_COUNTS_TTL seconds.
+        self._status_counts: dict[str, int] | None = None
+        self._status_counts_time: float = 0.0
+
         # Track if we've been closed
         self._closed = False
 
@@ -8392,30 +8398,50 @@ class ImageDatabase:
         )
         status = 'up_to_date' if (queues_empty and phase4_idle) else 'updating'
 
-        # Get counts for live updates during processing
-        cursor = self.conn.execute("SELECT COUNT(*) as count FROM images WHERE deleted = 0 AND media_type = 'image'")
-        total_images = cursor.fetchone()['count']
-
-        cursor = self.conn.execute("SELECT COUNT(*) as count FROM images WHERE deleted = 0 AND media_type = 'video'")
-        total_videos = cursor.fetchone()['count']
-
-        # people/faces tables are created by FaceDB, which may not have
-        # initialised yet when the frontend first polls /api/status.
-        try:
-            cursor = self.conn.execute('SELECT COUNT(*) as count FROM people')
-            total_people = cursor.fetchone()['count']
-        except Exception:
-            total_people = 0
-
-        try:
+        # Get counts for live updates — cached with a 5-second TTL to avoid
+        # running 4 COUNT queries on every poll (the main source of idle CPU).
+        now = time.monotonic()
+        if self._status_counts is None or (now - self._status_counts_time) >= 5.0:
             cursor = self.conn.execute(
-                """SELECT COUNT(*) as count FROM faces f
-                   JOIN images i ON f.image_id = i.id
-                   WHERE f.suppressed = 0 AND i.deleted = 0"""
+                "SELECT COUNT(*) as count FROM images WHERE deleted = 0 AND media_type = 'image'"
             )
-            total_faces = cursor.fetchone()['count']
-        except Exception:
-            total_faces = 0
+            total_images = cursor.fetchone()['count']
+
+            cursor = self.conn.execute(
+                "SELECT COUNT(*) as count FROM images WHERE deleted = 0 AND media_type = 'video'"
+            )
+            total_videos = cursor.fetchone()['count']
+
+            # people/faces tables are created by FaceDB, which may not have
+            # initialised yet when the frontend first polls /api/status.
+            try:
+                cursor = self.conn.execute('SELECT COUNT(*) as count FROM people')
+                total_people = cursor.fetchone()['count']
+            except Exception:
+                total_people = 0
+
+            try:
+                cursor = self.conn.execute(
+                    """SELECT COUNT(*) as count FROM faces f
+                       JOIN images i ON f.image_id = i.id
+                       WHERE f.suppressed = 0 AND i.deleted = 0"""
+                )
+                total_faces = cursor.fetchone()['count']
+            except Exception:
+                total_faces = 0
+
+            self._status_counts = {
+                'total_images': total_images,
+                'total_videos': total_videos,
+                'total_people': total_people,
+                'total_faces': total_faces,
+            }
+            self._status_counts_time = now
+
+        total_images = self._status_counts['total_images']
+        total_videos = self._status_counts['total_videos']
+        total_people = self._status_counts['total_people']
+        total_faces = self._status_counts['total_faces']
 
         # Build response - only include Phase 4 statuses if they're active
         result = {
