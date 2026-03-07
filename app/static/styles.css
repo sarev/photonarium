@@ -3864,6 +3864,10 @@ a:hover {
     border-color: var(--color-selection-border);
     background-color: var(--color-selection);
 }
+.video-card.selected .video-card-label {
+    color: var(--color-accent-hover);
+    font-weight: 600;
+}
 .video-card img {
     width: 100%;
     aspect-ratio: 16 / 9;
@@ -4005,14 +4009,15 @@ a:hover {
     bottom: 1px;
     left: 2px;
     font-size: 0.65rem;
-    color: var(--color-pastel-orange-fg);
+    color: var(--color-accent-hover);
+    font-weight: 600;
     white-space: nowrap;
     pointer-events: none;
     text-shadow:
-        -1px 0 0 var(--color-overlay-bg-solid),
-        1px 0 0 var(--color-overlay-bg-solid),
-        0 -1px 0 var(--color-overlay-bg-solid),
-        0 1px 0 var(--color-overlay-bg-solid);
+        -1px 0 0 var(--color-bg-primary),
+        1px 0 0 var(--color-bg-primary),
+        0 -1px 0 var(--color-bg-primary),
+        0 1px 0 var(--color-bg-primary);
 }
 
 .timeline-scene {
@@ -4080,11 +4085,13 @@ a:hover {
 }
 .timeline-star .material-symbols-outlined {
     color: var(--color-text-muted);
-    text-shadow: 0 1px 3px rgba(0, 0, 0, 0.6);
+    text-shadow:
+        -1px 0 0 var(--color-bg-primary),
+        1px 0 0 var(--color-bg-primary),
+        0 -1px 0 var(--color-bg-primary),
+        0 1px 0 var(--color-bg-primary);
 }
-.timeline-star.preferred .material-symbols-outlined {
-    color: var(--color-text-amber);
-}
+.timeline-star.preferred .material-symbols-outlined,
 .timeline-star:hover .material-symbols-outlined {
     color: var(--color-text-amber);
 }

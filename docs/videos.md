@@ -49,14 +49,22 @@ Scores are normalised across all videos and scenes in the search results, so the
 
 When no search is active, the timeline shows scenes with thumbnails and timecodes but no heatmap overlay.
 
-### Scrolling
+### Scrolling and the minimap
 
-If a video has many scenes, the timeline scrolls horizontally. Gradient indicators appear at the edges to show there are more scenes to see. Each scene has a minimum width to ensure the keyframe remains recognisable.
+If a video has many scenes, the timeline overflows horizontally. You can navigate it in several ways:
+
+- **Drag-to-scroll** -- click and drag anywhere on the timeline to scroll through scenes, like a touch surface
+- **Minimap** -- a thin bar appears below the timeline showing the full video duration. It includes time ticks and a draggable viewport indicator. Click anywhere on the minimap to jump to that position, or drag the viewport block to scroll proportionally.
+- **Gradient indicators** appear at the edges to show there are more scenes to see
+
+When a search is active, the minimap also displays a smoothed heatmap gradient reflecting the per-scene match scores across the full duration.
+
+The minimap hides automatically when the timeline fits without scrolling. Each scene has a minimum width to ensure the keyframe remains recognisable.
 
 ### Interacting with scenes
 
 - **Single click** highlights a scene.
-- **Double click** opens the video in the full-screen viewer, seeked to that scene's start time.
+- **Double click** opens the video in the full-screen viewer, seeked to that scene's start time, and begins playback automatically.
 - **Click the star** to make that scene the video's preferred scene (updates the thumbnail in the Gallery and Videos grid immediately).
 
 ## Browse mode vs search mode
