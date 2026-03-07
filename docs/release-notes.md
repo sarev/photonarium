@@ -1,5 +1,59 @@
 # Release Notes
 
+## v1.2.0-beta.17
+
+### Video Support
+
+Photonarium now manages videos alongside images as a first-class feature. A new **Videos** screen provides a dedicated space for browsing, searching, and managing video content.
+
+**Videos screen:**
+
+- **Video grid** -- a thumbnail grid of all videos (or search results), using the same VirtualGrid, selection model, and keyboard shortcuts as the Gallery. Each card shows the preferred scene thumbnail, a duration badge, and a match score badge when searching. Thumbnail size is adjustable independently from the Gallery.
+- **Scene timeline** -- selecting a video reveals a horizontal strip of scene keyframe thumbnails below the grid. Scenes are proportionally sized by duration, giving an intuitive sense of the video's structure at a glance. Each scene shows a timecode and a preferred star.
+- **Drag-to-scroll and minimap** -- long timelines scroll horizontally with click-and-drag. A minimap bar appears below, showing the full duration with time ticks and a draggable viewport indicator. Click anywhere on the minimap to jump; gradient indicators at the edges signal hidden content. The minimap hides automatically when everything fits on screen.
+- **Video search with heatmap** -- a three-way search mode toggle (Images / Videos / All) on the Search screen lets you search specifically for video content. "Videos" mode performs scene-level semantic search and navigates to the Videos screen with a per-scene heatmap overlay (blue → yellow → red) showing match strength across the timeline. The minimap also displays a smoothed heatmap gradient in search mode.
+- **Preferred scenes** -- each video has a preferred scene that represents it across the app (Gallery thumbnail, Videos grid, search ranking in "All" mode). Click the star on any scene to change it. The first scene is the default.
+- **Sorting** -- videos can be sorted by date, rating, or content similarity. Sort by similarity works like the Gallery: select a video, click the similarity button, and all videos re-order by visual similarity to the selected one. When searching, videos sort by match score.
+- **Double-click scenes** to open the video in the full-screen viewer, seeked to the scene's start time, with autoplay.
+
+**Scene detection:**
+
+- Uses ffmpeg's `select` filter for cut detection, with automatic subdivision of long scenes at configurable intervals (`video_max_scene_duration`, default 8 seconds). Short, natural scene lengths (3–8 seconds) produce more useful timelines than the previous 30-second default.
+- If ffmpeg isn't available or finds no cuts, the video is uniformly subdivided.
+
+**Video processing pipeline:**
+
+- The Database screen shows real-time video processing progress with step detail (e.g. "Detecting scenes (1/6)", "Computing embeddings (4/6)") instead of just a queue count.
+- Videos are processed through scene detection, keyframe extraction, OpenCLIP embedding, and (where audio is present) speech transcription.
+
+**Transcriptions:**
+
+- Automatic speech-to-text for video audio. Transcription text is displayed below the scene timeline, labelled by timecode.
+- Transcriptions are semantically searchable -- searching for something someone said in a video finds matching scenes.
+
+**Videos in the Gallery and full-screen viewer:**
+
+- Videos appear alongside images in the Gallery, with their preferred scene as the thumbnail and a duration badge.
+- In the full-screen viewer, face tagging and rotate buttons are visually greyed out for videos. Videos autoplay in slideshow mode, advancing after playback ends or the hold time elapses (capped at 30 seconds).
+
+### Videos Screen Theming and Polish
+
+- **Orange accent** -- video card labels and minimap tick labels use the Videos screen accent colour (orange), consistent with each screen having its own accent.
+- **Contrast improvements** -- selected video card labels darken for readability; minimap tick labels and timeline stars use page-background text outlines so they blend naturally in both light and dark themes.
+
+### Documentation Overhaul
+
+- **Sub-documents** -- the monolithic README has been split into focused guides under `docs/`: [Gallery](gallery.md), [Full-screen viewer](fullscreen.md), [Search](search.md), [Videos](videos.md), [Groups](groups.md), [Faces](faces.md), [Database](database.md), [Installation](installation.md). The README is now a concise overview with links.
+- **Feature coverage** -- updated documentation to cover light/dark themes, similarity sort (Gallery and Videos), image histogram, auto-captioning, video transcriptions, Docker/NAS deployment, and the 100k+ image scalability of the thumbnail grid.
+- **Competitive comparison** -- updated the background document with video management and scene-level search rows in the comparison table.
+
+### Bug Fixes
+
+- **Scene detection on Windows:** The previous `lavfi`/`movie` approach silently failed on Windows paths (backslash escaping), causing all videos to fall back to uniform segments. Replaced with `ffmpeg -i` which handles paths natively.
+- **Preferred scene not updating in search mode:** Setting a preferred scene while searching updated `AppState.images` but not the separate `_searchResults` object, so the star didn't visually update. Both are now kept in sync.
+- **Timeline drag-to-scroll:** `overflow-x: hidden` prevented programmatic scrolling; switched to `overflow-x: auto` with hidden scrollbar. Also prevented native drag on scene thumbnails which could swallow click events.
+- **Search input selector:** Fixed `#filter-description` → `#filter-text` so video search queries are correctly read from the search input.
+
 ## v1.1.6-beta.16
 
 ### Smarter Filename Date Parsing
