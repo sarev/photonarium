@@ -139,6 +139,7 @@ const Videos = {
 
         // Subscribe to AppState.videos changes
         this._unsubs.push(AppState.videos.onChanged((event) => {
+            console.log('[TIMELINE DEBUG] videos changed:', event.property, 'screen:', AppState.nav.getScreen(), 'selectedId:', AppState.videos.getSelectedVideoId());
             if (event.property === 'searchResults' || event.property === 'allVideos'
                     || event.property === 'cleared') {
                 // Only render if the Videos screen is active — rendering
@@ -173,6 +174,7 @@ const Videos = {
 
         // When the filter is cleared, exit search mode and return to browse
         this._unsubs.push(AppState.filter.onChanged(() => {
+            console.log('[TIMELINE DEBUG] filter changed, active:', AppState.filter.isActive(), 'isSearch:', AppState.videos.isSearchMode(), 'screen:', AppState.nav.getScreen());
             if (!AppState.filter.isActive() && AppState.videos.isSearchMode()) {
                 AppState.videos.clear();
                 if (AppState.nav.getScreen() === 'videos') {
@@ -201,12 +203,14 @@ const Videos = {
      * Called when entering the videos screen.
      */
     onEnter() {
+        console.log('[TIMELINE DEBUG] onEnter, isSearch:', AppState.videos.isSearchMode(), 'filterActive:', AppState.filter.isActive(), 'selectedId:', AppState.videos.getSelectedVideoId());
         // If there's an active text filter from a non-video search (e.g.
         // "all" mode), automatically execute a video search so the user
         // sees heatmaps and score badges rather than an unfiltered list.
         if (!AppState.videos.isSearchMode() && AppState.filter.isActive()) {
             const filter = AppState.filter.get();
             if (filter?.text && filter.searchMode !== 'videos') {
+                console.log('[TIMELINE DEBUG] onEnter: applying filter to videos');
                 this._applyFilterToVideos(filter);
                 return;
             }
@@ -221,6 +225,29 @@ const Videos = {
         // rendered while the screen was hidden (zero-size container),
         // which produces an empty layout.
         this._refreshGrid();
+
+        // If a video is already selected, ensure its scenes are loaded
+        // (selection callback won't fire since the selection hasn't changed)
+        const selectedId = AppState.videos.getSelectedVideoId();
+        if (selectedId) {
+            console.log('[TIMELINE DEBUG] onEnter: loading scenes for', selectedId);
+            this._loadScenesIfNeeded(selectedId);
+        } else {
+            // Auto-select the first video if none is selected (e.g. after
+            // arriving from search screen where results were set off-screen,
+            // or after clear() reset selectedVideoId while GridSelection
+            // retained its previous selection state)
+            const videos = this._getVideoList();
+            if (videos?.length > 0) {
+                const firstId = videos[0].id;
+                console.log('[TIMELINE DEBUG] onEnter: auto-selecting first video', firstId);
+                AppState.videos.selectVideo(firstId);
+                this._loadScenesIfNeeded(firstId);
+                if (this._selection) {
+                    this._selection.select(firstId);
+                }
+            }
+        }
         this._renderTimeline();
     },
 
@@ -430,11 +457,13 @@ const Videos = {
         if (!container) return;
 
         const videoId = AppState.videos.getSelectedVideoId();
+        console.log('[TIMELINE DEBUG] _renderTimeline, videoId:', videoId);
         if (!videoId) {
             container.innerHTML = '';
             if (this._els.timelineEmpty) {
                 this._els.timelineEmpty.hidden = false;
             }
+            console.log('[TIMELINE DEBUG] _renderTimeline: no videoId, cleared');
             return;
         }
 
@@ -445,12 +474,18 @@ const Videos = {
         const scenes = AppState.videos.getScenes(videoId);
         if (!scenes || scenes.length === 0) {
             container.innerHTML = '<div class="empty-state">Loading scenes...</div>';
+            console.log('[TIMELINE DEBUG] _renderTimeline: no scenes for', videoId, '(showing loading)');
             return;
         }
+        console.log('[TIMELINE DEBUG] _renderTimeline: rendering', scenes.length, 'scenes for', videoId);
 
         const isSearch = AppState.videos.isSearchMode();
         const video = AppState.videos.getSelectedVideo();
         const preferredSceneId = video?.preferred_scene_id;
+
+        // Preserve scroll position across re-renders (e.g. preferred scene change)
+        const prevTrack = container.querySelector('.timeline-track');
+        const savedScrollLeft = prevTrack ? prevTrack.scrollLeft : 0;
 
         container.innerHTML = '';
 
@@ -521,7 +556,7 @@ const Videos = {
             });
 
             sceneEl.addEventListener('dblclick', () => {
-                App.showFullscreen(videoId, { seekTo: scene.start_time });
+                App.showFullscreen(videoId, { seekTo: scene.start_time, autoplay: true });
             });
 
             track.appendChild(sceneEl);
@@ -558,8 +593,11 @@ const Videos = {
             }
         }, { passive: true });
 
-        // Initial layout check — show/hide minimap based on overflow
+        // Initial layout check — show/hide minimap, restore scroll position
         requestAnimationFrame(() => {
+            if (savedScrollLeft > 0) {
+                track.scrollLeft = savedScrollLeft;
+            }
             updateIndicators();
             const overflows = track.scrollWidth > track.clientWidth + 4;
             minimap.classList.toggle('hidden', !overflows);
@@ -667,29 +705,34 @@ const Videos = {
      * @private
      */
     _initTrackDrag(track) {
-        let dragging = false;
         let startX = 0;
         let startScrollLeft = 0;
-        let hasDragged = false;
+        let isDragging = false;
+
+        // Prevent native drag on scene thumbnails (background-image divs)
+        // which can swallow click/dblclick events in some browsers
+        track.addEventListener('dragstart', (e) => e.preventDefault());
 
         track.addEventListener('mousedown', (e) => {
+            // Always reset drag state so the capture click handler
+            // doesn't suppress clicks from a previous drag
+            isDragging = false;
             // Don't hijack clicks on interactive elements (stars, buttons)
             if (e.target.closest('button, a, input')) return;
-            dragging = true;
-            hasDragged = false;
             startX = e.clientX;
             startScrollLeft = track.scrollLeft;
-            track.classList.add('dragging');
-            e.preventDefault();
 
             const onMove = (/** @type {MouseEvent} */ ev) => {
-                if (!dragging) return;
                 const dx = ev.clientX - startX;
-                if (Math.abs(dx) > 3) hasDragged = true;
-                track.scrollLeft = startScrollLeft - dx;
+                if (!isDragging && Math.abs(dx) > 3) {
+                    isDragging = true;
+                    track.classList.add('dragging');
+                }
+                if (isDragging) {
+                    track.scrollLeft = startScrollLeft - dx;
+                }
             };
             const onUp = () => {
-                dragging = false;
                 track.classList.remove('dragging');
                 document.removeEventListener('mousemove', onMove);
                 document.removeEventListener('mouseup', onUp);
@@ -698,11 +741,11 @@ const Videos = {
             document.addEventListener('mouseup', onUp);
         });
 
-        // Suppress click after a drag so scenes aren't accidentally selected
+        // Suppress click after a real drag (threshold exceeded).
+        // Uses the shared isDragging flag which is reset on next mousedown.
         track.addEventListener('click', (e) => {
-            if (hasDragged) {
+            if (isDragging) {
                 e.stopPropagation();
-                hasDragged = false;
             }
         }, { capture: true });
     },

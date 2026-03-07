@@ -312,14 +312,15 @@ const Fullscreen = {
             this.state.currentIndex = this.state.imageList.findIndex(img => img.id === imageId);
         }
 
+        // Store seek-to time and autoplay flag for video playback
+        this._pendingSeekTo = options.seekTo ?? null;
+        this._pendingAutoplay = options.autoplay ?? false;
+
         // If still not found, fetch the single image by ID
         if (this.state.currentIndex < 0) {
             this._loadSingleImage(imageId);
             return;
         }
-
-        // Store seek-to time for video playback
-        this._pendingSeekTo = options.seekTo ?? null;
 
         // Reset zoom/pan state
         this._resetTransform();
@@ -600,12 +601,19 @@ const Fullscreen = {
             this._els.video.hidden = false;
             this._els.video.src = ThumbnailLoader.getFullImageUrl(imageId);
 
-            // Seek to requested time on load (from scene timeline or search)
+            // Seek to requested time and/or autoplay on load
             const seekTo = this._pendingSeekTo;
+            const autoplay = this._pendingAutoplay;
             this._pendingSeekTo = null;
+            this._pendingAutoplay = false;
             if (seekTo != null && seekTo > 0) {
                 this._els.video.addEventListener('loadedmetadata', () => {
                     this._els.video.currentTime = seekTo;
+                    if (autoplay) this._els.video.play();
+                }, { once: true });
+            } else if (autoplay) {
+                this._els.video.addEventListener('loadedmetadata', () => {
+                    this._els.video.play();
                 }, { once: true });
             }
             this._els.video.load();

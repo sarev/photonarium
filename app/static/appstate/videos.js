@@ -188,9 +188,14 @@ AppState.videos = (function() {
             // PHASE 1: Synchronous optimistic update
             const img = AppState.images.getById(videoId);
             const prevSceneId = img?.preferred_scene_id;
+            // Also update search result object (separate from images cache)
+            const searchHit = _searchResults?.find(v => v.id === videoId);
             transaction(() => {
                 if (img) {
                     img.preferred_scene_id = sceneId;
+                }
+                if (searchHit) {
+                    searchHit.preferred_scene_id = sceneId;
                 }
                 broadcast({
                     type: 'changed', property: 'preferredScene',
@@ -209,6 +214,9 @@ AppState.videos = (function() {
                     transaction(() => {
                         if (img) {
                             img.preferred_scene_id = prevSceneId;
+                        }
+                        if (searchHit) {
+                            searchHit.preferred_scene_id = prevSceneId;
                         }
                         broadcast({
                             type: 'changed', property: 'preferredScene',

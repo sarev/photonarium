@@ -3942,9 +3942,13 @@ a:hover {
     height: 100%;
     gap: 2px;
     border-radius: 4px;
-    overflow-x: hidden;
+    overflow-x: auto;
     overflow-y: hidden;
+    scrollbar-width: none;  /* Firefox — minimap replaces scrollbar */
     cursor: grab;
+}
+.timeline-track::-webkit-scrollbar {
+    display: none;  /* Chrome/Safari — minimap replaces scrollbar */
 }
 .timeline-track.dragging {
     cursor: grabbing;
