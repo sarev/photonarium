@@ -1893,6 +1893,7 @@ class IngestionThread(threading.Thread):
         video_queue: queue.Queue[str] | None = None,
         video_extensions: set[str] | None = None,
         thumbnail_dir: Path | str = '.thumbnails',
+        db_path: str = '',
     ):
         """Initialise the ingestion thread.
 
@@ -1920,6 +1921,8 @@ class IngestionThread(threading.Thread):
                 embeddings, STT).
             video_extensions: Set of lowercase video file extensions.
             thumbnail_dir: Path to thumbnail cache directory.
+            db_path: Path to the SQLite database file. Worker threads create
+                their own connections to avoid contention with the shared conn.
         """
         super().__init__(name='IngestionThread', daemon=True)
         self.conn = conn
@@ -1946,6 +1949,12 @@ class IngestionThread(threading.Thread):
         self._pending_count = 0  # Number of items being processed (not just in queue)
         self._pending_lock = threading.Lock()
         self._was_idle = True  # Track idle transitions for debug logging
+        # Per-thread DB connections for worker threads — eliminates shared-conn
+        # contention between ingestion workers and Flask/other background threads.
+        self._db_path = db_path
+        self._thread_local = threading.local()
+        self._worker_conns: list[sqlite3.Connection] = []
+        self._worker_conns_lock = threading.Lock()
 
     @property
     def processed_count(self) -> int:
@@ -1976,6 +1985,26 @@ class IngestionThread(threading.Thread):
         """
         with self._pending_lock:
             return self.ingestion_queue.empty() and self._pending_count == 0
+
+    def _get_worker_conn(self) -> sqlite3.Connection:
+        """Get or create a thread-local database connection for worker threads.
+
+        Each ThreadPoolExecutor worker gets its own SQLite connection, avoiding
+        contention on the shared ``self.conn`` used by Flask routes and other
+        background threads.  Connections use WAL mode and a generous busy_timeout
+        so concurrent writes serialize at the database level rather than failing.
+        """
+        conn = getattr(self._thread_local, 'conn', None)
+        if conn is None:
+            conn = sqlite3.connect(self._db_path, timeout=10.0)
+            conn.execute('PRAGMA journal_mode=WAL')
+            conn.execute('PRAGMA busy_timeout=10000')
+            conn.execute('PRAGMA foreign_keys=ON')
+            conn.row_factory = sqlite3.Row
+            self._thread_local.conn = conn
+            with self._worker_conns_lock:
+                self._worker_conns.append(conn)
+        return conn
 
     def run(self) -> None:
         """Main thread loop - process images using thread pool."""
@@ -2066,13 +2095,23 @@ class IngestionThread(threading.Thread):
                     with self._pending_lock:
                         self._pending_count -= 1
 
+        # Close all per-thread worker connections
+        with self._worker_conns_lock:
+            for wconn in self._worker_conns:
+                try:
+                    wconn.close()
+                except Exception:
+                    pass
+            self._worker_conns.clear()
+
         logger.info('Ingestion thread stopped')
 
     def _process_image(self, path: Path) -> None:
         """Process a single image file.
 
-        This method is called from worker threads. Database operations are
-        protected by _db_lock to ensure thread safety.
+        This method is called from worker threads.  Each worker uses its own
+        thread-local SQLite connection (via ``_get_worker_conn()``) so there
+        is no contention with the shared connection used by Flask routes.
 
         Uses size + mtime for fast change detection to avoid reading file
         contents (checksum) on every scan.
@@ -2081,6 +2120,9 @@ class IngestionThread(threading.Thread):
             path: Path to the image file.
         """
         path = canonicalise_path(path)
+
+        # Get a per-thread database connection (created on first use)
+        conn = self._get_worker_conn()
 
         # Check if file still exists (no lock needed - file I/O)
         if not path.exists():
@@ -2096,9 +2138,8 @@ class IngestionThread(threading.Thread):
             logger.warning(f'Cannot stat file: {path}')
             return
 
-        # Check if already in database (lock needed - DB read)
-        with self._db_lock:
-            existing = get_image_by_path(self.conn, path)
+        # Check if already in database
+        existing = get_image_by_path(conn, path)
 
         if existing is not None:
             # Image exists - check if it has changed using size + mtime
@@ -2112,9 +2153,8 @@ class IngestionThread(threading.Thread):
                 # Size matches but no mtime stored - just update mtime without full re-process
                 # NOTE: Don't update updated_at here - mtime backfill is not a content change
                 logger.debug(f'Backfilling mtime for: {path}')
-                with self._db_lock:
-                    self.conn.execute('UPDATE images SET mtime = ? WHERE id = ?', (current_mtime, existing['id']))
-                    self.conn.commit()
+                conn.execute('UPDATE images SET mtime = ? WHERE id = ?', (current_mtime, existing['id']))
+                conn.commit()
                 existing_mtime = current_mtime  # Continue with normal checks
 
             if existing['size'] == current_size and existing_mtime == current_mtime:
@@ -2133,22 +2173,21 @@ class IngestionThread(threading.Thread):
                         self._date_order,
                     )
                     if metadata is not None:
-                        with self._db_lock:
-                            update_image_metadata(
-                                self.conn,
-                                existing['id'],
-                                size=metadata.size,
-                                width=metadata.width,
-                                height=metadata.height,
-                                timestamp=metadata.timestamp,
-                                timestamp_confidence=metadata.timestamp_confidence,
-                                checksum=metadata.checksum,
-                                perceptual_hash=metadata.perceptual_hash,
-                                laplacian_var=metadata.laplacian_var,
-                                lossless=metadata.lossless,
-                                mtime=metadata.mtime,
-                                exif_data=metadata.exif_data,
-                            )
+                        update_image_metadata(
+                            conn,
+                            existing['id'],
+                            size=metadata.size,
+                            width=metadata.width,
+                            height=metadata.height,
+                            timestamp=metadata.timestamp,
+                            timestamp_confidence=metadata.timestamp_confidence,
+                            checksum=metadata.checksum,
+                            perceptual_hash=metadata.perceptual_hash,
+                            laplacian_var=metadata.laplacian_var,
+                            lossless=metadata.lossless,
+                            mtime=metadata.mtime,
+                            exif_data=metadata.exif_data,
+                        )
                         needs_embedding = True
 
                 # Check if embedding is needed
@@ -2179,14 +2218,13 @@ class IngestionThread(threading.Thread):
                     if existing.get('exif_data') is None:
                         exif_data = extract_exif_data(path)
                         exif_json = json.dumps(exif_data) if exif_data else '{}'
-                        with self._db_lock:
-                            self.conn.execute(
-                                'UPDATE images SET exif_data = ?, updated_at = ? WHERE id = ?',
-                                (exif_json, datetime.now().isoformat(), existing['id']),
-                            )
-                            if exif_data:
-                                _upsert_image_metadata(self.conn, existing['id'], exif_data)
-                            self.conn.commit()
+                        conn.execute(
+                            'UPDATE images SET exif_data = ?, updated_at = ? WHERE id = ?',
+                            (exif_json, datetime.now().isoformat(), existing['id']),
+                        )
+                        if exif_data:
+                            _upsert_image_metadata(conn, existing['id'], exif_data)
+                        conn.commit()
                         logger.debug(f'Backfilled EXIF data for: {path}')
                 # Recompute non-user-assigned timestamps (picks up parser
                 # improvements and config changes like date_order)
@@ -2207,13 +2245,11 @@ class IngestionThread(threading.Thread):
                     new_ts_str = new_ts.isoformat() if new_ts else None
                     old_ts = existing.get('timestamp')
                     if new_ts_str != old_ts or new_conf != ts_conf:
-                        with self._db_lock:
-                            self.conn.execute(
-                                'UPDATE images SET timestamp = ?, timestamp_confidence = ?, '
-                                'updated_at = ? WHERE id = ?',
-                                (new_ts_str, new_conf, datetime.now().isoformat(), existing['id']),
-                            )
-                            self.conn.commit()
+                        conn.execute(
+                            'UPDATE images SET timestamp = ?, timestamp_confidence = ?, updated_at = ? WHERE id = ?',
+                            (new_ts_str, new_conf, datetime.now().isoformat(), existing['id']),
+                        )
+                        conn.commit()
                         logger.debug(f'Recomputed timestamp for: {path}')
                 if not needs_embedding:
                     logger.debug(f'Skipping unchanged image: {path}')
@@ -2247,25 +2283,24 @@ class IngestionThread(threading.Thread):
                     checksum = None
 
                 now_ts = datetime.now().isoformat()
-                with self._db_lock:
-                    self.conn.execute(
-                        """UPDATE images SET size = ?, width = ?, height = ?, duration = ?,
-                           mtime = ?, checksum = ?, embedding = NULL, updated_at = ?
-                           WHERE id = ?""",
-                        (
-                            current_size,
-                            vmeta.width,
-                            vmeta.height,
-                            vmeta.duration,
-                            current_mtime,
-                            checksum,
-                            now_ts,
-                            existing['id'],
-                        ),
-                    )
-                    # Delete old scenes (cascade deletes scene_embeddings)
-                    self.conn.execute('DELETE FROM scenes WHERE image_id = ?', (existing['id'],))
-                    self.conn.commit()
+                conn.execute(
+                    """UPDATE images SET size = ?, width = ?, height = ?, duration = ?,
+                       mtime = ?, checksum = ?, embedding = NULL, updated_at = ?
+                       WHERE id = ?""",
+                    (
+                        current_size,
+                        vmeta.width,
+                        vmeta.height,
+                        vmeta.duration,
+                        current_mtime,
+                        checksum,
+                        now_ts,
+                        existing['id'],
+                    ),
+                )
+                # Delete old scenes (cascade deletes scene_embeddings)
+                conn.execute('DELETE FROM scenes WHERE image_id = ?', (existing['id'],))
+                conn.commit()
 
                 if checksum:
                     with self._checksum_cache_lock:
@@ -2293,23 +2328,22 @@ class IngestionThread(threading.Thread):
                     logger.warning(f'Failed to extract metadata for changed image: {path}')
                     return
 
-                # Update existing record (lock needed - DB write)
-                with self._db_lock:
-                    update_image_metadata(
-                        self.conn,
-                        existing['id'],
-                        size=metadata.size,
-                        width=metadata.width,
-                        height=metadata.height,
-                        timestamp=metadata.timestamp,
-                        timestamp_confidence=metadata.timestamp_confidence,
-                        checksum=metadata.checksum,
-                        perceptual_hash=metadata.perceptual_hash,
-                        laplacian_var=metadata.laplacian_var,
-                        lossless=metadata.lossless,
-                        mtime=metadata.mtime,
-                        exif_data=metadata.exif_data,
-                    )
+                # Update existing record
+                update_image_metadata(
+                    conn,
+                    existing['id'],
+                    size=metadata.size,
+                    width=metadata.width,
+                    height=metadata.height,
+                    timestamp=metadata.timestamp,
+                    timestamp_confidence=metadata.timestamp_confidence,
+                    checksum=metadata.checksum,
+                    perceptual_hash=metadata.perceptual_hash,
+                    laplacian_var=metadata.laplacian_var,
+                    lossless=metadata.lossless,
+                    mtime=metadata.mtime,
+                    exif_data=metadata.exif_data,
+                )
 
                 # Update checksum cache
                 if metadata.checksum:
@@ -2370,22 +2404,21 @@ class IngestionThread(threading.Thread):
                 with self._import_names_lock:
                     import_name = self._import_names.pop(path_str_canon, None)
 
-                with self._db_lock:
-                    create_image(
-                        self.conn,
-                        image_id=image_id,
-                        path=path,
-                        size=current_size,
-                        width=vmeta.width,
-                        height=vmeta.height,
-                        timestamp=ts,
-                        timestamp_confidence=ts_conf,
-                        checksum=checksum,
-                        mtime=current_mtime,
-                        import_name=import_name,
-                        media_type='video',
-                        duration=vmeta.duration,
-                    )
+                create_image(
+                    conn,
+                    image_id=image_id,
+                    path=path,
+                    size=current_size,
+                    width=vmeta.width,
+                    height=vmeta.height,
+                    timestamp=ts,
+                    timestamp_confidence=ts_conf,
+                    checksum=checksum,
+                    mtime=current_mtime,
+                    import_name=import_name,
+                    media_type='video',
+                    duration=vmeta.duration,
+                )
 
                 # Add to checksum cache
                 if checksum:
@@ -2429,25 +2462,24 @@ class IngestionThread(threading.Thread):
                 with self._import_names_lock:
                     import_name = self._import_names.pop(path_str_canon, None)
 
-                # Insert new record (lock needed - DB write)
-                with self._db_lock:
-                    create_image(
-                        self.conn,
-                        image_id=image_id,
-                        path=metadata.path,
-                        size=metadata.size,
-                        width=metadata.width,
-                        height=metadata.height,
-                        timestamp=metadata.timestamp,
-                        timestamp_confidence=metadata.timestamp_confidence,
-                        checksum=metadata.checksum,
-                        perceptual_hash=metadata.perceptual_hash,
-                        laplacian_var=metadata.laplacian_var,
-                        lossless=metadata.lossless,
-                        mtime=metadata.mtime,
-                        exif_data=metadata.exif_data,
-                        import_name=import_name,
-                    )
+                # Insert new record
+                create_image(
+                    conn,
+                    image_id=image_id,
+                    path=metadata.path,
+                    size=metadata.size,
+                    width=metadata.width,
+                    height=metadata.height,
+                    timestamp=metadata.timestamp,
+                    timestamp_confidence=metadata.timestamp_confidence,
+                    checksum=metadata.checksum,
+                    perceptual_hash=metadata.perceptual_hash,
+                    laplacian_var=metadata.laplacian_var,
+                    lossless=metadata.lossless,
+                    mtime=metadata.mtime,
+                    exif_data=metadata.exif_data,
+                    import_name=import_name,
+                )
 
                 # Add to checksum cache
                 if metadata.checksum:
@@ -6643,6 +6675,7 @@ class ImageDatabase:
             video_queue=self._video_queue,
             video_extensions=self.config.video_extensions,
             thumbnail_dir=self.thumbnail_dir,
+            db_path=str(self.db_path),
         )
         self._ingestion_thread.start()
 
@@ -8400,35 +8433,38 @@ class ImageDatabase:
 
         # Get counts for live updates — cached with a 5-second TTL to avoid
         # running 4 COUNT queries on every poll (the main source of idle CPU).
+        # Protected by _db_lock because self.conn is shared with background
+        # threads that also acquire _db_lock for their DB access.
         now = time.monotonic()
         if self._status_counts is None or (now - self._status_counts_time) >= 5.0:
-            cursor = self.conn.execute(
-                "SELECT COUNT(*) as count FROM images WHERE deleted = 0 AND media_type = 'image'"
-            )
-            total_images = cursor.fetchone()['count']
-
-            cursor = self.conn.execute(
-                "SELECT COUNT(*) as count FROM images WHERE deleted = 0 AND media_type = 'video'"
-            )
-            total_videos = cursor.fetchone()['count']
-
-            # people/faces tables are created by FaceDB, which may not have
-            # initialised yet when the frontend first polls /api/status.
-            try:
-                cursor = self.conn.execute('SELECT COUNT(*) as count FROM people')
-                total_people = cursor.fetchone()['count']
-            except Exception:
-                total_people = 0
-
-            try:
+            with self._db_lock:
                 cursor = self.conn.execute(
-                    """SELECT COUNT(*) as count FROM faces f
-                       JOIN images i ON f.image_id = i.id
-                       WHERE f.suppressed = 0 AND i.deleted = 0"""
+                    "SELECT COUNT(*) as count FROM images WHERE deleted = 0 AND media_type = 'image'"
                 )
-                total_faces = cursor.fetchone()['count']
-            except Exception:
-                total_faces = 0
+                total_images = cursor.fetchone()['count']
+
+                cursor = self.conn.execute(
+                    "SELECT COUNT(*) as count FROM images WHERE deleted = 0 AND media_type = 'video'"
+                )
+                total_videos = cursor.fetchone()['count']
+
+                # people/faces tables are created by FaceDB, which may not have
+                # initialised yet when the frontend first polls /api/status.
+                try:
+                    cursor = self.conn.execute('SELECT COUNT(*) as count FROM people')
+                    total_people = cursor.fetchone()['count']
+                except Exception:
+                    total_people = 0
+
+                try:
+                    cursor = self.conn.execute(
+                        """SELECT COUNT(*) as count FROM faces f
+                           JOIN images i ON f.image_id = i.id
+                           WHERE f.suppressed = 0 AND i.deleted = 0"""
+                    )
+                    total_faces = cursor.fetchone()['count']
+                except Exception:
+                    total_faces = 0
 
             self._status_counts = {
                 'total_images': total_images,
