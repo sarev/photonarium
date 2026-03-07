@@ -1671,16 +1671,16 @@ def step_videos_search_opening(page, ctx):
     page.wait_for_timeout(500)
     navigate_to(page, 'search')
     # Wait for the search form to be fully ready
-    page.wait_for_selector('#filter-description', state='visible', timeout=5000)
+    page.wait_for_selector('#filter-text', state='visible', timeout=5000)
     page.wait_for_timeout(300)
     # Switch to Videos mode
     page.locator('.search-mode-toggle button[data-mode="videos"]').click()
     page.wait_for_timeout(300)
     # Click the input to focus it, then type the search query
-    search_input = page.locator('#filter-description')
+    search_input = page.locator('#filter-text')
     search_input.click()
     page.wait_for_timeout(200)
-    search_input.fill('flowers')
+    search_input.fill('Earth in space')
     page.wait_for_timeout(300)
     # Highlight the mode toggle
     highlight_element(page, '.search-mode-toggle')
