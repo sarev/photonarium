@@ -705,13 +705,17 @@ const Database = {
             if (this._els.videoQueueRow && this._els.videoCount) {
                 if (video > 0 || videoProgress) {
                     this._els.videoQueueRow.hidden = false;
-                    // Count includes the currently-processing video
-                    const totalActive = video + (videoProgress ? 1 : 0);
-                    this._els.videoCount.textContent = totalActive;
+                    // Show "done/total" when per-video progress is available
+                    if (videoProgress && videoProgress.total > 0) {
+                        this._els.videoCount.textContent =
+                            `${videoProgress.done + 1}/${videoProgress.total}`;
+                    } else {
+                        this._els.videoCount.textContent = video;
+                    }
                     // Show step detail when a video is being processed
                     if (this._els.videoStep) {
                         this._els.videoStep.textContent = videoProgress
-                            ? ` \u2014 ${videoProgress.label} (${videoProgress.step}/${videoProgress.total_steps})`
+                            ? ` \u2014 ${videoProgress.label} (${videoProgress.step} ${videoProgress.step_index}/${videoProgress.total_steps})`
                             : '';
                     }
                 } else {

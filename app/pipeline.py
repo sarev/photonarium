@@ -1129,7 +1129,14 @@ class PipelineOrchestrator(threading.Thread):
                 continue
 
             basename = path.name
-            self._current_video = {'basename': basename, 'step': 'scene_detection', 'step_index': 1, 'total_steps': 3}
+            self._current_video = {
+                'label': basename,
+                'step': 'Detecting scenes',
+                'step_index': 1,
+                'total_steps': 3,
+                'done': count,
+                'total': len(rows),
+            }
 
             # Generate poster-frame thumbnail if missing
             if checksum:
@@ -1170,11 +1177,25 @@ class PipelineOrchestrator(threading.Thread):
                 self._db.conn.commit()
 
             # Extract keyframes
-            self._current_video = {'basename': basename, 'step': 'keyframes', 'step_index': 2, 'total_steps': 3}
+            self._current_video = {
+                'label': basename,
+                'step': 'Extracting keyframes',
+                'step_index': 2,
+                'total_steps': 3,
+                'done': count,
+                'total': len(rows),
+            }
             keyframes = extract_scene_keyframes(path, scenes)
 
             # Generate scene thumbnails
-            self._current_video = {'basename': basename, 'step': 'thumbnails', 'step_index': 3, 'total_steps': 3}
+            self._current_video = {
+                'label': basename,
+                'step': 'Generating thumbnails',
+                'step_index': 3,
+                'total_steps': 3,
+                'done': count,
+                'total': len(rows),
+            }
             thumbnail_dir = self._db.thumbnail_dir
             for scene_idx, midpoint, _pil in keyframes:
                 if self._stopped():
@@ -2006,10 +2027,12 @@ class PipelineOrchestrator(threading.Thread):
                 continue
 
             self._current_video = {
-                'basename': basename,
-                'step': 'transcribing',
+                'label': basename,
+                'step': 'Transcribing',
                 'step_index': 1,
                 'total_steps': 1,
+                'done': count,
+                'total': len(rows),
             }
 
             # Load scene boundaries
