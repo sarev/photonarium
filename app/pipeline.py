@@ -16,9 +16,9 @@ Benefits
   `_db_lock` is only briefly held for reads/writes, never contested
   between stages.
 - **Self-healing** — each stage discovers its own work by querying the
-  DB for rows with null values (e.g. `embedding IS NULL`).  If the
-  process is killed mid-pipeline, restarting picks up exactly where it
-  left off with no manual intervention.
+  DB for incomplete rows (e.g. `embedding IS NULL`, `thumbnails_pending
+  = 1`).  If the process is killed mid-pipeline, restarting picks up
+  exactly where it left off with no manual intervention.
 - **Simpler control flow** — no callback chains, no inter-thread
   signalling between stages.
 
@@ -35,16 +35,23 @@ Stages
 
    *No GPU, no batching* — work is I/O-bound (stat, read, hash, EXIF).
 
-2. **Thumbnails** — Generate missing 200 px and 400 px thumbnails for
-   images (2a) and detect scenes + generate scene thumbnails for videos
-   (2b).
+2. **Thumbnails** — Replace placeholder thumbnails with real 200 px and
+   400 px thumbnails for images (2a, flag-driven via
+   ``thumbnails_pending``), and detect scenes + generate scene
+   thumbnails for videos (2b).
 
    *Threading (2a)*: `ThreadPoolExecutor` with
    `config.indexing_threads` workers (capped at 8).  Each thumbnail is
    independently generated from the original image using Pillow/rawpy.
 
    *Sequential (2b)*: Video scene detection (PyAV + content-aware scene
-   splits) runs one video at a time.  Config vars:
+   splits) runs one video at a time.  For each video: detect scene
+   boundaries, insert scene records, extract keyframes, and generate
+   200 px + 400 px scene thumbnails.  Scene thumbnails live at a
+   separate path (``scenes/<size>/<scene_id[:2]>/``) from the
+   checksum-based image thumbnails — the placeholder written during
+   ingestion becomes unused once a preferred scene is set.  Clears
+   ``thumbnails_pending`` after processing.  Config vars:
    `video_scene_detection_threshold`, `video_max_scene_duration`.
 
    *No GPU* — Pillow resize + sharpen + JPEG encode.
@@ -152,7 +159,7 @@ import uuid
 from concurrent.futures import Future, ThreadPoolExecutor
 from datetime import datetime
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, ClassVar
 
 import numpy as np
 import torch
@@ -169,7 +176,7 @@ from faces import (
 )
 from metadata import derive_timestamp_with_confidence, extract_exif_data
 from thumbnails import generate_thumbnail, get_thumbnail_cache_path
-from video import extract_keyframe_thumbnail, get_video_metadata, is_video_supported
+from video import get_video_metadata, is_video_supported
 
 if TYPE_CHECKING:
     from imagedb import ImageDatabase, OpenCLIPModel
@@ -183,6 +190,32 @@ class PipelineOrchestrator(threading.Thread):
     Self-healing: each stage queries DB for items with null values,
     so interrupted processing resumes on restart.
     """
+
+    # Pre-generated placeholder thumbnails (logo on dark 16:9 background).
+    # Keyed by size (200/400), values are absolute paths to static JPEGs.
+    _PLACEHOLDER_PATHS: ClassVar[dict[int, Path]] = {
+        200: Path(__file__).parent / 'static' / 'placeholder_200.jpg',
+        400: Path(__file__).parent / 'static' / 'placeholder_400.jpg',
+    }
+
+    def _write_placeholder_thumbnails(self, checksum: str) -> None:
+        """Copy pre-generated placeholder thumbnails to the cache.
+
+        Called during ingestion so all media appears in the Gallery
+        immediately (with the Photonarium logo) rather than as blank
+        spaces while waiting for real thumbnail generation.
+        """
+        import shutil
+
+        for size_px, src_path in self._PLACEHOLDER_PATHS.items():
+            thumb_path = get_thumbnail_cache_path(
+                checksum,
+                size_px,
+                thumbnail_dir=self._db.thumbnail_dir,
+            )
+            if not thumb_path.exists():
+                thumb_path.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copyfile(src_path, thumb_path)
 
     def __init__(
         self,
@@ -758,7 +791,8 @@ class PipelineOrchestrator(threading.Thread):
         conn.execute(
             """UPDATE images SET size = ?, width = ?, height = ?, duration = ?,
                mtime = ?, checksum = ?, embedding = NULL,
-               aesthetic_nima = NULL, aesthetic_laion = NULL, updated_at = ?
+               aesthetic_nima = NULL, aesthetic_laion = NULL,
+               thumbnails_pending = 1, updated_at = ?
                WHERE id = ?""",
             (current_size, vmeta.width, vmeta.height, vmeta.duration, current_mtime, checksum, now_ts, existing['id']),
         )
@@ -770,6 +804,8 @@ class PipelineOrchestrator(threading.Thread):
         if checksum:
             with self._db._checksum_cache_lock:
                 self._db._checksum_cache[existing['id']] = checksum
+            # Refresh placeholder so the video is visible immediately
+            self._write_placeholder_thumbnails(checksum)
 
     def _reingest_changed_image(
         self,
@@ -807,9 +843,11 @@ class PipelineOrchestrator(threading.Thread):
             exif_data=metadata.exif_data,
         )
 
-        # Clear embedding and scores so Stages 3-5 re-process
+        # Clear embedding and scores so Stages 3-5 re-process; mark
+        # thumbnails as pending so Stage 2a regenerates them.
         conn.execute(
-            'UPDATE images SET embedding = NULL, aesthetic_nima = NULL, aesthetic_laion = NULL WHERE id = ?',
+            """UPDATE images SET embedding = NULL, aesthetic_nima = NULL,
+               aesthetic_laion = NULL, thumbnails_pending = 1 WHERE id = ?""",
             (existing['id'],),
         )
         # Delete faces so Stage 5 re-detects
@@ -819,6 +857,9 @@ class PipelineOrchestrator(threading.Thread):
         if metadata.checksum:
             with self._db._checksum_cache_lock:
                 self._db._checksum_cache[existing['id']] = metadata.checksum
+            # Copy placeholder thumbnails so the image is visible
+            # immediately while Stage 2a generates real ones.
+            self._write_placeholder_thumbnails(metadata.checksum)
 
     def _process_new_file(
         self,
@@ -888,11 +929,15 @@ class PipelineOrchestrator(threading.Thread):
             import_name=import_name,
             media_type='video',
             duration=vmeta.duration,
+            thumbnails_pending=True,
         )
 
         if checksum:
             with self._db._checksum_cache_lock:
                 self._db._checksum_cache[image_id] = checksum
+            # Copy placeholder thumbnails so videos are visible in the
+            # Gallery immediately, before Stage 2b runs.
+            self._write_placeholder_thumbnails(checksum)
 
         logger.debug(f'Ingested new video: {path}')
 
@@ -939,11 +984,15 @@ class PipelineOrchestrator(threading.Thread):
             mtime=metadata.mtime,
             exif_data=metadata.exif_data,
             import_name=import_name,
+            thumbnails_pending=True,
         )
 
         if metadata.checksum:
             with self._db._checksum_cache_lock:
                 self._db._checksum_cache[image_id] = metadata.checksum
+            # Copy placeholder thumbnails so images are visible in the
+            # Gallery immediately, before Stage 2a runs.
+            self._write_placeholder_thumbnails(metadata.checksum)
 
         logger.debug(f'Ingested new image: {path}')
 
@@ -1011,7 +1060,7 @@ class PipelineOrchestrator(threading.Thread):
         return did_work
 
     def _generate_image_thumbnails(self) -> int:
-        """Generate missing 200px and 400px thumbnails for images.
+        """Generate real thumbnails for images with ``thumbnails_pending = 1``.
 
         Returns:
             Number of thumbnails generated.
@@ -1019,22 +1068,17 @@ class PipelineOrchestrator(threading.Thread):
         with self._db._db_lock:
             cursor = self._db.conn.execute("""
                 SELECT id, path, checksum FROM images
-                WHERE deleted = 0 AND checksum IS NOT NULL AND media_type = 'image'
+                WHERE deleted = 0 AND checksum IS NOT NULL
+                  AND media_type = 'image' AND thumbnails_pending = 1
             """)
             rows = cursor.fetchall()
 
-        # Filter to those actually missing thumbnails on disk
-        need_thumbnails: list[tuple[str, str]] = []  # (path, checksum)
-        for row in rows:
-            checksum = row['checksum']
-            for size in (200, 400):
-                cache_path = get_thumbnail_cache_path(checksum, size, thumbnail_dir=self._db.thumbnail_dir)
-                if not cache_path.exists():
-                    need_thumbnails.append((row['path'], checksum))
-                    break
-
-        if not need_thumbnails:
+        if not rows:
             return 0
+
+        need_thumbnails: list[tuple[str, str, str]] = [  # (id, path, checksum)
+            (row['id'], row['path'], row['checksum']) for row in rows
+        ]
 
         self._set_stage('thumbnails', len(need_thumbnails), 0)
         logger.info(f'Stage 2a: Generating thumbnails for {len(need_thumbnails)} images...')
@@ -1043,21 +1087,30 @@ class PipelineOrchestrator(threading.Thread):
         num_threads = max(1, min(8, self._db.config.indexing_threads))
 
         with ThreadPoolExecutor(max_workers=num_threads) as executor:
-            futures = {}
-            for path_str, checksum in need_thumbnails:
+            futures: dict[Future, tuple[str, str]] = {}
+            for image_id, path_str, checksum in need_thumbnails:
                 if self._stopped():
                     break
                 future = executor.submit(self._gen_thumb, Path(path_str), checksum)
-                futures[future] = path_str
+                futures[future] = (image_id, checksum)
 
             for future in futures:
                 if self._stopped():
                     break
+                image_id, checksum = futures[future]
                 try:
                     if future.result():
                         count += 1
                 except Exception as e:
                     logger.warning(f'Thumbnail generation failed: {e}')
+                # Clear the pending flag regardless of success — if it
+                # failed, the placeholder stays but we don't keep retrying.
+                with self._db._db_lock:
+                    self._db.conn.execute(
+                        'UPDATE images SET thumbnails_pending = 0 WHERE id = ?',
+                        (image_id,),
+                    )
+                    self._db.conn.commit()
                 self._update_done(count)
 
         if count > 0:
@@ -1066,15 +1119,9 @@ class PipelineOrchestrator(threading.Thread):
 
     def _gen_thumb(self, source_path: Path, checksum: str) -> bool:
         """Generate 200px and 400px thumbnails for a single image."""
-        # Skip videos (poster thumbnails handled separately)
-        if source_path.suffix.lower() in self._db.config.video_extensions:
-            return True
-
         success = True
         for size in (200, 400):
             cache_path = get_thumbnail_cache_path(checksum, size, thumbnail_dir=self._db.thumbnail_dir)
-            if cache_path.exists():
-                continue
             if not generate_thumbnail(
                 source_path,
                 cache_path,
@@ -1103,7 +1150,7 @@ class PipelineOrchestrator(threading.Thread):
 
         with self._db._db_lock:
             cursor = self._db.conn.execute("""
-                SELECT i.id, i.path, i.duration, i.checksum
+                SELECT i.id, i.path
                 FROM images i
                 WHERE i.deleted = 0
                   AND i.media_type = 'video'
@@ -1124,8 +1171,6 @@ class PipelineOrchestrator(threading.Thread):
 
             image_id = row['id']
             path = Path(row['path'])
-            duration = row['duration'] or 0.0
-            checksum = row['checksum']
 
             if not path.exists():
                 continue
@@ -1140,14 +1185,6 @@ class PipelineOrchestrator(threading.Thread):
                 'done': count,
                 'total': len(rows),
             }
-
-            # Generate poster-frame thumbnail if missing
-            if checksum:
-                poster_offset = min(1.0, duration / 2) if duration > 0 else 0
-                for size_px in (200, 400):
-                    thumb_path = get_thumbnail_cache_path(checksum, size_px, thumbnail_dir=self._db.thumbnail_dir)
-                    if not thumb_path.exists():
-                        extract_keyframe_thumbnail(path, thumb_path, size_px, time_offset=poster_offset)
 
             # Scene detection
             scenes = detect_scenes(
@@ -1207,6 +1244,14 @@ class PipelineOrchestrator(threading.Thread):
                         quality=self._db.config.thumbnail_quality,
                         frame=frame,
                     )
+
+            # Clear the pending flag now that scene thumbnails exist
+            with self._db._db_lock:
+                self._db.conn.execute(
+                    'UPDATE images SET thumbnails_pending = 0 WHERE id = ?',
+                    (image_id,),
+                )
+                self._db.conn.commit()
 
             count += 1
             self._update_done(count)

@@ -274,6 +274,8 @@ _SQL_MIGRATIONS = [
     'ALTER TABLE images ADD COLUMN preferred_scene_id TEXT',
     # → Drop obsolete scene_embeddings table (data now lives in scenes.embedding)
     'DROP TABLE IF EXISTS scene_embeddings',
+    # → No backfill needed (0 = has real thumbnails, 1 = still has placeholder)
+    'ALTER TABLE images ADD COLUMN thumbnails_pending INTEGER NOT NULL DEFAULT 0',
 ]
 
 # SQL schema for the image_metadata table (indexed EXIF key-value pairs for search)
@@ -1087,6 +1089,7 @@ def create_image(
     media_type: str = 'image',
     duration: float | None = None,
     preferred_scene_id: str | None = None,
+    thumbnails_pending: bool = False,
 ) -> dict[str, Any]:
     """Create a new image record in the database.
 
@@ -1115,6 +1118,8 @@ def create_image(
         media_type: 'image' or 'video' (default 'image').
         duration: Video duration in seconds (None for images).
         preferred_scene_id: UUID of the preferred scene (for videos).
+        thumbnails_pending: Whether the image still has placeholder thumbnails
+            (True = placeholder, False = real thumbnails).
 
     Returns:
         Dictionary with the created image record.
@@ -1135,8 +1140,9 @@ def create_image(
             id, path, basename, size, width, height, timestamp, timestamp_confidence,
             checksum, perceptual_hash, laplacian_var, lossless, mtime,
             description, rating, embedding, deleted, created_at, updated_at,
-            exif_data, import_name, media_type, duration, preferred_scene_id
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, 0, ?, ?, ?, ?, ?, ?, ?)
+            exif_data, import_name, media_type, duration, preferred_scene_id,
+            thumbnails_pending
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, 0, ?, ?, ?, ?, ?, ?, ?, ?)
     """,
         (
             image_id,
@@ -1161,6 +1167,7 @@ def create_image(
             media_type,
             duration,
             preferred_scene_id,
+            int(thumbnails_pending),
         ),
     )
 
