@@ -14,7 +14,7 @@ The HTTP layer. Receives requests from the frontend and delegates to the
 backend modules for database operations and image processing. Uses the waitress
 WSGI server in production.
 
-**Routes (82):**
+**Routes (83):**
 
 Mutation endpoints prefer batch format (arrays, not single items).
 
@@ -213,27 +213,23 @@ background processing in threads.
 2. Folder management and scanning
 3. Image CRUD helpers
 4. Metadata extraction (delegates to `metadata.py`)
-5. Ingestion thread (consumes file paths, extracts metadata, queues for
-   embedding)
-6. Embedding thread (batches image IDs, computes OpenCLIP embeddings, stores
-   via single `executemany` + commit per batch)
-7. Semantic search
-8. Thumbnail generation stubs
-9. Event queue (cursor-based, multi-client)
-10. Import worker (copies files into catalogue directory, organised by date)
-11. Video processing thread (scene detection, keyframe extraction, embeddings,
-    transcription — delegates to `video.py`)
-12. NIMA scoring thread (aesthetic quality scoring)
-13. Scan timer thread (periodic rescans at configurable intervals)
-14. `ImageDatabase` public API wrapper
-15. Graceful shutdown helpers
+5. `PipelineOrchestrator` — single worker thread running 7 sequential stages
+6. Semantic search
+7. Thumbnail generation stubs
+8. Event queue (cursor-based, multi-client)
+9. Import worker (copies files into catalogue directory, organised by date)
+10. `ImageDatabase` public API wrapper
+11. Graceful shutdown helpers
 
-**Threading:** Six worker threads run by default (ingestion, embedding, face
-detection, NIMA scoring, video processing, scan timer). Work is coordinated
-through `queue.Queue` instances. The database connection is shared and protected
-by `threading.RLock`. Embedding and face detection threads yield the GIL
-periodically (10ms sleep between batches) to prevent blocking Flask request
-handling.
+**Threading:** A single `PipelineOrchestrator` thread runs seven stages
+sequentially in a loop: ingestion, thumbnails (images then video scenes),
+embeddings, NIMA/LAION scoring, face detection, grouping (duplicates, directory
+groups, face reassessment), and transcription. Each stage explicitly unloads its
+model before the next begins, eliminating GPU contention. Stages query the
+database for incomplete rows (e.g. `embedding IS NULL`) so a killed process
+resumes where it left off. A scan timer triggers periodic rescans at
+configurable intervals. The database connection is shared and protected by
+`threading.RLock`.
 
 ### `app/faces.py` - Face Detection and Recognition
 
