@@ -888,12 +888,12 @@ def _parse_timestamp_scoring(
         best.minute,
         best.second,
     )
-    logger.debug(
-        'Scoring parser: score=%.1f assumptions=%s for %s',
-        best.score,
-        best.assumptions,
-        path,
-    )
+    # logger.debug(
+    #     'Scoring parser: score=%.1f assumptions=%s for %s',
+    #     best.score,
+    #     best.assumptions,
+    #     path,
+    # )
     return result, best.score, best.assumptions
 
 
@@ -989,7 +989,8 @@ def extract_exif_timestamp(path: Path | str) -> datetime | None:
                     return result
 
     except (OSError, AttributeError, KeyError) as e:
-        logger.debug(f'Failed to extract EXIF from {path}: {e}')
+        # logger.debug(f'Failed to extract EXIF from {path}: {e}')
+        pass
 
     return None
 
@@ -1993,7 +1994,7 @@ def derive_timestamp_with_confidence(
                 if not timestamp:
                     timestamp = parse_timestamp_from_path(path)
                 if timestamp:
-                    logger.debug(f'Timestamp from filename (override match "{pattern}"): {timestamp} for {path}')
+                    # logger.debug(f'Timestamp from filename (override match "{pattern}"): {timestamp} for {path}')
                     return (timestamp, CONFIDENCE_FILENAME)
                 # Pattern matched but filename parsing failed — fall through to EXIF
                 break
@@ -2004,32 +2005,32 @@ def derive_timestamp_with_confidence(
         if date_taken:
             timestamp = parse_exif_datetime(date_taken)
             if timestamp:
-                logger.debug(f'Timestamp from pre-read EXIF: {timestamp} for {path}')
+                # logger.debug(f'Timestamp from pre-read EXIF: {timestamp} for {path}')
                 return (timestamp, CONFIDENCE_EXIF)
     else:
         # Fall back to opening the file for EXIF (backward compat)
         timestamp = extract_exif_timestamp(path)
         if timestamp:
-            logger.debug(f'Timestamp from EXIF: {timestamp} for {path}')
+            # logger.debug(f'Timestamp from EXIF: {timestamp} for {path}')
             return (timestamp, CONFIDENCE_EXIF)
 
     # Try parsing from filename/path (before filesystem, as files get copied around)
     # Scoring parser first — handles month words, seasons, DMY/MDY ambiguity
     timestamp, score, _assumptions = _parse_timestamp_scoring(path, date_order)
     if timestamp:
-        logger.debug(f'Timestamp from scoring parser (score={score:.1f}): {timestamp} for {path}')
+        # logger.debug(f'Timestamp from scoring parser (score={score:.1f}): {timestamp} for {path}')
         return (timestamp, CONFIDENCE_FILENAME)
 
     # Legacy regex-cascade fallback
     timestamp = parse_timestamp_from_path(path)
     if timestamp:
-        logger.debug(f'Timestamp from legacy parser: {timestamp} for {path}')
+        # logger.debug(f'Timestamp from legacy parser: {timestamp} for {path}')
         return (timestamp, CONFIDENCE_FILENAME)
 
     # Try filesystem timestamp as last resort
     timestamp = extract_filesystem_timestamp(path)
     if timestamp:
-        logger.debug(f'Timestamp from filesystem: {timestamp} for {path}')
+        # logger.debug(f'Timestamp from filesystem: {timestamp} for {path}')
         return (timestamp, CONFIDENCE_FILESYSTEM)
 
     logger.debug(f'No timestamp found for {path}')
