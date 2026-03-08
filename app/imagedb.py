@@ -123,11 +123,10 @@ import signal
 import sqlite3
 import threading
 import time
-import uuid
 import warnings
 from collections import defaultdict
-from concurrent.futures import Future, ThreadPoolExecutor, as_completed
-from typing import Any, Callable, Iterator
+from concurrent.futures import ThreadPoolExecutor, as_completed
+from typing import TYPE_CHECKING, Any, Callable, Iterator
 
 import cv2
 import imagehash
@@ -136,28 +135,20 @@ import open_clip
 import torch
 
 # Local imports
-from config import Config, get_default_config, load_config
+from config import Config, load_config
 from dbutil import sql_placeholders
 from duplicates import DuplicateManager, embedding_to_numpy
 from faces import (
-    FaceDetector,
-    compute_unknown_face_groups,
-    create_face,
     delete_face_thumbnail,
-    delete_people_without_faces,
-    find_best_match,
     generate_face_thumbnail,
     generate_face_thumbnails_for_image,
     get_all_faces_for_thumbnail_regen,
-    get_all_known_face_embeddings,
     get_face,
     get_face_thumbnail_path,
     get_faces_for_image,
     get_faces_without_semantic_embedding,
     get_group_computation_status,
-    has_faces_detected,
     init_face_tables,
-    mark_no_faces_detected,
     rotate_faces_for_image,
     update_face_semantic_embedding,
 )
@@ -185,7 +176,9 @@ from thumbnails import (
     rotate_image_file,
 )
 from trash import move_to_trash, validate_trash_dir
-from video import extract_keyframe_thumbnail, get_video_metadata, is_video_supported
+
+if TYPE_CHECKING:
+    from pipeline import PipelineOrchestrator
 
 # Configure module logger
 logger = logging.getLogger(__name__)
@@ -1856,667 +1849,8 @@ def extract_image_metadata(
 # =============================================================================
 
 
-class IngestionThread(threading.Thread):
-    """Background thread for ingesting images into the database.
-
-    Processes image paths from the ingestion queue using a thread pool for
-    parallel metadata extraction. Images that need embeddings are queued
-    to the embedding queue.
-
-    Attributes:
-        conn: Database connection.
-        ingestion_queue: Queue of file paths to process.
-        embedding_queue: Queue of image IDs needing embeddings.
-        stop_event: Event to signal thread shutdown.
-        pause_event: Event to temporarily pause processing.
-        num_threads: Number of worker threads for parallel processing.
-    """
-
-    def __init__(
-        self,
-        conn: sqlite3.Connection,
-        ingestion_queue: queue.Queue[Path],
-        embedding_queue: queue.Queue[str],
-        stop_event: threading.Event,
-        db_lock: threading.RLock,
-        checksum_cache: dict[str, str],
-        checksum_cache_lock: threading.Lock,
-        generate_thumbnails: Callable[[Path, str], bool],
-        pause_event: threading.Event | None = None,
-        num_threads: int = 4,
-        max_image_dimension: int = 0,
-        nima_queue: queue.Queue[str] | None = None,
-        import_names: dict[str, str] | None = None,
-        import_names_lock: threading.Lock | None = None,
-        filename_date_overrides: list[str] | None = None,
-        date_order: str = 'DMY',
-        video_queue: queue.Queue[str] | None = None,
-        video_extensions: set[str] | None = None,
-        thumbnail_dir: Path | str = '.thumbnails',
-        db_path: str = '',
-    ):
-        """Initialise the ingestion thread.
-
-        Args:
-            conn: Database connection (must be created with check_same_thread=False).
-            ingestion_queue: Queue of file paths to process.
-            embedding_queue: Queue to add image IDs that need embeddings.
-            stop_event: Event to signal thread should stop.
-            db_lock: Shared lock for database access (from ImageDatabase).
-            checksum_cache: Shared cache mapping image_id to checksum.
-            checksum_cache_lock: Lock for checksum cache access.
-            generate_thumbnails: Callback to generate thumbnails (path, checksum) -> bool.
-            pause_event: Optional event to pause processing (for folder removal).
-            num_threads: Number of worker threads for parallel metadata extraction.
-            max_image_dimension: Max dimension for image processing (0 to disable).
-            nima_queue: Optional queue for NIMA aesthetic scoring.
-            import_names: Shared dict mapping catalogue dest path to original
-                filename (populated by ImportWorker, consumed here).
-            import_names_lock: Lock protecting the import_names dict.
-            filename_date_overrides: Glob patterns where filename timestamps
-                override EXIF (e.g. WhatsApp images).
-            date_order: Preferred date order for ambiguous numeric dates in
-                filenames ('DMY', 'MDY', or 'YMD').
-            video_queue: Optional queue for video processing (scene detection,
-                embeddings, STT).
-            video_extensions: Set of lowercase video file extensions.
-            thumbnail_dir: Path to thumbnail cache directory.
-            db_path: Path to the SQLite database file. Worker threads create
-                their own connections to avoid contention with the shared conn.
-        """
-        super().__init__(name='IngestionThread', daemon=True)
-        self.conn = conn
-        self.ingestion_queue = ingestion_queue
-        self.embedding_queue = embedding_queue
-        self.stop_event = stop_event
-        self.pause_event = pause_event or threading.Event()
-        self.num_threads = max(1, min(16, num_threads))
-        self.max_image_dimension = max_image_dimension
-        self._processed_count = 0
-        self._error_count = 0
-        self._db_lock = db_lock  # Shared lock from ImageDatabase
-        self._checksum_cache = checksum_cache  # Shared cache from ImageDatabase
-        self._checksum_cache_lock = checksum_cache_lock  # Shared lock from ImageDatabase
-        self._generate_thumbnails = generate_thumbnails  # Callback from ImageDatabase
-        self._nima_queue = nima_queue  # Optional NIMA scoring queue
-        self._import_names = import_names or {}  # Shared import name mapping
-        self._import_names_lock = import_names_lock or threading.Lock()
-        self._filename_date_overrides = filename_date_overrides
-        self._date_order = date_order
-        self._video_queue = video_queue  # Optional video processing queue
-        self._video_extensions = video_extensions or set()
-        self._thumbnail_dir = Path(thumbnail_dir)
-        self._pending_count = 0  # Number of items being processed (not just in queue)
-        self._pending_lock = threading.Lock()
-        self._was_idle = True  # Track idle transitions for debug logging
-        # Per-thread DB connections for worker threads — eliminates shared-conn
-        # contention between ingestion workers and Flask/other background threads.
-        self._db_path = db_path
-        self._thread_local = threading.local()
-        self._worker_conns: list[sqlite3.Connection] = []
-        self._worker_conns_lock = threading.Lock()
-        # Retry tracking for transient "database is locked" errors — items
-        # are re-queued up to _max_retries times before being counted as
-        # permanent failures.
-        self._retry_counts: dict[Path, int] = {}
-        self._max_retries = 5
-
-    @property
-    def processed_count(self) -> int:
-        """Number of images successfully processed."""
-        return self._processed_count
-
-    @property
-    def error_count(self) -> int:
-        """Number of images that failed processing."""
-        return self._error_count
-
-    @property
-    def has_started_processing(self) -> bool:
-        """Whether at least one image has been processed or errored.
-
-        Prevents downstream threads from triggering completion callbacks
-        at startup when all queues are momentarily empty but no real work
-        has been done yet.
-        """
-        return self._processed_count > 0 or self._error_count > 0
-
-    @property
-    def is_idle(self) -> bool:
-        """Check if thread is idle (queue empty AND no pending work).
-
-        This is used by EmbeddingThread to determine when all ingestion
-        is truly complete, not just when the queue appears empty.
-        """
-        with self._pending_lock:
-            return self.ingestion_queue.empty() and self._pending_count == 0
-
-    def _get_worker_conn(self) -> sqlite3.Connection:
-        """Get or create a thread-local database connection for worker threads.
-
-        Each ThreadPoolExecutor worker gets its own SQLite connection, avoiding
-        contention on the shared ``self.conn`` used by Flask routes and other
-        background threads.  Connections use WAL mode and a generous busy_timeout
-        so concurrent writes serialize at the database level rather than failing.
-        """
-        conn = getattr(self._thread_local, 'conn', None)
-        if conn is None:
-            conn = sqlite3.connect(self._db_path, timeout=10.0)
-            conn.execute('PRAGMA journal_mode=WAL')
-            conn.execute('PRAGMA busy_timeout=10000')
-            conn.execute('PRAGMA foreign_keys=ON')
-            conn.row_factory = sqlite3.Row
-            self._thread_local.conn = conn
-            with self._worker_conns_lock:
-                self._worker_conns.append(conn)
-        return conn
-
-    def run(self) -> None:
-        """Main thread loop - process images using thread pool."""
-        logger.info(f'Ingestion thread started with {self.num_threads} worker threads')
-
-        # Progress logging state
-        last_progress_time = time.time()
-        progress_interval = 5.0  # Log every 5 seconds
-        initial_queue_size = self.ingestion_queue.qsize()
-        if initial_queue_size > 0:
-            logger.info(f'Indexing {initial_queue_size} images...')
-
-        with ThreadPoolExecutor(max_workers=self.num_threads) as executor:
-            pending_futures: dict[Future, Path] = {}
-
-            while not self.stop_event.is_set():
-                # Check if paused
-                if self.pause_event.is_set():
-                    time.sleep(0.1)
-                    continue
-
-                # Submit new jobs while we have capacity
-                while len(pending_futures) < self.num_threads * 2:
-                    try:
-                        path = self.ingestion_queue.get_nowait()
-                        future = executor.submit(self._process_image, path)
-                        pending_futures[future] = path
-                        with self._pending_lock:
-                            self._pending_count += 1
-                    except queue.Empty:
-                        break
-
-                # Check for completed futures
-                if pending_futures:
-                    done_futures = [f for f in pending_futures if f.done()]
-                    for future in done_futures:
-                        path = pending_futures.pop(future)
-                        try:
-                            future.result()  # Raises exception if worker failed
-                            self._processed_count += 1
-                            # Clear retry count on success
-                            self._retry_counts.pop(path, None)
-                        except Exception as e:
-                            retries = self._retry_counts.get(path, 0)
-                            if 'database is locked' in str(e) and retries < self._max_retries:
-                                # Re-queue for retry — transient DB lock contention
-                                self._retry_counts[path] = retries + 1
-                                self.ingestion_queue.put(path)
-                                logger.debug(
-                                    f'Re-queued {path} after "database is locked" '
-                                    f'(attempt {retries + 1}/{self._max_retries})'
-                                )
-                            else:
-                                logger.error(f'Error processing {path}: {e}')
-                                self._retry_counts.pop(path, None)
-                                self._error_count += 1
-                        finally:
-                            self.ingestion_queue.task_done()
-                            with self._pending_lock:
-                                self._pending_count -= 1
-
-                # Periodic progress logging
-                now = time.time()
-                if now - last_progress_time >= progress_interval:
-                    remaining = self.ingestion_queue.qsize() + len(pending_futures)
-                    if remaining > 0:
-                        logger.info(f'Indexing progress: {self._processed_count} done, {remaining} remaining')
-                    last_progress_time = now
-
-                # Log idle state transitions (not every poll)
-                now_idle = not pending_futures and self.ingestion_queue.empty()
-                if now_idle != self._was_idle:
-                    with self._pending_lock:
-                        pc = self._pending_count
-                    logger.debug(
-                        f'IngestionThread idle={now_idle} '
-                        f'(queue={self.ingestion_queue.qsize()}, '
-                        f'futures={len(pending_futures)}, pending={pc}, '
-                        f'processed={self._processed_count}, errors={self._error_count})'
-                    )
-                    self._was_idle = now_idle
-
-                # Small sleep if no work to prevent busy-waiting
-                if not pending_futures:
-                    time.sleep(0.1)
-                else:
-                    # Brief sleep to allow futures to complete
-                    time.sleep(0.01)
-
-            # Wait for remaining futures on shutdown
-            for future in pending_futures:
-                path = pending_futures[future]
-                try:
-                    future.result(timeout=1.0)
-                    self._processed_count += 1
-                except Exception as e:
-                    logger.error(f'Error processing {path} during shutdown: {e}')
-                    self._error_count += 1
-                finally:
-                    self.ingestion_queue.task_done()
-                    with self._pending_lock:
-                        self._pending_count -= 1
-
-        # Close all per-thread worker connections
-        with self._worker_conns_lock:
-            for wconn in self._worker_conns:
-                try:
-                    wconn.close()
-                except Exception:
-                    pass
-            self._worker_conns.clear()
-
-        logger.info('Ingestion thread stopped')
-
-    def _process_image(self, path: Path) -> None:
-        """Process a single image file.
-
-        This method is called from worker threads.  Each worker uses its own
-        thread-local SQLite connection (via ``_get_worker_conn()``) so there
-        is no contention with the shared connection used by Flask routes.
-
-        Uses size + mtime for fast change detection to avoid reading file
-        contents (checksum) on every scan.
-
-        Args:
-            path: Path to the image file.
-        """
-        path = canonicalise_path(path)
-
-        # Get a per-thread database connection (created on first use)
-        conn = self._get_worker_conn()
-
-        # Check if file still exists (no lock needed - file I/O)
-        if not path.exists():
-            logger.debug(f'Skipping non-existent file: {path}')
-            return
-
-        # Get file size and mtime (no lock needed - file I/O)
-        try:
-            stat_info = path.stat()
-            current_size = stat_info.st_size
-            current_mtime = stat_info.st_mtime
-        except OSError:
-            logger.warning(f'Cannot stat file: {path}')
-            return
-
-        # Check if already in database
-        existing = get_image_by_path(conn, path)
-
-        if existing is not None:
-            # Image exists - check if it has changed using size + mtime
-            # This is much faster than computing checksum for every file
-            existing_mtime = existing.get('mtime')
-            existing_checksum = existing.get('checksum')
-            existing_size = existing.get('size', 0)
-
-            # Check if mtime is missing (pre-migration image) - need to backfill
-            if existing_mtime is None and existing['size'] == current_size:
-                # Size matches but no mtime stored - just update mtime without full re-process
-                # NOTE: Don't update updated_at here - mtime backfill is not a content change
-                logger.debug(f'Backfilling mtime for: {path}')
-                conn.execute('UPDATE images SET mtime = ? WHERE id = ?', (current_mtime, existing['id']))
-                conn.commit()
-                existing_mtime = current_mtime  # Continue with normal checks
-
-            if existing['size'] == current_size and existing_mtime == current_mtime:
-                # File unchanged (size and mtime match)
-                is_existing_video = existing.get('media_type') == 'video'
-                needs_embedding = False
-
-                # Check if we need to backfill missing checksum (images only)
-                if not is_existing_video and existing_checksum is None and existing_size > 0:
-                    # Missing checksum - need to regenerate metadata
-                    logger.info(f'Backfilling missing checksum for: {path}')
-                    metadata = extract_image_metadata(
-                        path,
-                        self.max_image_dimension,
-                        self._filename_date_overrides,
-                        self._date_order,
-                    )
-                    if metadata is not None:
-                        update_image_metadata(
-                            conn,
-                            existing['id'],
-                            size=metadata.size,
-                            width=metadata.width,
-                            height=metadata.height,
-                            timestamp=metadata.timestamp,
-                            timestamp_confidence=metadata.timestamp_confidence,
-                            checksum=metadata.checksum,
-                            perceptual_hash=metadata.perceptual_hash,
-                            laplacian_var=metadata.laplacian_var,
-                            lossless=metadata.lossless,
-                            mtime=metadata.mtime,
-                            exif_data=metadata.exif_data,
-                        )
-                        needs_embedding = True
-
-                # Check if embedding is needed
-                if existing['embedding'] is None:
-                    needs_embedding = True
-
-                # Check if description embedding is needed
-                description = existing.get('description', '')
-                description_embedding = existing.get('description_embedding')
-                if description and description_embedding is None:
-                    needs_embedding = True
-
-                if needs_embedding:
-                    if is_existing_video:
-                        # Videos get their embedding from the video processing thread
-                        if self._video_queue is not None:
-                            self._video_queue.put(existing['id'])
-                            logger.debug(f'Queued existing video for processing: {path}')
-                    else:
-                        self.embedding_queue.put(existing['id'])
-                        logger.debug(f'Queued existing image for embedding: {path}')
-                # Skip NIMA and EXIF for videos (not applicable)
-                if not is_existing_video:
-                    # Queue for NIMA scoring if missing (independent of embedding)
-                    if self._nima_queue is not None and existing.get('aesthetic_nima') is None:
-                        self._nima_queue.put(existing['id'])
-                    # Backfill EXIF metadata if missing (lightweight I/O, done inline)
-                    if existing.get('exif_data') is None:
-                        exif_data = extract_exif_data(path)
-                        exif_json = json.dumps(exif_data) if exif_data else '{}'
-                        conn.execute(
-                            'UPDATE images SET exif_data = ?, updated_at = ? WHERE id = ?',
-                            (exif_json, datetime.now().isoformat(), existing['id']),
-                        )
-                        if exif_data:
-                            _upsert_image_metadata(conn, existing['id'], exif_data)
-                        conn.commit()
-                        logger.debug(f'Backfilled EXIF data for: {path}')
-                # Recompute non-user-assigned timestamps (picks up parser
-                # improvements and config changes like date_order)
-                ts_conf = existing.get('timestamp_confidence')
-                if ts_conf is not None and ts_conf != 0:
-                    exif_data = None
-                    raw_exif = existing.get('exif_data')
-                    if raw_exif:
-                        parsed = json.loads(raw_exif)
-                        if isinstance(parsed, dict) and parsed:
-                            exif_data = parsed
-                    new_ts, new_conf = derive_timestamp_with_confidence(
-                        path,
-                        exif_data=exif_data,
-                        filename_date_overrides=self._filename_date_overrides,
-                        date_order=self._date_order,
-                    )
-                    new_ts_str = new_ts.isoformat() if new_ts else None
-                    old_ts = existing.get('timestamp')
-                    if new_ts_str != old_ts or new_conf != ts_conf:
-                        conn.execute(
-                            'UPDATE images SET timestamp = ?, timestamp_confidence = ?, updated_at = ? WHERE id = ?',
-                            (new_ts_str, new_conf, datetime.now().isoformat(), existing['id']),
-                        )
-                        conn.commit()
-                        logger.debug(f'Recomputed timestamp for: {path}')
-                if not needs_embedding:
-                    logger.debug(f'Skipping unchanged image: {path}')
-                return
-
-            # File has changed (size or mtime differ) - re-extract metadata
-            is_existing_video = existing.get('media_type') == 'video'
-
-            if is_existing_video:
-                # Re-ingest changed video
-                logger.info(f'Re-ingesting changed video: {path}')
-                if not is_video_supported():
-                    logger.warning(f'Skipping video (PyAV not installed): {path}')
-                    return
-                vmeta = get_video_metadata(path)
-                if vmeta is None:
-                    logger.warning(f'Failed to extract video metadata for changed file: {path}')
-                    return
-
-                # Recompute checksum
-                try:
-                    sha256 = hashlib.sha256()
-                    with open(path, 'rb') as f:
-                        while True:
-                            chunk = f.read(1024 * 1024)
-                            if not chunk:
-                                break
-                            sha256.update(chunk)
-                    checksum = sha256.hexdigest()
-                except OSError:
-                    checksum = None
-
-                now_ts = datetime.now().isoformat()
-                conn.execute(
-                    """UPDATE images SET size = ?, width = ?, height = ?, duration = ?,
-                       mtime = ?, checksum = ?, embedding = NULL, updated_at = ?
-                       WHERE id = ?""",
-                    (
-                        current_size,
-                        vmeta.width,
-                        vmeta.height,
-                        vmeta.duration,
-                        current_mtime,
-                        checksum,
-                        now_ts,
-                        existing['id'],
-                    ),
-                )
-                # Delete old scenes (cascade deletes scene_embeddings)
-                conn.execute('DELETE FROM scenes WHERE image_id = ?', (existing['id'],))
-                conn.commit()
-
-                if checksum:
-                    with self._checksum_cache_lock:
-                        self._checksum_cache[existing['id']] = checksum
-                    poster_offset = min(1.0, vmeta.duration / 2) if vmeta.duration > 0 else 0
-                    for size_px in (200, 400):
-                        thumb_path = get_thumbnail_cache_path(checksum, size_px, thumbnail_dir=self._thumbnail_dir)
-                        if not thumb_path.exists():
-                            extract_keyframe_thumbnail(path, thumb_path, size_px, time_offset=poster_offset)
-
-                if self._video_queue is not None:
-                    self._video_queue.put(existing['id'])
-                logger.debug(f'Queued changed video for reprocessing: {path}')
-
-            else:
-                # Re-ingest changed image
-                logger.info(f'Re-ingesting changed image: {path}')
-                metadata = extract_image_metadata(
-                    path,
-                    self.max_image_dimension,
-                    self._filename_date_overrides,
-                    self._date_order,
-                )
-                if metadata is None:
-                    logger.warning(f'Failed to extract metadata for changed image: {path}')
-                    return
-
-                # Update existing record
-                update_image_metadata(
-                    conn,
-                    existing['id'],
-                    size=metadata.size,
-                    width=metadata.width,
-                    height=metadata.height,
-                    timestamp=metadata.timestamp,
-                    timestamp_confidence=metadata.timestamp_confidence,
-                    checksum=metadata.checksum,
-                    perceptual_hash=metadata.perceptual_hash,
-                    laplacian_var=metadata.laplacian_var,
-                    lossless=metadata.lossless,
-                    mtime=metadata.mtime,
-                    exif_data=metadata.exif_data,
-                )
-
-                # Update checksum cache
-                if metadata.checksum:
-                    with self._checksum_cache_lock:
-                        self._checksum_cache[existing['id']] = metadata.checksum
-
-                # Generate thumbnail for changed image
-                if metadata.checksum:
-                    self._generate_thumbnails(path, metadata.checksum)
-
-                # Queue for embedding (metadata cleared embedding) and NIMA
-                self.embedding_queue.put(existing['id'])
-                if self._nima_queue is not None:
-                    self._nima_queue.put(existing['id'])
-                logger.debug(f'Queued changed image for embedding: {path}')
-
-        else:
-            # Determine if this is a video file
-            ext = path.suffix.lower()
-            is_video = ext in self._video_extensions
-
-            if is_video:
-                # New video — extract video metadata instead of image metadata
-                if not is_video_supported():
-                    logger.warning(f'Skipping video (PyAV not installed): {path}')
-                    return
-
-                vmeta = get_video_metadata(path)
-                if vmeta is None:
-                    logger.warning(f'Failed to extract video metadata: {path}')
-                    return
-
-                image_id = str(uuid.uuid4())
-
-                # Compute checksum for thumbnail keying (same as images)
-                try:
-                    sha256 = hashlib.sha256()
-                    with open(path, 'rb') as f:
-                        while True:
-                            chunk = f.read(1024 * 1024)
-                            if not chunk:
-                                break
-                            sha256.update(chunk)
-                    checksum = sha256.hexdigest()
-                except OSError as e:
-                    logger.warning(f'Failed to compute checksum for video: {path}: {e}')
-                    checksum = None
-
-                # Derive timestamp from filesystem (videos don't have EXIF)
-                ts, ts_conf = derive_timestamp_with_confidence(
-                    path,
-                    exif_data=None,
-                    filename_date_overrides=self._filename_date_overrides,
-                    date_order=self._date_order,
-                )
-
-                path_str_canon = str(canonicalise_path(path))
-                with self._import_names_lock:
-                    import_name = self._import_names.pop(path_str_canon, None)
-
-                create_image(
-                    conn,
-                    image_id=image_id,
-                    path=path,
-                    size=current_size,
-                    width=vmeta.width,
-                    height=vmeta.height,
-                    timestamp=ts,
-                    timestamp_confidence=ts_conf,
-                    checksum=checksum,
-                    mtime=current_mtime,
-                    import_name=import_name,
-                    media_type='video',
-                    duration=vmeta.duration,
-                )
-
-                # Add to checksum cache
-                if checksum:
-                    with self._checksum_cache_lock:
-                        self._checksum_cache[image_id] = checksum
-
-                # Generate poster-frame thumbnail (extract ~1s in to skip black)
-                if checksum:
-                    poster_offset = min(1.0, vmeta.duration / 2) if vmeta.duration > 0 else 0
-                    for size_px in (200, 400):
-                        thumb_path = get_thumbnail_cache_path(checksum, size_px, thumbnail_dir=self._thumbnail_dir)
-                        if not thumb_path.exists():
-                            extract_keyframe_thumbnail(path, thumb_path, size_px, time_offset=poster_offset)
-
-                # Queue for video processing (scene detection, embeddings, STT)
-                if self._video_queue is not None:
-                    self._video_queue.put(image_id)
-
-                logger.debug(f'Ingested new video: {path}')
-
-            else:
-                # New image - extract metadata (no lock - file I/O)
-                metadata = extract_image_metadata(
-                    path,
-                    self.max_image_dimension,
-                    self._filename_date_overrides,
-                    self._date_order,
-                )
-                if metadata is None:
-                    logger.warning(f'Failed to extract metadata for new image: {path}')
-                    return
-
-                # DESIGN: Backend generates image IDs because images are discovered via folder
-                # scanning, which frontend cannot pre-generate IDs for (see design-audit.md 1.11)
-                image_id = str(uuid.uuid4())
-
-                # Check if this file was placed by ImportWorker (has an original
-                # import name that may differ from the on-disk basename due to
-                # collision renaming).
-                path_str_canon = str(canonicalise_path(path))
-                with self._import_names_lock:
-                    import_name = self._import_names.pop(path_str_canon, None)
-
-                # Insert new record
-                create_image(
-                    conn,
-                    image_id=image_id,
-                    path=metadata.path,
-                    size=metadata.size,
-                    width=metadata.width,
-                    height=metadata.height,
-                    timestamp=metadata.timestamp,
-                    timestamp_confidence=metadata.timestamp_confidence,
-                    checksum=metadata.checksum,
-                    perceptual_hash=metadata.perceptual_hash,
-                    laplacian_var=metadata.laplacian_var,
-                    lossless=metadata.lossless,
-                    mtime=metadata.mtime,
-                    exif_data=metadata.exif_data,
-                    import_name=import_name,
-                )
-
-                # Add to checksum cache
-                if metadata.checksum:
-                    with self._checksum_cache_lock:
-                        self._checksum_cache[image_id] = metadata.checksum
-
-                # Generate thumbnail for new image
-                if metadata.checksum:
-                    self._generate_thumbnails(path, metadata.checksum)
-
-                # Queue for embedding and NIMA scoring
-                self.embedding_queue.put(image_id)
-                if self._nima_queue is not None:
-                    self._nima_queue.put(image_id)
-                logger.debug(f'Ingested new image: {path}')
-
-
 # =============================================================================
-# EMBEDDING THREAD (OpenCLIP)
+# OpenCLIP MODEL
 # =============================================================================
 
 
@@ -2952,1641 +2286,6 @@ def parse_semantic_query(query: str) -> tuple[list[str], list[str]]:
             positive_parts.append(token)
 
     return positive_parts, negative_parts
-
-
-class EmbeddingThread(threading.Thread):
-    """Background thread for computing image embeddings.
-
-    Processes image IDs from the embedding queue in batches, computes
-    OpenCLIP embeddings, and stores them in the database.
-
-    Attributes:
-        conn: Database connection.
-        embedding_queue: Queue of image IDs to process.
-        ingestion_thread: Reference to ingestion thread (to check if idle).
-        stop_event: Event to signal thread shutdown.
-        config: Configuration object.
-        clip_model: OpenCLIP model wrapper.
-        on_complete: Optional callback when all processing is done.
-    """
-
-    def __init__(
-        self,
-        conn: sqlite3.Connection,
-        embedding_queue: queue.Queue[str],
-        ingestion_thread: IngestionThread,
-        stop_event: threading.Event,
-        db_lock: threading.RLock,
-        config: Config | None = None,
-        data_dir: Path | str = '.',
-        on_complete: callable | None = None,
-    ):
-        """Initialise the embedding thread.
-
-        Args:
-            conn: Database connection (must be created with check_same_thread=False).
-            embedding_queue: Queue of image IDs to process.
-            ingestion_thread: Reference to ingestion thread (to check if idle).
-            stop_event: Event to signal thread should stop.
-            db_lock: Shared lock for database access (from ImageDatabase).
-            config: Configuration object. Uses defaults if None.
-            data_dir: Directory containing user data (for LAION aesthetic head).
-            on_complete: Optional callback function called when both queues
-                are empty. Used to trigger duplicate group computation.
-        """
-        super().__init__(name='EmbeddingThread', daemon=True)
-        self.conn = conn
-        self.embedding_queue = embedding_queue
-        self.ingestion_thread = ingestion_thread
-        self.stop_event = stop_event
-        self._db_lock = db_lock  # Shared lock from ImageDatabase
-        self.config = config or get_default_config()
-        self._data_dir = Path(data_dir)
-        self.on_complete = on_complete
-
-        self._clip_model: OpenCLIPModel | None = None
-        self._processed_count = 0
-        self._error_count = 0
-        self._completion_triggered = False
-        self._on_complete_finished = False  # Set after on_complete callback returns
-
-        # LAION aesthetic head weights (loaded lazily on first use).
-        # Protected by _laion_lock because both the main thread (backfill)
-        # and this thread (_process_batch) may call _load_laion_head().
-        self._laion_lock = threading.Lock()
-        self._laion_weight: np.ndarray | None = None
-        self._laion_bias: float | None = None
-        self._laion_loaded = False  # Track whether we've attempted loading
-
-    @property
-    def clip_model(self) -> OpenCLIPModel:
-        """Get the OpenCLIP model (lazy loaded)."""
-        if self._clip_model is None:
-            self._clip_model = OpenCLIPModel(
-                model_name=self.config.openclip_model,
-                pretrained=self.config.openclip_pretrained,
-                max_dimension=self.config.max_image_dimension,
-            )
-        return self._clip_model
-
-    def _load_laion_head(self) -> None:
-        """Load the LAION aesthetic predictor head weights.
-
-        The aesthetic head is a nn.Linear(embed_dim, 1) checkpoint that scores
-        image quality via dot product with the L2-normalised CLIP embedding.
-        Loaded lazily on first use — either from the main thread (backfill at
-        startup) or from this thread (_process_batch).
-
-        Thread-safe: guarded by _laion_lock so concurrent callers from different
-        threads don't double-load or see partially-initialised state.
-
-        Sets self._laion_weight (1D numpy array) and self._laion_bias (float),
-        or leaves them as None if the checkpoint is unavailable or incompatible.
-        """
-        # Fast path: already loaded (no lock needed for a boolean read under GIL,
-        # but the lock ensures we see the final weight/bias values)
-        if self._laion_loaded:
-            return
-
-        with self._laion_lock:
-            # Double-check inside lock (another thread may have loaded while we waited)
-            if self._laion_loaded:
-                return
-            self._laion_loaded = True
-
-            head_path = self._data_dir / '.laion-aesthetic-head.pth'
-            if not head_path.exists():
-                logger.warning(
-                    'LAION aesthetic head not found — aesthetic scoring disabled. '
-                    'Run "python download_models.py" to download it.'
-                )
-                return
-
-            try:
-                import torch
-
-                state_dict = torch.load(str(head_path), map_location='cpu', weights_only=True)
-
-                weight = state_dict['weight'].numpy().flatten()  # shape: (embed_dim,)
-                bias = float(state_dict['bias'].item())
-
-                # Validate dimension matches the CLIP model's output
-                embed_dim = self.clip_model.model.visual.output_dim
-                if len(weight) != embed_dim:
-                    logger.warning(
-                        f'LAION head dimension mismatch: head has {len(weight)}, '
-                        f'CLIP model has {embed_dim}. Aesthetic scoring disabled.'
-                    )
-                    return
-
-                self._laion_weight = weight
-                self._laion_bias = bias
-                logger.info(f'LAION aesthetic head loaded ({len(weight)}D)')
-            except Exception as e:
-                logger.warning(f'Failed to load LAION aesthetic head: {e}')
-
-    @property
-    def processed_count(self) -> int:
-        """Number of images successfully processed."""
-        return self._processed_count
-
-    @property
-    def error_count(self) -> int:
-        """Number of images that failed processing."""
-        return self._error_count
-
-    def run(self) -> None:
-        """Main thread loop - process images in batches from the queue."""
-        logger.info('Image embedding thread started')
-
-        # Progress logging state
-        last_progress_time = time.time()
-        progress_interval = 5.0  # Log every 5 seconds
-
-        while not self.stop_event.is_set():
-            try:
-                # Collect a batch of image IDs
-                batch_ids: list[str] = []
-                batch_paths: list[Path] = []
-
-                # Try to fill batch up to configured size
-                while len(batch_ids) < self.config.embedding_batch_size:
-                    try:
-                        # Short timeout to allow checking stop_event
-                        image_id = self.embedding_queue.get(timeout=0.1)
-                    except queue.Empty:
-                        break
-
-                    # Get image path from database
-                    with self._db_lock:
-                        image = get_image(self.conn, image_id)
-                    if image is None:
-                        logger.warning(f'Image not found for image embedding: {image_id}')
-                        self.embedding_queue.task_done()
-                        continue
-
-                    path = Path(image['path'])
-                    if not path.exists():
-                        logger.warning(f'Image file not found for image embedding: {path}')
-                        self.embedding_queue.task_done()
-                        continue
-
-                    batch_ids.append(image_id)
-                    batch_paths.append(path)
-
-                # Process batch if we have any
-                if batch_ids:
-                    self._process_batch(batch_ids, batch_paths)
-                    if self._completion_triggered or self._on_complete_finished:
-                        logger.debug(
-                            'EmbeddingThread: resetting completion flags '
-                            f'(was triggered={self._completion_triggered}, '
-                            f'on_complete_finished={self._on_complete_finished})'
-                        )
-                    self._completion_triggered = False  # Reset completion flag
-                    # Reset so FaceDetectionThread waits for this cycle's
-                    # callback rather than seeing a stale True from a
-                    # previous (possibly spurious) completion.
-                    self._on_complete_finished = False
-                    time.sleep(0.01)  # Yield GIL briefly for Flask request handling
-
-                    # Periodic progress logging
-                    now = time.time()
-                    if now - last_progress_time >= progress_interval:
-                        remaining = self.embedding_queue.qsize()
-                        if remaining > 0 or self._processed_count > 0:
-                            logger.info(
-                                f'Image embedding progress: {self._processed_count} done, {remaining} remaining'
-                            )
-                        last_progress_time = now
-                else:
-                    # Queue is empty - check if we should trigger completion
-                    self._check_completion()
-
-            except Exception as e:
-                logger.error(f'Unexpected error in image embedding thread: {e}')
-
-        logger.info('Image embedding thread stopped')
-
-    def _process_batch(self, image_ids: list[str], paths: list[Path]) -> None:
-        """Process a batch of images.
-
-        Computes CLIP embeddings and optionally LAION aesthetic scores
-        (dot product of embedding with aesthetic head weights).
-
-        Args:
-            image_ids: List of image IDs.
-            paths: List of corresponding file paths.
-        """
-        logger.debug(f'Processing embedding batch of {len(paths)} images')
-
-        # Ensure LAION head is loaded (lazy, only attempts once)
-        self._load_laion_head()
-
-        # Encode batch
-        results = self.clip_model.encode_images_batch(paths)
-
-        # Collect successful embeddings for batch commit
-        updates = []
-        for (_idx, embedding), image_id in zip(results, image_ids, strict=True):
-            try:
-                if embedding is not None:
-                    embedding_bytes = embedding.astype(np.float32).tobytes()
-                    # Compute LAION aesthetic score (dot product on L2-normalised embedding)
-                    aesthetic = None
-                    if self._laion_weight is not None:
-                        aesthetic = float(embedding @ self._laion_weight + self._laion_bias)
-                    updates.append((embedding_bytes, aesthetic, datetime.now().isoformat(), image_id))
-                    self._processed_count += 1
-                else:
-                    self._error_count += 1
-            except Exception as e:
-                logger.error(f'Failed to store image embedding for {image_id}: {e}')
-                self._error_count += 1
-            finally:
-                self.embedding_queue.task_done()
-
-        # Batch commit all updates at once (single fsync instead of per-row)
-        if updates:
-            with self._db_lock:
-                self.conn.executemany(
-                    'UPDATE images SET embedding = ?, aesthetic_laion = ?, updated_at = ? WHERE id = ?', updates
-                )
-                self.conn.commit()
-
-    def _check_completion(self) -> None:
-        """Check if all processing is complete and trigger completion callback.
-
-        Completion requires:
-        - IngestionThread has processed at least one file (prevents spurious
-          trigger at startup when all queues are momentarily empty)
-        - IngestionThread is idle (queue empty AND no pending futures)
-        - EmbeddingThread's queue is empty
-        """
-        if self._completion_triggered:
-            return
-
-        # Don't fire until ingestion has actually processed files — at startup
-        # all queues are empty and is_idle is True before work is queued.
-        if not self.ingestion_thread.has_started_processing:
-            return
-
-        ingestion_idle = self.ingestion_thread.is_idle
-        embedding_empty = self.embedding_queue.empty()
-
-        if not ingestion_idle or not embedding_empty:
-            logger.debug(
-                f'EmbeddingThread completion check: not ready '
-                f'(ingestion_idle={ingestion_idle}, '
-                f'embedding_empty={embedding_empty}, '
-                f'embedding_qsize={self.embedding_queue.qsize()})'
-            )
-            return
-
-        self._completion_triggered = True
-        logger.info(
-            f'All embedding processing complete — triggering callback '
-            f'(ingestion processed={self.ingestion_thread.processed_count})'
-        )
-
-        if self.on_complete:
-            try:
-                self.on_complete()
-            except Exception as e:
-                logger.error(f'Error in completion callback: {e}')
-                # Rollback any uncommitted transaction to release the WAL
-                # write lock — otherwise the stuck lock makes all subsequent
-                # DB operations fail with "database is locked".
-                try:
-                    self.conn.rollback()
-                except Exception:
-                    pass
-
-        # Signal that callback has finished — downstream threads (e.g.
-        # FaceDetectionThread) must wait for this before checking their own
-        # completion, because the callback may populate their work queues.
-        self._on_complete_finished = True
-        logger.debug('EmbeddingThread: _on_complete_finished set to True')
-
-
-class FaceDetectionThread(threading.Thread):
-    """Background thread for detecting faces in images.
-
-    Processes image IDs from the face detection queue, detects faces using
-    MTCNN, computes face embeddings, and stores them in the database.
-    Also performs auto-recognition against known faces.
-
-    Attributes:
-        conn: Database connection.
-        face_queue: Queue of image IDs to process.
-        embedding_thread: Reference to embedding thread (to check if idle).
-        stop_event: Event to signal thread shutdown.
-        config: Configuration object.
-        on_complete: Optional callback when all processing is done.
-    """
-
-    def __init__(
-        self,
-        conn: sqlite3.Connection,
-        face_queue: queue.Queue[str],
-        embedding_thread: EmbeddingThread,
-        ingestion_thread: IngestionThread,
-        stop_event: threading.Event,
-        db_lock: threading.RLock,
-        config: Config | None = None,
-        thumbnail_dir: Path | str = '.thumbnails',
-        on_complete: callable | None = None,
-    ):
-        """Initialise the face detection thread.
-
-        Args:
-            conn: Database connection (must be created with check_same_thread=False).
-            face_queue: Queue of image IDs to process.
-            embedding_thread: Reference to embedding thread (to check if idle).
-            ingestion_thread: Reference to ingestion thread (to check if idle).
-            stop_event: Event to signal thread should stop.
-            db_lock: Shared lock for database access (from ImageDatabase).
-            config: Configuration object. Uses defaults if None.
-            thumbnail_dir: Path to thumbnail cache directory.
-            on_complete: Optional callback function called when processing complete.
-        """
-        super().__init__(name='FaceDetectionThread', daemon=True)
-        self.conn = conn
-        self.face_queue = face_queue
-        self.embedding_thread = embedding_thread
-        self.ingestion_thread = ingestion_thread
-        self.stop_event = stop_event
-        self._db_lock = db_lock
-        self.config = config or get_default_config()
-        self.thumbnail_dir = Path(thumbnail_dir)
-        self.on_complete = on_complete
-
-        self._face_detector: FaceDetector | None = None
-        self._processed_count = 0
-        self._faces_detected_count = 0
-        self._error_count = 0
-        self._completion_triggered = False
-
-    @property
-    def face_detector(self) -> FaceDetector:
-        """Get the face detector (lazy loaded)."""
-        if self._face_detector is None:
-            self._face_detector = FaceDetector(
-                min_confidence=self.config.face_detection_min_confidence,
-                min_face_size=self.config.face_detection_min_size,
-            )
-        return self._face_detector
-
-    @property
-    def processed_count(self) -> int:
-        """Number of images successfully processed."""
-        return self._processed_count
-
-    @property
-    def faces_detected_count(self) -> int:
-        """Total number of faces detected."""
-        return self._faces_detected_count
-
-    @property
-    def error_count(self) -> int:
-        """Number of images that failed processing."""
-        return self._error_count
-
-    # Batch size for face detection - now configured via config.face_detection_batch_size
-
-    def run(self) -> None:
-        """Main thread loop - process images from the queue in batches.
-
-        Uses prefetching: while the GPU processes batch N, the CPU loads
-        batch N+1's images in parallel for better throughput.
-        """
-        logger.info('Face detection thread started')
-
-        # Don't do anything if face detection is disabled
-        if not self.config.face_detection_enabled:
-            logger.info('Face detection disabled in config - thread idle')
-            while not self.stop_event.is_set():
-                # Just check for completion
-                time.sleep(1.0)
-                self._check_completion()
-            logger.info('Face detection thread stopped (was disabled)')
-            return
-
-        # Progress logging state
-        last_progress_time = time.time()
-        progress_interval = 5.0
-        first_batch = True
-
-        # Prefetch state
-        prefetch_executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix='face-prefetch')
-        prefetch_future: Future | None = None
-        prefetch_batch_ids: list[str] = []
-
-        def collect_batch() -> list[str]:
-            """Collect up to batch_size image IDs from the queue."""
-            batch = []
-            try:
-                # Get first image (blocking with timeout)
-                image_id = self.face_queue.get(timeout=0.5)
-                batch.append(image_id)
-
-                # Try to fill the batch (non-blocking)
-                while len(batch) < self.config.face_detection_batch_size:
-                    try:
-                        image_id = self.face_queue.get_nowait()
-                        batch.append(image_id)
-                    except queue.Empty:
-                        break
-            except queue.Empty:
-                pass
-            return batch
-
-        def resolve_and_preload(batch_ids: list[str]) -> tuple[dict, dict, list]:
-            """Resolve image IDs to paths and preload images (runs in prefetch thread)."""
-            id_to_path: dict[str, Path] = {}
-            path_to_id: dict[Path, str] = {}
-
-            for image_id in batch_ids:
-                # Check for shutdown during path resolution
-                if self.stop_event.is_set():
-                    break
-
-                with self._db_lock:
-                    image = get_image(self.conn, image_id)
-                if image is None:
-                    logger.warning(f'Image not found for face detection: {image_id}')
-                    continue
-
-                path = Path(image['path'])
-                if not path.exists():
-                    logger.warning(f'Image file not found for face detection: {path}')
-                    continue
-
-                # Skip if already processed
-                with self._db_lock:
-                    if has_faces_detected(self.conn, image_id):
-                        logger.debug(f'Skipping already-processed image: {path.name}')
-                        self._processed_count += 1
-                        continue
-
-                id_to_path[image_id] = path
-                path_to_id[path] = image_id
-
-            # Preload images in parallel (CPU-bound) - skip if shutting down
-            if id_to_path and not self.stop_event.is_set():
-                paths = list(id_to_path.values())
-                loaded_images = self.face_detector.preload_images_batch(paths, num_workers=4)
-            else:
-                loaded_images = []
-
-            return id_to_path, path_to_id, loaded_images
-
-        try:
-            while not self.stop_event.is_set():
-                batch_ids = []
-                try:
-                    # If we have a prefetch ready, use it; otherwise collect new batch
-                    if prefetch_future is not None:
-                        # Wait for prefetch to complete
-                        id_to_path, path_to_id, loaded_images = prefetch_future.result()
-                        batch_ids = prefetch_batch_ids
-                        prefetch_future = None
-                        prefetch_batch_ids = []
-                    else:
-                        # No prefetch - collect and prepare synchronously
-                        batch_ids = collect_batch()
-                        if not batch_ids:
-                            self._check_completion()
-                            continue
-
-                        # Log before first batch (model loading happens here)
-                        if first_batch:
-                            logger.info('Loading face detection models (MTCNN + InceptionResnetV1)...')
-                            first_batch = False
-
-                        id_to_path, path_to_id, loaded_images = resolve_and_preload(batch_ids)
-
-                    # Start prefetching next batch while we process current one
-                    # (but only if we're not shutting down)
-                    if not self.stop_event.is_set():
-                        next_batch_ids = collect_batch()
-                        if next_batch_ids:
-                            prefetch_batch_ids = next_batch_ids
-                            prefetch_future = prefetch_executor.submit(resolve_and_preload, next_batch_ids)
-
-                    # Process the current batch (GPU work + DB writes)
-                    if loaded_images:
-                        self._process_preloaded_batch(id_to_path, path_to_id, loaded_images)
-                    self._completion_triggered = False
-                    time.sleep(0.01)  # Yield GIL briefly for Flask request handling
-
-                    # Periodic progress logging
-                    now = time.time()
-                    if now - last_progress_time >= progress_interval:
-                        remaining = self.face_queue.qsize()
-                        if remaining > 0 or self._processed_count > 0:
-                            logger.info(
-                                f'Face detection progress: {self._processed_count} images, '
-                                f'{self._faces_detected_count} faces, {remaining} remaining'
-                            )
-                        last_progress_time = now
-
-                except Exception as e:
-                    logger.error(f'Error in face detection thread: {e}')
-                    # Release any lingering write transaction so the shared
-                    # connection doesn't hold the WAL lock indefinitely.
-                    try:
-                        self.conn.rollback()
-                    except Exception:
-                        pass
-                    # If the prefetch future failed, its batch_ids were never
-                    # transferred to batch_ids.  Claim them now so the finally
-                    # block calls task_done() for them and clear the failed
-                    # future so we don't retry it on the next loop iteration.
-                    if prefetch_future is not None:
-                        batch_ids = prefetch_batch_ids
-                        prefetch_future = None
-                        prefetch_batch_ids = []
-                    self._error_count += len(batch_ids)
-                finally:
-                    # Always mark items as done, even on error or shutdown
-                    for _ in batch_ids:
-                        self.face_queue.task_done()
-        finally:
-            # Clean up any pending prefetch
-            if prefetch_future is not None:
-                try:
-                    # Wait for prefetch to complete (it checks stop_event internally)
-                    prefetch_future.result(timeout=5.0)
-                except Exception:
-                    pass  # Ignore errors during shutdown
-            if prefetch_batch_ids:
-                for _ in prefetch_batch_ids:
-                    self.face_queue.task_done()
-            prefetch_executor.shutdown(wait=True)
-
-        logger.info('Face detection thread stopped')
-
-    def _process_batch(self, image_ids: list[str]) -> None:
-        """Process a batch of images for face detection.
-
-        Legacy method - loads images synchronously then processes.
-        For better throughput, use the prefetching approach in run().
-
-        Args:
-            image_ids: List of image IDs to process.
-        """
-        # Build mapping of image_id -> path and filter out invalid images
-        id_to_path: dict[str, Path] = {}
-        path_to_id: dict[Path, str] = {}
-
-        for image_id in image_ids:
-            with self._db_lock:
-                image = get_image(self.conn, image_id)
-            if image is None:
-                logger.warning(f'Image not found for face detection: {image_id}')
-                continue
-
-            path = Path(image['path'])
-            if not path.exists():
-                logger.warning(f'Image file not found for face detection: {path}')
-                continue
-
-            # Skip if already processed
-            with self._db_lock:
-                if has_faces_detected(self.conn, image_id):
-                    logger.debug(f'Skipping already-processed image: {path.name}')
-                    self._processed_count += 1
-                    continue
-
-            id_to_path[image_id] = path
-            path_to_id[path] = image_id
-
-        if not id_to_path:
-            return
-
-        # Run batched face detection (pass stop_event for graceful interruption)
-        paths = list(id_to_path.values())
-        loaded_images = self.face_detector.preload_images_batch(paths, num_workers=4)
-        self._process_preloaded_batch(id_to_path, path_to_id, loaded_images)
-
-    def _process_preloaded_batch(
-        self,
-        id_to_path: dict[str, Path],
-        path_to_id: dict[Path, str],
-        loaded_images: list,
-    ) -> None:
-        """Process pre-loaded images for face detection.
-
-        This is the GPU phase - takes images that were already loaded and
-        runs MTCNN detection + embedding generation.
-
-        Args:
-            id_to_path: Mapping of image_id to file path.
-            path_to_id: Mapping of file path to image_id.
-            loaded_images: List of (path, PIL.Image, scale) tuples from preload.
-        """
-        if not loaded_images:
-            return
-
-        # Run GPU face detection on pre-loaded images
-        results = self.face_detector.detect_faces_from_preloaded(loaded_images, stop_event=self.stop_event)
-
-        # Get known face embeddings, per-person thresholds, and ignored
-        # person IDs for auto-recognition.  Ignored people (name == '-')
-        # are only matched as a fallback after all named people are tried.
-        with self._db_lock:
-            known_embeddings = get_all_known_face_embeddings(self.conn)
-            cursor = self.conn.execute('SELECT id, name, recognition_threshold FROM people')
-            per_person_thresholds: dict[str, float | None] = {}
-            ignored_person_ids: set[str] = set()
-            for row in cursor.fetchall():
-                per_person_thresholds[row['id']] = row['recognition_threshold']
-                if row['name'] == '-':
-                    ignored_person_ids.add(row['id'])
-
-        # Track auto-match statistics for batch summary
-        batch_faces_total = 0
-        batch_matched = 0
-        batch_best_unmatched = -1.0  # Highest similarity that didn't meet threshold
-
-        # Process results for each image
-        for path, detected_faces in results.items():
-            if path not in path_to_id:
-                logger.error(f'Path {path} not found in path_to_id mapping - skipping')
-                continue
-            image_id = path_to_id[path]
-
-            if not detected_faces:
-                # Mark image as processed with no faces found
-                with self._db_lock:
-                    mark_no_faces_detected(self.conn, image_id)
-                self._processed_count += 1
-                continue
-
-            for face in detected_faces:
-                batch_faces_total += 1
-
-                # Try to auto-match against known faces (respects per-person thresholds)
-                person_id = None
-                match = find_best_match(
-                    face.embedding,
-                    known_embeddings,
-                    threshold=self.config.face_recognition_threshold,
-                    person_thresholds=per_person_thresholds,
-                    ignored_person_ids=ignored_person_ids,
-                )
-                if match:
-                    _, person_id, similarity = match
-                    batch_matched += 1
-                    logger.debug(
-                        f'Auto-matched face in {path.name} to person {person_id} (similarity: {similarity:.3f})'
-                    )
-                elif known_embeddings:
-                    # Track best unmatched similarity for diagnostics
-                    emb = face.embedding
-                    emb_norm = np.linalg.norm(emb)
-                    if emb_norm > 0:
-                        if not np.isclose(emb_norm, 1.0, atol=0.01):
-                            emb = emb / emb_norm
-                        for _, _, known_emb in known_embeddings:
-                            sim = float(np.dot(emb, known_emb))
-                            if sim > batch_best_unmatched:
-                                batch_best_unmatched = sim
-
-                # Generate face thumbnail first (needed for semantic embedding)
-                face_id = str(uuid.uuid4())
-                thumb_path = get_face_thumbnail_path(face_id, self.thumbnail_dir)
-                generate_face_thumbnail(
-                    path,
-                    thumb_path,
-                    box_x=face.box_x,
-                    box_y=face.box_y,
-                    box_w=face.box_w,
-                    box_h=face.box_h,
-                    size=200,
-                    quality=self.config.thumbnail_quality,
-                )
-
-                # Generate semantic embedding from face thumbnail using CLIP
-                semantic_embedding = None
-                if thumb_path.exists():
-                    semantic_embedding = self.embedding_thread.clip_model.encode_image(thumb_path)
-
-                # Create face record with semantic embedding
-                with self._db_lock:
-                    create_face(
-                        self.conn,
-                        image_id=image_id,
-                        box_x=face.box_x,
-                        box_y=face.box_y,
-                        box_w=face.box_w,
-                        box_h=face.box_h,
-                        embedding=face.embedding,
-                        confidence=face.confidence,
-                        person_id=person_id,
-                        face_id=face_id,
-                        semantic_embedding=semantic_embedding,
-                    )
-
-                self._faces_detected_count += 1
-
-            self._processed_count += 1
-            logger.debug(f'Detected {len(detected_faces)} faces in {path.name}')
-
-        # Log batch auto-match summary at INFO level for diagnostics
-        if batch_faces_total > 0:
-            threshold = self.config.face_recognition_threshold
-            parts = [
-                f'{batch_faces_total} faces detected',
-                f'{len(known_embeddings)} known references',
-                f'{batch_matched} auto-matched',
-            ]
-            if batch_faces_total > batch_matched and batch_best_unmatched > -1.0:
-                parts.append(f'best unmatched similarity: {batch_best_unmatched:.3f}/{threshold:.2f}')
-            logger.info(f'Face auto-match: {", ".join(parts)}')
-
-    def _check_completion(self) -> None:
-        """Check if all processing is complete and trigger completion callback.
-
-        Completion requires:
-        - IngestionThread has processed at least one file (prevents spurious
-          trigger at startup when all queues are momentarily empty)
-        - EmbeddingThread's on_complete callback has finished (which
-          populates the face queue — must check BEFORE testing queue empty)
-        - IngestionThread is idle
-        - EmbeddingThread's queue is empty
-        - FaceDetectionThread's queue is empty
-        """
-        if self._completion_triggered:
-            return
-
-        # Don't fire until ingestion has actually processed files.
-        if not self.ingestion_thread.has_started_processing:
-            return
-
-        # The embedding thread's on_complete callback populates the face
-        # queue.  We must not check face_queue.empty() until that callback
-        # has returned, otherwise we race and fire completion before the
-        # face queue is populated.
-        on_complete_finished = self.embedding_thread._on_complete_finished
-        if not on_complete_finished:
-            return
-
-        # Check all threads are idle
-        embedding_idle = self.embedding_thread.embedding_queue.empty()
-        ingestion_idle = self.ingestion_thread.is_idle
-        face_queue_empty = self.face_queue.empty()
-
-        if not (ingestion_idle and embedding_idle and face_queue_empty):
-            logger.debug(
-                f'FaceDetectionThread completion check: not ready '
-                f'(ingestion_idle={ingestion_idle}, '
-                f'embedding_idle={embedding_idle}, '
-                f'face_queue_empty={face_queue_empty}, '
-                f'face_qsize={self.face_queue.qsize()}, '
-                f'on_complete_finished={on_complete_finished})'
-            )
-            return
-
-        self._completion_triggered = True
-        logger.info(
-            f'Face detection complete — triggering completion callback '
-            f'(faces_processed={self._processed_count}, '
-            f'faces_detected={self._faces_detected_count})'
-        )
-
-        if self.on_complete:
-            try:
-                self.on_complete()
-            except Exception as e:
-                logger.error(f'Error in face detection completion callback: {e}')
-                # Rollback any uncommitted transaction to release the WAL
-                # write lock — a stuck lock makes the app unable to access
-                # the database for the rest of the session.
-                try:
-                    self.conn.rollback()
-                except Exception:
-                    pass
-
-
-class NimaThread(threading.Thread):
-    """Background thread for NIMA aesthetic scoring.
-
-    Processes image IDs from the NIMA queue, loads 400px thumbnails from
-    disk, scores them with the MobileNetV2-AVA NIMA model, and stores results.
-
-    Runs concurrently with (not chained into) the embedding and face
-    detection pipelines.  GPU memory for MobileNetV2 (~9MB) plus CLIP ViT-B-32
-    (~350MB) plus MTCNN+InceptionResnet (~100MB) totals ~460MB, fitting
-    comfortably on 2GB+ GPUs.  Disable via ``nima_enabled: false`` on
-    machines with limited VRAM.
-
-    The model is loaded lazily on first batch (thread-safe double-checked
-    locking).  If the checkpoint is missing the thread logs a warning and
-    sits idle.
-    """
-
-    def __init__(
-        self,
-        conn: sqlite3.Connection,
-        nima_queue: queue.Queue[str],
-        ingestion_thread: IngestionThread,
-        stop_event: threading.Event,
-        db_lock: threading.RLock,
-        config: Config,
-        data_dir: Path | str = '.',
-        thumbnail_dir: Path | str = '.thumbnails',
-        event_queue: EventQueue | None = None,
-    ):
-        """Initialise the NIMA scoring thread.
-
-        Args:
-            conn: Database connection (check_same_thread=False).
-            nima_queue: Queue of image IDs to score.
-            ingestion_thread: Ingestion thread (for idle checks).
-            stop_event: Event to signal thread should stop.
-            db_lock: Shared lock for database access.
-            config: Application configuration.
-            data_dir: Directory containing the NIMA checkpoint.
-            thumbnail_dir: Directory containing cached thumbnails.
-            event_queue: Optional event queue for completion notifications.
-        """
-        super().__init__(name='NimaThread', daemon=True)
-        self.conn = conn
-        self.nima_queue = nima_queue
-        self.ingestion_thread = ingestion_thread
-        self.stop_event = stop_event
-        self._db_lock = db_lock
-        self.config = config
-        self._data_dir = Path(data_dir)
-        self._thumbnail_dir = Path(thumbnail_dir)
-        self._event_queue = event_queue
-
-        self._model = None
-        self._device: str | None = None
-        self._model_lock = threading.Lock()
-        self._model_loaded = False  # Track whether we've attempted loading
-
-        self._processed_count = 0
-        self._skipped_count = 0  # Images skipped (e.g. missing thumbnails)
-        self._error_count = 0
-        self._completion_triggered = False
-
-    @property
-    def processed_count(self) -> int:
-        """Number of images successfully scored."""
-        return self._processed_count
-
-    def _load_model(self) -> bool:
-        """Lazily load the NIMA model (thread-safe, only attempts once).
-
-        Returns:
-            True if model is available, False otherwise.
-        """
-        if self._model_loaded:
-            return self._model is not None
-
-        with self._model_lock:
-            if self._model_loaded:
-                return self._model is not None
-            self._model_loaded = True
-
-            checkpoint_path = self._data_dir / '.nima-mobilenetv2-ava.pth'
-            if not checkpoint_path.exists():
-                logger.warning(
-                    'NIMA checkpoint not found — aesthetic scoring disabled. '
-                    'Run "python download_models.py" to download it.'
-                )
-                return False
-
-            try:
-                from nima import load_nima_model
-
-                # Priority: CUDA (NVIDIA GPU) > MPS (Apple Silicon) > CPU
-                if torch.cuda.is_available():
-                    device = 'cuda'
-                elif hasattr(torch.backends, 'mps') and torch.backends.mps.is_available():
-                    device = 'mps'
-                else:
-                    device = 'cpu'
-                self._model = load_nima_model(str(checkpoint_path), device=device)
-                self._device = device
-                logger.info(f'NIMA model loaded on {device}')
-                return True
-            except Exception as e:
-                logger.warning(f'Failed to load NIMA model: {e}')
-                return False
-
-    def run(self) -> None:
-        """Main thread loop — score images from the queue."""
-        logger.info('NIMA scoring thread started')
-
-        # Don't do anything if NIMA scoring is disabled
-        if not self.config.nima_enabled:
-            logger.info('NIMA scoring disabled in config — thread idle')
-            while not self.stop_event.is_set():
-                time.sleep(1.0)
-                self._check_completion()
-            logger.info('NIMA scoring thread stopped (was disabled)')
-            return
-
-        batch_size = self.config.nima_batch_size
-        last_progress_time = time.time()
-        progress_interval = 5.0
-
-        while not self.stop_event.is_set():
-            # Collect a batch of image IDs
-            batch_ids: list[str] = []
-            try:
-                # Block briefly for the first item
-                image_id = self.nima_queue.get(timeout=0.1)
-                batch_ids.append(image_id)
-                # Drain up to batch_size - 1 more without blocking
-                while len(batch_ids) < batch_size:
-                    try:
-                        image_id = self.nima_queue.get_nowait()
-                        batch_ids.append(image_id)
-                    except queue.Empty:
-                        break
-            except queue.Empty:
-                # No work available — check completion
-                self._check_completion()
-                continue
-
-            # Process the batch
-            try:
-                self._process_batch(batch_ids)
-            except Exception as e:
-                logger.error(f'Error processing NIMA batch: {e}')
-                self._error_count += len(batch_ids)
-            finally:
-                for _ in batch_ids:
-                    self.nima_queue.task_done()
-
-            # Progress logging
-            now = time.time()
-            if now - last_progress_time >= progress_interval:
-                remaining = self.nima_queue.qsize()
-                logger.info(f'NIMA scoring: {self._processed_count} done, {remaining} remaining')
-                last_progress_time = now
-
-            # Yield GIL briefly to avoid blocking Flask request handling
-            time.sleep(0.01)
-
-        logger.info(f'NIMA scoring thread stopped (scored {self._processed_count}, errors {self._error_count})')
-
-    def _process_batch(self, image_ids: list[str]) -> None:
-        """Score a batch of images using their 400px thumbnails.
-
-        Resolves image IDs to checksums, loads thumbnails from disk,
-        runs NIMA inference, and writes scores to the database.
-
-        Args:
-            image_ids: List of image IDs to score.
-        """
-        # Ensure model is loaded
-        if not self._load_model():
-            return
-
-        # Look up checksums for these image IDs
-        with self._db_lock:
-            placeholders = sql_placeholders(image_ids)
-            cursor = self.conn.execute(f'SELECT id, checksum FROM images WHERE id IN ({placeholders})', image_ids)
-            rows = {row['id']: row['checksum'] for row in cursor.fetchall()}
-
-        # Load 400px thumbnails from disk
-        valid_ids = []
-        pil_images = []
-        for image_id in image_ids:
-            checksum = rows.get(image_id)
-            if not checksum:
-                logger.debug(f'No checksum for image {image_id}, skipping NIMA')
-                continue
-
-            thumb_path = get_thumbnail_cache_path(checksum, 400, thumbnail_dir=self._thumbnail_dir)
-            if not Path(thumb_path).exists():
-                logger.debug(f'No 400px thumbnail for {image_id}, skipping NIMA')
-                continue
-
-            try:
-                img = Image.open(thumb_path).convert('RGB')
-                valid_ids.append(image_id)
-                pil_images.append(img)
-            except Exception as e:
-                logger.warning(f'Failed to load thumbnail for NIMA: {image_id}: {e}')
-
-        skipped = len(image_ids) - len(valid_ids)
-        if skipped > 0:
-            self._skipped_count += skipped
-
-        if not pil_images:
-            return
-
-        # Score the batch — with OOM fallback to single-image processing
-        from nima import score_images_batch
-
-        try:
-            scores = score_images_batch(self._model, pil_images, device=self._device)
-        except (MemoryError, RuntimeError) as e:
-            if not isinstance(e, MemoryError) and 'out of memory' not in str(e).lower():
-                raise
-            logger.warning(
-                f'OOM scoring NIMA batch of {len(pil_images)} images, falling back to single-image processing'
-            )
-            if torch.cuda.is_available():
-                torch.cuda.empty_cache()
-
-            # Process one at a time
-            scores = []
-            for i, img in enumerate(pil_images):
-                try:
-                    single_scores = score_images_batch(self._model, [img], device=self._device)
-                    scores.append(single_scores[0])
-                except (MemoryError, RuntimeError):
-                    logger.error(f'OOM scoring single image {valid_ids[i]}, skipping')
-                    if torch.cuda.is_available():
-                        torch.cuda.empty_cache()
-                    scores.append(None)
-
-            # Filter out failed images
-            paired = [(s, vid) for s, vid in zip(scores, valid_ids, strict=True) if s is not None]
-            skipped_oom = len(valid_ids) - len(paired)
-            if skipped_oom:
-                self._error_count += skipped_oom
-            if not paired:
-                return
-            scores, valid_ids = zip(*paired, strict=True)
-            scores = list(scores)
-            valid_ids = list(valid_ids)
-
-        # Batch commit to database
-        now = datetime.now().isoformat()
-        updates = [(score, now, vid) for score, vid in zip(scores, valid_ids, strict=True)]
-
-        with self._db_lock:
-            self.conn.executemany('UPDATE images SET aesthetic_nima = ?, updated_at = ? WHERE id = ?', updates)
-            self.conn.commit()
-
-        self._processed_count += len(updates)
-
-    def _check_completion(self) -> None:
-        """Check if all scoring is complete and emit completion event.
-
-        Completion requires:
-        - IngestionThread is idle (no more images coming in)
-        - NIMA queue is empty
-        - At least one image has been dequeued (avoids spurious events on
-          startup when the queue hasn't been populated yet)
-        """
-        if self._completion_triggered:
-            return
-
-        total_dequeued = self._processed_count + self._skipped_count + self._error_count
-        if total_dequeued > 0 and self.ingestion_thread.is_idle and self.nima_queue.empty():
-            self._completion_triggered = True
-            parts = []
-            if self._processed_count:
-                parts.append(f'scored {self._processed_count}')
-            if self._skipped_count:
-                parts.append(f'skipped {self._skipped_count} (no thumbnail)')
-            if self._error_count:
-                parts.append(f'{self._error_count} errors')
-            logger.info(f'NIMA scoring complete — {", ".join(parts)}')
-
-            if self._event_queue:
-                self._event_queue.emit(
-                    EVENT_NIMA_COMPLETE,
-                    {
-                        'scored_count': self._processed_count,
-                    },
-                )
-
-
-# =============================================================================
-# VIDEO PROCESSING THREAD
-# =============================================================================
-
-
-class VideoProcessingThread(threading.Thread):
-    """Background thread for video scene detection, frame embedding, and STT.
-
-    Runs concurrently with EmbeddingThread (like NimaThread — not chained).
-    Delegates heavy work to ``video.py`` and ``stt.py``.
-
-    Per-video pipeline:
-        1. Scene detection → insert ``scenes`` rows
-        2. Extract ONE keyframe per scene at midpoint
-        3. Generate 200px + 400px scene thumbnails
-        4. OpenCLIP-embed each keyframe → store in ``scenes.embedding``
-        5. Set ``preferred_scene_id`` = scene 0, ``images.embedding`` = preferred embedding
-        6. STT transcription (whole-clip-then-chop by scene boundaries)
-    """
-
-    def __init__(
-        self,
-        conn: sqlite3.Connection,
-        video_queue: queue.Queue[str],
-        ingestion_thread: IngestionThread,
-        stop_event: threading.Event,
-        db_lock: threading.RLock,
-        config: Config,
-        data_dir: Path | str = '.',
-        event_queue: EventQueue | None = None,
-        clip_model: OpenCLIPModel | None = None,
-        transcribe_queue: queue.Queue[str] | None = None,
-    ):
-        super().__init__(name='VideoProcessingThread', daemon=True)
-        self.conn = conn
-        self.video_queue = video_queue
-        self._transcribe_queue = transcribe_queue or queue.Queue()
-        self.ingestion_thread = ingestion_thread
-        self.stop_event = stop_event
-        self._db_lock = db_lock
-        self.config = config
-        self._data_dir = Path(data_dir)
-        self._event_queue = event_queue
-        self._clip_model = clip_model  # Shared with EmbeddingThread (A6)
-        self._stt_backend = None
-        self._stt_loaded = False
-        self._processed_count = 0
-        self._error_count = 0
-        self._transcribe_count = 0
-        self._completion_triggered = False
-        # Progress tracking for status endpoint — read by get_processing_status()
-        self._current_video: dict[str, Any] | None = None
-
-    def run(self) -> None:
-        """Main thread loop — process videos from the queue."""
-        logger.info('Video processing thread started')
-
-        while not self.stop_event.is_set():
-            try:
-                image_id = self.video_queue.get(timeout=0.5)
-            except queue.Empty:
-                self._check_completion()
-                continue
-
-            try:
-                self._process_video(image_id)
-                self._processed_count += 1
-                self._completion_triggered = False
-            except Exception as e:
-                logger.error(f'Error processing video {image_id}: {e}')
-                # Rollback any uncommitted transaction to release the WAL
-                # write lock — otherwise the stuck lock makes all subsequent
-                # DB operations fail with "database is locked".
-                try:
-                    self.conn.rollback()
-                except Exception:
-                    pass
-                self._error_count += 1
-            finally:
-                self._current_video = None
-                self.video_queue.task_done()
-
-            time.sleep(0.01)  # Yield GIL
-
-        logger.info('Video processing thread stopped')
-
-    def _check_completion(self) -> None:
-        """Check if all video processing is done and emit event.
-
-        After the main video queue drains, processes any pending
-        transcribe-only items before emitting the completion event.
-        """
-        if self._completion_triggered:
-            return
-        if not self.ingestion_thread.has_started_processing:
-            return
-        if not self.ingestion_thread.is_idle:
-            return
-        if not self.video_queue.empty():
-            return
-
-        # Drain transcribe-only queue after full video processing finishes.
-        # This avoids DB lock contention — transcription runs sequentially
-        # after the heavier video pipeline is done.
-        while not self._transcribe_queue.empty() and not self.stop_event.is_set():
-            try:
-                image_id = self._transcribe_queue.get_nowait()
-            except queue.Empty:
-                break
-            try:
-                self._transcribe_video(image_id)
-                self._transcribe_count += 1
-            except Exception as e:
-                logger.error(f'Error transcribing video {image_id}: {e}')
-                try:
-                    self.conn.rollback()
-                except Exception:
-                    pass
-                self._error_count += 1
-            finally:
-                self._current_video = None
-                self._transcribe_queue.task_done()
-
-        # Don't trigger completion if there are still transcribe items
-        if not self._transcribe_queue.empty():
-            return
-
-        self._completion_triggered = True
-        total_processed = self._processed_count + self._transcribe_count
-        if total_processed > 0 or self._error_count > 0:
-            parts = []
-            if self._processed_count:
-                parts.append(f'{self._processed_count} processed')
-            if self._transcribe_count:
-                parts.append(f'{self._transcribe_count} transcribed')
-            if self._error_count:
-                parts.append(f'{self._error_count} errors')
-            logger.info(f'Video processing complete — {", ".join(parts)}')
-
-            if self._event_queue:
-                self._event_queue.emit(
-                    EVENT_VIDEO_PROCESSED,
-                    {'processed_count': total_processed},
-                )
-
-    def _transcribe_video(self, image_id: str) -> None:
-        """Run STT transcription only for a previously-processed video.
-
-        Loads existing scene boundaries from the DB and calls
-        ``_transcribe_scenes()`` without re-running scene detection,
-        keyframe extraction, or embedding generation.
-
-        Args:
-            image_id: The video's image ID (must already have scenes).
-        """
-        with self._db_lock:
-            row = self.conn.execute(
-                'SELECT path, basename FROM images WHERE id = ? AND deleted = 0',
-                (image_id,),
-            ).fetchone()
-            if not row:
-                logger.warning(f'Transcribe-only: image {image_id} not found or deleted, skipping')
-                return
-
-            scene_rows = self.conn.execute(
-                'SELECT id, start_time, end_time FROM scenes WHERE image_id = ? ORDER BY scene_index',
-                (image_id,),
-            ).fetchall()
-
-        if not scene_rows:
-            logger.warning(f'Transcribe-only: {row["basename"]} has no scenes, skipping (needs full processing)')
-            return
-
-        video_path = Path(row['path'])
-        if not video_path.exists():
-            logger.warning(f'Transcribe-only: {row["basename"]} file missing, skipping')
-            return
-
-        scenes = [(r['start_time'], r['end_time']) for r in scene_rows]
-        scene_ids = [r['id'] for r in scene_rows]
-
-        self._current_video = {
-            'basename': row['basename'],
-            'step': 'transcribing',
-            'step_index': 6,
-            'total_steps': 6,
-        }
-
-        logger.info(f'Transcribing {row["basename"]} ({len(scenes)} scenes)')
-        clip = self._get_clip_model()
-        self._transcribe_scenes(image_id, video_path, scenes, scene_ids, clip)
-
-    def _get_clip_model(self) -> OpenCLIPModel | None:
-        """Get the shared OpenCLIP model instance.
-
-        Falls back to creating a new instance if no shared model was
-        provided (shouldn't happen in normal operation).
-        """
-        if self._clip_model is None:
-            self._clip_model = OpenCLIPModel(
-                model_name=self.config.openclip_model,
-                pretrained=self.config.openclip_pretrained,
-            )
-        return self._clip_model
-
-    def _get_stt_backend(self):
-        """Lazy-load the STT backend."""
-        if not self._stt_loaded:
-            self._stt_loaded = True
-            from stt import get_stt_backend
-
-            self._stt_backend = get_stt_backend(self.config)
-        return self._stt_backend
-
-    def _set_step(self, step: int, label: str, basename: str) -> None:
-        """Update current video progress for status reporting."""
-        self._current_video = {
-            'step': step,
-            'total_steps': 6,
-            'label': label,
-            'basename': basename,
-        }
-
-    def _process_video(self, image_id: str) -> None:
-        """Process a single video: scenes, keyframes, embeddings, STT.
-
-        Args:
-            image_id: The image ID of the video record.
-        """
-        from video import (
-            detect_scenes,
-            extract_scene_keyframes,
-            generate_scene_thumbnails,
-        )
-
-        # Look up the video record
-        with self._db_lock:
-            cursor = self.conn.execute(
-                'SELECT path, duration, media_type FROM images WHERE id = ?',
-                (image_id,),
-            )
-            row = cursor.fetchone()
-
-        if row is None:
-            logger.warning(f'Video record not found: {image_id}')
-            return
-
-        if row['media_type'] != 'video':
-            logger.debug(f'Skipping non-video: {image_id}')
-            return
-
-        path = Path(row['path'])
-        if not path.exists():
-            logger.warning(f'Video file not found on disk: {path}')
-            return
-
-        duration = row['duration'] or 0.0
-        basename = path.name
-        logger.info(f'Processing video: {basename} ({duration:.1f}s)')
-        self._set_step(1, 'Detecting scenes', basename)
-
-        # 1. Scene detection — reuse existing scenes if already in DB
-        #    (handles restart after interrupted processing)
-        if self.stop_event.is_set():
-            return
-
-        with self._db_lock:
-            existing_scenes = self.conn.execute(
-                'SELECT id, scene_index, start_time, end_time FROM scenes WHERE image_id = ? ORDER BY scene_index',
-                (image_id,),
-            ).fetchall()
-
-        if existing_scenes:
-            logger.debug(f'  [1/6] Reusing {len(existing_scenes)} existing scene(s)')
-            scenes = [(row['start_time'], row['end_time']) for row in existing_scenes]
-            scene_ids = [row['id'] for row in existing_scenes]
-        else:
-            logger.debug(f'  [1/6] Detecting scenes in {path.name}...')
-            scenes = detect_scenes(
-                path,
-                threshold=self.config.video_scene_detection_threshold,
-                max_scene_duration=self.config.video_max_scene_duration,
-            )
-            if not scenes:
-                logger.warning(f'No scenes detected for {path}')
-                return
-            logger.debug(f'  [1/6] Detected {len(scenes)} scene(s)')
-
-            # Insert scene records — batch all inserts into a single
-            # executemany + commit to avoid per-row lock contention.
-            now = datetime.now().isoformat()
-            scene_ids = []
-            insert_params: list[tuple] = []
-            for idx, (start, end) in enumerate(scenes):
-                scene_id = str(uuid.uuid4())
-                scene_ids.append(scene_id)
-                keyframe_time = (start + end) / 2
-                insert_params.append((scene_id, image_id, idx, start, end, keyframe_time, now, now))
-
-            if self.stop_event.is_set():
-                return
-
-            with self._db_lock:
-                self.conn.executemany(
-                    """
-                    INSERT OR REPLACE INTO scenes
-                        (id, image_id, scene_index, start_time, end_time,
-                         keyframe_time, created_at, updated_at)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-                    """,
-                    insert_params,
-                )
-                self.conn.commit()
-
-        # 2. Extract ONE keyframe per scene at midpoint
-        if self.stop_event.is_set():
-            return
-        self._set_step(2, 'Extracting keyframes', basename)
-        logger.debug(f'  [2/6] Extracting keyframes from {len(scenes)} scene(s)...')
-        keyframes = extract_scene_keyframes(path, scenes)
-
-        if not keyframes:
-            logger.warning(f'No keyframes extracted from {path}')
-            return
-
-        # 3. Generate scene thumbnails (200px + 400px)
-        self._set_step(3, 'Generating thumbnails', basename)
-        logger.debug('  [3/6] Generating scene thumbnails...')
-        thumbnail_dir = self._data_dir / '.thumbnails'
-        for scene_idx, midpoint, _pil in keyframes:
-            if self.stop_event.is_set():
-                return
-            if scene_idx < len(scene_ids):
-                generate_scene_thumbnails(
-                    path,
-                    scene_ids[scene_idx],
-                    midpoint,
-                    thumbnail_dir,
-                    quality=self.config.thumbnail_quality,
-                )
-
-        # 4. OpenCLIP-embed each keyframe → store in scenes.embedding
-        if self.stop_event.is_set():
-            return
-        self._set_step(4, 'Computing embeddings', basename)
-        logger.debug(f'  [4/6] Computing CLIP embeddings for {len(keyframes)} keyframe(s)...')
-        clip = self._get_clip_model()
-        if clip is None:
-            logger.warning('OpenCLIP model not available for video embeddings')
-            return
-
-        scene_embeddings: dict[int, np.ndarray] = {}  # scene_idx -> embedding
-        embedding_updates: list[tuple] = []  # (emb_blob, now_ts, scene_id)
-        for scene_idx, frame_time, pil_image in keyframes:
-            if self.stop_event.is_set():
-                return
-
-            try:
-                embedding = clip.encode_pil_image(pil_image)
-                if embedding is None:
-                    continue
-
-                scene_embeddings[scene_idx] = embedding
-
-                # Collect embedding update for batch write
-                scene_id = scene_ids[scene_idx] if scene_idx < len(scene_ids) else None
-                if scene_id:
-                    emb_blob = embedding.astype(np.float32).tobytes()
-                    now_ts = datetime.now().isoformat()
-                    embedding_updates.append((emb_blob, now_ts, scene_id))
-
-            except (MemoryError, RuntimeError) as e:
-                logger.error(f'OOM during video frame embedding: {e}')
-                try:
-                    torch.cuda.empty_cache()
-                except Exception:
-                    pass
-                continue
-            except Exception as e:
-                logger.error(f'Error embedding keyframe at {frame_time:.1f}s: {e}')
-                continue
-
-        # Batch-write all embedding updates in a single lock acquisition
-        if embedding_updates:
-            with self._db_lock:
-                self.conn.executemany(
-                    'UPDATE scenes SET embedding = ?, updated_at = ? WHERE id = ?',
-                    embedding_updates,
-                )
-                self.conn.commit()
-
-        # 5. Set preferred_scene_id and images.embedding from preferred scene
-        self._set_step(5, 'Setting preferred scene', basename)
-        logger.debug('  [5/6] Setting preferred scene...')
-        preferred_scene_id = scene_ids[0] if scene_ids else None
-        preferred_emb = scene_embeddings.get(0)
-        if preferred_emb is not None and preferred_scene_id:
-            rep_blob = preferred_emb.astype(np.float32).tobytes()
-            now_ts = datetime.now().isoformat()
-            with self._db_lock:
-                self.conn.execute(
-                    'UPDATE images SET embedding = ?, preferred_scene_id = ?, updated_at = ? WHERE id = ?',
-                    (rep_blob, preferred_scene_id, now_ts, image_id),
-                )
-                self.conn.commit()
-
-        # 6. STT transcription (if enabled) — whole-clip-then-chop
-        self._set_step(6, 'Transcribing audio', basename)
-        if self.stop_event.is_set():
-            return
-        logger.debug('  [6/6] STT transcription...')
-        stt = self._get_stt_backend()
-        if stt is not None:
-            self._transcribe_scenes(image_id, path, scenes, scene_ids, clip)
-
-        logger.info(f'Video processed: {path.name} — {len(scenes)} scenes, {len(scene_embeddings)} embedded')
-
-    def _transcribe_scenes(
-        self,
-        image_id: str,
-        video_path: Path,
-        scenes: list[tuple[float, float]],
-        scene_ids: list[str],
-        clip: OpenCLIPModel,
-    ) -> None:
-        """Transcribe the entire video and assign text to scenes by overlap.
-
-        Fixes two bugs from the original per-scene approach:
-        - Bug 1 (tempfile): Uses ``NamedTemporaryFile(delete=False)`` and
-          manually unlinks after use.
-        - Bug 2 (timing): Transcribes the full clip in one pass (Whisper
-          gets better context) and uses returned segment timestamps to
-          assign text to scenes by overlap.
-
-        Args:
-            image_id: The video's image ID.
-            video_path: Path to the video file.
-            scenes: List of (start, end) scene boundaries.
-            scene_ids: Corresponding scene UUIDs.
-            clip: OpenCLIP model for computing text embeddings.
-        """
-        import tempfile
-
-        from video import extract_audio_segment
-
-        stt = self._stt_backend
-        if stt is None:
-            return
-
-        if self.stop_event.is_set():
-            return
-
-        try:
-            # Extract audio for the entire clip to a temp file
-            tmp_fd, tmp_name = tempfile.mkstemp(suffix='.wav')
-            os.close(tmp_fd)
-            tmp_path = Path(tmp_name)
-
-            total_start = scenes[0][0] if scenes else 0.0
-            total_end = scenes[-1][1] if scenes else 0.0
-
-            if not extract_audio_segment(video_path, tmp_path, total_start, total_end):
-                tmp_path.unlink(missing_ok=True)
-                return
-
-            # Transcribe the whole clip in one pass for better context
-            stt_segments = stt.transcribe(tmp_path, language=self.config.stt_language)
-
-            # Clean up temp file
-            try:
-                tmp_path.unlink(missing_ok=True)
-            except OSError:
-                pass
-
-            if not stt_segments:
-                return
-
-            # Assign STT segments to scenes by temporal overlap.
-            # Each STT segment has .start, .end (seconds), .text attributes.
-            # Collect all updates, then batch-write in a single lock acquisition.
-            transcription_updates: list[tuple] = []
-            for _scene_idx, ((scene_start, scene_end), scene_id) in enumerate(zip(scenes, scene_ids, strict=False)):
-                if self.stop_event.is_set():
-                    return
-
-                # Collect text from STT segments that overlap this scene
-                scene_texts: list[str] = []
-                for seg in stt_segments:
-                    seg_start = getattr(seg, 'start', 0.0)
-                    seg_end = getattr(seg, 'end', 0.0)
-                    # Check overlap: segment overlaps scene if
-                    # seg_start < scene_end AND seg_end > scene_start
-                    if seg_start < scene_end and seg_end > scene_start:
-                        text = getattr(seg, 'text', '').strip()
-                        if text:
-                            scene_texts.append(text)
-
-                if not scene_texts:
-                    continue
-
-                full_text = ' '.join(scene_texts)
-
-                # Compute transcription embedding via OpenCLIP text encoder
-                text_emb = clip.encode_text(full_text) if clip else None
-                text_emb_blob = text_emb.astype(np.float32).tobytes() if text_emb is not None else None
-
-                now_ts = datetime.now().isoformat()
-                transcription_updates.append((full_text, text_emb_blob, now_ts, scene_id))
-
-            # Batch-write all transcription updates in a single lock acquisition
-            if transcription_updates:
-                with self._db_lock:
-                    self.conn.executemany(
-                        """
-                        UPDATE scenes SET transcription = ?, transcription_embedding = ?,
-                               updated_at = ?
-                        WHERE id = ?
-                        """,
-                        transcription_updates,
-                    )
-                    self.conn.commit()
-
-        except Exception as e:
-            logger.error(f'STT failed for video {video_path}: {e}')
 
 
 def get_metadata(conn: sqlite3.Connection, key: str) -> str | None:
@@ -5912,27 +3611,17 @@ class ImageDatabase:
         self._import_names: dict[str, str] = {}
         self._import_names_lock = threading.Lock()
 
-        # Create queues
-        self._ingestion_queue: queue.Queue[Path] = queue.Queue()
-        self._embedding_queue: queue.Queue[str] = queue.Queue()
-        self._face_queue: queue.Queue[str] = queue.Queue()
-        self._nima_queue: queue.Queue[str] = queue.Queue()
+        # Queues for independent workers (trash, import)
         self._trash_queue: queue.Queue[tuple[str, str]] = queue.Queue()  # (image_id, file_path)
         self._import_queue: queue.Queue[str] = queue.Queue()  # source file paths
-        self._video_queue: queue.Queue[str] = queue.Queue()  # video image IDs needing scene/embedding
-        self._transcribe_queue: queue.Queue[str] = queue.Queue()  # video IDs needing STT only
 
-        # Shared OpenCLIP model instance (used by EmbeddingThread and VideoProcessingThread)
+        # Shared OpenCLIP model instance (used by pipeline and search)
         self._shared_clip_model: OpenCLIPModel | None = None
 
-        # Thread references (created when started)
-        self._ingestion_thread: IngestionThread | None = None
-        self._embedding_thread: EmbeddingThread | None = None
-        self._face_thread: FaceDetectionThread | None = None
-        self._nima_thread: NimaThread | None = None
+        # Pipeline orchestrator and independent thread references
+        self._orchestrator: PipelineOrchestrator | None = None
         self._trash_thread: TrashWorker | None = None
         self._import_thread: ImportWorker | None = None
-        self._video_thread: VideoProcessingThread | None = None
         self._scan_timer_thread: ScanTimerThread | None = None
 
         # Phase 4 status tracking (post-processing after queues empty)
@@ -5984,17 +3673,9 @@ class ImageDatabase:
         # Initialise import/catalogue directory
         self._init_import_dir()
 
-        # Step 4: Optionally scan folders and queue processing
+        # Step 4: Note scan status (actual scanning handled by pipeline orchestrator)
         if self._run_scan:
-            logger.info('[4/5] Scanning registered folders...')
-            self._rescan_all_folders()
-
-            # Queue images with missing embeddings
-            missing_embeddings = get_images_without_embedding(self.conn)
-            for image in missing_embeddings:
-                self._embedding_queue.put(image['id'])
-            if missing_embeddings:
-                logger.info(f'        {len(missing_embeddings)} images queued for image embedding')
+            logger.info('[4/5] Scan requested — pipeline will process on startup...')
         else:
             logger.info('[4/5] Skipping scan (use --scan or GUI Rescan button to process)')
 
@@ -6015,22 +3696,15 @@ class ImageDatabase:
         self.start_threads()
 
         # Optionally pre-load OpenCLIP model to show download progress during startup
-        if self._preload_model and self._embedding_thread is not None:
+        if self._preload_model:
             logger.info('Pre-loading OpenCLIP model...')
-            # Access the clip_model property to trigger loading
-            _ = self._embedding_thread.clip_model
+            _ = self._get_clip_model()
 
         # Backfill description embeddings for images with descriptions but no embedding
         self._backfill_description_embeddings()
 
-        # Backfill LAION aesthetic scores for images with embeddings but no score
-        self._backfill_aesthetic_laion()
-
         # NIMA model invalidation — wipe stale scores if model identity changed
         self._invalidate_nima_model()
-
-        # Queue existing images for NIMA scoring (backfill)
-        self._queue_images_for_nima()
 
         logger.info('-' * 60)
         logger.info('Database initialisation complete')
@@ -6084,76 +3758,12 @@ class ImageDatabase:
     def _backfill_aesthetic_laion(self) -> None:
         """Compute LAION aesthetic scores for images with embeddings but no score.
 
-        This is a cheap operation — just dot products on existing embedding blobs,
-        no image I/O required. Uses the has_migration_run/record_migration pattern
-        to run only once per database.
-
-        Respects _stop_event for graceful shutdown. Acquires _db_lock for writes
-        since the embedding thread may be running concurrently.
-
-        Requires the LAION head to be loaded in the embedding thread; skips
-        gracefully if the head is unavailable.
+        .. deprecated::
+            Now handled by Stage 4 of the pipeline orchestrator.  Kept as a
+            no-op stub for the one-time migration guard (the pipeline handles
+            scoring on every cycle for images with null aesthetic_laion).
         """
-        migration_id = 'backfill_aesthetic_laion'
-        if has_migration_run(self.conn, migration_id):
-            return
-
-        # Get LAION head weights from the embedding thread
-        if self._embedding_thread is None:
-            return
-
-        # Trigger lazy loading of the LAION head (thread-safe)
-        self._embedding_thread._load_laion_head()
-        laion_weight = self._embedding_thread._laion_weight
-        laion_bias = self._embedding_thread._laion_bias
-
-        if laion_weight is None:
-            # LAION head not available — record migration anyway to avoid
-            # re-checking every startup (user can re-download and re-run)
-            logger.info('Skipping LAION aesthetic backfill — head not available')
-            record_migration(self.conn, migration_id)
-            return
-
-        cursor = self.conn.execute("""
-            SELECT id, embedding
-            FROM images
-            WHERE embedding IS NOT NULL AND aesthetic_laion IS NULL AND deleted = 0
-        """)
-        rows = cursor.fetchall()
-
-        if not rows:
-            record_migration(self.conn, migration_id)
-            return
-
-        logger.info(f'Backfilling LAION aesthetic scores for {len(rows)} images...')
-
-        updates = []
-        for row in rows:
-            # Check for shutdown between rows
-            if self._stop_event.is_set():
-                logger.info('LAION aesthetic backfill interrupted by shutdown')
-                break
-
-            try:
-                embedding = np.frombuffer(row['embedding'], dtype=np.float32)
-                score = float(embedding @ laion_weight + laion_bias)
-                updates.append((score, datetime.now().isoformat(), row['id']))
-            except Exception as e:
-                logger.warning(f'Failed to compute aesthetic score for {row["id"]}: {e}')
-
-        # Commit whatever we computed (even on early exit from shutdown).
-        # Acquire _db_lock since the embedding thread may be writing concurrently.
-        if updates:
-            with self._db_lock:
-                self.conn.executemany('UPDATE images SET aesthetic_laion = ?, updated_at = ? WHERE id = ?', updates)
-                self.conn.commit()
-
-        # Only record migration as complete if we weren't interrupted
-        if not self._stop_event.is_set():
-            record_migration(self.conn, migration_id)
-            logger.info(f'        Backfilled {len(updates)} LAION aesthetic scores')
-        else:
-            logger.info(f'        Partially backfilled {len(updates)} LAION aesthetic scores (interrupted)')
+        return
 
     def backfill_face_semantic_embeddings(self) -> int:
         """Generate semantic embeddings for faces that don't have them.
@@ -6536,105 +4146,6 @@ class ImageDatabase:
         if missing:
             logger.warning(f'        {missing} image(s) have NULL checksums — run with --scan to repair')
 
-    def _rescan_all_folders(self) -> None:
-        """Rescan all registered folders for new/changed/deleted files."""
-        folders = get_folders(self.conn)
-        folder_paths = [f['path'] for f in folders]
-
-        if not folder_paths:
-            logger.info('        No folders registered yet')
-            return
-
-        logger.info(f'        {len(folder_paths)} folder(s) to scan')
-
-        # Get all currently known image paths
-        all_images = get_all_images(self.conn, include_deleted=False)
-        known_paths = {img['path'] for img in all_images}
-        found_paths: set[str] = set()
-
-        # Scan each folder
-        for folder_path in folder_paths:
-            folder = Path(folder_path)
-            if not folder.exists():
-                continue
-
-            logger.info(f'        Scanning: {folder}')
-
-            # Find all images and videos in folder
-            for image_path in find_images_in_folder(
-                folder,
-                self.config.image_extensions | self.config.video_extensions,
-                registered_folders=folder_paths,
-            ):
-                path_str = str(image_path)
-                found_paths.add(path_str)
-
-                # Queue for ingestion (thread will skip unchanged)
-                self._ingestion_queue.put(image_path)
-
-        # Mark missing files as deleted
-        missing_paths = known_paths - found_paths
-        if missing_paths:
-            logger.info(f'Marking {len(missing_paths)} missing images as deleted')
-            now = datetime.now().isoformat()
-            with self._db_lock:
-                for path in missing_paths:
-                    self.conn.execute(
-                        'UPDATE images SET deleted = 1, updated_at = ? WHERE path = ? AND deleted = 0', (now, path)
-                    )
-                self.conn.commit()
-
-        logger.info(f'        Found {len(found_paths)} images')
-
-    def _queue_images_for_face_detection(self) -> None:
-        """Queue all images that need face detection.
-
-        Finds images that don't have any face records (including suppressed)
-        and queues them for face detection processing.
-        """
-        if not self.config.face_detection_enabled:
-            return
-
-        # Find images without face detection
-        with self._db_lock:
-            cursor = self.conn.execute("""
-                SELECT i.id
-                FROM images i
-                WHERE i.deleted = 0
-                  AND i.embedding IS NOT NULL
-                  AND i.media_type != 'video'
-                  AND NOT EXISTS (
-                      SELECT 1 FROM faces f WHERE f.image_id = i.id
-                  )
-            """)
-            rows = cursor.fetchall()
-
-        if rows:
-            logger.info(f'Queueing {len(rows)} images for face detection')
-            for row in rows:
-                self._face_queue.put(row['id'])
-
-    def _queue_images_for_nima(self) -> None:
-        """Queue all images that need NIMA aesthetic scoring.
-
-        Finds images with a checksum (so thumbnails exist) but no NIMA score.
-        Called during startup for backfill of existing images.
-        """
-        if not self.config.nima_enabled:
-            return
-
-        with self._db_lock:
-            cursor = self.conn.execute("""
-                SELECT id FROM images
-                WHERE aesthetic_nima IS NULL AND deleted = 0 AND checksum IS NOT NULL
-            """)
-            rows = cursor.fetchall()
-
-        if rows:
-            logger.info(f'Queueing {len(rows)} images for NIMA scoring')
-            for row in rows:
-                self._nima_queue.put(row['id'])
-
     def _invalidate_nima_model(self) -> None:
         """Check if the NIMA model identity has changed and wipe stale scores.
 
@@ -6661,190 +4172,29 @@ class ImageDatabase:
             set_metadata(self.conn, 'nima_model', current_model)
 
     def start_threads(self) -> None:
-        """Start the background processing threads."""
-        if self._ingestion_thread is not None and self._ingestion_thread.is_alive():
+        """Start the pipeline orchestrator and independent worker threads."""
+        if self._orchestrator is not None and self._orchestrator.is_alive():
             logger.warning('Threads already running')
             return
 
         self._stop_event.clear()
 
-        # Final completion callback (after all processing including faces)
-        def on_final_complete():
-            # Each phase is wrapped in try/except so a failure in one
-            # (e.g. transient DB lock) doesn't prevent later phases or
-            # the processing_complete event that unblocks the frontend.
-            logger.debug('on_final_complete: ENTER')
+        # Start the pipeline orchestrator (replaces 5 processing threads)
+        from pipeline import PipelineOrchestrator
 
-            # Sync directory groups — lightweight DB operation that mirrors
-            # filesystem folders as browse-able groups. Runs regardless of
-            # whether face grouping was requested.
-            try:
-                logger.debug('on_final_complete: sync_directory_groups START')
-                self._duplicate_manager.sync_directory_groups(self.conn, self._db_lock)
-                logger.debug('on_final_complete: sync_directory_groups DONE')
-            except Exception as e:
-                logger.error(f'Failed to sync directory groups: {e}')
-
-            if not self._run_face_grouping:
-                logger.info('Skipping grouping phase (use --group-faces or GUI Rescan)')
-                emit_processing_complete(self.event_queue)
-                logger.debug('on_final_complete: EXIT (no grouping)')
-                return
-
-            # --- Face reassessment FIRST (user-visible, latency-sensitive) ---
-            # Match unknown faces against known people before the slower
-            # duplicate/grouping calculations so that newly imported faces
-            # get identified as quickly as possible.
-            if self.config.face_detection_enabled:
-                try:
-                    logger.debug('on_final_complete: face reassessment START')
-                    # Clean up people with no faces
-                    with self._db_lock:
-                        delete_people_without_faces(self.conn)
-                    # Match unknown faces against known people (locked faces)
-                    self._reassess_faces_with_status()
-                    logger.debug('on_final_complete: face reassessment DONE')
-                except Exception as e:
-                    logger.error(f'Failed during face reassessment: {e}')
-
-            # --- Duplicate and face grouping (slower, less urgent) ---
-            try:
-                logger.debug('on_final_complete: compute_duplicates START')
-                self._compute_duplicates_with_status()
-                logger.debug('on_final_complete: compute_duplicates DONE')
-            except Exception as e:
-                logger.error(f'Failed to compute duplicates: {e}')
-
-            if self.config.face_detection_enabled:
-                try:
-                    logger.debug('on_final_complete: compute_unknown_face_groups START')
-                    with self._db_lock:
-                        compute_unknown_face_groups(self.conn, threshold=self.config.face_recognition_threshold)
-                    logger.debug('on_final_complete: compute_unknown_face_groups DONE')
-                except Exception as e:
-                    logger.error(f'Failed to compute unknown face groups: {e}')
-                try:
-                    logger.debug('on_final_complete: backfill_face_semantic_embeddings START')
-                    # Backfill semantic embeddings for faces that don't have them
-                    # (e.g., faces added before this feature existed)
-                    self.backfill_face_semantic_embeddings()
-                    logger.debug('on_final_complete: backfill_face_semantic_embeddings DONE')
-                except Exception as e:
-                    logger.error(f'Failed to backfill face semantic embeddings: {e}')
-
-            emit_processing_complete(self.event_queue)
-            logger.debug('on_final_complete: EXIT')
-
-        # Callback when embedding completes - queue images for face detection
-        def on_embedding_complete():
-            logger.debug(
-                f'on_embedding_complete: ENTER '
-                f'(run_face_detection={self._run_face_detection}, '
-                f'face_detection_enabled={self.config.face_detection_enabled})'
-            )
-            # Notify frontend that new images are indexed and ready for display.
-            # This fires well before processing_complete, which waits for face
-            # detection, reassessment, and duplicate grouping (can take minutes).
-            self.event_queue.emit('images_indexed', {})
-
-            if not self._run_face_detection:
-                logger.info('Skipping face detection (use --detect-faces or GUI Rescan)')
-                logger.debug('on_embedding_complete: EXIT (no face detection)')
-                return
-            if self.config.face_detection_enabled:
-                # Queue all images that don't have face detection run yet
-                self._queue_images_for_face_detection()
-                logger.debug(f'on_embedding_complete: EXIT (face_queue_size={self._face_queue.qsize()})')
-
-        # Start ingestion thread with configured number of worker threads
-        self._ingestion_thread = IngestionThread(
-            conn=self.conn,
-            ingestion_queue=self._ingestion_queue,
-            embedding_queue=self._embedding_queue,
+        self._orchestrator = PipelineOrchestrator(
+            db=self,
             stop_event=self._stop_event,
-            db_lock=self._db_lock,
-            checksum_cache=self._checksum_cache,
-            checksum_cache_lock=self._checksum_cache_lock,
-            generate_thumbnails=self._generate_thumbnails,
             pause_event=self._pause_event,
-            num_threads=self.config.indexing_threads,
-            max_image_dimension=self.config.max_image_dimension,
-            nima_queue=self._nima_queue,
-            import_names=self._import_names,
-            import_names_lock=self._import_names_lock,
-            filename_date_overrides=self.config.filename_date_overrides,
-            date_order=self.config.date_order,
-            video_queue=self._video_queue,
-            video_extensions=self.config.video_extensions,
-            thumbnail_dir=self.thumbnail_dir,
-            db_path=str(self.db_path),
-        )
-        self._ingestion_thread.start()
-
-        # Create shared OpenCLIP model (lazy-loaded on first use, thread-safe)
-        self._shared_clip_model = OpenCLIPModel(
-            model_name=self.config.openclip_model,
-            pretrained=self.config.openclip_pretrained,
-            max_dimension=self.config.max_image_dimension,
+            run_face_detection=self._run_face_detection,
+            run_face_grouping=self._run_face_grouping,
         )
 
-        # Start embedding thread (uses shared CLIP model)
-        self._embedding_thread = EmbeddingThread(
-            conn=self.conn,
-            embedding_queue=self._embedding_queue,
-            ingestion_thread=self._ingestion_thread,
-            stop_event=self._stop_event,
-            db_lock=self._db_lock,
-            config=self.config,
-            data_dir=self.db_path.parent,
-            on_complete=on_embedding_complete,
-        )
-        self._embedding_thread._clip_model = self._shared_clip_model
-        self._embedding_thread.start()
+        # If scan was requested, trigger the pipeline to run immediately
+        if self._run_scan:
+            self._orchestrator.request_rerun()
 
-        # Start face detection thread
-        self._face_thread = FaceDetectionThread(
-            conn=self.conn,
-            face_queue=self._face_queue,
-            embedding_thread=self._embedding_thread,
-            ingestion_thread=self._ingestion_thread,
-            stop_event=self._stop_event,
-            db_lock=self._db_lock,
-            config=self.config,
-            thumbnail_dir=self.thumbnail_dir,
-            on_complete=on_final_complete,
-        )
-        self._face_thread.start()
-
-        # Start NIMA scoring thread (runs concurrently, not chained)
-        self._nima_thread = NimaThread(
-            conn=self.conn,
-            nima_queue=self._nima_queue,
-            ingestion_thread=self._ingestion_thread,
-            stop_event=self._stop_event,
-            db_lock=self._db_lock,
-            config=self.config,
-            data_dir=self.db_path.parent,
-            thumbnail_dir=self.thumbnail_dir,
-            event_queue=self.event_queue,
-        )
-        self._nima_thread.start()
-
-        # Start video processing thread (runs concurrently, not chained).
-        # Shares the EmbeddingThread's OpenCLIP model to avoid duplicate loads (A6).
-        self._video_thread = VideoProcessingThread(
-            conn=self.conn,
-            video_queue=self._video_queue,
-            ingestion_thread=self._ingestion_thread,
-            stop_event=self._stop_event,
-            db_lock=self._db_lock,
-            config=self.config,
-            data_dir=self.db_path.parent,
-            event_queue=self.event_queue,
-            clip_model=self._shared_clip_model,
-            transcribe_queue=self._transcribe_queue,
-        )
-        self._video_thread.start()
+        self._orchestrator.start()
 
         # Start trash worker thread (moves files asynchronously)
         if getattr(self, '_trash_enabled', False):
@@ -6876,10 +4226,6 @@ class ImageDatabase:
             )
             self._import_thread.start()
 
-        # Queue unprocessed videos — videos in the DB that have no scenes
-        # (e.g. imported under a buggy version, or processing was interrupted).
-        self._queue_unprocessed_videos()
-
         # Start scan timer thread for scheduled rescans (headless/Docker mode)
         if self.config.scan_interval_minutes > 0:
             self._scan_timer_thread = ScanTimerThread(
@@ -6893,7 +4239,7 @@ class ImageDatabase:
         logger.info('Background threads started')
 
     def stop_threads(self, timeout: float = 5.0) -> None:
-        """Stop the background processing threads.
+        """Stop the pipeline orchestrator and independent worker threads.
 
         Args:
             timeout: Maximum time to wait for threads to stop.
@@ -6901,30 +4247,10 @@ class ImageDatabase:
         logger.info('Stopping background threads')
         self._stop_event.set()
 
-        if self._ingestion_thread is not None:
-            self._ingestion_thread.join(timeout=timeout)
-            if self._ingestion_thread.is_alive():
-                logger.warning('Ingestion thread did not stop in time')
-
-        if self._embedding_thread is not None:
-            self._embedding_thread.join(timeout=timeout)
-            if self._embedding_thread.is_alive():
-                logger.warning('Image embedding thread did not stop in time')
-
-        if self._face_thread is not None:
-            self._face_thread.join(timeout=timeout)
-            if self._face_thread.is_alive():
-                logger.warning('Face detection thread did not stop in time')
-
-        if self._nima_thread is not None:
-            self._nima_thread.join(timeout=timeout)
-            if self._nima_thread.is_alive():
-                logger.warning('NIMA scoring thread did not stop in time')
-
-        if self._video_thread is not None:
-            self._video_thread.join(timeout=timeout)
-            if self._video_thread.is_alive():
-                logger.warning('Video processing thread did not stop in time')
+        if self._orchestrator is not None:
+            self._orchestrator.join(timeout=timeout)
+            if self._orchestrator.is_alive():
+                logger.warning('Pipeline orchestrator did not stop in time')
 
         if self._trash_thread is not None:
             self._trash_thread.join(timeout=timeout)
@@ -6997,7 +4323,7 @@ class ImageDatabase:
         return get_folders(self.conn)
 
     def add_folder(self, path: str) -> dict[str, Any] | None:
-        """Register a new folder and queue its images for processing.
+        """Register a new folder and trigger the pipeline to ingest it.
 
         Returns:
             Folder info dict, or None if already registered.
@@ -7012,52 +4338,20 @@ class ImageDatabase:
             emit_folder_added(self.event_queue, result['path'])
             # Re-validate trash dir (new folder may conflict)
             self._validate_trash_dir()
-            # Scan the folder for images in a background thread so the
-            # HTTP response returns immediately.  Walking a NAS path over
-            # SMB can take minutes for large collections; blocking the
-            # request would leave the user staring at a frozen UI.
-            scan_thread = threading.Thread(
-                target=self._scan_and_queue_folder,
-                args=(result['path'],),
-                daemon=True,
-                name='folder-scan',
-            )
-            scan_thread.start()
+            # Trigger the pipeline to run — Stage 1 will discover the
+            # new folder's images.  No blocking scan needed since the
+            # orchestrator runs in its own thread.
+            if self._orchestrator is not None:
+                self._orchestrator.run_face_detection = True
+                self._orchestrator.run_face_grouping = True
+                self._orchestrator.request_rerun()
         return result
-
-    def _scan_and_queue_folder(self, folder_path: str) -> None:
-        """Scan a single folder for images and queue them for ingestion.
-
-        Runs in a background thread after a folder is registered so that
-        the API response is not blocked by potentially slow filesystem
-        traversal (e.g. network shares over SMB).
-        """
-        try:
-            count = 0
-            for image_path in find_images_in_folder(
-                folder_path,
-                self.config.image_extensions | self.config.video_extensions,
-            ):
-                if self._stop_event.is_set():
-                    logger.info(f'Folder scan interrupted by shutdown: {folder_path}')
-                    return
-                self._ingestion_queue.put(image_path)
-                count += 1
-            if count:
-                logger.info(f'Queued {count} image(s) from {folder_path}')
-            else:
-                logger.info(f'No images found in {folder_path}')
-        except Exception:
-            logger.exception(f'Error scanning folder: {folder_path}')
 
     def remove_folder(self, path: str) -> bool:
         """Remove a folder and mark orphaned images as deleted."""
         # Pause ingestion while modifying
         self._pause_event.set()
         try:
-            # Clear ingestion queue of paths from this folder
-            self._clear_folder_from_queue(path)
-
             # Get image IDs that will be orphaned (for duplicate cleanup)
             orphaned_ids = self._get_orphaned_image_ids(path)
 
@@ -7117,25 +4411,6 @@ class ImageDatabase:
             )
 
         return [row['id'] for row in cursor.fetchall()]
-
-    def _clear_folder_from_queue(self, folder_path: str) -> None:
-        """Remove paths from ingestion queue that are within a folder."""
-        folder = Path(folder_path)
-        remaining: list[Path] = []
-
-        # Drain queue
-        while True:
-            try:
-                path = self._ingestion_queue.get_nowait()
-                if not folder_contains_path(folder, path):
-                    remaining.append(path)
-                self._ingestion_queue.task_done()
-            except queue.Empty:
-                break
-
-        # Re-add remaining paths
-        for path in remaining:
-            self._ingestion_queue.put(path)
 
     # =========================================================================
     # Public API - Images
@@ -8183,62 +5458,26 @@ class ImageDatabase:
     # =========================================================================
 
     def _queue_unprocessed_videos(self) -> None:
-        """Queue videos that need processing or reprocessing.
+        """No-op — unprocessed videos are now handled by pipeline Stages 2-3.
 
-        Catches both videos with no scenes at all AND videos where
-        processing was interrupted (scenes exist but no embedding or
-        preferred_scene_id — meaning steps 2-6 of the pipeline never
-        completed).
-
-        Called at startup to recover from interrupted processing or
-        imports that occurred under buggy code.
+        .. deprecated::
+            The pipeline orchestrator's Stage 2 (thumbnails) and Stage 3
+            (embeddings) query for videos needing work directly from the DB.
         """
-        with self._db_lock:
-            cursor = self.conn.execute("""
-                SELECT i.id, i.basename
-                FROM images i
-                WHERE i.deleted = 0
-                  AND i.media_type = 'video'
-                  AND (
-                      -- No scenes at all (never started)
-                      NOT EXISTS (SELECT 1 FROM scenes s WHERE s.image_id = i.id)
-                      -- Or scenes exist but pipeline didn't finish (no embedding/preferred)
-                      OR i.preferred_scene_id IS NULL
-                      OR i.embedding IS NULL
-                      -- Or any scene is missing its embedding (step 4 never completed)
-                      OR EXISTS (
-                          SELECT 1 FROM scenes s2
-                          WHERE s2.image_id = i.id AND s2.embedding IS NULL
-                      )
-                  )
-            """)
-            rows = cursor.fetchall()
-
-        if rows:
-            logger.info(f'Found {len(rows)} unprocessed video(s), queueing for processing')
-            for row in rows:
-                self._video_queue.put(row['id'])
-                logger.debug(f'  Queued unprocessed video: {row["basename"]}')
+        return
 
     def reprocess_broken_videos(self, force_all: bool = False) -> int:
-        """Delete scene data for broken (or all) videos and queue for reprocessing.
+        """Delete scene data for broken (or all) videos so the pipeline re-processes them.
 
-        For broken videos, "broken" means the same conditions checked by
-        _queue_unprocessed_videos: no scenes, null preferred_scene_id/embedding,
-        or any scene with a null embedding.
-
-        When force_all is True, ALL videos are wiped and reprocessed regardless
-        of their current state.
-
-        Scenes are deleted so the video pipeline re-detects them from scratch.
-        The images table fields (preferred_scene_id, embedding) are also cleared
-        so the video shows as unprocessed.
+        Clears scenes and embedding data, then triggers a pipeline rerun.
+        Stage 2 (thumbnails) and Stage 3 (embeddings) will pick up
+        the videos that now have null values.
 
         Args:
             force_all: If True, reprocess every video; if False, only broken ones.
 
         Returns:
-            Number of videos queued for reprocessing.
+            Number of videos marked for reprocessing.
         """
         with self._db_lock:
             if force_all:
@@ -8283,33 +5522,31 @@ class ImageDatabase:
             )
             self.conn.commit()
 
-        # Queue each video for the processing thread
-        for row in rows:
-            self._video_queue.put(row['id'])
-            logger.debug(f'  Queued video for reprocessing: {row["basename"]}')
+        logger.info(f'Marked {len(rows)} video(s) for reprocessing')
+
+        # Trigger pipeline rerun — Stage 2+3 will pick up the cleared videos
+        if self._orchestrator is not None:
+            self._orchestrator.request_rerun()
 
         return len(rows)
 
     def queue_transcribe_videos(self) -> int:
-        """Queue already-processed videos that are missing STT transcriptions.
+        """Trigger transcription for videos missing STT data.
 
-        Unlike ``reprocess_broken_videos()``, this does NOT delete scene data
-        or re-run the full video pipeline.  It only queues videos whose scenes
-        already exist but have at least one NULL transcription, so that only
-        step 6 (STT) runs.
+        Counts videos needing transcription and triggers a pipeline
+        rerun.  Stage 7 (STT) will pick them up automatically.
 
         Returns:
-            Number of videos queued for transcription.
+            Number of videos needing transcription.
         """
         with self._db_lock:
             cursor = self.conn.execute("""
-                SELECT DISTINCT i.id, i.basename
+                SELECT COUNT(DISTINCT i.id) as count
                 FROM images i
                 JOIN scenes s ON s.image_id = i.id
                 WHERE i.deleted = 0
                   AND i.media_type = 'video'
                   AND s.transcription IS NULL
-                  -- Only pick fully-processed videos (have embedding + preferred scene)
                   AND i.preferred_scene_id IS NOT NULL
                   AND i.embedding IS NOT NULL
                   AND NOT EXISTS (
@@ -8317,20 +5554,18 @@ class ImageDatabase:
                       WHERE s2.image_id = i.id AND s2.embedding IS NULL
                   )
             """)
-            rows = cursor.fetchall()
+            count = cursor.fetchone()['count']
 
-        if not rows:
+        if count == 0:
             return 0
 
-        for row in rows:
-            self._transcribe_queue.put(row['id'])
-            logger.debug(f'  Queued video for transcription: {row["basename"]}')
+        logger.info(f'{count} video(s) need transcription')
 
-        # Reset completion flag so the thread picks up the new work
-        if self._video_thread is not None:
-            self._video_thread._completion_triggered = False
+        # Trigger pipeline rerun — Stage 7 will transcribe them
+        if self._orchestrator is not None:
+            self._orchestrator.request_rerun()
 
-        return len(rows)
+        return count
 
     def _generate_thumbnails(self, source_path: Path, checksum: str) -> bool:
         """Generate and cache thumbnails for an image at standard sizes.
@@ -8515,17 +5750,29 @@ class ImageDatabase:
     def get_processing_status(self) -> dict[str, Any]:
         """Get current processing status.
 
+        Maps pipeline orchestrator stage progress to legacy field names
+        for frontend compatibility.
+
         Returns:
             Dict with status, queue counts, and Phase 4 processing statuses.
         """
-        indexing_count = self._ingestion_queue.qsize()
-        embedding_count = self._embedding_queue.qsize()
-        face_count = self._face_queue.qsize()
-        nima_count = self._nima_queue.qsize() if self._nima_queue else 0
-        video_count = (self._video_queue.qsize() if self._video_queue else 0) + (
-            self._transcribe_queue.qsize() if self._transcribe_queue else 0
+        # Get orchestrator stage progress
+        stage = self._orchestrator.get_stage_progress() if self._orchestrator else {}
+        current = stage.get('stage')
+        remaining = max(0, stage.get('total', 0) - stage.get('done', 0))
+
+        # Map orchestrator stage to legacy field names (frontend reads these)
+        indexing_count = remaining if current == 'ingestion' else 0
+        embedding_count = remaining if current == 'embeddings' else 0
+        face_count = remaining if current == 'faces' else 0
+        nima_count = remaining if current == 'scoring' else 0
+        video_count = remaining if current in ('thumbnails', 'transcription') else 0
+        video_progress = (
+            self._orchestrator.current_video
+            if self._orchestrator is not None and current in ('thumbnails', 'transcription')
+            else None
         )
-        video_progress = self._video_thread._current_video if self._video_thread is not None else None
+
         trash_count = self._trash_queue.qsize()
         import_count = self._import_queue.qsize()
 
@@ -8558,21 +5805,12 @@ class ImageDatabase:
         face_embedding_computing = face_embedding_status.get('status') == 'computing'
         face_reassess_computing = face_reassess_status is not None and face_reassess_status.get('status') == 'computing'
 
-        # Determine overall status (NIMA + trash + import queues also contribute to 'updating').
-        # Import progress is checked in addition to import_count because
-        # the ImportWorker dequeues items before copying — qsize() can be 0
-        # while files are still being processed.
-        queues_empty = (
-            indexing_count == 0
-            and embedding_count == 0
-            and face_count == 0
-            and nima_count == 0
-            and video_count == 0
-            and video_progress is None
-            and trash_count == 0
-            and import_count == 0
-            and import_progress is None
-        )
+        # Determine overall status.  The pipeline is active if it's running
+        # any stage.  Import progress is checked in addition to import_count
+        # because the ImportWorker dequeues items before copying — qsize()
+        # can be 0 while files are still being processed.
+        pipeline_idle = current is None
+        queues_empty = pipeline_idle and trash_count == 0 and import_count == 0 and import_progress is None
         phase4_idle = not (
             duplicates_computing or face_grouping_computing or face_embedding_computing or face_reassess_computing
         )
@@ -8645,6 +5883,10 @@ class ImageDatabase:
             'video_queue': video_count,
         }
 
+        # Include current pipeline stage (additive — frontend can optionally display)
+        if current is not None:
+            result['pipeline_stage'] = current
+
         # Include per-video progress if a video is currently being processed
         if video_progress is not None:
             result['video_progress'] = video_progress
@@ -8708,8 +5950,7 @@ class ImageDatabase:
         - Epoch management
 
         Uses a private connection (via DuplicateManager._get_db()) rather
-        than the shared self.conn to avoid concurrent cursor conflicts with
-        NimaThread and other background threads that are still running.
+        than the shared self.conn to avoid concurrent cursor conflicts.
         """
         self._duplicate_manager.compute_all()
 
@@ -8779,18 +6020,13 @@ class ImageDatabase:
                 self._face_reassess_status = None
 
     def queue_rescan_all(self) -> None:
-        """Queue all registered folders for rescanning and full processing.
+        """Trigger a full rescan of all registered folders.
 
-        This triggers the full processing chain:
-        1. Rescan folders for new/changed/deleted files
-        2. Queue images with missing embeddings
-        3. (Automatic) Face detection after embeddings complete
-        4. (Automatic) Duplicate grouping and face grouping after face detection
+        Enables face detection and grouping, then requests the pipeline
+        orchestrator to start a new cycle.  Stage 1 walks all folders
+        (unchanged files skip fast via size+mtime check).
 
-        Timestamp recomputation for non-user-assigned images happens
-        inline in the ingestion thread as each unchanged file is visited.
-
-        Called from GUI "Rescan" button - enables all processing phases.
+        Called from GUI "Rescan" button and scan timer.
         """
         logger.info('Queueing full rescan of all folders')
 
@@ -8798,34 +6034,16 @@ class ImageDatabase:
         self._run_face_detection = True
         self._run_face_grouping = True
 
-        self._rescan_all_folders()
-
-        # Queue images that need embedding (new images or images without embeddings)
-        missing_embeddings = get_images_without_embedding(self.conn)
-        for image in missing_embeddings:
-            self._embedding_queue.put(image['id'])
-        if missing_embeddings:
-            logger.info(f'{len(missing_embeddings)} images queued for image embedding')
-
-        # Reset completion flags so callbacks fire again for this cycle.
-        # _on_complete_finished must also be reset so the face detection
-        # thread doesn't see a stale True from the previous cycle and
-        # fire completion before the embedding callback populates its queue.
-        if self._embedding_thread:
-            self._embedding_thread._completion_triggered = False
-            self._embedding_thread._on_complete_finished = False
-            logger.debug('queue_rescan_all: reset EmbeddingThread completion flags')
-        if self._face_thread:
-            self._face_thread._completion_triggered = False
-            logger.debug('queue_rescan_all: reset FaceDetectionThread completion flags')
+        if self._orchestrator is not None:
+            self._orchestrator.run_face_detection = True
+            self._orchestrator.run_face_grouping = True
+            self._orchestrator.request_rerun()
 
     def queue_rescan_folder(self, folder_path: str) -> None:
-        """Queue a single folder for rescanning and processing.
+        """Trigger a rescan that includes the specified folder.
 
-        Like ``queue_rescan_all()`` but limited to one folder.  Walks only
-        the specified folder, marks missing files under it as deleted,
-        queues new/changed images for ingestion and embedding, then resets
-        processing-thread completion flags.
+        The pipeline's Stage 1 always walks all registered folders
+        (unchanged files skip fast), so this just triggers a new cycle.
 
         Args:
             folder_path: Absolute path of the folder to rescan.
@@ -8835,82 +6053,10 @@ class ImageDatabase:
         self._run_face_detection = True
         self._run_face_grouping = True
 
-        self._rescan_folder(folder_path)
-
-        # Queue images under this folder that need embedding
-        with self._db_lock:
-            cursor = self.conn.execute(
-                "SELECT id, path FROM images WHERE deleted = 0 AND embedding IS NULL AND path LIKE ? || '%'",
-                (folder_path.rstrip('/\\') + '/',),
-            )
-            missing_embeddings = rows_to_dicts(cursor.fetchall())
-
-        for image in missing_embeddings:
-            self._embedding_queue.put(image['id'])
-        if missing_embeddings:
-            logger.info(f'{len(missing_embeddings)} images queued for image embedding')
-
-        # Reset completion flags so callbacks fire again for this cycle
-        if self._embedding_thread:
-            self._embedding_thread._completion_triggered = False
-            self._embedding_thread._on_complete_finished = False
-            logger.debug('queue_rescan_folder: reset EmbeddingThread completion flags')
-        if self._face_thread:
-            self._face_thread._completion_triggered = False
-            logger.debug('queue_rescan_folder: reset FaceDetectionThread completion flags')
-
-    def _rescan_folder(self, folder_path: str) -> None:
-        """Rescan a single folder for new/changed/deleted files.
-
-        Walks the specified folder using ``find_images_in_folder()``, queues
-        discovered files for ingestion, and marks images under this folder
-        that are no longer on disk as deleted.
-
-        Args:
-            folder_path: Absolute path of the folder to rescan.
-        """
-        folder = Path(folder_path)
-        if not folder.exists():
-            logger.warning(f'Folder does not exist: {folder_path}')
-            return
-
-        logger.info(f'        Scanning: {folder}')
-
-        # Get all registered folder paths (for sub-folder skip logic)
-        all_folders = get_folders(self.conn)
-        all_folder_paths = [f['path'] for f in all_folders]
-
-        found_paths: set[str] = set()
-        for image_path in find_images_in_folder(
-            folder,
-            self.config.image_extensions | self.config.video_extensions,
-            registered_folders=all_folder_paths,
-        ):
-            path_str = str(image_path)
-            found_paths.add(path_str)
-            self._ingestion_queue.put(image_path)
-
-        # Mark missing files under this folder as deleted
-        with self._db_lock:
-            cursor = self.conn.execute(
-                "SELECT path FROM images WHERE deleted = 0 AND path LIKE ? || '%'",
-                (folder_path.rstrip('/\\') + '/',),
-            )
-            known_paths = {row['path'] for row in cursor.fetchall()}
-
-        missing_paths = known_paths - found_paths
-        if missing_paths:
-            logger.info(f'Marking {len(missing_paths)} missing images as deleted')
-            now = datetime.now().isoformat()
-            with self._db_lock:
-                for path in missing_paths:
-                    self.conn.execute(
-                        'UPDATE images SET deleted = 1, updated_at = ? WHERE path = ? AND deleted = 0',
-                        (now, path),
-                    )
-                self.conn.commit()
-
-        logger.info(f'        Found {len(found_paths)} images')
+        if self._orchestrator is not None:
+            self._orchestrator.run_face_detection = True
+            self._orchestrator.run_face_grouping = True
+            self._orchestrator.request_rerun()
 
     # =========================================================================
     # Public API - Events (SSE)
