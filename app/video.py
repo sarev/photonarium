@@ -220,7 +220,11 @@ def _get_video_rotation(path: Path) -> int:
     return 0
 
 
-def extract_frame(path: Path, time_seconds: float) -> Image.Image | None:
+def extract_frame(
+    path: Path,
+    time_seconds: float,
+    rotation: int | None = None,
+) -> Image.Image | None:
     """Seek to a timestamp and decode a single video frame.
 
     Uses `av.open()` with seeking to decode one frame near the requested
@@ -230,6 +234,10 @@ def extract_frame(path: Path, time_seconds: float) -> Image.Image | None:
     Args:
         path: Path to the video file.
         time_seconds: Target position in seconds.
+        rotation: Pre-computed rotation in degrees (0/90/180/270).
+            If None, calls ``_get_video_rotation()`` (ffprobe subprocess).
+            Pass explicitly when extracting many frames from the same
+            video to avoid repeated ffprobe calls.
 
     Returns:
         PIL Image (RGB) on success, None on failure.
@@ -251,7 +259,8 @@ def extract_frame(path: Path, time_seconds: float) -> Image.Image | None:
             # background threads when the GIL is contested.
             stream.codec_context.thread_type = 'SLICE'
 
-            rotation = _get_video_rotation(path)
+            if rotation is None:
+                rotation = _get_video_rotation(path)
             if rotation:
                 logger.debug(f'extract_frame: detected {rotation}° rotation')
 
@@ -283,16 +292,17 @@ def extract_keyframe_thumbnail(
     quality: int = 85,
     time_offset: float = 0,
 ) -> bool:
-    """Extract a frame from a video and save it as a JPEG thumbnail.
+    """Extract a frame from a video and save it as a 16:9 JPEG thumbnail.
 
-    Uses the same sharpening and JPEG pipeline as the image thumbnail
-    generator in `thumbnails.py`: resize with Lanczos, apply
-    UnsharpMask, save as JPEG.
+    Uses the same 16:9 fitting pipeline as scene thumbnails: non-16:9
+    frames get a blurred/darkened pillarbox background.  This ensures
+    poster thumbnails are visually consistent with the scene thumbnails
+    that replace them once scene detection completes.
 
     Args:
         video_path: Path to the source video file.
         dest_path: Where to write the JPEG thumbnail.
-        size: Target size (largest dimension).
+        size: Target height in pixels (width = size * 16/9).
         quality: JPEG quality (1-100).
         time_offset: Time in seconds to extract the frame from.
             Defaults to 0 (first frame).  For a representative poster,
@@ -306,16 +316,11 @@ def extract_keyframe_thumbnail(
         return False
 
     try:
-        # Resize preserving aspect ratio (same as thumbnails.py)
-        frame.thumbnail((size, size), Image.LANCZOS)
+        thumb = _fit_frame_to_16_9(frame, size)
+        thumb = sharpen_thumbnail(thumb, video=True)
 
-        # Apply sharpening (shared with the image thumbnail pipeline)
-        frame = sharpen_thumbnail(frame, video=True)
-
-        # Ensure destination directory exists
         dest_path.parent.mkdir(parents=True, exist_ok=True)
-
-        frame.save(str(dest_path), 'JPEG', quality=quality)
+        thumb.save(str(dest_path), 'JPEG', quality=quality)
         return True
     except Exception as e:
         logger.error(f'Failed to create video thumbnail for {video_path}: {e}')
@@ -632,12 +637,15 @@ def generate_scene_thumbnails(
     keyframe_time: float,
     thumbnail_dir: Path,
     quality: int = 85,
+    *,
+    frame: Image.Image | None = None,
+    rotation: int | None = None,
 ) -> bool:
     """Generate 200px and 400px thumbnails for a video scene.
 
     Uses the same Lanczos + UnsharpMask pipeline as the image thumbnail
     system.  Thumbnails are stored at:
-    `<thumbnail_dir>/scenes/<size>/<scene_id[:2]>/<scene_id>.jpg`
+    ``<thumbnail_dir>/scenes/<size>/<scene_id[:2]>/<scene_id>.jpg``
 
     Args:
         video_path: Path to the source video.
@@ -645,13 +653,19 @@ def generate_scene_thumbnails(
         keyframe_time: Time in seconds to extract the frame from.
         thumbnail_dir: Root thumbnail directory.
         quality: JPEG quality (1-100).
+        frame: Pre-extracted PIL Image to use instead of decoding again.
+            When processing many scenes from the same video, the caller
+            should extract and pass the frame to avoid double-decode.
+        rotation: Pre-computed rotation (passed to ``extract_frame()``
+            if *frame* is not provided).
 
     Returns:
         True if both thumbnails were created, False on failure.
     """
-    frame = extract_frame(video_path, keyframe_time)
     if frame is None:
-        return False
+        frame = extract_frame(video_path, keyframe_time, rotation=rotation)
+        if frame is None:
+            return False
 
     prefix = scene_id[:2]
     ok = True

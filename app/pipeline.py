@@ -1092,8 +1092,9 @@ class PipelineOrchestrator(threading.Thread):
             Number of videos processed.
         """
         from video import (
+            _get_video_rotation,
             detect_scenes,
-            extract_scene_keyframes,
+            extract_frame,
             generate_scene_thumbnails,
         )
 
@@ -1135,7 +1136,7 @@ class PipelineOrchestrator(threading.Thread):
                 'label': basename,
                 'step': 'Detecting scenes',
                 'step_index': 1,
-                'total_steps': 3,
+                'total_steps': 2,
                 'done': count,
                 'total': len(rows),
             }
@@ -1178,37 +1179,33 @@ class PipelineOrchestrator(threading.Thread):
                 )
                 self._db.conn.commit()
 
-            # Extract keyframes
-            self._current_video = {
-                'label': basename,
-                'step': 'Extracting keyframes',
-                'step_index': 2,
-                'total_steps': 3,
-                'done': count,
-                'total': len(rows),
-            }
-            keyframes = extract_scene_keyframes(path, scenes)
-
-            # Generate scene thumbnails
+            # Extract keyframes and generate thumbnails in a single pass.
+            # Each frame is decoded once, used for both thumbnail sizes,
+            # then released — peak memory is one full-res frame at a time
+            # instead of holding all N frames in a list.
             self._current_video = {
                 'label': basename,
                 'step': 'Generating thumbnails',
-                'step_index': 3,
-                'total_steps': 3,
+                'step_index': 2,
+                'total_steps': 2,
                 'done': count,
                 'total': len(rows),
             }
             thumbnail_dir = self._db.thumbnail_dir
-            for scene_idx, midpoint, _pil in keyframes:
+            rotation = _get_video_rotation(path)
+            for scene_idx, (start, end) in enumerate(scenes):
                 if self._stopped():
                     break
-                if scene_idx < len(scene_ids):
+                midpoint = (start + end) / 2
+                frame = extract_frame(path, midpoint, rotation=rotation)
+                if frame is not None:
                     generate_scene_thumbnails(
                         path,
                         scene_ids[scene_idx],
                         midpoint,
                         thumbnail_dir,
                         quality=self._db.config.thumbnail_quality,
+                        frame=frame,
                     )
 
             count += 1
