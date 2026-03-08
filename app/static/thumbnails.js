@@ -11,7 +11,7 @@
  * - Items are absolutely positioned based on their index (no insertion order dependency)
  * - One unified buffer zone: visible rows ± extraRows (from ThumbnailConfig)
  * - Elements are destroyed when they leave this zone
- * - Priority is determined by absolute distance from the center of the visible area
+ * - Priority is determined by absolute distance from the centre of the visible area
  * - Re-prioritization happens each time a fetch slot becomes available
  * - A faint grid pattern shows placeholder positions during scroll
  *
@@ -72,7 +72,7 @@
  * 8. O(n) LOOKUPS DURING SCROLL:
  *    Early versions had O(r × n) scroll performance where r = rendered items
  *    and n = total items. Fixed by building id→index Map once per scroll
- *    update. If you modify _updateVisibleItems, maintain this optimization.
+ *    update. If you modify _updateVisibleItems, maintain this optimisation.
  *
  * @module thumbnails
  * @requires core
@@ -98,7 +98,7 @@
  *
  * HOW IT WORKS:
  * 1. VirtualGrid calls request(imageId, index, onReady) for items entering buffer
- * 2. Request is added to queue, sorted by distance from visible area center
+ * 2. Request is added to queue, sorted by distance from visible area centre
  * 3. Loader fetches up to N concurrent requests (from config)
  * 4. On success: calls onReady(blobUrl), item creates DOM element
  * 5. On scroll: items leaving buffer are pruned from queue, in-flight aborted
@@ -111,7 +111,7 @@
 const ThumbnailLoader = {
     /**
      * Pending request queue. Each entry: { imageId, index, onReady }
-     * Sorted by priority (distance from visible center) on each processQueue.
+     * Sorted by priority (distance from visible centre) on each processQueue.
      */
     _queue: [],
 
@@ -134,7 +134,7 @@ const ThumbnailLoader = {
     /**
      * Current scroll state for prioritization.
      * Updated by VirtualGrid on each scroll via updateScrollState().
-     * Used to calculate priority (distance from visible center).
+     * Used to calculate priority (distance from visible centre).
      */
     _scrollState: {
         itemsPerRow: 1,
@@ -294,8 +294,8 @@ const ThumbnailLoader = {
         const config = this._getConfig();
         const { visibleStartRow, visibleEndRow } = this._scrollState;
 
-        // Calculate center of visible area for distance calculation
-        const centerRow = (visibleStartRow + visibleEndRow) / 2;
+        // Calculate centre of visible area for distance calculation
+        const centreRow = (visibleStartRow + visibleEndRow) / 2;
 
         // Prune items outside buffer zone
         this._queue = this._queue.filter(item => {
@@ -305,13 +305,13 @@ const ThumbnailLoader = {
 
         // Fill available slots, re-prioritizing on each iteration
         while (this._activeCount < config.concurrentRequests && this._queue.length > 0) {
-            // Find the item closest to center (minimum absolute distance)
+            // Find the item closest to centre (minimum absolute distance)
             let bestIndex = 0;
             let bestDistance = Infinity;
 
             for (let i = 0; i < this._queue.length; i++) {
                 const row = this._getRow(this._queue[i].index);
-                const distance = Math.abs(row - centerRow);
+                const distance = Math.abs(row - centreRow);
                 if (distance < bestDistance) {
                     bestDistance = distance;
                     bestIndex = i;
@@ -647,15 +647,15 @@ const VirtualGrid = {
                 const tileWidth = itemWidth + gap;
                 const tileHeight = itemHeight;
 
-                // Get colors from CSS custom properties (use dedicated placeholder vars for subtlety)
+                // Get colours from CSS custom properties (use dedicated placeholder vars for subtlety)
                 const style = getComputedStyle(document.documentElement);
-                const fillColor = style.getPropertyValue('--color-grid-placeholder-fill').trim() || 'rgba(128,128,128,0.04)';
-                const strokeColor = style.getPropertyValue('--color-grid-placeholder-stroke').trim() || 'rgba(128,128,128,0.06)';
+                const fillColour = style.getPropertyValue('--color-grid-placeholder-fill').trim() || 'rgba(128,128,128,0.04)';
+                const strokeColour = style.getPropertyValue('--color-grid-placeholder-stroke').trim() || 'rgba(128,128,128,0.06)';
 
                 // Create SVG pattern for one cell - a faint rounded rectangle
                 const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="${tileWidth}" height="${tileHeight}">
                     <rect x="0" y="0" width="${cellWidth}" height="${cellHeight}" rx="8"
-                          fill="${fillColor}" stroke="${strokeColor}" stroke-width="1"/>
+                          fill="${fillColour}" stroke="${strokeColour}" stroke-width="1"/>
                 </svg>`;
 
                 const encoded = encodeURIComponent(svg)
@@ -1578,14 +1578,14 @@ const GridSelection = {
                 const id = this._getItemId(e.target);
                 if (!id) return;
 
-                const normalizedId = String(id);
+                const normalisedId = String(id);
                 this._longPressTriggered = false;
                 this._longPressTimer = setTimeout(() => {
                     this._longPressTriggered = true;
                     // Add to selection without clearing
-                    if (!this._selected.has(normalizedId)) {
-                        this._selected.add(normalizedId);
-                        this._updateItemVisualState(normalizedId, true);
+                    if (!this._selected.has(normalisedId)) {
+                        this._selected.add(normalisedId);
+                        this._updateItemVisualState(normalisedId, true);
                         this._notifySelectionChanged();
                     }
                 }, GridSelection.LONG_PRESS_MS);
@@ -1929,8 +1929,8 @@ const GridSelection = {
              * @param {string} id - Item ID to select
              */
             select(id) {
-                const normalizedId = String(id);
-                const changed = this._selected.size !== 1 || !this._selected.has(normalizedId);
+                const normalisedId = String(id);
+                const changed = this._selected.size !== 1 || !this._selected.has(normalisedId);
                 if (!changed) return;
 
                 // Update visual state for previously selected
@@ -1939,8 +1939,8 @@ const GridSelection = {
                 }
 
                 this._selected.clear();
-                this._selected.add(normalizedId);
-                this._updateItemVisualState(normalizedId, true);
+                this._selected.add(normalisedId);
+                this._updateItemVisualState(normalisedId, true);
                 this._notifySelectionChanged();
             },
 
@@ -1949,13 +1949,13 @@ const GridSelection = {
              * @param {string} id - Item ID to toggle
              */
             toggle(id) {
-                const normalizedId = String(id);
-                if (this._selected.has(normalizedId)) {
-                    this._selected.delete(normalizedId);
-                    this._updateItemVisualState(normalizedId, false);
+                const normalisedId = String(id);
+                if (this._selected.has(normalisedId)) {
+                    this._selected.delete(normalisedId);
+                    this._updateItemVisualState(normalisedId, false);
                 } else {
-                    this._selected.add(normalizedId);
-                    this._updateItemVisualState(normalizedId, true);
+                    this._selected.add(normalisedId);
+                    this._updateItemVisualState(normalisedId, true);
                 }
                 this._notifySelectionChanged();
             },
@@ -1966,16 +1966,16 @@ const GridSelection = {
              * @param {string} targetId - Ending item ID
              */
             selectRange(anchorId, targetId) {
-                const normalizedAnchor = String(anchorId);
-                const normalizedTarget = String(targetId);
+                const normalisedAnchor = String(anchorId);
+                const normalisedTarget = String(targetId);
                 const items = this._config.getItems();
                 const getItemId = this._config.getItemId;
 
-                const anchorIdx = items.findIndex(item => String(getItemId(item)) === normalizedAnchor);
-                const targetIdx = items.findIndex(item => String(getItemId(item)) === normalizedTarget);
+                const anchorIdx = items.findIndex(item => String(getItemId(item)) === normalisedAnchor);
+                const targetIdx = items.findIndex(item => String(getItemId(item)) === normalisedTarget);
 
                 if (anchorIdx === -1 || targetIdx === -1) {
-                    this.select(normalizedTarget);
+                    this.select(normalisedTarget);
                     return;
                 }
 
@@ -2051,12 +2051,12 @@ const GridSelection = {
              * @param {Array<string>} ids - Item IDs to select
              */
             setSelected(ids) {
-                // Normalize to strings for consistent comparison
-                const normalizedIds = ids.map(id => String(id));
+                // Normalise to strings for consistent comparison
+                const normalisedIds = ids.map(id => String(id));
 
                 // Check if selection is actually changing to avoid feedback loops
-                if (normalizedIds.length === this._selected.size &&
-                    normalizedIds.every(id => this._selected.has(id))) {
+                if (normalisedIds.length === this._selected.size &&
+                    normalisedIds.every(id => this._selected.has(id))) {
                     return;
                 }
 
@@ -2067,13 +2067,13 @@ const GridSelection = {
 
                 this._selected.clear();
 
-                for (const id of normalizedIds) {
+                for (const id of normalisedIds) {
                     this._selected.add(id);
                     this._updateItemVisualState(id, true);
                 }
 
-                if (normalizedIds.length > 0) {
-                    this._anchor = normalizedIds[normalizedIds.length - 1];
+                if (normalisedIds.length > 0) {
+                    this._anchor = normalisedIds[normalisedIds.length - 1];
                 }
 
                 this._notifySelectionChanged();

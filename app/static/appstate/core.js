@@ -124,7 +124,7 @@ const AppState = (function() {
     // =========================================================================
 
     /**
-     * localStorage helper with JSON serialization and error handling.
+     * localStorage helper with JSON serialisation and error handling.
      * All keys are prefixed with 'photonarium-' to avoid collisions.
      */
     const storage = {
@@ -146,7 +146,7 @@ const AppState = (function() {
         /**
          * Set a value in localStorage.
          * @param {string} key - Storage key (without prefix)
-         * @param {*} value - Value to store (will be JSON serialized)
+         * @param {*} value - Value to store (will be JSON serialised)
          */
         set(key, value) {
             try {
@@ -170,7 +170,7 @@ const AppState = (function() {
     /** @type {Set<Object>} Domains that need notification after transaction */
     let _dirtyDomains = new Set();
 
-    /** @type {Promise} Queue for serializing async operations */
+    /** @type {Promise} Queue for serialising async operations */
     let _transactionQueue = Promise.resolve();
 
     /**
@@ -259,7 +259,7 @@ const AppState = (function() {
     /**
      * Queue an async operation to run after pending operations complete.
      *
-     * Used for API calls that should be serialized. The queue ensures
+     * Used for API calls that should be serialised. The queue ensures
      * operations complete in order even if they have different latencies.
      *
      * @param {Function} fn - Async function to queue

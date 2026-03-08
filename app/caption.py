@@ -146,7 +146,7 @@ class CaptionGenerator:
         british_english: bool = False,
         device: str | None = None,
     ):
-        """Initialize the caption generator.
+        """Initialise the caption generator.
 
         Args:
             model_name: BLIP model to use. Default 'Salesforce/blip-image-captioning-large'.

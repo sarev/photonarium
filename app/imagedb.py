@@ -545,7 +545,7 @@ def folder_path_upper_bound(folder_path: str) -> str:
     LIKE with a prefix wildcard (path LIKE folder || '%') cannot use indexes.
 
     Args:
-        folder_path: Folder path (should end with '/' for correct behavior).
+        folder_path: Folder path (should end with '/' for correct behaviour).
 
     Returns:
         Upper bound string for exclusive comparison.
@@ -2194,7 +2194,7 @@ class OpenCLIPModel:
         """Encode a semantic query with support for negative terms.
 
         Parses the query for negative terms (prefixed with '-' at start or after space)
-        and computes a combined embedding: normalize(positive - weight * negative).
+        and computes a combined embedding: normalise(positive - weight * negative).
 
         Examples:
             "beach -face" -> positive: "beach", negative: "face"
@@ -2233,7 +2233,7 @@ class OpenCLIPModel:
         if positive_embedding is not None and negative_embedding is not None:
             # Subtract weighted negative from positive
             combined = positive_embedding - negative_weight * negative_embedding
-            # Re-normalize
+            # Re-normalise
             norm = np.linalg.norm(combined)
             if norm > 0:
                 combined = combined / norm
@@ -3361,7 +3361,7 @@ class ImportWorker(threading.Thread):
 
     @staticmethod
     def _get_file_date(path: Path) -> datetime:
-        """Get the best date for organizing the file into date-based directories.
+        """Get the best date for organising the file into date-based directories.
 
         Tries EXIF DateTimeOriginal first, then falls back to the file's
         modification time. This determines which ``YYYY/YYYY-MM-DD/`` subdirectory
@@ -3829,7 +3829,7 @@ class ImageDatabase:
         """Regenerate all face thumbnails with improved non-distorted rendering.
 
         For non-square face crops, creates a square thumbnail with a blurred,
-        darkened background and the undistorted face centered on top.
+        darkened background and the undistorted face centred on top.
 
         Groups faces by image and processes in parallel using a thread pool.
         Respects _stop_event for graceful shutdown.
@@ -5366,7 +5366,7 @@ class ImageDatabase:
             return []
 
         # Encode the query text (with support for negative terms)
-        # encode_semantic_query returns a normalized embedding
+        # encode_semantic_query returns a normalised embedding
         query_embedding = self._get_clip_model().encode_semantic_query(query)
 
         # Get embeddings for the specified images

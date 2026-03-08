@@ -565,7 +565,7 @@ const Videos = {
             // Heatmap overlay (search mode only)
             if (isSearch && scene.normalised_score != null) {
                 const overlay = App.createElement('div', { className: 'timeline-heatmap' });
-                overlay.style.backgroundColor = this._scoreToColor(scene.normalised_score);
+                overlay.style.backgroundColor = this._scoreToColour(scene.normalised_score);
                 sceneEl.appendChild(overlay);
             }
 
@@ -873,12 +873,12 @@ const Videos = {
             document.addEventListener('mouseup', onUp);
         });
 
-        // Click on minimap background — jump viewport center to click position
+        // Click on minimap background — jump viewport centre to click position
         minimap.addEventListener('mousedown', (e) => {
             if (e.target === viewport || dragging) return;
             const rect = minimap.getBoundingClientRect();
             const clickPct = (e.clientX - rect.left) / rect.width;
-            // Center the viewport around the click
+            // Centre the viewport around the click
             const targetScroll = clickPct * track.scrollWidth - track.clientWidth / 2;
             track.scrollLeft = Math.max(0, targetScroll);
 
@@ -937,7 +937,7 @@ const Videos = {
         for (const scene of scenes) {
             const midTime = (scene.start_time + scene.end_time) / 2;
             const pct = (midTime / totalDuration * 100).toFixed(2);
-            const color = this._scoreToColor(scene.normalised_score ?? 0);
+            const color = this._scoreToColour(scene.normalised_score ?? 0);
             stops.push(`${color} ${pct}%`);
         }
         return `linear-gradient(to right, ${stops.join(', ')})`;
@@ -974,10 +974,10 @@ const Videos = {
      * Convert a normalised score (0-1) to a heatmap colour.
      * 0 = transparent, 0-0.5 = blue->yellow, 0.5-1.0 = yellow->red.
      * @param {number} score
-     * @returns {string} CSS color with opacity
+     * @returns {string} CSS colour with opacity
      * @private
      */
-    _scoreToColor(score) {
+    _scoreToColour(score) {
         if (score <= 0) return 'transparent';
 
         let r, g, b;

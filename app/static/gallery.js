@@ -14,7 +14,7 @@
  *   - DOM elements are only created after their thumbnail blob URL is fetched
  *   - Items are absolutely positioned and can load in any order
  *   - A faint grid pattern shows placeholder positions during scroll
- *   - Priority based on absolute distance from center of visible area
+ *   - Priority based on absolute distance from centre of visible area
  *
  * RESPONSIBILITIES:
  *
@@ -205,7 +205,7 @@ const Gallery = {
                 });
             }
         } else {
-            console.log('VirtualGrid: NOT INITIALIZED');
+            console.log('VirtualGrid: NOT INITIALISED');
         }
 
         // Specific image info

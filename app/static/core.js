@@ -42,8 +42,8 @@
  *
  * Module Registration:
  *   - Exposes App.registerModule() for screen modules to register themselves
- *   - Ensures proper initialization order
- *   - Provides App.ready() callback for post-initialization logic
+ *   - Ensures proper initialisation order
+ *   - Provides App.ready() callback for post-initialisation logic
  *
  * @module core
  */
@@ -98,7 +98,7 @@ const App = {
     },
 
     /**
-     * Event subscribers organized by event name.
+     * Event subscribers organised by event name.
      * @type {Object<string, Array<Function>>}
      * @private
      */
@@ -132,7 +132,7 @@ const App = {
     _readyCallbacks: [],
 
     /**
-     * Whether the App has completed initialization.
+     * Whether the App has completed initialisation.
      * @type {boolean}
      * @private
      */
@@ -1110,7 +1110,7 @@ const App = {
 
     /**
      * Initialises toolbar event listeners.
-     * Called once during app initialization.
+     * Called once during app initialisation.
      * @private
      */
     _initToolbar() {
@@ -2529,7 +2529,7 @@ const App = {
      * @param {Object} module - Module object with onEnter/onLeave hooks
      * @param {Function} [module.onEnter] - Called when screen becomes active
      * @param {Function} [module.onLeave] - Called when leaving the screen
-     * @param {Function} [module.init] - Called once during app initialization
+     * @param {Function} [module.init] - Called once during app initialisation
      */
     registerModule(name, module) {
         this._modules[name] = module;
@@ -2563,7 +2563,7 @@ const App = {
      * @private
      */
     _init() {
-        // Initialize AppState.view (applies theme to DOM, loads from localStorage)
+        // Initialise AppState.view (applies theme to DOM, loads from localStorage)
         AppState.view.init();
 
         // Set up event bridge from AppState to App events (backward compatibility)
@@ -2604,7 +2604,7 @@ const App = {
                 try {
                     module.init();
                 } catch (error) {
-                    console.error(`Error initializing module '${name}':`, error);
+                    console.error(`Error initialising module '${name}':`, error);
                 }
             }
         }

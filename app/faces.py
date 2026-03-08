@@ -22,7 +22,7 @@ locking (updated_at) to avoid overwriting concurrent user edits.
 Usage:
     from faces import FaceDetector, init_face_tables
 
-    # Initialize database tables
+    # Initialise database tables
     init_face_tables(conn)
 
     # Create detector (lazy loads models on first use)
@@ -152,7 +152,7 @@ _MIGRATIONS = [
 
 
 def init_face_tables(conn: sqlite3.Connection) -> None:
-    """Initialize the face recognition database tables.
+    """Initialise the face recognition database tables.
 
     Creates the people and faces tables if they don't exist, along with
     necessary indexes. Also runs any pending migrations.
@@ -174,7 +174,7 @@ def init_face_tables(conn: sqlite3.Connection) -> None:
     _run_migrations(conn)
 
     conn.commit()
-    logger.info('Face recognition tables initialized')
+    logger.info('Face recognition tables initialised')
 
 
 def _run_migrations(conn: sqlite3.Connection) -> None:
@@ -214,10 +214,10 @@ class DetectedFace:
     """A face detected in an image.
 
     Attributes:
-        box_x: Normalized x coordinate of bounding box (0-1).
-        box_y: Normalized y coordinate of bounding box (0-1).
-        box_w: Normalized width of bounding box (0-1).
-        box_h: Normalized height of bounding box (0-1).
+        box_x: Normalised x coordinate of bounding box (0-1).
+        box_y: Normalised y coordinate of bounding box (0-1).
+        box_w: Normalised width of bounding box (0-1).
+        box_h: Normalised height of bounding box (0-1).
         confidence: Detection confidence score (0-1).
         embedding: 512D face embedding as numpy array.
     """
@@ -253,7 +253,7 @@ class FaceDetector:
         min_face_size: int = FACE_DETECTION_MIN_SIZE_PX,
         device: str | None = None,
     ):
-        """Initialize the face detector.
+        """Initialise the face detector.
 
         Args:
             min_confidence: Minimum MTCNN confidence for face detection.
@@ -345,7 +345,7 @@ class FaceDetector:
                 Larger images are downscaled to improve performance.
 
         Returns:
-            List of DetectedFace objects with normalized bounding boxes
+            List of DetectedFace objects with normalised bounding boxes
             and embeddings. Returns empty list if no faces detected or
             on error.
         """
@@ -412,7 +412,7 @@ class FaceDetector:
                 box = valid_boxes[i]
                 prob = valid_probs[i]
 
-                # Convert box from pixels to normalized coordinates (0-1)
+                # Convert box from pixels to normalised coordinates (0-1)
                 # MTCNN returns [x1, y1, x2, y2] format
                 x1, y1, x2, y2 = box
 
@@ -421,15 +421,15 @@ class FaceDetector:
                 box_height = y2 - y1
                 box_size = max(box_width, box_height)
 
-                # Center the square box
-                center_x = (x1 + x2) / 2
-                center_y = (y1 + y2) / 2
+                # Centre the square box
+                centre_x = (x1 + x2) / 2
+                centre_y = (y1 + y2) / 2
 
                 # Calculate square box coordinates
-                sq_x1 = center_x - box_size / 2
-                sq_y1 = center_y - box_size / 2
+                sq_x1 = centre_x - box_size / 2
+                sq_y1 = centre_y - box_size / 2
 
-                # Normalize to 0-1 (relative to processed image size)
+                # Normalise to 0-1 (relative to processed image size)
                 norm_x = sq_x1 / processed_width
                 norm_y = sq_y1 / processed_height
                 norm_w = box_size / processed_width
@@ -452,7 +452,7 @@ class FaceDetector:
                 valid_faces.append(
                     (
                         i,  # tensor index
-                        (norm_x, norm_y, norm_w, norm_h),  # normalized box
+                        (norm_x, norm_y, norm_w, norm_h),  # normalised box
                         float(prob),  # confidence
                     )
                 )
@@ -469,7 +469,7 @@ class FaceDetector:
                 embeddings_batch = self.resnet(batch_tensor)
                 embeddings_batch = embeddings_batch.cpu().numpy()
 
-            # Normalize all embeddings (L2 normalization for cosine similarity)
+            # Normalise all embeddings (L2 normalisation for cosine similarity)
             norms = np.linalg.norm(embeddings_batch, axis=1, keepdims=True)
             norms[norms == 0] = 1  # Avoid division by zero
             embeddings_batch = embeddings_batch / norms
@@ -577,7 +577,7 @@ class FaceDetector:
 
         results: dict[Path, list[DetectedFace]] = {}
 
-        # Initialize results with empty lists
+        # Initialise results with empty lists
         for path, _, _ in loaded_images:
             results[path] = []
 
@@ -661,10 +661,10 @@ class FaceDetector:
                     box_height = y2 - y1
                     box_size = max(box_width, box_height)
 
-                    center_x = (x1 + x2) / 2
-                    center_y = (y1 + y2) / 2
-                    sq_x1 = center_x - box_size / 2
-                    sq_y1 = center_y - box_size / 2
+                    centre_x = (x1 + x2) / 2
+                    centre_y = (y1 + y2) / 2
+                    sq_x1 = centre_x - box_size / 2
+                    sq_y1 = centre_y - box_size / 2
 
                     norm_x = max(0.0, min(1.0, sq_x1 / processed_width))
                     norm_y = max(0.0, min(1.0, sq_y1 / processed_height))
@@ -768,7 +768,7 @@ class FaceDetector:
         ]
         del all_faces_data
 
-        # Normalize embeddings
+        # Normalise embeddings
         norms = np.linalg.norm(embeddings_batch, axis=1, keepdims=True)
         norms[norms == 0] = 1
         embeddings_batch = embeddings_batch / norms
@@ -810,10 +810,10 @@ def _create_face_thumbnail(
 
     Args:
         img: PIL Image (already RGB, EXIF-corrected).
-        box_x: Normalized x coordinate of face box (0-1).
-        box_y: Normalized y coordinate of face box (0-1).
-        box_w: Normalized width of face box (0-1).
-        box_h: Normalized height of face box (0-1).
+        box_x: Normalised x coordinate of face box (0-1).
+        box_y: Normalised y coordinate of face box (0-1).
+        box_w: Normalised width of face box (0-1).
+        box_h: Normalised height of face box (0-1).
         size: Output thumbnail size in pixels (square).
 
     Returns:
@@ -821,7 +821,7 @@ def _create_face_thumbnail(
     """
     width, height = img.size
 
-    # Convert normalized coordinates to pixels
+    # Convert normalised coordinates to pixels
     px_x = int(box_x * width)
     px_y = int(box_y * height)
     px_w = int(box_w * width)
@@ -845,7 +845,7 @@ def _create_face_thumbnail(
     if (1 - FACE_THUMB_SQUARE_TOLERANCE) <= aspect_ratio <= (1 + FACE_THUMB_SQUARE_TOLERANCE):
         thumb = face_crop.resize((size, size), Image.Resampling.LANCZOS)
     else:
-        # Non-square: create blurred/darkened background with centered face
+        # Non-square: create blurred/darkened background with centred face
         # Background: stretch to square, blur, darken
         background = face_crop.resize((size, size), Image.Resampling.LANCZOS)
         background = background.filter(ImageFilter.GaussianBlur(radius=FACE_THUMB_BG_BLUR_RADIUS))
@@ -865,7 +865,7 @@ def _create_face_thumbnail(
 
         foreground = face_crop.resize((new_w, new_h), Image.Resampling.LANCZOS)
 
-        # Center foreground on background
+        # Centre foreground on background
         paste_x = (size - new_w) // 2
         paste_y = (size - new_h) // 2
         background.paste(foreground, (paste_x, paste_y))
@@ -891,15 +891,15 @@ def generate_face_thumbnail(
 
     Crops the face region from the full-size image and saves as a square
     thumbnail. For non-square crops, creates a blurred background with the
-    undistorted face centered. Applies sharpening to counteract downscale blur.
+    undistorted face centred. Applies sharpening to counteract downscale blur.
 
     Args:
         source_path: Path to the source image.
         dest_path: Path where thumbnail should be saved.
-        box_x: Normalized x coordinate of face box (0-1).
-        box_y: Normalized y coordinate of face box (0-1).
-        box_w: Normalized width of face box (0-1).
-        box_h: Normalized height of face box (0-1).
+        box_x: Normalised x coordinate of face box (0-1).
+        box_y: Normalised y coordinate of face box (0-1).
+        box_w: Normalised width of face box (0-1).
+        box_h: Normalised height of face box (0-1).
         size: Output thumbnail size in pixels (square).
         quality: JPEG quality (1-100).
 
@@ -1189,7 +1189,7 @@ def revalidate_person_faces(
     Checks each face's similarity to other faces of the same person.
     Faces that don't meet the threshold are unassigned (ejected to unknown pool).
 
-    DESIGN: This function implements atomic cascade behavior - if ejecting faces would
+    DESIGN: This function implements atomic cascade behaviour - if ejecting faces would
     leave preferred_face_id invalid, auto-selects a new one. This maintains the data
     integrity invariant that person.preferred_face_id must always be valid.
     (see design-audit.md 1.4)
@@ -1228,7 +1228,7 @@ def revalidate_person_faces(
         logger.error(f'OOM building embedding matrix for person {person_id} ({len(faces)} faces), skipping eject')
         return []
 
-    # Ensure normalized (guard against zero-norm embeddings from corruption)
+    # Ensure normalised (guard against zero-norm embeddings from corruption)
     norms = np.linalg.norm(embeddings, axis=1, keepdims=True)
     if not np.allclose(norms, 1.0, atol=0.01):
         norms[norms == 0] = 1
@@ -1397,10 +1397,10 @@ def create_face(
     Args:
         conn: Database connection.
         image_id: ID of the image containing this face.
-        box_x: Normalized x coordinate of bounding box.
-        box_y: Normalized y coordinate of bounding box.
-        box_w: Normalized width of bounding box.
-        box_h: Normalized height of bounding box.
+        box_x: Normalised x coordinate of bounding box.
+        box_y: Normalised y coordinate of bounding box.
+        box_w: Normalised width of bounding box.
+        box_h: Normalised height of bounding box.
         embedding: 512D face embedding for recognition.
         confidence: Detection confidence (optional).
         person_id: Associated person ID (optional).
@@ -1802,7 +1802,7 @@ def get_face_matches(
     # Compute similarities
     locked_matrix = np.vstack([emb for _, _, _, emb in locked_faces])
 
-    # Ensure L2-normalized (guard against zero-norm from corruption)
+    # Ensure L2-normalised (guard against zero-norm from corruption)
     target_norm = np.linalg.norm(target_embedding)
     if target_norm == 0:
         return []  # Zero-norm embedding cannot produce meaningful matches
@@ -1813,7 +1813,7 @@ def get_face_matches(
         locked_norms[locked_norms == 0] = 1
         locked_matrix = locked_matrix / locked_norms[:, np.newaxis]
 
-    # Dot product = cosine similarity for L2-normalized vectors
+    # Dot product = cosine similarity for L2-normalised vectors
     similarities = target_embedding @ locked_matrix.T
 
     # Group by person, keeping only the best match per person
@@ -2179,7 +2179,7 @@ def find_best_match(
     if not known_embeddings:
         return None
 
-    # Ensure input embedding is normalized (guard against zero-norm)
+    # Ensure input embedding is normalised (guard against zero-norm)
     emb_norm = np.linalg.norm(embedding)
     if emb_norm == 0:
         return None  # Zero-norm embedding cannot produce meaningful matches
@@ -2191,7 +2191,7 @@ def find_best_match(
     max_similarity = -1.0
 
     for face_id, person_id, known_embedding in known_embeddings:
-        # Ensure known embedding is normalized (skip zero-norm)
+        # Ensure known embedding is normalised (skip zero-norm)
         known_norm = np.linalg.norm(known_embedding)
         if known_norm == 0:
             continue
@@ -2517,27 +2517,27 @@ def reassess_unknown_faces(
     candidate_ids = [fid for fid, _ in candidate_embeddings]
     candidate_matrix = np.vstack([emb for _, emb in candidate_embeddings])
 
-    # Verify embeddings are L2-normalized (norms should be ~1.0)
+    # Verify embeddings are L2-normalised (norms should be ~1.0)
     known_norms = np.linalg.norm(known_matrix, axis=1)
     candidate_norms = np.linalg.norm(candidate_matrix, axis=1)
     if not np.allclose(known_norms, 1.0, atol=0.01):
         logger.warning(
-            f'Known embeddings not normalized! norms: min={known_norms.min():.3f}, max={known_norms.max():.3f}'
+            f'Known embeddings not normalised! norms: min={known_norms.min():.3f}, max={known_norms.max():.3f}'
         )
-        # Re-normalize (guard against zero-norm from corruption)
+        # Re-normalise (guard against zero-norm from corruption)
         known_norms[known_norms == 0] = 1
         known_matrix = known_matrix / known_norms[:, np.newaxis]
     if not np.allclose(candidate_norms, 1.0, atol=0.01):
         logger.warning(
-            f'Candidate embeddings not normalized! norms: '
+            f'Candidate embeddings not normalised! norms: '
             f'min={candidate_norms.min():.3f}, max={candidate_norms.max():.3f}'
         )
-        # Re-normalize (guard against zero-norm from corruption)
+        # Re-normalise (guard against zero-norm from corruption)
         candidate_norms[candidate_norms == 0] = 1
         candidate_matrix = candidate_matrix / candidate_norms[:, np.newaxis]
 
     # Compute all similarities at once: (num_candidates, num_known)
-    # Embeddings are L2-normalized, so dot product = cosine similarity
+    # Embeddings are L2-normalised, so dot product = cosine similarity
     similarities = candidate_matrix @ known_matrix.T
 
     # Pre-compute person -> known face indices for efficient per-person grouping
@@ -2659,7 +2659,7 @@ def compute_unknown_face_groups(
     together. This helps users identify the same unknown person across images.
 
     The algorithm:
-    1. Load all unknown face embeddings (already L2-normalized)
+    1. Load all unknown face embeddings (already L2-normalised)
     2. Compute pairwise cosine similarity using chunked matrix multiplication
     3. Use UnionFind to cluster faces above the similarity threshold
     4. Assign group IDs and update the database
@@ -2712,7 +2712,7 @@ def _compute_unknown_face_groups_impl(
     n_faces = len(face_ids)
     logger.info(f'Computing groups for {n_faces} unknown faces')
 
-    # Stack embeddings into a matrix (already L2-normalized)
+    # Stack embeddings into a matrix (already L2-normalised)
     try:
         embedding_matrix = np.vstack(embeddings)
     except (MemoryError, RuntimeError):
@@ -2805,7 +2805,7 @@ def search_unknown_faces_semantic(
 
     Args:
         conn: Database connection.
-        query_embedding: Normalized query embedding from OpenCLIP.
+        query_embedding: Normalised query embedding from OpenCLIP.
 
     Returns:
         List of face dicts with 'similarity' field added.
@@ -2843,7 +2843,7 @@ def search_unknown_faces_semantic(
         emb_bytes = row['semantic_embedding']
         emb = np.frombuffer(emb_bytes, dtype=np.float32)
 
-        # Compute cosine similarity (embeddings are normalized)
+        # Compute cosine similarity (embeddings are normalised)
         similarity = float(np.dot(query_norm, emb))
 
         faces.append(
@@ -3014,7 +3014,7 @@ def reassess_unknown_faces_async(
             candidate_ids = [fid for fid, _ in candidate_embeddings]
             candidate_matrix = np.vstack([emb for _, emb in candidate_embeddings])
 
-            # Ensure L2-normalized (guard against zero-norm from corruption)
+            # Ensure L2-normalised (guard against zero-norm from corruption)
             known_norms = np.linalg.norm(known_matrix, axis=1)
             candidate_norms = np.linalg.norm(candidate_matrix, axis=1)
             if not np.allclose(known_norms, 1.0, atol=0.01):

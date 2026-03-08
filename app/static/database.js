@@ -26,7 +26,7 @@
  *   - Displays total image count in database
  *   - Updates count as processing completes
  *
- * Startup Behavior:
+ * Startup Behaviour:
  *   - If database is empty on app start, this screen is shown automatically
  *   - Prompts user to add at least one folder to begin
  *

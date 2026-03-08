@@ -39,7 +39,7 @@ AppState.loading = (function() {
     // =========================================================================
 
     /**
-     * Lazy-initialize DOM references.
+     * Lazy-initialise DOM references.
      * @private
      */
     function ensureElements() {

@@ -11,7 +11,7 @@ detection across 6 group levels:
 - Level 4: Directories (auto-generated from filesystem directory structure)
 - Level 5: Custom (user-curated albums)
 
-The module uses several optimization techniques:
+The module uses several optimisation techniques:
 - Multi-index hashing (LSH) for level 1 to avoid O(n²) comparisons
 - Chunked matrix multiplication for levels 2-3 to manage memory
 - Union-find with path compression for efficient clustering
@@ -146,7 +146,7 @@ class UnionFind:
     """
 
     def __init__(self, n: int = 0, ids: list[str] | None = None):
-        """Initialize UnionFind.
+        """Initialise UnionFind.
 
         Args:
             n: Number of elements (for index mode). Elements are 0..n-1.
@@ -226,7 +226,7 @@ class UnionFind:
             True if the sets were merged, False if already in same set.
         """
         if self._id_to_idx is None:
-            raise ValueError('UnionFind not initialized with IDs')
+            raise ValueError('UnionFind not initialised with IDs')
         return self.union(self._id_to_idx[id1], self._id_to_idx[id2])
 
     def extract_groups(self) -> dict[int, list[int]]:
@@ -252,7 +252,7 @@ class UnionFind:
             Only includes groups with more than one member.
         """
         if self._ids is None:
-            raise ValueError('UnionFind not initialized with IDs')
+            raise ValueError('UnionFind not initialised with IDs')
 
         groups: dict[str, list[str]] = {}
         for i in range(self._n):
@@ -536,7 +536,7 @@ def _popcount_vectorized(arr: np.ndarray) -> np.ndarray:
 def _hamming_distance_fast(hash1: int, hash2: int) -> int:
     """Compute Hamming distance between two integer hashes.
 
-    Uses int.bit_count() which is optimized in CPython 3.10+.
+    Uses int.bit_count() which is optimised in CPython 3.10+.
     Falls back to bin().count('1') for compatibility.
     """
     xor = hash1 ^ hash2
@@ -694,7 +694,7 @@ def _compute_level1_lsh(
                 # Vectorized comparison for larger buckets
                 bucket_matches = _find_matches_in_bucket_vectorized(bucket, hashes, threshold)
                 for idx1, idx2 in bucket_matches:
-                    # Normalize pair ordering
+                    # Normalise pair ordering
                     if idx1 > idx2:
                         idx1, idx2 = idx2, idx1
                     pair = (idx1, idx2)
@@ -833,16 +833,16 @@ def _compute_duplicates_level1(conn: sqlite3.Connection, threshold: int = 4) -> 
 # =============================================================================
 
 
-def _normalize_embeddings(embeddings: np.ndarray) -> np.ndarray:
-    """Normalize embeddings to unit length for cosine similarity.
+def _normalise_embeddings(embeddings: np.ndarray) -> np.ndarray:
+    """Normalise embeddings to unit length for cosine similarity.
 
-    After normalization, dot product equals cosine similarity.
+    After normalisation, dot product equals cosine similarity.
 
     Args:
         embeddings: Array of shape (n, dim).
 
     Returns:
-        Normalized array of same shape.
+        Normalised array of same shape.
     """
     norms = np.linalg.norm(embeddings, axis=1, keepdims=True)
     # Avoid division by zero for zero vectors
@@ -859,7 +859,7 @@ def _compute_embedding_duplicates_chunked(
     """Compute duplicate groups from embeddings using chunked processing.
 
     Uses chunked matrix multiplication to avoid O(n²) memory usage.
-    Embeddings should already be normalized for cosine similarity.
+    Embeddings should already be normalised for cosine similarity.
 
     Algorithm:
     1. Process embeddings in chunks to limit memory to O(chunk_size * n)
@@ -870,7 +870,7 @@ def _compute_embedding_duplicates_chunked(
 
     Args:
         image_ids: List of image IDs corresponding to embeddings.
-        embeddings: Normalized embedding matrix of shape (n, dim).
+        embeddings: Normalised embedding matrix of shape (n, dim).
         threshold: Minimum cosine similarity for a match.
         chunk_size: Number of embeddings to process at once.
 
@@ -939,16 +939,16 @@ def _compute_embedding_duplicates_chunked(
     return groups, metrics
 
 
-def _load_embeddings_normalized(
+def _load_embeddings_normalised(
     conn: sqlite3.Connection,
 ) -> tuple[list[str], np.ndarray] | None:
-    """Load all image embeddings and normalize them.
+    """Load all image embeddings and normalise them.
 
     Args:
         conn: Database connection.
 
     Returns:
-        Tuple of (image_ids, normalized_embeddings) or None if < 2 images.
+        Tuple of (image_ids, normalised_embeddings) or None if < 2 images.
     """
     cursor = conn.execute("""
         SELECT id, embedding
@@ -963,8 +963,8 @@ def _load_embeddings_normalized(
     image_ids = [row['id'] for row in rows]
     embeddings = np.array([embedding_to_numpy(row['embedding']) for row in rows])
 
-    # Normalize once for all subsequent operations
-    embeddings = _normalize_embeddings(embeddings)
+    # Normalise once for all subsequent operations
+    embeddings = _normalise_embeddings(embeddings)
 
     return image_ids, embeddings
 
@@ -974,7 +974,7 @@ def _compute_duplicates_level2(conn: sqlite3.Connection, threshold: float = 0.95
 
     Groups images with high cosine similarity (>= threshold).
     Level 2 uses a high threshold (default 0.95) for visually similar images
-    like crops, color adjustments, or shot sequences.
+    like crops, colour adjustments, or shot sequences.
 
     Args:
         conn: Database connection.
@@ -987,7 +987,7 @@ def _compute_duplicates_level2(conn: sqlite3.Connection, threshold: float = 0.95
 
     _clear_duplicate_groups(conn, level=2)
 
-    result = _load_embeddings_normalized(conn)
+    result = _load_embeddings_normalised(conn)
     if result is None:
         logger.info('Not enough images with embeddings for similarity detection')
         return 0
@@ -1035,7 +1035,7 @@ def _compute_duplicates_level3(conn: sqlite3.Connection, threshold: float = 0.85
 
     _clear_duplicate_groups(conn, level=3)
 
-    result = _load_embeddings_normalized(conn)
+    result = _load_embeddings_normalised(conn)
     if result is None:
         logger.info('Not enough images with embeddings for similarity detection')
         return 0
@@ -1116,7 +1116,7 @@ def _compute_duplicates_embedding_incremental(
         )
         for row in cursor:
             emb = embedding_to_numpy(row['embedding'])
-            # Normalize
+            # Normalise
             norm = np.linalg.norm(emb)
             if norm > 0:
                 emb = emb / norm
@@ -1324,7 +1324,7 @@ class DuplicateManager:
     """
 
     def __init__(self, db_path: str, config: Config | None = None):
-        """Initialize the DuplicateManager.
+        """Initialise the DuplicateManager.
 
         Args:
             db_path: Path to the SQLite database.

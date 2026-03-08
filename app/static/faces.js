@@ -312,14 +312,14 @@
     // -------------------------------------------------------------------------
     // VIEW MODE STATE
     // -------------------------------------------------------------------------
-    // The faces screen has three view modes with different UI and behavior:
+    // The faces screen has three view modes with different UI and behaviour:
     //
     //   'all'            Default. Known section (static) + Unknown section (VirtualGrid).
     //                    Selection applies to unknown faces only.
     //                    Delete = suppress (mark as false positive).
     //
     //   'unknowns'       Only unknown faces (hides known section).
-    //                    Same behavior as 'all', just filtered view.
+    //                    Same behaviour as 'all', just filtered view.
     //
     //   'pick-preferred' Focus on single person. Replaces both sections with
     //                    VirtualGrid of that person's faces. Star icon on each
@@ -628,7 +628,7 @@
         divider.innerHTML = '<div class="faces-divider-handle"></div>';
         normalView.appendChild(divider);
 
-        // Set up divider drag behavior
+        // Set up divider drag behaviour
         setupDividerDrag(divider, peopleSection);
 
         // Create unknown section wrapper
@@ -845,21 +845,21 @@
 
         facesGrid.appendChild(pickerView);
 
-        // Initialize VirtualGrid for unknown faces (created once, persists)
+        // Initialise VirtualGrid for unknown faces (created once, persists)
         initUnknownFacesGrid();
 
-        // Initialize GridSelection for unknown faces
+        // Initialise GridSelection for unknown faces
         initFacesSelection();
 
-        // Initialize VirtualGrid for picker (created once, persists)
+        // Initialise VirtualGrid for picker (created once, persists)
         initPickerGrid();
 
-        // Initialize GridSelection for picker
+        // Initialise GridSelection for picker
         initPickerSelection();
     }
 
     /**
-     * Set up divider drag behavior for resizing known section.
+     * Set up divider drag behaviour for resizing known section.
      * Supports both mouse and touch input.
      */
     function setupDividerDrag(divider, section) {
@@ -933,7 +933,7 @@
     }
 
     /**
-     * Initialize the VirtualGrid for unknown faces.
+     * Initialise the VirtualGrid for unknown faces.
      * Called once when containers are created.
      */
     function initUnknownFacesGrid() {
@@ -964,7 +964,7 @@
     }
 
     /**
-     * Initialize GridSelection for unknown faces.
+     * Initialise GridSelection for unknown faces.
      * Called once when containers are created.
      */
     function initFacesSelection() {
@@ -990,7 +990,7 @@
     }
 
     /**
-     * Initialize the VirtualGrid for pick-preferred mode.
+     * Initialise the VirtualGrid for pick-preferred mode.
      * Called once when containers are created.
      */
     function initPickerGrid() {
@@ -1033,7 +1033,7 @@
     }
 
     /**
-     * Initialize GridSelection for pick-preferred mode.
+     * Initialise GridSelection for pick-preferred mode.
      * Called once when containers are created.
      */
     function initPickerSelection() {
@@ -1063,7 +1063,7 @@
     // =========================================================================
 
     /**
-     * Initialize the faces module.
+     * Initialise the faces module.
      * Called when DOM is ready.
      */
     function init() {
@@ -1206,7 +1206,7 @@
         });
 
         // Register the faces screen module
-        // Note: GridSelection is initialized in renderFacesGrid after VirtualGrid is set up
+        // Note: GridSelection is initialised in renderFacesGrid after VirtualGrid is set up
         registerFacesModule();
     }
 
@@ -1698,7 +1698,7 @@
             pickerLoadingEl.hidden = !isLoading;
         }
 
-        // Ensure grid and selection are initialized
+        // Ensure grid and selection are initialised
         if (!pickPreferredGrid) {
             initPickerGrid();
         }
@@ -1800,7 +1800,7 @@
             card.appendChild(ignoreBtn);
         }
 
-        // Quick Match button (centered) - for reassigning to different person
+        // Quick Match button (centred) - for reassigning to different person
         const quickMatchBtn = createQuickMatchButton(face.id, card, pickerSelection);
         card.appendChild(quickMatchBtn);
 
@@ -2562,7 +2562,7 @@
     }
 
     /**
-     * Initialize GridSelection for faces screen.
+     * Initialise GridSelection for faces screen.
      * Works with the VirtualGrid for unknown faces.
      */
     function initFacesSelection() {
@@ -3306,7 +3306,7 @@
             }
         }
 
-        // Ensure selection is initialized and bound
+        // Ensure selection is initialised and bound
         if (!facesSelection) {
             initFacesSelection();
         }
@@ -3415,7 +3415,7 @@
             }
         });
 
-        // Quick Match button (centered)
+        // Quick Match button (centred)
         const quickMatchBtn = createQuickMatchButton(face.id, card, facesSelection);
 
         card.appendChild(thumb);
@@ -3717,7 +3717,7 @@
         container.appendChild(autocomplete);
 
         // Post-render: adjust position if the autocomplete extends off-viewport.
-        // Uses rAF so layout is finalized and getBoundingClientRect is accurate.
+        // Uses rAF so layout is finalised and getBoundingClientRect is accurate.
         requestAnimationFrame(() => {
             if (!autocomplete.isConnected) return;
             const rect = autocomplete.getBoundingClientRect();
@@ -4057,7 +4057,7 @@
             baseWidth = containerRect.height * imgAspect;
         }
 
-        // Position the overlay centered in the container (same as image)
+        // Position the overlay centred in the container (same as image)
         const offsetX = (containerRect.width - baseWidth) / 2;
         const offsetY = (containerRect.height - baseHeight) / 2;
 
@@ -4127,7 +4127,7 @@
             box.classList.add('unknown');
         }
 
-        // Calculate pixel positions from normalized coordinates
+        // Calculate pixel positions from normalised coordinates
         // Positions are relative to the overlay (which matches the image)
         const left = face.box_x * imgWidth;
         const top = face.box_y * imgHeight;
@@ -4250,18 +4250,18 @@
             box.appendChild(ignoreBtn);
         }
 
-        // Quick Match button (centered) - shows on all face types
+        // Quick Match button (centred) — shows on all face types
         const quickMatchBtn = createQuickMatchButtonForOverlay(face.id, box, face);
         box.appendChild(quickMatchBtn);
 
         // Repel buttons if they would overlap on small bboxes
-        // Layout: ignore (left, -10px), quickmatch (center), action (right, -10px)
-        // Each button is 20px wide. Quickmatch is centered via CSS transform.
-        // Overlap happens when width < 48px (need 10+4+20+4+10 from center to edges)
+        // Layout: ignore (left, -10px), quickmatch (centre), action (right, -10px)
+        // Each button is 20px wide. Quickmatch is centred via CSS transform.
+        // Overlap happens when width < 48px (need 10+4+20+4+10 from centre to edges)
         const MIN_BUTTON_GAP = 4;
         const BUTTON_SIZE = 20;
         const BUTTON_OFFSET = 10;  // How far buttons extend beyond box edge
-        // Minimum: half-button + gap + half-center-button on each side = 10+4+10 = 24 per side = 48 total
+        // Minimum: half-button + gap + half-centre-button on each side = 10+4+10 = 24 per side = 48 total
         const minWidthNeeded = (BUTTON_OFFSET + MIN_BUTTON_GAP + BUTTON_SIZE / 2) * 2;
 
         if (width < minWidthNeeded) {
@@ -4269,12 +4269,12 @@
             const overflow = minWidthNeeded - width;
             const outerOffset = overflow / 2;
 
-            // Move outer buttons further out, center button stays centered
+            // Move outer buttons further out, centre button stays centred
             if (ignoreBtn) {
                 ignoreBtn.style.left = `${-BUTTON_OFFSET - outerOffset}px`;
             }
             actionBtn.style.right = `${-BUTTON_OFFSET - outerOffset}px`;
-            // Quick match stays centered (CSS handles it)
+            // Quick match stays centred (CSS handles it)
         }
 
         // Clamp buttons inward when face box is near the image edge so
@@ -4523,7 +4523,7 @@
         }
 
         // Post-render: adjust position if the autocomplete extends off-viewport.
-        // Uses rAF so layout is finalized and getBoundingClientRect is accurate.
+        // Uses rAF so layout is finalised and getBoundingClientRect is accurate.
         requestAnimationFrame(() => {
             if (!activeAutocomplete) return;
             const rect = activeAutocomplete.getBoundingClientRect();
@@ -5003,7 +5003,7 @@
     }
 
     /**
-     * Position the Quick Match card centered over the anchor, respecting viewport bounds.
+     * Position the Quick Match card centred over the anchor, respecting viewport bounds.
      * @param {HTMLElement} card - The card element
      * @param {HTMLElement} anchor - The anchor element
      */
@@ -5017,7 +5017,7 @@
         const anchorRect = anchor.getBoundingClientRect();
         const cardRect = card.getBoundingClientRect();
 
-        // Target: centered horizontally over anchor, above it vertically
+        // Target: centred horizontally over anchor, above it vertically
         let left = anchorRect.left + (anchorRect.width / 2) - (cardRect.width / 2);
         let top = anchorRect.top - cardRect.height - 8;
 
@@ -5045,28 +5045,28 @@
 
     /**
      * Repel face card buttons if they would overlap on small thumbnails.
-     * Moves outer buttons further out while keeping center button centered.
+     * Moves outer buttons further out while keeping centre button centred.
      *
      * @param {number} cardWidth - Width of the card/thumbnail in pixels
      * @param {HTMLElement|null} leftBtn - Left button (ignore), or null
-     * @param {HTMLElement} centerBtn - Center button (quickmatch)
+     * @param {HTMLElement} centreBtn - Centre button (quickmatch)
      * @param {HTMLElement} rightBtn - Right button (suppress/unassign)
      */
-    function repelFaceCardButtons(cardWidth, leftBtn, centerBtn, rightBtn) {
+    function repelFaceCardButtons(cardWidth, leftBtn, centreBtn, rightBtn) {
         const BUTTON_SIZE = 22;      // Face card buttons are 22px
         const BUTTON_INSET = 4;      // 0.25rem = 4px from edge
         const MIN_GAP = 4;           // Minimum gap between buttons
 
         // Calculate minimum width needed:
-        // Left side: inset + button + gap + half of center button
+        // Left side: inset + button + gap + half of centre button
         // Right side: same
         // Total: 2 * (4 + 22 + 4 + 11) = 2 * 41 = 82px for 3 buttons
-        // For 2 buttons: inset + button + gap + half-center on right side only matters
+        // For 2 buttons: inset + button + gap + half-centre on right side only matters
         const numButtons = leftBtn ? 3 : 2;
-        const halfCenter = BUTTON_SIZE / 2;
+        const halfCentre = BUTTON_SIZE / 2;
         const minWidthNeeded = numButtons === 3
-            ? 2 * (BUTTON_INSET + BUTTON_SIZE + MIN_GAP + halfCenter)
-            : BUTTON_INSET + BUTTON_SIZE + MIN_GAP + halfCenter + halfCenter + MIN_GAP + BUTTON_SIZE + BUTTON_INSET;
+            ? 2 * (BUTTON_INSET + BUTTON_SIZE + MIN_GAP + halfCentre)
+            : BUTTON_INSET + BUTTON_SIZE + MIN_GAP + halfCentre + halfCentre + MIN_GAP + BUTTON_SIZE + BUTTON_INSET;
 
         if (cardWidth < minWidthNeeded) {
             const overflow = minWidthNeeded - cardWidth;
@@ -5077,7 +5077,7 @@
                 leftBtn.style.left = `${BUTTON_INSET - outerOffset}px`;
             }
             rightBtn.style.right = `${BUTTON_INSET - outerOffset}px`;
-            // Center button stays centered (CSS handles it)
+            // Centre button stays centred (CSS handles it)
         }
     }
 
@@ -5207,7 +5207,7 @@
     // MODULE REGISTRATION
     // =========================================================================
 
-    // Initialize when DOM is ready
+    // Initialise when DOM is ready
     if (document.readyState === 'loading') {
         document.addEventListener('DOMContentLoaded', init);
     } else {

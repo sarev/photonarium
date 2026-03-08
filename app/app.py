@@ -286,7 +286,7 @@ _caption_generator_lock = threading.Lock()
 
 
 def get_caption_generator() -> CaptionGenerator:
-    """Get the caption generator, initializing if necessary.
+    """Get the caption generator, initialising if necessary.
 
     Thread-safe: uses a lock to prevent duplicate model loading when
     two concurrent caption requests arrive before the model is loaded.
@@ -328,7 +328,7 @@ def _attach_db_log_handler() -> None:
 
 
 def get_db() -> ImageDatabase:
-    """Get the database instance, initializing if necessary.
+    """Get the database instance, initialising if necessary.
 
     Uses ``auto_start=False`` so the database log handler can be attached
     after the ``logs`` table is created (by ``init_database()``) but before
@@ -391,15 +391,15 @@ atexit.register(shutdown_db)
 # Thumbnail RAM Cache Instance
 # =============================================================================
 
-# Global thumbnail cache instance (initialized lazily)
+# Global thumbnail cache instance (initialised lazily)
 _thumbnail_cache: ThumbnailCache | None = None
 _thumbnail_cache_lock = threading.Lock()
 
 
 def get_thumbnail_cache() -> ThumbnailCache:
-    """Get the thumbnail cache instance, initializing if necessary.
+    """Get the thumbnail cache instance, initialising if necessary.
 
-    Thread-safe: uses a lock to prevent duplicate initialization.
+    Thread-safe: uses a lock to prevent duplicate initialisation.
     """
     global _thumbnail_cache
     if _thumbnail_cache is not None:
@@ -410,7 +410,7 @@ def get_thumbnail_cache() -> ThumbnailCache:
             max_bytes = config.thumbnail_cache_size_mb * 1024 * 1024
             _thumbnail_cache = ThumbnailCache(max_bytes)
             if max_bytes > 0:
-                logger.info(f'Thumbnail cache initialized: {config.thumbnail_cache_size_mb}MB')
+                logger.info(f'Thumbnail cache initialised: {config.thumbnail_cache_size_mb}MB')
             else:
                 logger.info('Thumbnail cache disabled (size=0)')
     return _thumbnail_cache
@@ -799,7 +799,7 @@ def get_thumbnail(image_id):
 
 @app.route('/api/images/<image_id>/histogram', methods=['GET'])
 def get_histogram_images(image_id):
-    """Get histogram images for all color channels.
+    """Get histogram images for all colour channels.
 
     Returns a JSON object with base64-encoded PNG data URLs for each
     channel (red, green, blue). Each image is 1000x1000 with transparent
@@ -862,7 +862,7 @@ def get_histogram_images(image_id):
         # Generate histogram images
         hist_size = 1000
 
-        def create_histogram_image(hist, color):
+        def create_histogram_image(hist, colour):
             img = Image.new('RGBA', (hist_size, hist_size), (0, 0, 0, 0))
             draw = ImageDraw.Draw(img)
             max_val = max(hist) if max(hist) > 0 else 1
@@ -874,7 +874,7 @@ def get_histogram_images(image_id):
                 x2 = int((i + 1) * bin_width)
                 height = int((count / max_val) * hist_size)
                 y1 = hist_size - height
-                draw.rectangle([x1, y1, x2, hist_size], fill=color)
+                draw.rectangle([x1, y1, x2, hist_size], fill=colour)
             return img
 
         red_img = create_histogram_image(r_hist, (255, 0, 0, 255))

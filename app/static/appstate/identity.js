@@ -97,7 +97,7 @@ AppState.faces = (function() {
          * Does NOT set locked - caller controls that.
          * @param {string} faceId - Face ID
          * @param {string} personId - Person ID
-         * @param {string} personName - Person name (denormalized)
+         * @param {string} personName - Person name (denormalised)
          */
         linkToPerson(faceId, personId, personName) {
             const face = _cache?.get(faceId);
@@ -156,7 +156,7 @@ AppState.faces = (function() {
         },
 
         /**
-         * Update denormalized person_name (for renames).
+         * Update denormalised person_name (for renames).
          * @param {string} faceId - Face ID
          * @param {string} newName - New person name
          */
@@ -716,7 +716,7 @@ AppState.faces = (function() {
             if (!missingIds.length) return;
 
             // Fetch missing faces individually (batch endpoint doesn't exist)
-            // Group by image to minimize API calls if we had that info,
+            // Group by image to minimise API calls if we had that info,
             // but we don't, so fetch each face directly
             const fetched = [];
             for (const faceId of missingIds) {
@@ -1399,7 +1399,7 @@ AppState.people = (function() {
          * @param {Object} person - Person object
          */
         add(person) {
-            // Initialize cache if needed (person creation can happen before load)
+            // Initialise cache if needed (person creation can happen before load)
             if (!_cache) _cache = new Map();
             _cache.set(person.id, person);
             markDirty(domainRef);
@@ -1446,7 +1446,7 @@ AppState.people = (function() {
 
         /**
          * Set person name.
-         * Also updates denormalized name on all faces.
+         * Also updates denormalised name on all faces.
          * @param {string} personId - Person ID
          * @param {string} name - New name
          */
@@ -1456,7 +1456,7 @@ AppState.people = (function() {
 
             person.name = name;
 
-            // Update denormalized name on faces
+            // Update denormalised name on faces
             const personFaces = AppState.faces._internal.getForPerson(personId);
             for (const face of personFaces) {
                 AppState.faces._internal.updateName(face.id, name);

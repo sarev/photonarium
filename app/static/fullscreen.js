@@ -20,8 +20,8 @@
  *   - Overlays reappear on any user interaction (mouse, keyboard, zoom, pan)
  *
  * Zoom Controls:
- *   - Mouse scroll wheel zooms in/out centered on cursor position
- *   - Touch pinch gesture zooms in/out centered on pinch midpoint
+ *   - Mouse scroll wheel zooms in/out centred on cursor position
+ *   - Touch pinch gesture zooms in/out centred on pinch midpoint
  *   - Double-tap/double-click toggles between fit-to-screen and 100% zoom
  *
  * Pan Controls:
@@ -801,7 +801,7 @@ const Fullscreen = {
 
     /**
      * Handles mouse wheel for zooming.
-     * Zooms centered on cursor position.
+     * Zooms centred on cursor position.
      * Supports both scroll wheel and trackpad pinch gestures.
      * @param {WheelEvent} e
      * @private
@@ -832,10 +832,10 @@ const Fullscreen = {
     },
 
     /**
-     * Zooms in or out centered on a specific point.
+     * Zooms in or out centred on a specific point.
      * @param {number} factor - Zoom multiplier (>1 zooms in, <1 zooms out)
-     * @param {number} clientX - X coordinate of zoom center
-     * @param {number} clientY - Y coordinate of zoom center
+     * @param {number} clientX - X coordinate of zoom centre
+     * @param {number} clientY - Y coordinate of zoom centre
      * @private
      */
     _zoomAtPoint(factor, clientX, clientY) {
@@ -849,12 +849,12 @@ const Fullscreen = {
 
         // Get container bounds (cached to avoid reflow)
         const rect = this._getContainerRect();
-        const centerX = rect.width / 2;
-        const centerY = rect.height / 2;
+        const centreX = rect.width / 2;
+        const centreY = rect.height / 2;
 
-        // Calculate point relative to image center
-        const pointX = clientX - rect.left - centerX;
-        const pointY = clientY - rect.top - centerY;
+        // Calculate point relative to image centre
+        const pointX = clientX - rect.left - centreX;
+        const pointY = clientY - rect.top - centreY;
 
         // Adjust pan to keep the point under cursor stationary
         const zoomRatio = newZoom / oldZoom;
@@ -880,7 +880,7 @@ const Fullscreen = {
         if (this.state.zoom > 1.01) {
             this._resetTransform();
         } else {
-            // Zoom to 100% (or 2x if image is smaller than screen) centered on click
+            // Zoom to 100% (or 2x if image is smaller than screen) centred on click
             const targetZoom = Math.max(2, this._calculateNativeZoom());
             const factor = targetZoom / this.state.zoom;
             this._zoomAtPoint(factor, e.clientX, e.clientY);
@@ -930,7 +930,7 @@ const Fullscreen = {
         if (e.button !== 0 || this.state.zoom <= 1) return;
 
         // Don't start panning if clicking on face tagging elements
-        // (allow default behavior so inputs can receive focus, buttons can be clicked)
+        // (allow default behaviour so inputs can receive focus, buttons can be clicked)
         if (e.target.closest('.face-box, .face-label, .face-input, .face-delete-btn')) return;
 
         e.preventDefault();
@@ -2005,7 +2005,7 @@ const Fullscreen = {
     },
 };
 
-// Initialize module when DOM is ready
+// Initialise module when DOM is ready
 if (document.readyState === 'loading') {
     document.addEventListener('DOMContentLoaded', () => Fullscreen.init());
 } else {

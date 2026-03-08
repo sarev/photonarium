@@ -131,10 +131,10 @@ Stages
    *Interruptible*: Checks `_rerun_requested` between videos so a
    GUI rescan doesn't wait for slow transcription to finish.
 
-Finalization
+Finalisation
 ------------
-Stages 1–5 are "data" stages.  Stages 6–7 ("finalization") only run
-when a data stage did work, or when `_finalization_requested` is set
+Stages 1–5 are "data" stages.  Stages 6–7 ("finalisation") only run
+when a data stage did work, or when `_finalisation_requested` is set
 (on startup for self-healing, or by `request_rerun()`).  This avoids
 repeated no-op grouping every 2 s poll cycle.
 """
@@ -219,11 +219,11 @@ class PipelineOrchestrator(threading.Thread):
         # Per-video progress tracking (for status endpoint)
         self._current_video: dict[str, Any] | None = None
 
-        # Finalization flag: when True, stages 6-7 (grouping/STT) will run
+        # Finalisation flag: when True, stages 6-7 (grouping/STT) will run
         # even if data stages found no work.  Set on startup (self-healing
         # for interrupted grouping/STT) and by request_rerun() (rescans,
         # GUI triggers, etc.).
-        self._finalization_requested = True
+        self._finalisation_requested = True
 
         # Thread-local storage for per-worker DB connections (Stage 1)
         self._thread_local = threading.local()
@@ -237,7 +237,7 @@ class PipelineOrchestrator(threading.Thread):
     def request_rerun(self) -> None:
         """Called from rescan methods to trigger a new pipeline cycle."""
         self._rerun_requested = True
-        self._finalization_requested = True
+        self._finalisation_requested = True
 
     def get_stage_progress(self) -> dict[str, Any]:
         """Get current stage progress for status reporting.
@@ -314,12 +314,12 @@ class PipelineOrchestrator(threading.Thread):
                     pass
 
         # Run grouping and STT when data stages did work, OR when
-        # finalization was explicitly requested (startup self-healing,
+        # finalisation was explicitly requested (startup self-healing,
         # rescans, GUI triggers, etc.).
-        run_finalization = had_work or self._finalization_requested
-        self._finalization_requested = False
+        run_finalisation = had_work or self._finalisation_requested
+        self._finalisation_requested = False
 
-        if run_finalization and not self._stop_event.is_set():
+        if run_finalisation and not self._stop_event.is_set():
             for stage_name, stage_fn in [
                 ('grouping', self._stage_grouping),
                 ('transcription', self._stage_stt),

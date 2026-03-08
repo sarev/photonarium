@@ -48,7 +48,7 @@ AppState.view = (function() {
     /** @type {boolean} Whether the user has explicitly toggled the info panel (vs auto-collapse) */
     let _infoPanelUserSet = storage.get('infoPanelUserSet', false);
 
-    // Initialize theme from system preference if not set
+    // Initialise theme from system preference if not set
     if (_theme === null) {
         _theme = window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
     }
@@ -87,7 +87,7 @@ AppState.view = (function() {
         onChanged: subscribe,
 
         /**
-         * Initialize the view domain (apply theme to DOM).
+         * Initialise the view domain (apply theme to DOM).
          * Called once on app startup.
          */
         init() {
