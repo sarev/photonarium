@@ -1267,11 +1267,17 @@ class PipelineOrchestrator(threading.Thread):
                         frame=frame,
                     )
 
-            # Clear the pending flag now that scene thumbnails exist
+            # Clear the pending flag and set preferred scene to the
+            # first scene so the video has a visible thumbnail in the
+            # Gallery/Videos screens immediately (Stage 3b will later
+            # copy the scene's embedding to the image row).
             with self._db._db_lock:
                 self._db.conn.execute(
-                    'UPDATE images SET thumbnails_pending = 0 WHERE id = ?',
-                    (image_id,),
+                    """UPDATE images SET thumbnails_pending = 0,
+                       preferred_scene_id = COALESCE(preferred_scene_id, ?),
+                       updated_at = ?
+                       WHERE id = ?""",
+                    (scene_ids[0], datetime.now().isoformat(), image_id),
                 )
                 self._db.conn.commit()
 
@@ -1389,8 +1395,8 @@ class PipelineOrchestrator(threading.Thread):
         """
         with self._db._db_lock:
             # Find videos with scenes missing embeddings, OR videos whose
-            # scenes are all embedded but the image-level embedding is still
-            # NULL (self-healing for interrupted processing).
+            # image-level embedding or preferred scene is still NULL
+            # (self-healing for interrupted processing).
             cursor = self._db.conn.execute("""
                 SELECT DISTINCT i.id, i.path
                 FROM images i
@@ -1399,7 +1405,8 @@ class PipelineOrchestrator(threading.Thread):
                   AND i.media_type = 'video'
                   AND (
                       s.embedding IS NULL
-                      OR (i.embedding IS NULL AND i.preferred_scene_id IS NULL)
+                      OR i.embedding IS NULL
+                      OR i.preferred_scene_id IS NULL
                   )
             """)
             rows = cursor.fetchall()
