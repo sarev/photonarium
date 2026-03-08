@@ -753,6 +753,28 @@ class PipelineOrchestrator(threading.Thread):
                         (new_ts_str, new_conf, datetime.now().isoformat(), existing['id']),
                     )
                     conn.commit()
+
+            # Backfill placeholder thumbnails for items ingested before
+            # the placeholder feature was added.  Sets the pending flag
+            # so Stage 2a/2b will generate real thumbnails.
+            checksum = existing_checksum or existing.get('checksum')
+            if checksum:
+                needs_placeholder = False
+                for size_px in (200, 400):
+                    thumb_path = get_thumbnail_cache_path(
+                        checksum, size_px, thumbnail_dir=self._db.thumbnail_dir,
+                    )
+                    if not thumb_path.exists():
+                        needs_placeholder = True
+                        break
+                if needs_placeholder:
+                    self._write_placeholder_thumbnails(checksum)
+                    conn.execute(
+                        'UPDATE images SET thumbnails_pending = 1, updated_at = ? WHERE id = ?',
+                        (datetime.now().isoformat(), existing['id']),
+                    )
+                    conn.commit()
+
             return False
 
         # File changed (size or mtime differ)
