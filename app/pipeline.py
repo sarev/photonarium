@@ -1113,6 +1113,7 @@ class PipelineOrchestrator(threading.Thread):
         if not rows:
             return 0
 
+        self._set_stage('thumbnails', len(rows), 0)
         logger.info(f'Stage 2b: Processing scenes for {len(rows)} videos...')
         count = 0
 
@@ -1129,6 +1130,7 @@ class PipelineOrchestrator(threading.Thread):
                 continue
 
             basename = path.name
+            logger.info(f'Processing video {count + 1}/{len(rows)}: {basename}')
             self._current_video = {
                 'label': basename,
                 'step': 'Detecting scenes',
@@ -1210,7 +1212,8 @@ class PipelineOrchestrator(threading.Thread):
                     )
 
             count += 1
-            logger.debug(f'Processed scenes for video: {basename} ({len(scenes)} scenes)')
+            self._update_done(count)
+            logger.info(f'Video {count}/{len(rows)} done: {basename} ({len(scenes)} scenes)')
 
         self._current_video = None
         if count > 0:
