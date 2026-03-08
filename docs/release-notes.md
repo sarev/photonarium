@@ -1,6 +1,6 @@
 # Release Notes
 
-## v1.2.0-beta.18
+## v1.2.1-beta.18
 
 ### Sequential Pipeline Orchestrator
 
