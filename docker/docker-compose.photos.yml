@@ -17,4 +17,4 @@ services:
       - ${PHOTOS_PATH:-.}:/photos:ro
 
     # Auto-register and scan photos on startup
-    command: --add-folder /photos --scan --detect-faces
+    command: --add-folder /photos --scan

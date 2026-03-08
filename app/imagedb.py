@@ -3534,8 +3534,6 @@ class ImageDatabase:
         auto_start: bool = True,
         preload_model: bool = True,
         run_scan: bool = False,
-        run_face_detection: bool = False,
-        run_face_grouping: bool = False,
     ):
         """Initialise the image database.
 
@@ -3552,19 +3550,15 @@ class ImageDatabase:
             preload_model: If True, load the OpenCLIP model during startup
                 instead of lazily on first use. This provides better console
                 feedback during first-time setup.
-            run_scan: If True, scan folders and queue embeddings on startup.
-                If False (default), just start the server without processing.
-            run_face_detection: If True, run face detection after embeddings.
-                Requires run_scan=True to have any effect.
-            run_face_grouping: If True, compute face/duplicate groups after
-                face detection. Requires run_face_detection=True.
+            run_scan: If True, run the processing pipeline on startup
+                (ingest, thumbnails, embeddings, scoring, face detection,
+                grouping, transcription). If False (default), just start
+                the server without processing.
 
             Use the GUI "Rescan" button to trigger all processing phases.
         """
         self._preload_model = preload_model
         self._run_scan = run_scan
-        self._run_face_detection = run_face_detection
-        self._run_face_grouping = run_face_grouping
         self.db_path = Path(db_path)
         self.thumbnail_dir = Path(thumbnail_dir)
 
@@ -3658,8 +3652,7 @@ class ImageDatabase:
         Steps 3-7 of the startup sequence. Call this if auto_start=False
         was passed to __init__.
 
-        Uses self._run_scan, self._run_face_detection, and self._run_face_grouping
-        to determine which processing phases to run.
+        Uses self._run_scan to determine whether to trigger the pipeline.
         """
         # Step 3: Verify registered folders exist
         logger.info('[3/5] Verifying registered folders...')
@@ -4186,8 +4179,6 @@ class ImageDatabase:
             db=self,
             stop_event=self._stop_event,
             pause_event=self._pause_event,
-            run_face_detection=self._run_face_detection,
-            run_face_grouping=self._run_face_grouping,
         )
 
         # If scan was requested, trigger the pipeline to run immediately
@@ -4331,10 +4322,6 @@ class ImageDatabase:
         with self._db_lock:
             result = add_folder(self.conn, path)
         if result is not None:
-            # Enable full processing chain — adding a folder via the GUI
-            # should trigger face detection and grouping just like Rescan
-            self._run_face_detection = True
-            self._run_face_grouping = True
             emit_folder_added(self.event_queue, result['path'])
             # Re-validate trash dir (new folder may conflict)
             self._validate_trash_dir()
@@ -4342,8 +4329,6 @@ class ImageDatabase:
             # new folder's images.  No blocking scan needed since the
             # orchestrator runs in its own thread.
             if self._orchestrator is not None:
-                self._orchestrator.run_face_detection = True
-                self._orchestrator.run_face_grouping = True
                 self._orchestrator.request_rerun()
         return result
 
@@ -4840,9 +4825,7 @@ class ImageDatabase:
         )
 
         # Trigger a rescan so the newly imported files get picked up by
-        # the existing ingestion pipeline. Enable full processing chain.
-        self._run_face_detection = True
-        self._run_face_grouping = True
+        # the existing ingestion pipeline.
         scan_thread = threading.Thread(
             target=self._scan_and_queue_folder,
             args=(str(self.catalogue_dir),),
@@ -5466,107 +5449,6 @@ class ImageDatabase:
         """
         return
 
-    def reprocess_broken_videos(self, force_all: bool = False) -> int:
-        """Delete scene data for broken (or all) videos so the pipeline re-processes them.
-
-        Clears scenes and embedding data, then triggers a pipeline rerun.
-        Stage 2 (thumbnails) and Stage 3 (embeddings) will pick up
-        the videos that now have null values.
-
-        Args:
-            force_all: If True, reprocess every video; if False, only broken ones.
-
-        Returns:
-            Number of videos marked for reprocessing.
-        """
-        with self._db_lock:
-            if force_all:
-                cursor = self.conn.execute("""
-                    SELECT id, basename FROM images
-                    WHERE deleted = 0 AND media_type = 'video'
-                """)
-            else:
-                cursor = self.conn.execute("""
-                    SELECT i.id, i.basename
-                    FROM images i
-                    WHERE i.deleted = 0
-                      AND i.media_type = 'video'
-                      AND (
-                          NOT EXISTS (SELECT 1 FROM scenes s WHERE s.image_id = i.id)
-                          OR i.preferred_scene_id IS NULL
-                          OR i.embedding IS NULL
-                          OR EXISTS (
-                              SELECT 1 FROM scenes s2
-                              WHERE s2.image_id = i.id AND s2.embedding IS NULL
-                          )
-                      )
-                """)
-            rows = cursor.fetchall()
-
-            if not rows:
-                return 0
-
-            video_ids = [row['id'] for row in rows]
-
-            # Delete all scenes for these videos (forces clean re-detection)
-            placeholders = ','.join('?' * len(video_ids))
-            self.conn.execute(
-                f'DELETE FROM scenes WHERE image_id IN ({placeholders})',
-                video_ids,
-            )
-
-            # Clear preferred_scene_id and embedding so they look fully unprocessed
-            self.conn.execute(
-                f'UPDATE images SET preferred_scene_id = NULL, embedding = NULL WHERE id IN ({placeholders})',
-                video_ids,
-            )
-            self.conn.commit()
-
-        logger.info(f'Marked {len(rows)} video(s) for reprocessing')
-
-        # Trigger pipeline rerun — Stage 2+3 will pick up the cleared videos
-        if self._orchestrator is not None:
-            self._orchestrator.request_rerun()
-
-        return len(rows)
-
-    def queue_transcribe_videos(self) -> int:
-        """Trigger transcription for videos missing STT data.
-
-        Counts videos needing transcription and triggers a pipeline
-        rerun.  Stage 7 (STT) will pick them up automatically.
-
-        Returns:
-            Number of videos needing transcription.
-        """
-        with self._db_lock:
-            cursor = self.conn.execute("""
-                SELECT COUNT(DISTINCT i.id) as count
-                FROM images i
-                JOIN scenes s ON s.image_id = i.id
-                WHERE i.deleted = 0
-                  AND i.media_type = 'video'
-                  AND s.transcription IS NULL
-                  AND i.preferred_scene_id IS NOT NULL
-                  AND i.embedding IS NOT NULL
-                  AND NOT EXISTS (
-                      SELECT 1 FROM scenes s2
-                      WHERE s2.image_id = i.id AND s2.embedding IS NULL
-                  )
-            """)
-            count = cursor.fetchone()['count']
-
-        if count == 0:
-            return 0
-
-        logger.info(f'{count} video(s) need transcription')
-
-        # Trigger pipeline rerun — Stage 7 will transcribe them
-        if self._orchestrator is not None:
-            self._orchestrator.request_rerun()
-
-        return count
-
     def _generate_thumbnails(self, source_path: Path, checksum: str) -> bool:
         """Generate and cache thumbnails for an image at standard sizes.
 
@@ -6030,13 +5912,7 @@ class ImageDatabase:
         """
         logger.info('Queueing full rescan of all folders')
 
-        # Enable all processing phases (GUI rescan runs everything)
-        self._run_face_detection = True
-        self._run_face_grouping = True
-
         if self._orchestrator is not None:
-            self._orchestrator.run_face_detection = True
-            self._orchestrator.run_face_grouping = True
             self._orchestrator.request_rerun()
 
     def queue_rescan_folder(self, folder_path: str) -> None:
@@ -6050,12 +5926,7 @@ class ImageDatabase:
         """
         logger.info(f'Queueing rescan of folder: {folder_path}')
 
-        self._run_face_detection = True
-        self._run_face_grouping = True
-
         if self._orchestrator is not None:
-            self._orchestrator.run_face_detection = True
-            self._orchestrator.run_face_grouping = True
             self._orchestrator.request_rerun()
 
     # =========================================================================

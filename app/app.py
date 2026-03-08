@@ -136,7 +136,6 @@ from thumbnails import (
     THUMBNAIL_SIZE_LARGE,
     THUMBNAIL_SIZE_SMALL,
     ThumbnailCache,
-    generate_missing_thumbnails,
     generate_thumbnail,
     get_thumbnail_cache_path,
 )
@@ -250,8 +249,6 @@ def _get_version_from_git() -> str:
 
 db: ImageDatabase | None = None
 _run_scan = False  # Set via command-line args in __main__
-_run_face_detection = False  # Set via command-line args in __main__
-_run_face_grouping = False  # Set via command-line args in __main__
 
 # Track face thumbnails currently being regenerated to avoid concurrent attempts
 _face_thumb_regenerating: set[str] = set()
@@ -348,8 +345,6 @@ def get_db() -> ImageDatabase:
             config=_config,
             auto_start=False,
             run_scan=_run_scan,
-            run_face_detection=_run_face_detection,
-            run_face_grouping=_run_face_grouping,
         )
 
         # Attach database log handler now that the logs table exists.
@@ -1790,23 +1785,6 @@ def rescan_folder():
         return error_response('Missing folder path', 400)
     get_db().queue_rescan_folder(folder_path)
     return success_response(message='Folder rescan queued')
-
-
-@app.route('/api/transcribe-videos', methods=['POST'])
-def transcribe_videos():
-    """Queue already-processed videos for STT transcription only.
-
-    Runs step 6 (speech-to-text) without re-detecting scenes or
-    regenerating thumbnails.  Requires ``stt_enabled`` in config.
-
-    Returns:
-        JSON with ``count`` of videos queued for transcription.
-    """
-    db = get_db()
-    if not db.config.stt_enabled:
-        return error_response('STT is not enabled in configuration', 400)
-    count = db.queue_transcribe_videos()
-    return success_response(count=count, message=f'Queued {count} video(s) for transcription')
 
 
 # =============================================================================
@@ -4582,18 +4560,6 @@ def _format_request_context(max_url_len: int = 200, max_body_len: int = 200) -> 
 # =============================================================================
 
 
-def run_generate_thumbnails_cli():
-    """CLI wrapper for generate_missing_thumbnails."""
-    db = get_db()
-    images = db.get_images_for_thumbnail_generation()
-    generate_missing_thumbnails(
-        images=images,
-        thumbnail_dir=db.thumbnail_dir,
-        quality=db.config.thumbnail_quality,
-        max_source_dimension=db.config.max_image_dimension,
-    )
-
-
 # =============================================================================
 # Main Entry Point
 # =============================================================================
@@ -4603,46 +4569,14 @@ if __name__ == '__main__':
 
     parser = argparse.ArgumentParser(description='Photonarium - Image Catalogue Server')
     parser.add_argument(
-        '-s', '--scan', action='store_true', help='Scan folders and compute image CLIP embeddings on startup'
-    )
-    parser.add_argument(
-        '-f',
-        '--detect-faces',
+        '-s',
+        '--scan',
         action='store_true',
-        help='Run face detection after image CLIP embeddings complete (requires --scan)',
-    )
-    parser.add_argument(
-        '-F',
-        '--group-faces',
-        action='store_true',
-        help='Compute face/duplicate grouping after face detection (requires --detect-faces)',
+        help='Run the processing pipeline on startup (ingest, thumbnails, '
+        'embeddings, scoring, face detection, grouping, transcription)',
     )
     parser.add_argument(
         '-p', '--port', type=int, default=None, help='Port to run the server on (overrides config, default: 5000)'
-    )
-    parser.add_argument(
-        '-g', '--generate-thumbnails', action='store_true', help='Generate missing thumbnails for all images and exit'
-    )
-    parser.add_argument(
-        '-r',
-        '--rebuild-duplicates',
-        action='store_true',
-        help='Force full recomputation of all duplicate groups and exit',
-    )
-    parser.add_argument(
-        '-e',
-        '--generate-face-embeddings',
-        action='store_true',
-        help='Generate CLIP embeddings for faces (for text search) and exit',
-    )
-    parser.add_argument(
-        '-t',
-        '--regenerate-face-thumbnails',
-        action='store_true',
-        help='Regenerate all face thumbnails with non-distorted rendering and exit',
-    )
-    parser.add_argument(
-        '-x', '--extract-exif', action='store_true', help='Extract EXIF metadata for all images missing it and exit'
     )
     parser.add_argument(
         '-m',
@@ -4684,21 +4618,6 @@ if __name__ == '__main__':
         metavar='DATA_DIR',
         help='Create/update config at OS default with the given data_dir and exit. '
         'Used by the installer to persist the chosen data directory.',
-    )
-    parser.add_argument(
-        '--reprocess-videos',
-        nargs='?',
-        const='broken',
-        default=None,
-        metavar='MODE',
-        help='Reprocess broken videos (default) or all videos if "all" is given. '
-        'Deletes scene data and re-queues for processing, then starts the server.',
-    )
-    parser.add_argument(
-        '--transcribe-videos',
-        action='store_true',
-        help='Transcribe already-processed videos that are missing STT. '
-        'Only runs step 6 (speech-to-text) — does not re-detect scenes or regenerate thumbnails.',
     )
     parser.add_argument(
         '--debug',
@@ -4811,6 +4730,10 @@ if __name__ == '__main__':
         print(json.dumps(models))
         sys.exit(0)
 
+    # Set module-level flag before any get_db() call so the DB knows
+    # whether to trigger the pipeline on startup.
+    _run_scan = args.scan
+
     # Handle add-folder command (register folders for indexing)
     # If --scan is also provided, continue to start the server; otherwise exit.
     if args.add_folder:
@@ -4835,134 +4758,12 @@ if __name__ == '__main__':
                 logger.info('Run with --scan to index their images.')
             sys.exit(0)
 
-    # Handle thumbnail generation command
-    if args.generate_thumbnails:
-        # Don't scan, just open database
-        get_db()
-        run_generate_thumbnails_cli()
-        sys.exit(0)
-
-    # Handle duplicate rebuild command
-    if args.rebuild_duplicates:
-        db = get_db()
-        logger.info('Starting full duplicate group recomputation...')
-        start_time = time.time()
-        group_counts = db._duplicate_manager.compute_all(force_full=True)
-        elapsed = time.time() - start_time
-        logger.info(f'Duplicate recomputation completed in {elapsed:.1f}s')
-        for level, count in sorted(group_counts.items()):
-            logger.info(f'  Level {level}: {count} groups')
-        sys.exit(0)
-
-    # Handle face embedding generation command
-    if args.generate_face_embeddings:
-        db = get_db()
-        logger.info('Starting face CLIP embedding generation (for text search)...')
-        start_time = time.time()
-        count = db.backfill_face_semantic_embeddings()
-        elapsed = time.time() - start_time
-        logger.info(f'Generated {count} face CLIP embeddings in {elapsed:.1f}s')
-        sys.exit(0)
-
-    # Handle face thumbnail regeneration command
-    if args.regenerate_face_thumbnails:
-        db = get_db()
-        logger.info('Starting face thumbnail regeneration...')
-        start_time = time.time()
-        count = db.regenerate_face_thumbnails()
-        elapsed = time.time() - start_time
-        logger.info(f'Regenerated {count} face thumbnails in {elapsed:.1f}s')
-        sys.exit(0)
-
-    # Handle EXIF extraction backfill command
-    if args.extract_exif:
-        from concurrent.futures import as_completed
-
-        db = get_db()
-        logger.info('Extracting EXIF metadata for images missing it...')
-        start_time = time.time()
-
-        # Find images with no EXIF data (NULL = never extracted)
-        rows = db.get_images_without_exif()
-        total = len(rows)
-
-        if total == 0:
-            logger.info('All images already have EXIF data extracted.')
-            sys.exit(0)
-
-        logger.info(f'Found {total} images needing EXIF extraction')
-
-        extracted = 0
-        skipped = 0
-        processed = 0
-        interrupted = False
-        num_workers = db.config.indexing_threads or 4
-        executor = ThreadPoolExecutor(max_workers=num_workers)
-
-        try:
-            futures = {executor.submit(db.extract_exif_for_image, row['id']): row for row in rows}
-
-            for future in as_completed(futures):
-                try:
-                    if future.result():
-                        extracted += 1
-                    else:
-                        skipped += 1
-                except Exception as e:
-                    row = futures[future]
-                    logger.warning(f'EXIF extraction failed for {row["basename"]}: {e}')
-                    skipped += 1
-                processed += 1
-
-                if processed % 100 == 0 or processed == total:
-                    logger.info(f'  Progress: {processed}/{total} ({extracted} extracted, {skipped} no EXIF)')
-
-        except KeyboardInterrupt:
-            logger.warning('Interrupted! Cancelling pending tasks...')
-            interrupted = True
-            for future in futures:
-                future.cancel()
-        finally:
-            executor.shutdown(wait=not interrupted, cancel_futures=interrupted)
-
-        elapsed = time.time() - start_time
-        status = 'interrupted' if interrupted else 'completed'
-        logger.info(f'EXIF extraction {status} in {elapsed:.1f}s: {extracted} extracted, {skipped} no EXIF')
-        sys.exit(0)
-
     # -------------------------------------------------------------------------
     # Phase 4: Start the server
     # -------------------------------------------------------------------------
 
-    # Set module-level flags before initializing database
-    _run_scan = args.scan
-    _run_face_detection = args.detect_faces
-    _run_face_grouping = args.group_faces
-
     # Initialise database before starting server
     get_db()
-
-    # Handle video reprocessing (after DB init, before server start)
-    if args.reprocess_videos is not None:
-        force_all = args.reprocess_videos.lower() == 'all'
-        mode_label = 'all' if force_all else 'broken'
-        logger.info(f'Reprocessing {mode_label} videos...')
-        count = db.reprocess_broken_videos(force_all=force_all)
-        if count:
-            logger.info(f'Queued {count} video(s) for reprocessing')
-        else:
-            logger.info('No videos found needing reprocessing')
-
-    # Handle transcribe-only mode (after DB init, before server start)
-    if args.transcribe_videos:
-        if not db.config.stt_enabled:
-            logger.warning('--transcribe-videos requires stt_enabled=true in config, skipping')
-        else:
-            count = db.queue_transcribe_videos()
-            if count:
-                logger.info(f'Queued {count} video(s) for transcription')
-            else:
-                logger.info('No videos found needing transcription')
 
     # Resolve server host/port: CLI --port overrides config, config overrides defaults
     server_host = db.config.server_host

@@ -2,23 +2,141 @@
 
 Replaces the five concurrent processing threads (IngestionThread,
 EmbeddingThread, FaceDetectionThread, NimaThread, VideoProcessingThread)
-with a single thread that runs seven stages sequentially.
+with a single daemon thread that runs seven stages sequentially in a
+loop.  The orchestrator polls every 2 seconds when idle and re-runs
+immediately when `request_rerun()` is called (from `--scan`, GUI
+Rescan, folder add/remove, imports, or timed rescans).
 
-Benefits:
-- No GPU contention (only one model loaded at a time)
-- No DB lock contention between stages
-- Self-healing: each stage queries DB for items with null values, so
-  interrupted processing resumes naturally on restart
-- Simpler control flow (no callback chains)
+Benefits
+--------
+- **No GPU contention** — only one model is loaded at a time.  Each
+  stage explicitly unloads its model (`del model` + `empty_cache()`)
+  before the next stage begins.
+- **No DB lock contention** — stages run sequentially, so the shared
+  `_db_lock` is only briefly held for reads/writes, never contested
+  between stages.
+- **Self-healing** — each stage discovers its own work by querying the
+  DB for rows with null values (e.g. `embedding IS NULL`).  If the
+  process is killed mid-pipeline, restarting picks up exactly where it
+  left off with no manual intervention.
+- **Simpler control flow** — no callback chains, no inter-thread
+  signalling between stages.
 
-Stages:
-1. Ingestion — walk folders, create/update DB records
-2. Thumbnails — generate missing image + scene thumbnails
-3. Embeddings — OpenCLIP on originals (images) / scene thumbs (videos)
-4. Scoring — NIMA + LAION aesthetic scores
-5. Faces — MTCNN + InceptionResnetV1 on 400px image thumbnails
-6. Grouping — directory groups, face reassessment, duplicates, face groups
-7. STT — transcribe videos with null transcription
+Stages
+------
+1. **Ingestion** — Walk registered folders, create/update DB records.
+
+   *Threading*: `ThreadPoolExecutor` with `config.indexing_threads`
+   workers (capped at 16).  Each worker gets its own SQLite connection
+   via `_get_worker_conn()` (WAL mode, `busy_timeout=10 s`) to
+   avoid contention on the shared connection.  Transient "database is
+   locked" errors are retried up to 5 times per file.  Worker
+   connections are closed after the stage completes.
+
+   *No GPU, no batching* — work is I/O-bound (stat, read, hash, EXIF).
+
+2. **Thumbnails** — Generate missing 200 px and 400 px thumbnails for
+   images (2a) and detect scenes + generate scene thumbnails for videos
+   (2b).
+
+   *Threading (2a)*: `ThreadPoolExecutor` with
+   `config.indexing_threads` workers (capped at 8).  Each thumbnail is
+   independently generated from the original image using Pillow/rawpy.
+
+   *Sequential (2b)*: Video scene detection (PyAV + content-aware scene
+   splits) runs one video at a time.  Config vars:
+   `video_scene_detection_threshold`, `video_max_scene_duration`.
+
+   *No GPU* — Pillow resize + sharpen + JPEG encode.
+
+3. **Embeddings** — Compute OpenCLIP vectors for images (3a) and video
+   scenes (3b).
+
+   *GPU model*: OpenCLIP (`config.openclip_model` /
+   `config.openclip_pretrained`).  Loaded lazily via
+   `_get_clip_model()` and kept in memory until the orchestrator
+   stops (shared with Stages 5 and 7).
+
+   *Batching (3a)*: Images are processed in batches of
+   `config.embedding_batch_size` (default 32).  Each batch is loaded
+   from original files, encoded on GPU/CPU, and committed to the DB.
+   LAION aesthetic scores (dot product with a ~2 KB linear head) are
+   computed in the same loop if the head weights are available.
+
+   *Sequential (3b)*: Video scenes are embedded one scene at a time
+   from 400 px scene thumbnails.  All scene embeddings for a single
+   video are committed atomically with the image-level representative
+   embedding to prevent partial state on crash.
+
+   *OOM protection (3b)*: Individual scene encodes are wrapped in a
+   `MemoryError`/`RuntimeError` catch that calls
+   `torch.cuda.empty_cache()` and skips the scene.
+
+4. **Scoring** — NIMA aesthetic scores (4a) and LAION backfill (4b).
+
+   *GPU model (4a)*: NIMA MobileNetV2 checkpoint
+   (`<data_dir>/.nima-mobilenetv2-ava.pth`).  Loaded, used, then
+   explicitly deleted + `empty_cache()` to free VRAM for Stage 5.
+
+   *Batching (4a)*: `config.nima_batch_size` (default 32) images per
+   GPU call.  Input is 400 px thumbnails loaded via Pillow.
+
+   *OOM protection (4a)*: If a batch OOMs, falls back to single-image
+   scoring.  If a single image also OOMs, it is skipped and the cache
+   is cleared.  Model load itself is also wrapped.
+
+   *CPU-only (4b)*: LAION backfill is a numpy dot product on existing
+   embedding blobs — no GPU needed.  DB writes are chunked in groups of
+   1 000 to avoid holding the lock too long.
+
+5. **Faces** — Detect faces with MTCNN, compute InceptionResnetV1
+   embeddings, auto-match to known people, generate face thumbnails,
+   and compute semantic (OpenCLIP) embeddings of face crops.
+
+   *GPU models*: MTCNN + InceptionResnetV1 (from facenet-pytorch).
+   Loaded per-stage, explicitly deleted + `empty_cache()` afterwards.
+   Config: `face_detection_min_confidence`, `face_detection_min_size`.
+   Gated by `config.face_detection_enabled`.
+
+   *Batching*: `config.face_detection_batch_size` (default 32) images
+   per iteration.  Within each batch, MTCNN's `preload_images_batch()`
+   uses 4 I/O workers to load 400 px thumbnails.  Detection results are
+   committed per-image (all faces for one image in a single transaction)
+   to guarantee atomicity on crash.
+
+   *No threadpool* — detection is GPU-bound; parallelism comes from
+   batched tensor operations inside MTCNN.
+
+6. **Grouping** — Post-processing housekeeping (always runs after data
+   stages when work was done or on startup for self-healing).
+
+   *Sub-stages*: (a) sync directory groups, (b) face reassessment
+   (optimistic-locking three-phase: READ→COMPUTE→conditional WRITE),
+   (c) duplicate computation (LSH + embedding similarity; see
+   `duplicates.py`), (d) unknown face clustering, (e) backfill face
+   semantic embeddings.
+
+   *No GPU, no threadpool* — CPU-bound similarity math + DB writes.
+
+7. **STT** — Transcribe videos with `faster-whisper`.
+
+   *GPU model*: Whisper (via `stt.py`).  Loaded lazily; config:
+   `stt_enabled`, `stt_model`, `stt_language`.
+
+   *Sequential*: One video at a time.  Audio is extracted to a temp WAV
+   file, transcribed as a whole, then segments are assigned to scenes by
+   temporal overlap.  Text embeddings are computed via the shared
+   OpenCLIP model.
+
+   *Interruptible*: Checks `_rerun_requested` between videos so a
+   GUI rescan doesn't wait for slow transcription to finish.
+
+Finalization
+------------
+Stages 1–5 are "data" stages.  Stages 6–7 ("finalization") only run
+when a data stage did work, or when `_finalization_requested` is set
+(on startup for self-healing, or by `request_rerun()`).  This avoids
+repeated no-op grouping every 2 s poll cycle.
 """
 
 from __future__ import annotations
@@ -71,8 +189,6 @@ class PipelineOrchestrator(threading.Thread):
         db: ImageDatabase,
         stop_event: threading.Event,
         pause_event: threading.Event,
-        run_face_detection: bool = False,
-        run_face_grouping: bool = False,
     ):
         """Initialise the pipeline orchestrator.
 
@@ -80,15 +196,11 @@ class PipelineOrchestrator(threading.Thread):
             db: ImageDatabase instance (provides conn, config, locks, etc.).
             stop_event: Event to signal thread shutdown.
             pause_event: Event to temporarily pause ingestion.
-            run_face_detection: Whether to run face detection (Stage 5).
-            run_face_grouping: Whether to run grouping (Stage 6).
         """
         super().__init__(name='PipelineOrchestrator', daemon=True)
         self._db = db
         self._stop_event = stop_event
         self._pause_event = pause_event
-        self._run_face_detection = run_face_detection
-        self._run_face_grouping = run_face_grouping
 
         # Stage progress (read by get_processing_status)
         self._current_stage: str | None = None
@@ -110,7 +222,7 @@ class PipelineOrchestrator(threading.Thread):
         # Finalization flag: when True, stages 6-7 (grouping/STT) will run
         # even if data stages found no work.  Set on startup (self-healing
         # for interrupted grouping/STT) and by request_rerun() (rescans,
-        # --transcribe-videos, etc.).
+        # GUI triggers, etc.).
         self._finalization_requested = True
 
         # Thread-local storage for per-worker DB connections (Stage 1)
@@ -126,24 +238,6 @@ class PipelineOrchestrator(threading.Thread):
         """Called from rescan methods to trigger a new pipeline cycle."""
         self._rerun_requested = True
         self._finalization_requested = True
-
-    @property
-    def run_face_detection(self) -> bool:
-        """Whether face detection is enabled for this cycle."""
-        return self._run_face_detection
-
-    @run_face_detection.setter
-    def run_face_detection(self, value: bool) -> None:
-        self._run_face_detection = value
-
-    @property
-    def run_face_grouping(self) -> bool:
-        """Whether grouping is enabled for this cycle."""
-        return self._run_face_grouping
-
-    @run_face_grouping.setter
-    def run_face_grouping(self, value: bool) -> None:
-        self._run_face_grouping = value
 
     def get_stage_progress(self) -> dict[str, Any]:
         """Get current stage progress for status reporting.
@@ -220,7 +314,7 @@ class PipelineOrchestrator(threading.Thread):
 
         # Run grouping and STT when data stages did work, OR when
         # finalization was explicitly requested (startup self-healing,
-        # rescans, --transcribe-videos, etc.).
+        # rescans, GUI triggers, etc.).
         run_finalization = had_work or self._finalization_requested
         self._finalization_requested = False
 
@@ -1563,7 +1657,7 @@ class PipelineOrchestrator(threading.Thread):
         Returns:
             True if any faces were detected.
         """
-        if not self._run_face_detection or not self._db.config.face_detection_enabled:
+        if not self._db.config.face_detection_enabled:
             return False
 
         with self._db._db_lock:
@@ -1799,11 +1893,6 @@ class PipelineOrchestrator(threading.Thread):
             self._db._duplicate_manager.sync_directory_groups(self._db.conn, self._db._db_lock)
         except Exception as e:
             logger.error(f'Failed to sync directory groups: {e}')
-
-        if not self._run_face_grouping:
-            logger.info('Skipping grouping phase (use --group-faces or GUI Rescan)')
-            emit_processing_complete(self._db.event_queue)
-            return False
 
         # 6b: Face reassessment
         if self._db.config.face_detection_enabled and not self._stopped():

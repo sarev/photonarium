@@ -31,14 +31,14 @@ docker run -d \
   -e PUID=$(id -u) \
   -e PGID=$(id -g) \
   7thsw/photonarium:latest \
-  --add-folder /photos --scan --detect-faces
+  --add-folder /photos --scan
 ```
 
 Then open `http://localhost:5000` in your browser. Your photos and videos will start indexing automatically.
 
-The `--add-folder /photos` flag registers the mounted directory (only needed on first run -- folders are saved in the database). The `--scan` flag triggers indexing. The `--add-folder` flag is needed because Docker runs in headless mode, which hides the GUI "Add Folder" button (native folder picker dialogs don't work without a display). The folder list and Rescan button remain available in the web UI. The `--detect-faces` flag causes face detection to run on images as they are indexed after startup.
+The `--add-folder /photos` flag registers the mounted directory (only needed on first run -- folders are saved in the database). The `--scan` flag triggers the full processing pipeline (ingestion, thumbnails, embeddings, scoring, face detection, grouping, transcription). The `--add-folder` flag is needed because Docker runs in headless mode, which hides the GUI "Add Folder" button (native folder picker dialogs don't work without a display). The folder list and Rescan button remain available in the web UI.
 
-On subsequent runs, you can omit `--add-folder` and just use `--scan --detect-faces` to pick up new files, or omit these flags entirely and use the **Rescan Local Folders** button in the web UI.
+On subsequent runs, you can omit `--add-folder` and just use `--scan` to pick up new files, or omit these flags entirely and use the **Rescan Local Folders** button in the web UI.
 
 ## Image Variants
 
@@ -80,7 +80,7 @@ services:
       - PUID=1000
       - PGID=1000
     # Register folder and start indexing
-    command: --add-folder /photos --scan --detect-faces
+    command: --add-folder /photos --scan
 ```
 
 Then run:
@@ -106,7 +106,7 @@ command: >-
   --add-folder /photos/holidays
   --add-folder /photos/family
   --add-folder /photos/archive
-  --scan --detect-faces
+  --scan
 ```
 
 Each `--add-folder` flag registers a folder for indexing. Folders are stored in the database, so subsequent restarts will rescan them even if you remove the `--add-folder` flags from the command.
@@ -482,16 +482,11 @@ python app/app.py --port 8080              # Use a different port
 python app/app.py --data-dir /path/to/data # Override data directory for this session
 python app/app.py --config /path/to/yml    # Use a specific config file
 python app/app.py --init-config /data/dir  # Create config with data_dir set, then exit
-python app/app.py --generate-thumbnails    # Pre-generate thumbnails for all images
-python app/app.py --scan                   # Run folder scan on startup
-python app/app.py --detect-faces           # Run face detection on startup
-python app/app.py --group-faces            # Run unknown face grouping on startup
-python app/app.py --scan --detect-faces    # Combine flags as needed
-python app/app.py --extract-exif           # Extract EXIF metadata for all images and exit
+python app/app.py --scan                   # Run full processing pipeline on startup
 python app/app.py --list-models            # Output required models as JSON (for scripting)
 ```
 
-By default, no processing runs at startup. Add flags to opt in to the phases you want.
+By default, no processing runs at startup. Use `--scan` to run the full pipeline (ingest, thumbnails, embeddings, scoring, face detection, grouping, transcription), or use the **Rescan Local Folders** button in the web UI.
 
 After running the installer (or `--init-config`), `python app.py` reads the data directory from the config file -- no `--data-dir` needed.
 
