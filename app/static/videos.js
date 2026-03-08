@@ -42,6 +42,21 @@ const Videos = {
     /** @type {Function[]} Unsubscribe callbacks. @private */
     _unsubs: [],
 
+    /** @type {HTMLElement|null} Scene preview popup singleton. @private */
+    _previewPopup: null,
+
+    /** @type {HTMLImageElement|null} Preview popup image element. @private */
+    _previewImg: null,
+
+    /** @type {HTMLElement|null} Preview popup score badge. @private */
+    _previewScore: null,
+
+    /** @type {number|null} Long-press timer for touch preview. @private */
+    _previewTimer: null,
+
+    /** @type {boolean} Flag to suppress click after long-press preview. @private */
+    _previewShown: false,
+
     /**
      * Initialise the videos module.
      */
@@ -287,6 +302,7 @@ const Videos = {
      * Called when leaving the videos screen.
      */
     onLeave() {
+        this._hidePreview();
         if (this._selection) this._selection.unbind();
         if (this._grid) this._grid.unbind();
     },
@@ -499,6 +515,7 @@ const Videos = {
      * @private
      */
     _renderTimeline() {
+        this._hidePreview();
         const container = this._els.timeline;
         if (!container) return;
 
@@ -587,8 +604,45 @@ const Videos = {
             });
             sceneEl.appendChild(star);
 
+            // Scene preview popup — hover (desktop) and long-press (touch)
+            sceneEl.addEventListener('mouseenter', (e) => {
+                this._showPreview(e, scene, wrapper);
+            });
+            sceneEl.addEventListener('mousemove', (e) => {
+                this._movePreview(e, wrapper);
+            });
+            sceneEl.addEventListener('mouseleave', () => {
+                this._hidePreview();
+            });
+
+            // Long-press for touch: show preview after 400ms hold
+            sceneEl.addEventListener('pointerdown', (e) => {
+                if (e.pointerType !== 'touch') return;
+                this._previewShown = false;
+                this._previewTimer = setTimeout(() => {
+                    this._previewShown = true;
+                    this._showPreview(e, scene, wrapper);
+                }, 400);
+            });
+            const cancelTouch = () => {
+                if (this._previewTimer) {
+                    clearTimeout(this._previewTimer);
+                    this._previewTimer = null;
+                }
+                this._hidePreview();
+            };
+            sceneEl.addEventListener('pointerup', cancelTouch);
+            sceneEl.addEventListener('pointerleave', cancelTouch);
+            sceneEl.addEventListener('pointercancel', cancelTouch);
+
             // Click handlers
-            sceneEl.addEventListener('click', () => {
+            sceneEl.addEventListener('click', (e) => {
+                // Suppress click after long-press preview
+                if (this._previewShown) {
+                    this._previewShown = false;
+                    e.stopPropagation();
+                    return;
+                }
                 // Highlight selected scene
                 track.querySelectorAll('.timeline-scene.selected').forEach(
                     s => s.classList.remove('selected'),
@@ -624,6 +678,7 @@ const Videos = {
         // Sync minimap viewport on scroll (RAF-throttled)
         let rafPending = false;
         track.addEventListener('scroll', () => {
+            this._hidePreview();
             updateIndicators();
             if (!rafPending) {
                 rafPending = true;
@@ -964,6 +1019,115 @@ const Videos = {
             ticks.push(t);
         }
         return ticks;
+    },
+
+    // =========================================================================
+    // SCENE PREVIEW POPUP
+    // =========================================================================
+
+    /**
+     * Lazily create the scene preview popup element (body-level singleton).
+     * @private
+     */
+    _ensurePreviewPopup() {
+        if (this._previewPopup) return;
+        const popup = App.createElement('div', { className: 'scene-preview-popup hidden' });
+        const img = App.createElement('img', { className: 'scene-preview-img' });
+        const score = App.createElement('span', { className: 'scene-preview-score' });
+        popup.appendChild(img);
+        popup.appendChild(score);
+        document.body.appendChild(popup);
+        this._previewPopup = popup;
+        this._previewImg = img;
+        this._previewScore = score;
+    },
+
+    /**
+     * Show the scene preview popup above the timeline, horizontally
+     * centred on the pointer and clamped to viewport edges.
+     * @param {MouseEvent|PointerEvent} e - Event with clientX/clientY
+     * @param {Object} scene - Scene data (scene_id, normalised_score, etc.)
+     * @param {HTMLElement} wrapper - The .timeline-track-wrapper element
+     * @private
+     */
+    _showPreview(e, scene, wrapper) {
+        this._ensurePreviewPopup();
+        const popup = this._previewPopup;
+        const img = this._previewImg;
+        const scoreEl = this._previewScore;
+
+        const thumbId = scene.scene_id || scene.id;
+        img.src = `/api/scenes/${thumbId}/thumbnail?size=400`;
+
+        const isSearch = AppState.videos.isSearchMode();
+        if (isSearch && scene.normalised_score != null) {
+            scoreEl.textContent = Math.round(scene.normalised_score * 100) + '%';
+            scoreEl.style.display = '';
+        } else {
+            scoreEl.style.display = 'none';
+        }
+
+        popup.classList.remove('hidden');
+
+        // Position after the image loads so offsetWidth/offsetHeight are correct.
+        // Also position immediately with estimated size for responsiveness.
+        const position = () => {
+            const wrapperRect = wrapper.getBoundingClientRect();
+            const gap = 6;
+            const popupW = popup.offsetWidth || 240;
+            const popupH = popup.offsetHeight || 160;
+            let top = wrapperRect.top - popupH - gap;
+            let left = e.clientX - popupW / 2;
+
+            // Clamp to viewport
+            left = Math.max(8, Math.min(left, window.innerWidth - popupW - 8));
+            top = Math.max(8, top);
+
+            popup.style.top = top + 'px';
+            popup.style.left = left + 'px';
+        };
+
+        position();
+        // Re-position once the image has loaded (corrects width)
+        img.addEventListener('load', position, { once: true });
+    },
+
+    /**
+     * Update horizontal position of the preview popup to track the pointer.
+     * @param {MouseEvent} e - mousemove event
+     * @param {HTMLElement} wrapper - The .timeline-track-wrapper element
+     * @private
+     */
+    _movePreview(e, wrapper) {
+        const popup = this._previewPopup;
+        if (!popup || popup.classList.contains('hidden')) return;
+
+        const wrapperRect = wrapper.getBoundingClientRect();
+        const gap = 6;
+        const popupW = popup.offsetWidth || 240;
+        const popupH = popup.offsetHeight || 160;
+
+        let left = e.clientX - popupW / 2;
+        left = Math.max(8, Math.min(left, window.innerWidth - popupW - 8));
+        popup.style.left = left + 'px';
+
+        let top = wrapperRect.top - popupH - gap;
+        top = Math.max(8, top);
+        popup.style.top = top + 'px';
+    },
+
+    /**
+     * Hide the scene preview popup.
+     * @private
+     */
+    _hidePreview() {
+        if (this._previewPopup) {
+            this._previewPopup.classList.add('hidden');
+        }
+        if (this._previewTimer) {
+            clearTimeout(this._previewTimer);
+            this._previewTimer = null;
+        }
     },
 
     // =========================================================================
