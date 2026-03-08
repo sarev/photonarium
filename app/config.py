@@ -254,6 +254,23 @@ CONFIG_SCHEMA: list[tuple[str, list[tuple[str, list[str]]]]] = [
                     'Recommended: 4-8 for HDD, 8-16 for SSD, 16-32 for NAS',
                 ],
             ),
+            (
+                'scan_interval_minutes',
+                [
+                    'Interval in minutes for automatic folder rescans (0 = disabled).',
+                    'Useful for Docker/NAS deployments where photos sync continuously.',
+                    'Range: 0-1440 (0 = off, 1440 = daily)',
+                ],
+            ),
+            (
+                'headless',
+                [
+                    'Headless mode disables features that require a local desktop:',
+                    'the "Add Local Folder" button is hidden and file paths are not',
+                    'clickable (since there is no file manager to reveal files in).',
+                    'Enable this for Docker, NAS, or other server deployments.',
+                ],
+            ),
         ],
     ),
     (

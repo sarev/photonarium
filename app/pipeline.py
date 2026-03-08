@@ -258,6 +258,11 @@ class PipelineOrchestrator(threading.Thread):
         # GUI triggers, etc.).
         self._finalisation_requested = True
 
+        # Ingestion throttle: after a full file walk that found nothing
+        # new, skip Stage 1 on subsequent idle polls until a rescan is
+        # explicitly requested.  The first cycle always runs Stage 1.
+        self._ingestion_needed = True
+
         # Thread-local storage for per-worker DB connections (Stage 1)
         self._thread_local = threading.local()
         self._worker_conns: list[sqlite3.Connection] = []
@@ -271,6 +276,7 @@ class PipelineOrchestrator(threading.Thread):
         """Called from rescan methods to trigger a new pipeline cycle."""
         self._rerun_requested = True
         self._finalisation_requested = True
+        self._ingestion_needed = True
 
     def get_stage_progress(self) -> dict[str, Any]:
         """Get current stage progress for status reporting.
@@ -315,23 +321,44 @@ class PipelineOrchestrator(threading.Thread):
     def _run_pipeline(self) -> bool:
         """Run all stages. Returns True if any stage did work.
 
-        Stages 1-5 are "data" stages that find items needing work via DB
-        queries.  Stage 6 (grouping) and Stage 7 (STT) only run when a
-        preceding stage did work, avoiding repeated no-op grouping every
-        poll cycle.
+        Stage 1 (ingestion) walks all registered folders looking for
+        new/changed files.  This is expensive for large libraries, so
+        it only runs when explicitly requested (startup, rescan, folder
+        change) or when a previous cycle found work (cascading changes).
+        Stages 2-5 are cheap DB queries and always run.
+
+        Stage 6 (grouping) and Stage 7 (STT) only run when a preceding
+        stage did work, avoiding repeated no-op grouping every poll
+        cycle.
         """
         t0 = time.perf_counter()
         had_work = False
 
-        data_stages = [
-            ('ingestion', self._stage_ingestion),
+        # Stage 1 is a full file-system walk — only run when needed
+        if self._ingestion_needed and not self._stop_event.is_set():
+            try:
+                ingestion_did_work = self._stage_ingestion()
+                if ingestion_did_work:
+                    had_work = True
+                    logger.debug('Pipeline stage "ingestion" reported work')
+                else:
+                    # No changes found — skip Stage 1 on subsequent idle
+                    # polls until a rescan is requested.
+                    self._ingestion_needed = False
+            except Exception:
+                logger.exception('Error in pipeline stage "ingestion"')
+                try:
+                    self._db.conn.rollback()
+                except Exception:
+                    pass
+
+        # Stages 2-5 are DB-query-driven and lightweight — always run
+        for stage_name, stage_fn in [
             ('thumbnails', self._stage_thumbnails),
             ('embeddings', self._stage_embeddings),
             ('scoring', self._stage_scoring),
             ('faces', self._stage_faces),
-        ]
-
-        for stage_name, stage_fn in data_stages:
+        ]:
             if self._stop_event.is_set():
                 break
             try:
@@ -651,7 +678,7 @@ class PipelineOrchestrator(threading.Thread):
                 _upsert_image_metadata,
             )
         else:
-            self._process_new_file(
+            return self._process_new_file(
                 conn,
                 path,
                 current_size,
@@ -660,7 +687,6 @@ class PipelineOrchestrator(threading.Thread):
                 create_image,
                 canonicalise_path,
             )
-            return True
 
     def _process_existing_file(
         self,
@@ -762,7 +788,9 @@ class PipelineOrchestrator(threading.Thread):
                 needs_placeholder = False
                 for size_px in (200, 400):
                     thumb_path = get_thumbnail_cache_path(
-                        checksum, size_px, thumbnail_dir=self._db.thumbnail_dir,
+                        checksum,
+                        size_px,
+                        thumbnail_dir=self._db.thumbnail_dir,
                     )
                     if not thumb_path.exists():
                         needs_placeholder = True
@@ -892,15 +920,20 @@ class PipelineOrchestrator(threading.Thread):
         extract_image_metadata,
         create_image,
         canonicalise_path,
-    ) -> None:
-        """Ingest a completely new file (image or video)."""
+    ) -> bool:
+        """Ingest a completely new file (image or video).
+
+        Returns:
+            True if the file was successfully ingested, False if it was
+            skipped (e.g. corrupt file, missing metadata).
+        """
         ext = path.suffix.lower()
         is_video = ext in self._db.config.video_extensions
 
         if is_video:
-            self._ingest_new_video(conn, path, current_size, current_mtime, create_image, canonicalise_path)
+            return self._ingest_new_video(conn, path, current_size, current_mtime, create_image, canonicalise_path)
         else:
-            self._ingest_new_image(
+            return self._ingest_new_image(
                 conn, path, current_size, current_mtime, extract_image_metadata, create_image, canonicalise_path
             )
 
@@ -912,16 +945,20 @@ class PipelineOrchestrator(threading.Thread):
         current_mtime: float,
         create_image,
         canonicalise_path,
-    ) -> None:
-        """Ingest a new video file."""
+    ) -> bool:
+        """Ingest a new video file.
+
+        Returns:
+            True if successfully ingested, False if skipped.
+        """
         if not is_video_supported():
             logger.warning(f'Skipping video (PyAV not installed): {path}')
-            return
+            return False
 
         vmeta = get_video_metadata(path)
         if vmeta is None:
             logger.warning(f'Failed to extract video metadata: {path}')
-            return
+            return False
 
         image_id = str(uuid.uuid4())
         checksum = self._compute_checksum(path)
@@ -962,6 +999,7 @@ class PipelineOrchestrator(threading.Thread):
             self._write_placeholder_thumbnails(checksum)
 
         logger.debug(f'Ingested new video: {path}')
+        return True
 
     def _ingest_new_image(
         self,
@@ -972,8 +1010,12 @@ class PipelineOrchestrator(threading.Thread):
         extract_image_metadata,
         create_image,
         canonicalise_path,
-    ) -> None:
-        """Ingest a new image file."""
+    ) -> bool:
+        """Ingest a new image file.
+
+        Returns:
+            True if successfully ingested, False if skipped.
+        """
         metadata = extract_image_metadata(
             path,
             self._db.config.max_image_dimension,
@@ -982,7 +1024,7 @@ class PipelineOrchestrator(threading.Thread):
         )
         if metadata is None:
             logger.warning(f'Failed to extract metadata for new image: {path}')
-            return
+            return False
 
         image_id = str(uuid.uuid4())
 
@@ -1017,6 +1059,7 @@ class PipelineOrchestrator(threading.Thread):
             self._write_placeholder_thumbnails(metadata.checksum)
 
         logger.debug(f'Ingested new image: {path}')
+        return True
 
     def _mark_deleted_files(self, folder_paths: list[str], found_paths: set[str]) -> None:
         """Mark files in DB but not on disk as deleted."""
@@ -1394,9 +1437,11 @@ class PipelineOrchestrator(threading.Thread):
             Number of videos with scenes embedded.
         """
         with self._db._db_lock:
-            # Find videos with scenes missing embeddings, OR videos whose
-            # image-level embedding or preferred scene is still NULL
-            # (self-healing for interrupted processing).
+            # Find videos needing scene embedding work:
+            # - scenes with NULL embeddings (not yet processed), OR
+            # - image-level embedding/preferred_scene_id still NULL
+            #   AND at least one scene has a real embedding (length > 0,
+            #   i.e. not an empty-blob marker for missing thumbnails).
             cursor = self._db.conn.execute("""
                 SELECT DISTINCT i.id, i.path
                 FROM images i
@@ -1405,8 +1450,15 @@ class PipelineOrchestrator(threading.Thread):
                   AND i.media_type = 'video'
                   AND (
                       s.embedding IS NULL
-                      OR i.embedding IS NULL
-                      OR i.preferred_scene_id IS NULL
+                      OR (
+                          (i.embedding IS NULL OR i.preferred_scene_id IS NULL)
+                          AND EXISTS (
+                              SELECT 1 FROM scenes s2
+                              WHERE s2.image_id = i.id
+                                AND s2.embedding IS NOT NULL
+                                AND length(s2.embedding) > 0
+                          )
+                      )
                   )
             """)
             rows = cursor.fetchall()
@@ -1432,10 +1484,19 @@ class PipelineOrchestrator(threading.Thread):
                 ).fetchall()
 
             if not scene_rows:
+                # All scene embeddings are done, but we may still need to
+                # set preferred_scene_id or image embedding (the query
+                # matched on preferred_scene_id IS NULL or i.embedding IS NULL).
+                if self._fix_video_preferred_scene(image_id):
+                    count += 1
                 continue
 
             embedding_updates: list[tuple] = []
             scene_embeddings: dict[int, np.ndarray] = {}
+            # Scenes whose thumbnails are missing — they can never be
+            # embedded, so we mark them with an empty blob to prevent
+            # the query from re-matching them every cycle.
+            missing_thumb_ids: list[str] = []
 
             for scene_row in scene_rows:
                 if self._stopped():
@@ -1448,6 +1509,7 @@ class PipelineOrchestrator(threading.Thread):
                 prefix = scene_id[:2]
                 thumb_path = self._db.thumbnail_dir / 'scenes' / '400' / prefix / f'{scene_id}.jpg'
                 if not thumb_path.exists():
+                    missing_thumb_ids.append(scene_id)
                     continue
 
                 try:
@@ -1472,45 +1534,147 @@ class PipelineOrchestrator(threading.Thread):
             # This prevents a kill between the two commits from leaving a
             # video with embedded scenes but no image-level embedding
             # (which would be invisible to the re-query on restart).
+            did_work = False
             with self._db._db_lock:
                 if embedding_updates:
                     self._db.conn.executemany(
                         'UPDATE scenes SET embedding = ?, updated_at = ? WHERE id = ?',
                         embedding_updates,
                     )
+                    did_work = True
 
-                # Set preferred scene and image embedding
+                # Mark scenes with missing thumbnails so they stop
+                # matching the s.embedding IS NULL query.  An empty
+                # blob distinguishes them from genuinely unprocessed
+                # scenes (NULL) while being obviously not a real
+                # embedding (length 0 vs 2048 bytes).
+                if missing_thumb_ids:
+                    now_ts = datetime.now().isoformat()
+                    self._db.conn.executemany(
+                        'UPDATE scenes SET embedding = ?, updated_at = ? WHERE id = ?',
+                        [(b'', now_ts, sid) for sid in missing_thumb_ids],
+                    )
+                    logger.debug(
+                        f'Marked {len(missing_thumb_ids)} scenes with missing thumbnails '
+                        f'as un-embeddable for video {row["path"]}'
+                    )
+
+                # Set preferred scene and image embedding — only if changed
                 all_scenes = self._db.conn.execute(
                     'SELECT id, scene_index FROM scenes WHERE image_id = ? ORDER BY scene_index',
                     (image_id,),
                 ).fetchall()
 
                 if all_scenes:
-                    preferred_scene_id = all_scenes[0]['id']
-                    # Get embedding for scene 0 (either just computed or already in DB)
-                    preferred_emb = scene_embeddings.get(0)
-                    if preferred_emb is None:
-                        emb_row = self._db.conn.execute(
-                            'SELECT embedding FROM scenes WHERE id = ?', (preferred_scene_id,)
-                        ).fetchone()
-                        if emb_row and emb_row['embedding']:
-                            preferred_emb = np.frombuffer(emb_row['embedding'], dtype=np.float32)
+                    # Pick the first scene with a real embedding as the
+                    # preferred scene.  Scene 0 is ideal, but if its
+                    # thumbnail was missing (empty-blob marker) we fall
+                    # back to the next available scene.
+                    preferred_scene_id = None
+                    preferred_emb = None
+                    for sc in all_scenes:
+                        emb = scene_embeddings.get(sc['scene_index'])
+                        if emb is None:
+                            emb_row = self._db.conn.execute(
+                                'SELECT embedding FROM scenes WHERE id = ?', (sc['id'],)
+                            ).fetchone()
+                            if emb_row and emb_row['embedding']:
+                                emb = np.frombuffer(emb_row['embedding'], dtype=np.float32)
+                        if emb is not None:
+                            preferred_scene_id = sc['id']
+                            preferred_emb = emb
+                            break
 
                     if preferred_emb is not None:
-                        rep_blob = preferred_emb.astype(np.float32).tobytes()
-                        now_ts = datetime.now().isoformat()
-                        self._db.conn.execute(
-                            'UPDATE images SET embedding = ?, preferred_scene_id = ?, updated_at = ? WHERE id = ?',
-                            (rep_blob, preferred_scene_id, now_ts, image_id),
+                        # Check current state to avoid no-op updates that
+                        # bump updated_at and create perpetually dirty rows
+                        current = self._db.conn.execute(
+                            'SELECT embedding, preferred_scene_id FROM images WHERE id = ?',
+                            (image_id,),
+                        ).fetchone()
+                        needs_update = (
+                            current['embedding'] is None or current['preferred_scene_id'] != preferred_scene_id
                         )
+
+                        if needs_update:
+                            rep_blob = preferred_emb.astype(np.float32).tobytes()
+                            now_ts = datetime.now().isoformat()
+                            self._db.conn.execute(
+                                'UPDATE images SET embedding = ?, preferred_scene_id = ?, updated_at = ? WHERE id = ?',
+                                (rep_blob, preferred_scene_id, now_ts, image_id),
+                            )
+                            did_work = True
 
                 self._db.conn.commit()
 
-            count += 1
+            if did_work:
+                count += 1
 
         if count > 0:
             logger.info(f'Stage 3b complete: embedded scenes for {count} videos')
         return count
+
+    def _fix_video_preferred_scene(self, image_id: str) -> bool:
+        """Set preferred_scene_id and image embedding for a video whose
+        scene embeddings are already computed but whose image-level fields
+        are still NULL (self-healing for interrupted processing).
+
+        Returns:
+            True if the image row was actually updated, False if already correct.
+        """
+        with self._db._db_lock:
+            all_scenes = self._db.conn.execute(
+                'SELECT id, scene_index FROM scenes WHERE image_id = ? ORDER BY scene_index',
+                (image_id,),
+            ).fetchall()
+
+            if not all_scenes:
+                return False
+
+            # Check current state — skip update if already correct
+            current = self._db.conn.execute(
+                'SELECT embedding, preferred_scene_id FROM images WHERE id = ?',
+                (image_id,),
+            ).fetchone()
+
+            # Pick the first scene with a real embedding (non-NULL,
+            # non-empty — empty blobs mark un-embeddable scenes).
+            preferred_scene_id = None
+            preferred_emb = None
+            for sc in all_scenes:
+                emb_row = self._db.conn.execute('SELECT embedding FROM scenes WHERE id = ?', (sc['id'],)).fetchone()
+                if emb_row and emb_row['embedding']:
+                    preferred_scene_id = sc['id']
+                    preferred_emb = np.frombuffer(emb_row['embedding'], dtype=np.float32)
+                    break
+
+            if preferred_emb is not None:
+                # Already has correct embedding and preferred_scene_id — no-op
+                if current['embedding'] is not None and current['preferred_scene_id'] == preferred_scene_id:
+                    return False
+
+                rep_blob = preferred_emb.astype(np.float32).tobytes()
+                now_ts = datetime.now().isoformat()
+                self._db.conn.execute(
+                    'UPDATE images SET embedding = ?, preferred_scene_id = ?, updated_at = ? WHERE id = ?',
+                    (rep_blob, preferred_scene_id, now_ts, image_id),
+                )
+            else:
+                # No scene has a usable embedding — at least set
+                # preferred_scene_id so this video isn't re-queried
+                # every cycle.
+                preferred_scene_id = all_scenes[0]['id']
+                if current['preferred_scene_id'] == preferred_scene_id:
+                    return False
+
+                now_ts = datetime.now().isoformat()
+                self._db.conn.execute(
+                    'UPDATE images SET preferred_scene_id = ?, updated_at = ? WHERE id = ?',
+                    (preferred_scene_id, now_ts, image_id),
+                )
+
+            self._db.conn.commit()
+            return True
 
     def _load_laion_head(self, clip: OpenCLIPModel) -> tuple[np.ndarray | None, float | None]:
         """Load the LAION aesthetic predictor head weights.
