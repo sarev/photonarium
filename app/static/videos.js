@@ -42,6 +42,9 @@ const Videos = {
     /** @type {Function[]} Unsubscribe callbacks. @private */
     _unsubs: [],
 
+    /** @type {Function|null} Unsubscribe for fullscreen nav tracking. @private */
+    _fullscreenUnsub: null,
+
     /** @type {HTMLElement|null} Scene preview popup singleton. @private */
     _previewPopup: null,
 
@@ -121,15 +124,7 @@ const Videos = {
                 }
             },
             onItemActivated: (id) => {
-                // Double-click: open in fullscreen
-                const isSearch = AppState.videos.isSearchMode();
-                const videos = this._getVideoList();
-                const video = videos.find(v => v.id === id);
-                const bestScene = isSearch ? video?.best_scene_id : null;
-                const seekTo = bestScene
-                    ? this._getSceneStartTime(id, bestScene)
-                    : 0;
-                App.showFullscreen(id, { seekTo });
+                this._openFullscreen(id);
             },
             onDeleteRequested: (ids) => {
                 this._deleteVideos(ids);
@@ -150,6 +145,12 @@ const Videos = {
         App.on('clearSelection', () => {
             if (AppState.nav.getScreen() === 'videos' && this._selection) {
                 this._selection.clear();
+            }
+        });
+        App.on('fullscreenSelected', () => {
+            if (AppState.nav.getScreen() === 'videos') {
+                const sel = App.getSelectedImages();
+                if (sel.length === 1) this._openFullscreen(sel[0]);
             }
         });
 
@@ -245,17 +246,43 @@ const Videos = {
         // which produces an empty layout.
         this._refreshGrid();
 
-        // If a video is already selected, ensure its scenes are loaded
-        // (selection callback won't fire since the selection hasn't changed)
+        const videos = this._getVideoList();
+
+        // 1. Fullscreen return — if the user navigated through videos in
+        //    fullscreen, select the last-viewed video (mirrors gallery.js
+        //    pattern at line 456).
+        const lastViewedId = AppState.nav.consumeLastViewedImageId();
+        if (lastViewedId && videos?.some(v => v.id === lastViewedId)) {
+            AppState.videos.selectVideo(lastViewedId);
+            this._loadScenesIfNeeded(lastViewedId);
+            if (this._selection) this._selection.select(lastViewedId);
+            this._renderTimeline();
+            this._grid.scrollToId(lastViewedId, 'instant');
+            return;
+        }
+
+        // 2. Cross-screen selection sync — if the user selected a video on
+        //    Gallery and switched to Videos, pick it up from the shared
+        //    'gallery' selection context.
+        const gallerySelection = AppState.selection.get('gallery');
+        if (gallerySelection.length > 0 && videos?.length > 0) {
+            const videoIds = new Set(videos.map(v => v.id));
+            const match = gallerySelection.find(id => videoIds.has(id));
+            if (match) {
+                AppState.videos.selectVideo(match);
+                this._loadScenesIfNeeded(match);
+                if (this._selection) this._selection.select(match);
+                this._renderTimeline();
+                this._grid.scrollToId(match, 'instant');
+                return;
+            }
+        }
+
+        // 3. Fallback — keep existing selection or auto-select first video.
         const selectedId = AppState.videos.getSelectedVideoId();
         if (selectedId) {
             this._loadScenesIfNeeded(selectedId);
         } else {
-            // Auto-select the first video if none is selected (e.g. after
-            // arriving from search screen where results were set off-screen,
-            // or after clear() reset selectedVideoId while GridSelection
-            // retained its previous selection state)
-            const videos = this._getVideoList();
             if (videos?.length > 0) {
                 const firstId = videos[0].id;
                 AppState.videos.selectVideo(firstId);
@@ -305,6 +332,76 @@ const Videos = {
         this._hidePreview();
         if (this._selection) this._selection.unbind();
         if (this._grid) this._grid.unbind();
+        if (this._fullscreenUnsub) {
+            this._fullscreenUnsub();
+            this._fullscreenUnsub = null;
+        }
+    },
+
+    // =========================================================================
+    // FULLSCREEN
+    // =========================================================================
+
+    /**
+     * Open the fullscreen viewer scoped to the current video list.
+     * Passes the video list as the navigation context so prev/next only
+     * iterates videos visible on this screen. Subscribes to fullscreen
+     * nav events to track selection changes and handle close — mirroring
+     * the Gallery pattern (gallery.js _openFullscreen).
+     * @param {string} id - Video ID to open
+     * @private
+     */
+    _openFullscreen(id) {
+        // Clean up any lingering subscription
+        if (this._fullscreenUnsub) {
+            this._fullscreenUnsub();
+            this._fullscreenUnsub = null;
+        }
+
+        // Subscribe to fullscreen navigation events
+        this._fullscreenUnsub = AppState.nav.onChanged((event) => {
+            if (event.property === 'fullscreenImageId') {
+                // Fullscreen navigated to a new video — update selection
+                const newId = AppState.nav.getFullscreenImageId();
+                if (newId && this._selection) {
+                    this._selection.select(newId);
+                    // Update video-specific state (timeline, scenes)
+                    AppState.videos.selectVideo(newId);
+                    this._loadScenesIfNeeded(newId);
+                    this._renderTimeline();
+                }
+            } else if (event.property === 'fullscreenClosing') {
+                // Consume lastViewedImageId so onEnter doesn't re-apply
+                AppState.nav.consumeLastViewedImageId();
+
+                // Scroll to the last-viewed video
+                if (event.imageId && this._grid) {
+                    this._grid.scrollToId(event.imageId, 'instant');
+                }
+
+                // Unsubscribe
+                if (this._fullscreenUnsub) {
+                    this._fullscreenUnsub();
+                    this._fullscreenUnsub = null;
+                }
+            }
+        });
+
+        // Build fullscreen options with video-scoped navigation list
+        const isSearch = AppState.videos.isSearchMode();
+        const videos = this._getVideoList();
+        const video = videos.find(v => v.id === id);
+        const bestScene = isSearch ? video?.best_scene_id : null;
+        const seekTo = bestScene
+            ? this._getSceneStartTime(id, bestScene)
+            : 0;
+
+        // Select only the target video before opening
+        if (this._selection) {
+            this._selection.select(id);
+        }
+
+        App.showFullscreen(id, { imageList: videos, seekTo });
     },
 
     // =========================================================================

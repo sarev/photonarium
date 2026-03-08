@@ -1157,7 +1157,7 @@ const App = {
         this._bindBtn('btn-vid-thumb-larger', () => {
             AppState.view.setVideoThumbnailSize(AppState.view.getVideoThumbnailSize() + 50);
         });
-        this._bindBtn('btn-vid-fullscreen', () => this._handleFullscreenClick());
+        this._bindBtn('btn-vid-fullscreen', () => this.emit('fullscreenSelected'));
         this._bindBtn('btn-vid-slideshow', () => this._startGallerySlideshow(false));
         this._bindBtn('btn-vid-shuffle', () => this._startGallerySlideshow(true));
         this._bindBtn('btn-vid-reveal-folder', () => this._handleRevealFolderClick());
