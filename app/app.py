@@ -150,7 +150,7 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 # Set our modules to INFO level
-for module in ['app', '__main__', 'imagedb', 'faces', 'thumbnails', 'duplicates', 'config', 'timestamps']:
+for module in ['app', '__main__', 'imagedb', 'faces', 'thumbnails', 'duplicates', 'config', 'timestamps', 'pipeline']:
     logging.getLogger(module).setLevel(logging.INFO)
 
 app = Flask(__name__, static_folder='static', static_url_path='')
@@ -4633,7 +4633,17 @@ if __name__ == '__main__':
     if args.debug:
         _debug_mode = True
         logging.getLogger().setLevel(logging.DEBUG)
-        for module in ['app', '__main__', 'imagedb', 'faces', 'thumbnails', 'duplicates', 'config', 'metadata']:
+        for module in [
+            'app',
+            '__main__',
+            'imagedb',
+            'faces',
+            'thumbnails',
+            'duplicates',
+            'config',
+            'metadata',
+            'pipeline',
+        ]:
             logging.getLogger(module).setLevel(logging.DEBUG)
         logger.info('Debug logging enabled')
 

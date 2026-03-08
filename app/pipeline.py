@@ -287,6 +287,7 @@ class PipelineOrchestrator(threading.Thread):
         preceding stage did work, avoiding repeated no-op grouping every
         poll cycle.
         """
+        t0 = time.perf_counter()
         had_work = False
 
         data_stages = [
@@ -333,6 +334,10 @@ class PipelineOrchestrator(threading.Thread):
                         self._db.conn.rollback()
                     except Exception:
                         pass
+
+        if had_work:
+            elapsed = time.perf_counter() - t0
+            logger.info(f'Pipeline cycle complete ({elapsed:.1f}s)')
 
         return had_work
 
@@ -533,7 +538,10 @@ class PipelineOrchestrator(threading.Thread):
                                 retry_counts.pop(path, None)
                                 error_count += 1
 
-                        self._update_done(processed_count + error_count)
+                        total_done = processed_count + error_count
+                        self._update_done(total_done)
+                        if total_done % 500 == 0 and total_done < len(all_paths):
+                            logger.info(f'  Ingestion: {total_done}/{len(all_paths)} files')
 
                 # Exit when all work is done
                 if paths_exhausted and not pending_futures:
@@ -1244,6 +1252,7 @@ class PipelineOrchestrator(threading.Thread):
         laion_weight, laion_bias = self._load_laion_head(clip)
 
         count = 0
+        last_log = time.perf_counter()
         for batch_start in range(0, len(rows), batch_size):
             if self._stopped():
                 break
@@ -1272,7 +1281,12 @@ class PipelineOrchestrator(threading.Thread):
                     )
                     self._db.conn.commit()
 
-            self._update_done(batch_start + len(batch))
+            done = batch_start + len(batch)
+            self._update_done(done)
+            now = time.perf_counter()
+            if done < len(rows) and now - last_log >= 10.0:
+                logger.info(f'  Embeddings: {done}/{len(rows)}')
+                last_log = now
             time.sleep(0.01)  # Yield GIL
 
         if count > 0:
@@ -1518,6 +1532,7 @@ class PipelineOrchestrator(threading.Thread):
 
         batch_size = self._db.config.nima_batch_size
         count = 0
+        last_log = time.perf_counter()
 
         for batch_start in range(0, len(rows), batch_size):
             if self._stopped():
@@ -1585,7 +1600,12 @@ class PipelineOrchestrator(threading.Thread):
                 self._db.conn.commit()
 
             count += len(updates)
-            self._update_done(batch_start + len(batch))
+            done = batch_start + len(batch)
+            self._update_done(done)
+            now = time.perf_counter()
+            if done < len(rows) and now - last_log >= 10.0:
+                logger.info(f'  NIMA scoring: {done}/{len(rows)}')
+                last_log = now
             time.sleep(0.01)
 
         # Unload NIMA model to free GPU memory for subsequent stages
@@ -1686,6 +1706,7 @@ class PipelineOrchestrator(threading.Thread):
         batch_size = self._db.config.face_detection_batch_size
         processed_count = 0
         faces_detected_count = 0
+        last_log = time.perf_counter()
 
         for batch_start in range(0, len(rows), batch_size):
             if self._stopped():
@@ -1854,6 +1875,10 @@ class PipelineOrchestrator(threading.Thread):
                 processed_count += 1
 
             self._update_done(processed_count)
+            now = time.perf_counter()
+            if processed_count < len(rows) and now - last_log >= 10.0:
+                logger.info(f'  Face detection: {processed_count}/{len(rows)} images')
+                last_log = now
 
             # Log batch summary
             if batch_faces_total > 0:
@@ -1887,6 +1912,8 @@ class PipelineOrchestrator(threading.Thread):
             Always False (grouping alone doesn't warrant a re-run).
         """
         from imagedb import emit_processing_complete
+
+        logger.info('Stage 6: Running grouping...')
 
         # 6a: Sync directory groups (always)
         try:
