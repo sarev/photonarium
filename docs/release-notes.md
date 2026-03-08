@@ -1,5 +1,60 @@
 # Release Notes
 
+## v1.2.0-beta.18
+
+### Sequential Pipeline Orchestrator
+
+The five concurrent processing threads (ingestion, embeddings, face detection, NIMA scoring, video processing) have been replaced with a single **PipelineOrchestrator** thread that runs seven stages sequentially in a loop:
+
+1. **Ingestion** — walk registered folders, create/update DB records
+2. **Thumbnails** — generate image thumbnails (2a) and detect video scenes + generate scene thumbnails (2b)
+3. **Embeddings** — compute OpenCLIP vectors for images and video scenes
+4. **Scoring** — NIMA + LAION aesthetic scores
+5. **Faces** — MTCNN detection + InceptionResnetV1 embeddings
+6. **Grouping** — directory groups, face reassessment, duplicate computation
+7. **Transcription** — speech-to-text for video audio (when enabled)
+
+**Why this matters:**
+
+- **No GPU contention** — only one model is loaded at a time; each stage explicitly unloads its model before the next begins.
+- **No database lock contention** — stages run sequentially, so the shared lock is only briefly held for reads/writes, never contested between stages.
+- **Self-healing** — each stage queries the DB for incomplete rows (e.g. `embedding IS NULL`, `thumbnails_pending = 1`). If the process is killed mid-pipeline, restarting picks up exactly where it left off.
+- **Simpler control flow** — no callback chains or inter-thread signalling between stages.
+
+Nine CLI flags that manually triggered individual stages (`--detect-faces`, `--group-faces`, `--generate-thumbnails`, `--rebuild-duplicates`, etc.) have been retired — `--scan` now triggers the full pipeline automatically.
+
+### Placeholder Thumbnails
+
+All media now gets **placeholder thumbnails** (the Photonarium logo on a dark background) written to the cache immediately during ingestion. This means images and videos appear in the Gallery straight away rather than as blank spaces while waiting for real thumbnail generation or video scene detection.
+
+A new `thumbnails_pending` database flag tracks which items still need real thumbnails, replacing the previous approach of checking for files on disk. Stage 2a overwrites placeholders with real thumbnails for images; Stage 2b generates scene thumbnails for videos (which live at a separate path).
+
+### Database Screen Improvements
+
+- **Per-folder rescan** — each folder row now shows a refresh button that rescans only that folder, complementing the existing global "Rescan local folders" button.
+- **Adaptive status polling** — the Database screen now polls at 1-second intervals while processing and 5 seconds when idle, reducing CPU usage. The backend caches count queries with a 5-second TTL so most idle polls skip SQL entirely.
+
+### Video Processing Improvements
+
+- **Single-pass keyframe processing** — scene keyframe extraction and thumbnail generation are now merged into a single pass: each frame is decoded once, thumbnailed at both sizes, then released. This halves decode work and drops peak memory from N full-res frames to one.
+- **Video rotation caching** — ffprobe rotation is now queried once per video instead of once per frame.
+- **Progress reporting** — the Database screen shows real-time video processing progress with human-readable step detail (e.g. "Detecting scenes (1/4)", "Generating thumbnails (2/4)") instead of just a queue count.
+- **Ingestion retry** — files that fail with transient "database is locked" errors during ingestion are re-queued up to 5 times, so a single rescan can self-heal without requiring repeated manual rescans.
+
+### Bug Fixes
+
+- **Database locking during video ingestion:** Ingestion workers shared a single SQLite connection with Flask threads, causing "database is locked" errors during video ingestion. Each worker now gets its own thread-local connection with WAL mode and 10-second busy timeout.
+- **Video processing database locking:** Scene inserts, embedding updates, and transcription updates are now batched into single `executemany` + `commit` calls inside one lock acquisition, replacing per-row lock/unlock loops.
+- **Partially-ingested videos not reprocessed:** The startup recovery query now catches videos where any scene has a null embedding, indicating the pipeline never completed.
+- **Video scene detection showing no progress:** Stage 2b was not calling `_set_stage()`, so the frontend showed only "Updating" with no detail.
+- **Video status showing 'undefined':** The progress dict used `basename` but the frontend expected `label`, and step names were internal identifiers instead of human-readable text.
+- **Pipeline stage logging suppressed:** The pipeline module logger was not registered at INFO level, so all stage messages were silently dropped. Added time-throttled progress logging to long-running stages.
+
+### Code Quality
+
+- **British English consistency:** All comments, docstrings, log messages, and identifiers now use British English spellings (initialise, normalise, centre, colour, etc.) throughout the Python and JavaScript codebase. External API names (PIL `optimize`, CSS `color`, etc.) are preserved.
+- **18-principle audit:** Systematic audit of all source against the project's key principles, with fixes for all findings — including vectorising an O(n²) face grouping loop, extracting a shared `sharpen_thumbnail()` utility, batching face unassign/suppress endpoints, adding OOM guards to face grouping and NIMA scoring, and replacing technical UI labels with user-friendly text.
+
 ## v1.2.0-beta.17
 
 ### Video Support

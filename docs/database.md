@@ -9,22 +9,24 @@ Database is where you tell Photonarium where your photos and videos live, import
 - Add folders (scanned recursively for images and videos)
 - Import files into a managed catalogue directory (see [Import](#import) below)
 - Rescan folders to pick up changes
-- Watch progress for indexing, embeddings, face detection, video processing, and imports (with ETAs when possible)
+- Watch progress for each pipeline stage (indexing, thumbnails, embeddings, scoring, face detection, video scenes, and imports)
 - Click **Edit Settings** to open the in-app settings editor (works from any device on your network)
 - Click **View Logs** to see recent server log output in a colour-coded, filterable dialog (useful for diagnosing issues without needing terminal access)
 - Click **Restart** to restart the backend server from the UI (useful for headless or Docker deployments where you don't have terminal access, e.g. after changing settings)
 
 ## Processing pipeline
 
-When you add a folder or rescan, Photonarium processes files through several stages. Progress for each stage is shown on the Database screen:
+When you add a folder or rescan, Photonarium processes files through a sequential pipeline. Each stage runs to completion before the next begins, and progress is shown on the Database screen:
 
-1. **Indexing** -- discovers new files, reads metadata, generates thumbnails
-2. **Embeddings** -- generates AI embeddings for semantic search (images and video keyframes)
-3. **Face detection** -- finds faces in images (not videos)
-4. **Video processing** -- detects scenes, extracts keyframes, generates scene thumbnails, transcribes audio. Shows the current step (e.g. "Detecting scenes (1/6)")
-5. **NIMA scoring** -- rates image aesthetic quality (images only)
+1. **Indexing** -- discovers new files, reads metadata, writes placeholder thumbnails so media appears in the Gallery immediately
+2. **Thumbnails** -- replaces placeholders with real thumbnails for images; detects scenes and generates scene thumbnails for videos. Shows per-video step detail (e.g. "Detecting scenes (1/4)")
+3. **Embeddings** -- generates AI embeddings for semantic search (images and video scenes)
+4. **Scoring** -- rates image aesthetic quality (NIMA and LAION scores)
+5. **Face detection** -- finds faces in images (not videos)
+6. **Grouping** -- computes duplicate groups, directory groups, and face reassessment
+7. **Transcription** -- speech-to-text for video audio (when enabled in settings)
 
-Large libraries take time, especially on first scan. You can keep browsing while processing runs in the background.
+The pipeline is self-healing: if the app is interrupted mid-processing, restarting picks up where it left off automatically. Large libraries take time, especially on first scan. You can keep browsing while processing runs in the background.
 
 ## Import
 
@@ -39,7 +41,7 @@ The Database screen has an Import section that lets you copy images and videos i
 - Tap Pick Photos to open the system photo picker. On Android, a Pick Folder button is also available.
 - Before uploading, the browser sends file names and sizes to the backend for a fast duplicate check. Only new files are uploaded, saving bandwidth.
 
-Imported files are processed by the normal indexing pipeline (thumbnails, embeddings, face detection, video processing) automatically.
+Imported files are processed by the normal pipeline (indexing, thumbnails, embeddings, scoring, face detection) automatically.
 
 ### Supported formats
 
