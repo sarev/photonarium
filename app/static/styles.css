@@ -4036,7 +4036,11 @@ a:hover {
     cursor: pointer;
     overflow: hidden;
     border-radius: 3px;
+    border-right: 2px solid var(--color-bg-primary);
     transition: outline 0.1s;
+}
+.timeline-scene:last-child {
+    border-right: none;
 }
 .timeline-scene:hover {
     outline: 2px solid var(--color-accent);
