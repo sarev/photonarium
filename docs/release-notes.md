@@ -41,6 +41,10 @@ A new `thumbnails_pending` database flag tracks which items still need real thum
 - **Progress reporting** — the Database screen shows real-time video processing progress with human-readable step detail (e.g. "Detecting scenes (1/4)", "Generating thumbnails (2/4)") instead of just a queue count.
 - **Ingestion retry** — files that fail with transient "database is locked" errors during ingestion are re-queued up to 5 times, so a single rescan can self-heal without requiring repeated manual rescans.
 
+### Cross-Screen Video Selection
+
+Selecting a video in the Gallery and switching to the Videos screen (or vice versa) now preserves the selection — the same video is selected, its timeline is loaded, and the grid scrolls to it. Fullscreen launched from Videos now navigates only through videos visible on that screen (respecting any active filter), and closing fullscreen returns to the last-viewed video rather than the one originally opened.
+
 ### Bug Fixes
 
 - **Database locking during video ingestion:** Ingestion workers shared a single SQLite connection with Flask threads, causing "database is locked" errors during video ingestion. Each worker now gets its own thread-local connection with WAL mode and 10-second busy timeout.
