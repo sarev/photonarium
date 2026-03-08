@@ -161,6 +161,14 @@
     --color-chip-button: rgba(255, 255, 255, 0.3);
     --color-chip-button-hover: rgba(255, 255, 255, 0.5);
 
+    /* Timeline star badge (high-contrast on thumbnails) */
+    --color-star-badge: #1a1a1a;
+    --color-star-badge-outline: #fff;
+    --color-star-badge-active-outline: #000;
+
+    /* Minimap viewport outline */
+    --color-minimap-outline: rgba(0, 0, 0, 0.3);
+
     /* Ambient background gradient — soft highlight and vignette for depth */
     --bg-gradient:
         radial-gradient(ellipse 120% 60% at 50% 0%, rgba(180, 140, 180, 0.06) 0%, transparent 70%),
@@ -272,6 +280,14 @@
     /* Chip/tag button backgrounds (on dark chip backgrounds) */
     --color-chip-button: rgba(255, 255, 255, 0.3);
     --color-chip-button-hover: rgba(255, 255, 255, 0.5);
+
+    /* Timeline star badge (high-contrast on thumbnails) */
+    --color-star-badge: #fff;
+    --color-star-badge-outline: #000;
+    --color-star-badge-active-outline: #000;
+
+    /* Minimap viewport outline */
+    --color-minimap-outline: rgba(0, 0, 0, 0.5);
 
     /* Ambient background gradient — soft highlight and vignette for depth */
     --bg-gradient:
@@ -3995,11 +4011,12 @@ a:hover {
     top: 0;
     bottom: 0;
     background: var(--color-accent-medium);
-    border: 1.5px solid var(--color-accent);
+    border: 2px solid var(--color-accent);
     border-radius: 2px;
     cursor: grab;
     z-index: 1;
     min-width: 12px;
+    box-shadow: 0 0 0 1px var(--color-minimap-outline);
 }
 .timeline-minimap-viewport.dragging {
     cursor: grabbing;
@@ -4128,16 +4145,21 @@ a:hover {
     transition: opacity 0.15s;
 }
 .timeline-star .material-symbols-outlined {
-    color: var(--color-text-muted);
+    color: var(--color-star-badge);
     text-shadow:
-        -1px 0 0 var(--color-bg-primary),
-        1px 0 0 var(--color-bg-primary),
-        0 -1px 0 var(--color-bg-primary),
-        0 1px 0 var(--color-bg-primary);
+        -1px 0 0 var(--color-star-badge-outline),
+        1px 0 0 var(--color-star-badge-outline),
+        0 -1px 0 var(--color-star-badge-outline),
+        0 1px 0 var(--color-star-badge-outline);
 }
 .timeline-star.preferred .material-symbols-outlined,
 .timeline-star:hover .material-symbols-outlined {
     color: var(--color-text-amber);
+    text-shadow:
+        -1px 0 0 var(--color-star-badge-active-outline),
+        1px 0 0 var(--color-star-badge-active-outline),
+        0 -1px 0 var(--color-star-badge-active-outline),
+        0 1px 0 var(--color-star-badge-active-outline);
 }
 
 /* Transcription text below timeline */
