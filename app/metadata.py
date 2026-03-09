@@ -423,6 +423,16 @@ def _candidate_from_compact_datetime(
         return None
 
     if re.fullmatch(r'\d{6}', token):
+        # Try YYYYMM first — if the first 4 digits form a plausible year
+        # and the remaining 2 are a valid month, this is more likely than
+        # YYMMDD (which has ambiguity with HHMMSS).
+        ym_year, ym_month = int(token[:4]), int(token[4:6])
+        if 1800 <= ym_year <= today.year and 1 <= ym_month <= 12:
+            c = _Candidate(year=ym_year, month=ym_month, day=1)
+            c.add(4.5 * leaf_bias, 'compact yyyymm')
+            c.add(-0.5, 'default day of month')
+            return c
+
         # Could be YYMMDD, but could also be HHMMSS — lower confidence
         yy, m, d = int(token[:2]), int(token[2:4]), int(token[4:6])
         y = _expand_two_digit_year(yy, today=today)
@@ -648,16 +658,17 @@ def _extract_month_word_candidates(
                         c.add(1.0 * fine_bias, 'nearby day-of-month')
                         break
 
-        # Fallback defaults
-        if c.year is None and policy.assume_current_year:
-            c.year = today.year
-            c.add(0.25, 'assumed current year')
-
+        # Fill default day if month is known but day is missing.
+        # Year-filling is deferred to _finalise_candidate() which has
+        # access to year_hints from parent path components and can apply
+        # a stronger signal than the "assume current year" fallback.
         if c.day is None and c.month is not None:
             c.day = policy.default_day
             c.add(0.25, 'default day of month')
 
-        if c.year is not None and c.month is not None and c.day is not None and _safe_date(c.year, c.month, c.day):
+        # Allow year=None — _finalise_candidate will fill it later
+        if (c.month is not None and c.day is not None
+                and (c.year is None or _safe_date(c.year, c.month, c.day))):
             out.append(c)
 
     return out
@@ -867,6 +878,56 @@ def _parse_timestamp_scoring(
             today=today,
         ):
             raw_candidates.append((i, cand))
+
+    # 4. Cross-directory numeric date merging — detect consecutive pure-numeric
+    #    path components that form a date (e.g. /2024/03/07/).  We try runs of
+    #    2 or 3 adjacent numeric-only components.
+    for start in range(total):
+        w0 = _split_words(components[start])
+        if len(w0) != 1 or not re.fullmatch(r'\d{2,4}', w0[0]):
+            continue
+        vals: list[tuple[int, int]] = [(int(w0[0]), len(w0[0]))]
+
+        for offset in range(1, min(3, total - start)):
+            w = _split_words(components[start + offset])
+            if len(w) != 1 or not re.fullmatch(r'\d{1,4}', w[0]):
+                break
+            vals.append((int(w[0]), len(w[0])))
+
+            if len(vals) == 3:
+                # Three consecutive: try as numeric triplet (YYYY/MM/DD, etc.)
+                coarse_bias = _component_weight(start, total)
+                fine_bias = _leaf_weight(start + offset, total)
+                for cand in _numeric_triplet_candidates(
+                    vals[0][0], vals[1][0], vals[2][0],
+                    len_a=vals[0][1], len_b=vals[1][1], len_c=vals[2][1],
+                    policy=policy,
+                    today=today,
+                    coarse_bias=coarse_bias,
+                    fine_bias=fine_bias,
+                ):
+                    # Slight penalty for being split across directories
+                    cand.add(-0.5, 'date split across path components')
+                    raw_candidates.append((start + offset, cand))
+
+            elif len(vals) == 2:
+                # Two consecutive: try as YYYY + MM
+                y_val, y_len = vals[0]
+                m_val, m_len = vals[1]
+                if y_len == 4 and 1800 <= y_val <= today.year and 1 <= m_val <= 12 and m_len <= 2:
+                    cand = _Candidate(year=y_val, month=m_val, day=1)
+                    coarse_bias = _component_weight(start, total)
+                    cand.add(3.5 * coarse_bias, 'year/month path components')
+                    cand.add(-0.5, 'default day of month')
+                    raw_candidates.append((start + 1, cand))
+
+    # 5. Year-only fallback — if no date candidates were generated but we
+    #    found year hints, create a low-confidence Jan 1st candidate.
+    if not raw_candidates and year_hints:
+        _hint_idx, best_year, _best_yscore = max(year_hints, key=lambda h: h[2])
+        cand = _Candidate(year=best_year, month=1, day=1)
+        cand.add(3.0, 'year-only fallback')
+        raw_candidates.append((_hint_idx, cand))
 
     best = _choose_best(
         raw_candidates,
@@ -2035,3 +2096,313 @@ def derive_timestamp_with_confidence(
 
     logger.debug(f'No timestamp found for {path}')
     return (None, CONFIDENCE_UNKNOWN)
+
+
+# =============================================================================
+# CLI TEST HARNESS
+# =============================================================================
+
+if __name__ == '__main__':
+    import argparse
+    import sys
+
+    # ANSI colour helpers (disabled when not a TTY)
+    _USE_COLOUR = hasattr(sys.stdout, 'isatty') and sys.stdout.isatty()
+
+    def _green(s: str) -> str:
+        return f'\033[32m{s}\033[0m' if _USE_COLOUR else s
+
+    def _red(s: str) -> str:
+        return f'\033[31m{s}\033[0m' if _USE_COLOUR else s
+
+    def _cyan(s: str) -> str:
+        return f'\033[36m{s}\033[0m' if _USE_COLOUR else s
+
+    def _dim(s: str) -> str:
+        return f'\033[2m{s}\033[0m' if _USE_COLOUR else s
+
+    def _bold(s: str) -> str:
+        return f'\033[1m{s}\033[0m' if _USE_COLOUR else s
+
+    # ------------------------------------------------------------------
+    # Test case table
+    # ------------------------------------------------------------------
+    # Each entry: (path, date_order, expected_date_str_or_None,
+    #              expected_time_str_or_None, which_parsers, description)
+    #
+    # expected_date_str: 'YYYY-MM-DD' or None (no date expected)
+    # expected_time_str: 'HH:MM:SS' or None (midnight / don't care)
+    # which_parsers: 'both' | 'scoring' | 'legacy' — which parser(s) should match
+    TEST_CASES: list[tuple[str, str, str | None, str | None, str, str]] = [
+        # -- Compact dates --
+        ('IMG_20240307.jpg', 'DMY', '2024-03-07', None, 'both', 'YYYYMMDD compact'),
+        ('photo_20240307_1430.jpg', 'DMY', '2024-03-07', '14:30:00', 'both', 'YYYYMMDD_HHMM'),
+        ('VID_20240307_143045.jpg', 'DMY', '2024-03-07', '14:30:45', 'both', 'YYYYMMDD_HHMMSS'),
+        ('photo_240307.jpg', 'DMY', '2024-03-07', None, 'scoring', 'YYMMDD compact'),
+        ('album_202403.jpg', 'DMY', '2024-03-01', None, 'scoring', 'YYYYMM compact'),
+        ('album_2024.jpg', 'DMY', '2024-01-01', None, 'scoring', 'YYYY only'),
+
+        # -- Separated dates --
+        ('photo_2024-03-07.jpg', 'DMY', '2024-03-07', None, 'both', 'YYYY-MM-DD separated'),
+        ('photo_2024.03.07.jpg', 'DMY', '2024-03-07', None, 'both', 'YYYY.MM.DD separated'),
+        ('photo_2024_03_07.jpg', 'DMY', '2024-03-07', None, 'both', 'YYYY_MM_DD separated'),
+        ('/photos/2024/03/07/pic.jpg', 'DMY', '2024-03-07', None, 'both', 'YYYY/MM/DD in path'),
+
+        # -- DMY/MDY ambiguity --
+        ('photo_07-03-2024.jpg', 'DMY', '2024-03-07', None, 'scoring', 'DD-MM-YYYY (DMY order)'),
+        ('photo_07-03-2024.jpg', 'MDY', '2024-07-03', None, 'scoring', 'MM-DD-YYYY (MDY order)'),
+        ('photo_03-07-2024.jpg', 'MDY', '2024-03-07', None, 'scoring', 'MM-DD-YYYY (MDY, Mar 7)'),
+
+        # -- Month words --
+        ('/Photos/May 2023/pic.jpg', 'DMY', '2023-05-01', None, 'scoring', 'Month Year folder'),
+        ('/Photos/January 15 2024/pic.jpg', 'DMY', '2024-01-15', None, 'scoring', 'Month Day Year folder'),
+        ('/Photos/15 March 2024/pic.jpg', 'DMY', '2024-03-15', None, 'scoring', 'Day Month Year folder'),
+        ('/Photos/early June/pic.jpg', 'DMY', None, None, 'scoring', '"early June" — no year, no match'),
+        ('/Photos/2023/early June/pic.jpg', 'DMY', '2023-06-01', None, 'scoring', '"early June" with year hint'),
+
+        # -- Seasons / holidays --
+        ('/Photos/Summer 2006/pic.jpg', 'DMY', '2006-06-01', None, 'scoring', 'Season word (June=start)'),
+        ('/Photos/Christmas 2023/pic.jpg', 'DMY', '2023-12-25', None, 'scoring', 'Holiday word'),
+        ('/Photos/Halloween 2020/pic.jpg', 'DMY', '2020-10-31', None, 'scoring', 'Holiday word'),
+
+        # -- Path hierarchy dates --
+        ('/Photos/2024/March/IMG_001.jpg', 'DMY', '2024-03-01', None, 'scoring', 'Year/Month path hierarchy'),
+        ('/2023/06/photo.jpg', 'DMY', '2023-06-01', None, 'both', 'Year/Month numeric path'),
+
+        # -- WhatsApp-style --
+        ('WhatsApp Image 2024-03-07 at 14.30.45.jpg', 'DMY', '2024-03-07', '14:30:45', 'both',
+         'WhatsApp date+time'),
+
+        # -- Camera-style --
+        ('DSC_20240307_143045.jpg', 'DMY', '2024-03-07', '14:30:45', 'both', 'Camera prefix YYYYMMDD_HHMMSS'),
+        ('IMG_20240307.jpg', 'DMY', '2024-03-07', None, 'both', 'Camera prefix YYYYMMDD'),
+
+        # -- Edge cases --
+        ('random_photo.jpg', 'DMY', None, None, 'both', 'No date at all'),
+        ('photo_99991231.jpg', 'DMY', None, None, 'both', 'Future date (should be rejected)'),
+        ('/Photos/2024/pic.jpg', 'DMY', '2024-01-01', None, 'scoring', 'Year-only directory'),
+    ]
+
+    # ------------------------------------------------------------------
+    # Test runner
+    # ------------------------------------------------------------------
+
+    def _run_tests(date_order_override: str | None = None) -> bool:
+        """Run built-in test suite. Returns True if all tests pass."""
+        passed = 0
+        failed = 0
+        errors: list[str] = []
+
+        skipped = 0
+        for path, case_order, exp_date, exp_time, which, desc in TEST_CASES:
+            order = date_order_override if date_order_override else case_order
+
+            # Skip date-order-sensitive tests when the override conflicts
+            # with the case's expected output (e.g. a DMY-specific test
+            # would give a different result under MDY).
+            if date_order_override and date_order_override != case_order:
+                skipped += 1
+                continue
+
+            # Build expected date/datetime
+            if exp_date is None:
+                expected_date = None
+                expected_dt = None
+            else:
+                parts = [int(x) for x in exp_date.split('-')]
+                expected_date = _dt.date(parts[0], parts[1], parts[2])
+                if exp_time:
+                    tparts = [int(x) for x in exp_time.split(':')]
+                    expected_dt = datetime(parts[0], parts[1], parts[2],
+                                           tparts[0], tparts[1], tparts[2])
+                else:
+                    expected_dt = None  # date-only check
+
+            # When exp_time is None, compare date portion only (time may
+            # vary due to leaf-time extraction from the same token).
+            check_time = exp_time is not None
+
+            # Run scoring parser
+            scoring_dt, score, assumptions = _parse_timestamp_scoring(path, order)
+
+            # Run legacy parser (date_order not supported)
+            legacy_dt = parse_timestamp_from_path(path)
+
+            # Check results based on which parser(s) should match
+            ok = True
+            detail_parts: list[str] = []
+
+            for label, actual in [('scoring', scoring_dt), ('legacy', legacy_dt)]:
+                if label == 'scoring' and which not in ('both', 'scoring'):
+                    continue
+                if label == 'legacy' and which not in ('both', 'legacy'):
+                    continue
+
+                if expected_date is None:
+                    if actual is not None:
+                        ok = False
+                        detail_parts.append(f'{label}: expected None, got {actual}')
+                elif actual is None:
+                    ok = False
+                    detail_parts.append(f'{label}: expected {expected_date}, got None')
+                elif check_time:
+                    if actual != expected_dt:
+                        ok = False
+                        detail_parts.append(f'{label}: expected {expected_dt}, got {actual}')
+                elif actual.date() != expected_date:
+                    ok = False
+                    detail_parts.append(f'{label}: expected date {expected_date}, got {actual}')
+
+            # Format result line
+            status = _green('PASS') if ok else _red('FAIL')
+            score_str = f' score={score:.1f}' if scoring_dt else ''
+            assume_str = f' [{", ".join(assumptions)}]' if assumptions else ''
+            line = f'  {status}  {desc}'
+            if scoring_dt:
+                line += _dim(f'  →{scoring_dt}{score_str}{assume_str}')
+
+            print(line)
+
+            if ok:
+                passed += 1
+            else:
+                failed += 1
+                for d in detail_parts:
+                    print(f'         {_red(d)}')
+                errors.append(f'{desc}: {"; ".join(detail_parts)}')
+
+        # Summary
+        print()
+        total = passed + failed
+        summary = f'{passed}/{total} passed'
+        if skipped:
+            summary += f', {skipped} skipped (date_order mismatch)'
+        if failed:
+            print(_red(_bold(f'FAILED: {summary}')))
+        else:
+            print(_green(_bold(f'ALL PASSED: {summary}')))
+
+        return failed == 0
+
+    # ------------------------------------------------------------------
+    # File/path inspection
+    # ------------------------------------------------------------------
+
+    def _inspect_path(path_str: str, date_order: str = 'DMY') -> None:
+        """Inspect a file path or synthetic path string."""
+        p = Path(path_str)
+        is_real = p.exists()
+
+        print(_bold(f'Path: {path_str}'))
+        if is_real:
+            print(f'  File exists: yes ({p.stat().st_size:,} bytes)')
+        else:
+            print('  File exists: no (treating as synthetic path)')
+        print()
+
+        # Scoring parser
+        scoring_dt, score, assumptions = _parse_timestamp_scoring(path_str, date_order)
+        print(_bold('Scoring parser:'))
+        if scoring_dt:
+            print(f'  Result:      {_cyan(str(scoring_dt))}')
+            print(f'  Score:       {score:.1f}')
+            if assumptions:
+                print(f'  Assumptions: {", ".join(assumptions)}')
+        else:
+            print(f'  Result:      {_dim("(no match)")}')
+        print()
+
+        # Legacy parser
+        legacy_dt = parse_timestamp_from_path(path_str)
+        print(_bold('Legacy parser:'))
+        if legacy_dt:
+            print(f'  Result:      {_cyan(str(legacy_dt))}')
+        else:
+            print(f'  Result:      {_dim("(no match)")}')
+        print()
+
+        # derive_timestamp_with_confidence (only meaningful for real files
+        # or paths — it will try EXIF + filesystem too)
+        confidence_names = {
+            CONFIDENCE_EXIF: 'EXIF',
+            CONFIDENCE_FILENAME: 'filename',
+            CONFIDENCE_FILESYSTEM: 'filesystem',
+            CONFIDENCE_UNKNOWN: 'unknown',
+        }
+
+        if is_real:
+            # Extract EXIF for real files
+            exif_data = extract_exif_data(str(p))
+            ts, conf = derive_timestamp_with_confidence(
+                path_str, exif_data=exif_data, date_order=date_order)
+
+            print(_bold('derive_timestamp_with_confidence:'))
+            print(f'  Timestamp:   {_cyan(str(ts)) if ts else _dim("None")}')
+            print(f'  Confidence:  {conf} ({confidence_names.get(conf, "?")})')
+            print()
+
+            # Show relevant EXIF dates
+            if exif_data:
+                date_keys = [k for k in exif_data if 'date' in k.lower()
+                             or 'time' in k.lower()]
+                if date_keys:
+                    print(_bold('EXIF date fields:'))
+                    for k in sorted(date_keys):
+                        print(f'  {k}: {exif_data[k]}')
+        else:
+            # For synthetic paths, just run without EXIF
+            ts, conf = derive_timestamp_with_confidence(
+                path_str, date_order=date_order)
+            print(_bold('derive_timestamp_with_confidence:'))
+            print(f'  Timestamp:   {_cyan(str(ts)) if ts else _dim("None")}')
+            print(f'  Confidence:  {conf} ({confidence_names.get(conf, "?")})')
+
+    # ------------------------------------------------------------------
+    # CLI entry point
+    # ------------------------------------------------------------------
+
+    parser = argparse.ArgumentParser(
+        description='Test harness for metadata.py filename date parsing.',
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog='''\
+examples:
+  python metadata.py --test                          Run built-in test suite
+  python metadata.py --date-order MDY --test         Test with MDY date order
+  python metadata.py /Photos/2024/March/IMG_001.jpg  Inspect a synthetic path
+  python metadata.py ../tools/mktutorial/examples/some_image.jpg  Inspect real file
+''',
+    )
+    parser.add_argument(
+        'path',
+        nargs='?',
+        help='File path (real or synthetic) to inspect.  '
+        'Runs both parsers and shows results.',
+    )
+    parser.add_argument(
+        '--test', '-t',
+        action='store_true',
+        help='Run the built-in test suite.',
+    )
+    parser.add_argument(
+        '--date-order', '-d',
+        choices=['DMY', 'MDY', 'YMD'],
+        default=None,
+        help='Date order for ambiguous numeric dates (default: per-case or DMY).',
+    )
+    args = parser.parse_args()
+
+    logging.basicConfig(level=logging.WARNING, format='%(levelname)s: %(message)s')
+
+    if not args.test and not args.path:
+        parser.print_help()
+        sys.exit(1)
+
+    if args.test:
+        print(_bold(f'Running metadata filename parser tests'
+                     f' (date_order={args.date_order or "per-case"})'))
+        print()
+        ok = _run_tests(date_order_override=args.date_order)
+        sys.exit(0 if ok else 1)
+
+    if args.path:
+        _inspect_path(args.path, date_order=args.date_order or 'DMY')
