@@ -2480,4 +2480,11 @@ class PipelineOrchestrator(threading.Thread):
                     self._db.conn.commit()
 
         except Exception as e:
+            # Rollback any uncommitted transaction to prevent cascade failures.
+            # Without this, a failed commit (e.g. "database is locked") leaves
+            # the connection dirty, causing ALL subsequent operations to fail.
+            try:
+                self._db.conn.rollback()
+            except Exception:
+                pass
             logger.error(f'STT failed for video {video_path}: {e}')

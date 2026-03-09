@@ -169,6 +169,12 @@ class DatabaseLogHandler(logging.Handler):
                 self._trim()
                 self._insert_count = 0
         except Exception as exc:
+            # Rollback the failed transaction so the connection is clean
+            # for the next flush attempt.
+            try:
+                self._conn.rollback()
+            except Exception:
+                pass
             # Re-buffer failed records so they aren't lost — prepend them
             # back so the next flush picks them up.  The deque's maxlen cap
             # will silently drop the oldest if the buffer overflows.

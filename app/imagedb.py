@@ -3757,6 +3757,10 @@ class ImageDatabase:
                     )
                 count += 1
             except Exception as e:
+                try:
+                    self.conn.rollback()
+                except Exception:
+                    pass
                 logger.warning(f'Failed to compute description embedding for {image_id}: {e}')
 
         with self._db_lock:
@@ -3952,6 +3956,10 @@ class ImageDatabase:
                     )
                     updated += 1
             except Exception as e:
+                try:
+                    self.conn.rollback()
+                except Exception:
+                    pass
                 logger.warning(f'Failed to recalculate timestamp for {path}: {e}')
 
         self.conn.commit()
@@ -4030,6 +4038,10 @@ class ImageDatabase:
                 )
                 updated += 1
             except Exception as e:
+                try:
+                    self.conn.rollback()
+                except Exception:
+                    pass
                 logger.warning(f'Failed to derive timestamp confidence for {path}: {e}')
 
         self.conn.commit()
@@ -5254,6 +5266,10 @@ class ImageDatabase:
                 with self._checksum_cache_lock:
                     self._checksum_cache[image_id] = new_checksum
             except Exception as e:
+                try:
+                    self.conn.rollback()
+                except Exception:
+                    pass
                 logger.error(f'rotate_image: Failed to update database: {e}')
                 return (False, None)
 
@@ -5318,6 +5334,10 @@ class ImageDatabase:
                                         f'rotate_image: Failed to regenerate face thumbnail for {face_id}: {e}'
                                     )
             except Exception as e:
+                try:
+                    self.conn.rollback()
+                except Exception:
+                    pass
                 logger.warning(f'rotate_image: Failed to rotate faces: {e}')
                 # Non-fatal - image was still rotated successfully
 
