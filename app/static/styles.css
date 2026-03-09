@@ -3898,6 +3898,19 @@ a:hover {
     padding: 0.5rem 0.75rem;
     background: var(--color-bg-elevated);
     border-top: 1px solid var(--color-border);
+    transition: min-height 0.3s ease, max-height 0.3s ease,
+                padding 0.3s ease, opacity 0.2s ease, border-top-width 0.3s ease;
+    opacity: 1;
+}
+
+.videos-section.timeline.collapsed {
+    min-height: 0;
+    max-height: 0;
+    padding-top: 0;
+    padding-bottom: 0;
+    opacity: 0;
+    overflow: hidden;
+    border-top-width: 0;
 }
 
 /* Video grid — VirtualGrid scroll container (mirrors .gallery-grid) */

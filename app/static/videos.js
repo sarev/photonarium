@@ -774,12 +774,11 @@ const Videos = {
         const videoId = AppState.videos.getSelectedVideoId();
         if (!videoId) {
             container.innerHTML = '';
-            if (this._els.timelineEmpty) {
-                this._els.timelineEmpty.hidden = false;
-            }
+            this._setTimelineVisible(false);
             return;
         }
 
+        this._setTimelineVisible(true);
         if (this._els.timelineEmpty) {
             this._els.timelineEmpty.hidden = true;
         }
@@ -970,7 +969,7 @@ const Videos = {
      */
     _setTimelineVisible(visible) {
         if (this._els.timelineSection) {
-            this._els.timelineSection.hidden = !visible;
+            this._els.timelineSection.classList.toggle('collapsed', !visible);
         }
         // The divider is a sibling between grid and timeline sections
         const divider = this._els.gridSection?.nextElementSibling;
