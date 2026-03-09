@@ -4,8 +4,8 @@
 
 Photonarium can be installed via Docker (easiest, especially for NAS devices) or directly on your system. Choose whichever suits your setup.
 
-- [Docker Installation](#docker-installation) -- recommended for NAS, servers, and containerised deployments
-- [Direct Installation](#direct-installation) -- for running natively on your desktop or laptop
+- [Docker Installation](#docker-installation) - recommended for NAS, servers, and containerised deployments
+- [Direct Installation](#direct-installation) - for running natively on your desktop or laptop
 
 ---
 
@@ -36,7 +36,7 @@ docker run -d \
 
 Then open `http://localhost:5000` in your browser. Your photos and videos will start indexing automatically.
 
-The `--add-folder /photos` flag registers the mounted directory (only needed on first run -- folders are saved in the database). The `--scan` flag triggers the full processing pipeline (ingestion, thumbnails, embeddings, scoring, face detection, grouping, transcription). The `--add-folder` flag is needed because Docker runs in headless mode, which hides the GUI "Add Folder" button (native folder picker dialogs don't work without a display). The folder list and Rescan button remain available in the web UI.
+The `--add-folder /photos` flag registers the mounted directory (only needed on first run - folders are saved in the database). The `--scan` flag triggers the full processing pipeline (ingestion, thumbnails, embeddings, scoring, face detection, grouping, transcription). The `--add-folder` flag is needed because Docker runs in headless mode, which hides the GUI "Add Folder" button (native folder picker dialogs don't work without a display). The folder list and Rescan button remain available in the web UI.
 
 On subsequent runs, you can omit `--add-folder` and just use `--scan` to pick up new files, or omit these flags entirely and use the **Rescan Local Folders** button in the web UI.
 
@@ -89,7 +89,7 @@ Then run:
 docker compose up -d
 ```
 
-The `command:` line registers your folder and starts processing. The `--add-folder` flag is idempotent (safe to repeat), so leaving it in the compose file is fine -- it won't create duplicates. On subsequent container restarts, registered folders are rescanned for new files.
+The `command:` line registers your folder and starts processing. The `--add-folder` flag is idempotent (safe to repeat), so leaving it in the compose file is fine - it won't create duplicates. On subsequent container restarts, registered folders are rescanned for new files.
 
 ### Multiple Folders
 
@@ -113,14 +113,14 @@ Each `--add-folder` flag registers a folder for indexing. Folders are stored in 
 
 ### Syncing Photos to Your NAS
 
-Photonarium doesn't include built-in phone backup -- and that's intentional. NAS vendors and cloud services already have excellent sync tools, and there's no need to reinvent the wheel:
+Photonarium doesn't include built-in phone backup - and that's intentional. NAS vendors and cloud services already have excellent sync tools, and there's no need to reinvent the wheel:
 
 - **Synology**: Use [Cloud Sync](https://www.synology.com/en-us/dsm/feature/cloud_sync) to sync from Google Drive, Dropbox, OneDrive, etc., or [Synology Photos](https://www.synology.com/en-us/dsm/feature/photos) mobile app for phone backup
 - **QNAP**: Use [HybridMount](https://www.qnap.com/en/software/hybrid-mount) or [Qsync](https://www.qnap.com/en/software/qsync) for phone backup
 - **Unraid/TrueNAS**: Mount cloud storage via rclone, or use Nextcloud for phone backup
 - **Any NAS**: Native mobile apps from Apple Photos, Google Photos, OneDrive, and Dropbox can back up to their respective clouds, which you then sync to your NAS
 
-Once photos and videos land on your NAS (however they get there), mount that folder into Photonarium and it will index them. Your existing backup workflow stays unchanged -- Photonarium just adds AI-powered search and organisation on top.
+Once photos and videos land on your NAS (however they get there), mount that folder into Photonarium and it will index them. Your existing backup workflow stays unchanged - Photonarium just adds AI-powered search and organisation on top.
 
 ## Hardware Acceleration
 
@@ -154,7 +154,7 @@ services:
       - NVIDIA_DRIVER_CAPABILITIES=compute,utility
 ```
 
-To verify GPU access, check the container logs on startup -- it should show your GPU device.
+To verify GPU access, check the container logs on startup - it should show your GPU device.
 
 ### Intel Integrated Graphics
 
@@ -198,8 +198,8 @@ Requires `/dev/dri` to be accessible on the host (standard on most Linux systems
 
 On first run, Photonarium creates `/config/photonarium.yml` with Docker-appropriate defaults:
 
-- `headless: true` -- hides desktop-only features (folder picker dialogs, reveal in explorer)
-- `scan_interval_minutes: 60` -- automatic rescan every hour (useful if files sync continuously)
+- `headless: true` - hides desktop-only features (folder picker dialogs, reveal in explorer)
+- `scan_interval_minutes: 60` - automatic rescan every hour (useful if files sync continuously)
 
 Edit this file to change settings. Most settings can also be changed via the **Edit Settings** button in the web UI.
 
@@ -233,7 +233,7 @@ volumes:
 The `/config` volume contains Photonarium's SQLite database and thumbnail cache. For best performance, especially with large libraries (50,000+ images):
 
 - **Store `/config` on local SSD storage**, not network storage (NFS/SMB)
-- SQLite requires a local filesystem with proper locking -- network storage causes corruption
+- SQLite requires a local filesystem with proper locking - network storage causes corruption
 - Thumbnails also benefit from fast random-read performance
 
 Your media (`/photos`) can remain on slower network or HDD storage since files are read sequentially during scanning.
@@ -245,7 +245,7 @@ Your media (`/photos`) can remain on slower network or HDD storage since files a
 - Face detection, video processing, and image captioning temporarily spike memory usage
 - For systems with limited RAM (e.g. NAS devices, small VMs), reduce `embedding_batch_size`, `face_detection_batch_size`, and `nima_batch_size` in settings (default: 16-32). Smaller batches use less memory at the cost of slower processing.
 - The thumbnail RAM cache is configurable via `thumbnail_cache_size_mb` (default: 100MB). Reduce this on memory-constrained systems.
-- **Graceful OOM handling:** If memory runs low during model loading or batch inference, Photonarium catches the error, logs a clear message, and either retries with a smaller batch or disables the affected feature -- rather than crashing the processing thread. On very constrained systems (e.g. Proxmox LXC with limited RAM), some features may be automatically disabled if there isn't enough memory to load their ML model.
+- **Graceful OOM handling:** If memory runs low during model loading or batch inference, Photonarium catches the error, logs a clear message, and either retries with a smaller batch or disables the affected feature - rather than crashing the processing thread. On very constrained systems (e.g. Proxmox LXC with limited RAM), some features may be automatically disabled if there isn't enough memory to load their ML model.
 
 ### Network Storage for Media
 
@@ -291,7 +291,7 @@ Docker does not notify you when a new image is available. Most NAS platforms han
 For bare Linux or Docker Compose setups, [Watchtower](https://containrrr.dev/watchtower/) can monitor running containers and automatically pull updated images:
 
 ```bash
-# Run Watchtower alongside your containers -- it checks for updates daily
+# Run Watchtower alongside your containers - it checks for updates daily
 docker run -d --name watchtower \
     -v /var/run/docker.sock:/var/run/docker.sock \
     containrrr/watchtower
@@ -325,7 +325,7 @@ make build-arm64
 make all-images
 ```
 
-The `make download-models` step downloads all ML models (OpenCLIP, BLIP, FaceNet, LAION, NIMA) to `docker/models/` so they can be copied into the Docker image during build. This only needs to be run once -- subsequent builds reuse the cached models. The build will fail with an error if models haven't been downloaded.
+The `make download-models` step downloads all ML models (OpenCLIP, BLIP, FaceNet, LAION, NIMA) to `docker/models/` so they can be copied into the Docker image during build. This only needs to be run once - subsequent builds reuse the cached models. The build will fail with an error if models haven't been downloaded.
 
 See the Makefile for all available build targets. Note that building ARM64 images on x86_64 uses QEMU emulation and is slow.
 
@@ -339,7 +339,7 @@ If you prefer to run Photonarium directly on your system without Docker, follow 
 
 ## Requirements
 
-- Python 3.10 or later (with tkinter -- see note below)
+- Python 3.10 or later (with tkinter - see note below)
 - A GPU is recommended for faster processing (NVIDIA with CUDA, or Apple Silicon with MPS), but not required
 
 ### Tested configurations
@@ -367,7 +367,7 @@ The installer scripts create a virtual environment, install all dependencies in 
 
 **Windows:**
 
-Open the Photonarium folder in File Explorer and double-click `install.bat`. If Windows SmartScreen shows a "Windows protected your PC" warning, click **More info** then **Run anyway** -- the script only installs Python packages and downloads ML models.
+Open the Photonarium folder in File Explorer and double-click `install.bat`. If Windows SmartScreen shows a "Windows protected your PC" warning, click **More info** then **Run anyway** - the script only installs Python packages and downloads ML models.
 
 Alternatively, open Command Prompt, navigate to the Photonarium folder, and run:
 
@@ -418,7 +418,7 @@ If you prefer to install manually, or the installer script doesn't suit your set
    # PyTorch (with CUDA support for GPU acceleration)
    # Replace cu124 with cu118 for CUDA 11.x, or cpu for no GPU:
    pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu124
-   # macOS (use default PyPI -- the CUDA indexes have no macOS wheels):
+   # macOS (use default PyPI - the CUDA indexes have no macOS wheels):
    # pip install torch torchvision torchaudio
 
    # Other dependencies
@@ -444,6 +444,8 @@ If you prefer to install manually, or the installer script doesn't suit your set
   This will create a `photonarium.yml` configuration file at the OS-appropriate location (see [Configuration](#configuration) below). You can change settings later via the in-app **Edit Settings** button on the Database screen, or by editing the YAML file directly in a text editor.
 
 5. **Download ML models**
+
+   On first launch, the **Setup Assistant** guides you through choosing a hardware profile and search language, then downloads the required models automatically. You can also download models manually from the command line:
 
    ```bash
    python download_models.py
@@ -473,7 +475,7 @@ If you haven't looked already, take a look at the [Photonarium site](http://phot
 
 By default, the server listens on all network interfaces (`0.0.0.0`), so other devices on your local network can reach it. To restrict access to this machine only, set `server_host: 127.0.0.1` in `photonarium.yml`.
 
-**Important:** Photonarium is designed for use on a trusted home network. It has not been hardened for exposure to the public internet or untrusted networks. Do not make it accessible outside your local network -- doing so may introduce security risks that are outside the scope of this project.
+**Important:** Photonarium is designed for use on a trusted home network. It has not been hardened for exposure to the public internet or untrusted networks. Do not make it accessible outside your local network - doing so may introduce security risks that are outside the scope of this project.
 
 ## Command line options
 
@@ -488,7 +490,7 @@ python app/app.py --list-models            # Output required models as JSON (for
 
 By default, no processing runs at startup. Use `--scan` to run the full pipeline (ingest, thumbnails, embeddings, scoring, face detection, grouping, transcription), or use the **Rescan Local Folders** button in the web UI.
 
-After running the installer (or `--init-config`), `python app.py` reads the data directory from the config file -- no `--data-dir` needed.
+After running the installer (or `--init-config`), `python app.py` reads the data directory from the config file - no `--data-dir` needed.
 
 ## Changing ML models
 

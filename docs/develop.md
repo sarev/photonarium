@@ -711,17 +711,17 @@ Automated linting, formatting, and static analysis for both Python and JavaScrip
 ### Quick Reference
 
 ```bash
-# Python -- lint and format
+# Python - lint and format
 ruff check --config tools/ruff.toml app/              # Check for errors
 ruff check --config tools/ruff.toml --fix app/        # Auto-fix safe issues
 ruff format --config tools/ruff.toml app/             # Format all Python files
 ruff format --config tools/ruff.toml --check app/     # Verify formatting (no changes)
 
-# JavaScript -- lint and format
+# JavaScript - lint and format
 npx --prefix tools eslint --config tools/eslint.config.mjs app/static/        # Check for errors
 npx --prefix tools eslint --config tools/eslint.config.mjs --fix app/static/  # Auto-fix safe issues
 
-# TypeScript -- type checking (informational, not enforced)
+# TypeScript - type checking (informational, not enforced)
 npx --prefix tools tsc --project tools/jsconfig.json --noEmit
 ```
 

@@ -11,7 +11,7 @@ Groups helps you clean up your library by finding duplicates and also lets you o
   - **Related**, **Similar**, **Near-identical**, **Identical**
 - Double click a stack (or press **Enter**) to open that group in the Gallery, automatically sorted by quality with the best image selected.
 - While viewing a group in the Gallery, use **Alt + Left / Right** to move between groups.
-- **Refine Groups**: click the refine button to filter groups by quality. Choose how many images to keep (or trash) per group -- best only, top N, or top N%. Two actions are available:
+- **Refine Groups**: click the refine button to filter groups by quality. Choose how many images to keep (or trash) per group - best only, top N, or top N%. Two actions are available:
   - **View in Gallery** shows the selected subset (the best or worst images) as a filtered Gallery view, without changing anything. Works for all group levels including directories and custom groups.
   - **Trash** moves the non-kept images to the trash directory (levels 0-4 only). Uses the same quality scoring as the Gallery Quality sort.
 
@@ -24,7 +24,7 @@ Slide to **Directories** to see your images and videos organised by folder. Dire
 - Each directory that contains media files becomes a group, named after the folder.
 - When two folders share the same name, parent directories are added to make names unique (e.g. `Holiday/Beach` vs `Birthday/Beach`).
 - Hover over a directory group name to see the full path.
-- Directory groups are read-only -- they mirror the filesystem and update automatically.
+- Directory groups are read-only - they mirror the filesystem and update automatically.
 
 ## Custom groups (albums)
 
@@ -51,30 +51,30 @@ Negative terms work here too. Use `blurry -sharp` or `dark -bright -colorful` to
 
 When you open a group in the Gallery, images are automatically sorted by **Quality** with the best image pre-selected. The quality score is a blend of several factors:
 
-- **Aesthetic appeal** (60%) -- how visually pleasing the image is, scored by two neural networks (NIMA and LAION) that were trained on large datasets of human aesthetic judgements.
-- **Sharpness** (20%) -- how well-focused the image is, measured by Laplacian variance.
-- **Resolution** (15%) -- total pixel count (higher resolution = better).
-- **Compression quality** (5%) -- bits per pixel, which favours less-compressed originals over heavily compressed copies.
+- **Aesthetic appeal** (60%) - how visually pleasing the image is, scored by two neural networks (NIMA and LAION) that were trained on large datasets of human aesthetic judgements.
+- **Sharpness** (20%) - how well-focused the image is, measured by Laplacian variance.
+- **Resolution** (15%) - total pixel count (higher resolution = better).
+- **Compression quality** (5%) - bits per pixel, which favours less-compressed originals over heavily compressed copies.
 
 The aesthetic component uses the raw model scores (divided by 10 to normalise to 0-1), so a score of 60% reflects a genuine 6/10 from the models rather than a relative ranking. Sharpness, resolution, and compression quality are percentile-ranked within the current image set, since they have no natural absolute scale.
 
 These weights can be adjusted in `photonarium.yml` to suit your preferences:
 
-- `quality_weight_aesthetic`, `quality_weight_sharpness`, `quality_weight_pixels`, `quality_weight_bpp` -- the four component weights (should sum to 1.0).
-- `quality_alpha` -- controls how the two aesthetic models are blended (0.0 = LAION only, 1.0 = NIMA only, default 0.60 = a mix of both, leaning more to NIMA).
-- `nima_enabled` -- set to `false` to skip NIMA scoring entirely (quality falls back to LAION with sharpness and resolution).
+- `quality_weight_aesthetic`, `quality_weight_sharpness`, `quality_weight_pixels`, `quality_weight_bpp` - the four component weights (should sum to 1.0).
+- `quality_alpha` - controls how the two aesthetic models are blended (0.0 = LAION only, 1.0 = NIMA only, default 0.60 = a mix of both, leaning more to NIMA).
+- `nima_enabled` - set to `false` to skip NIMA scoring entirely (quality falls back to LAION with sharpness and resolution).
 
-NIMA and LAION approach aesthetics differently. NIMA was trained on hundreds of thousands of photos rated by people, so it has a good sense of what makes a photograph look appealing -- composition, lighting, colour. LAION is faster and lighter but more impressionistic; it can favour vibrant or striking images even if they're technically flawed. Blending the two gives more balanced results than either alone, which is why both are used by default.
+NIMA and LAION approach aesthetics differently. NIMA was trained on hundreds of thousands of photos rated by people, so it has a good sense of what makes a photograph look appealing - composition, lighting, colour. LAION is faster and lighter but more impressionistic; it can favour vibrant or striking images even if they're technically flawed. Blending the two gives more balanced results than either alone, which is why both are used by default.
 
 ---
 
 # Smart Groups
 
-Regular custom groups are like photo albums -- you add specific images by hand. Smart Groups are more like saved searches: you define what you are looking for (a text description, a date range, certain people, camera settings, a rating -- any combination of the filters on the Search screen) and Photonarium finds matching images every time you open the group. If new photos are added to your library later, they appear automatically when they match the criteria.
+Regular custom groups are like photo albums - you add specific images by hand. Smart Groups are more like saved searches: you define what you are looking for (a text description, a date range, certain people, camera settings, a rating - any combination of the filters on the Search screen) and Photonarium finds matching images every time you open the group. If new photos are added to your library later, they appear automatically when they match the criteria.
 
 ## Creating a Smart Group
 
-1. Go to the **Search** screen and set up the filters you want (text, date range, rating, people, metadata -- any combination).
+1. Go to the **Search** screen and set up the filters you want (text, date range, rating, people, metadata - any combination).
 2. Click **Save as Smart Group**.
 3. Enter a name when prompted.
 
@@ -96,7 +96,7 @@ Hover over a Smart Group stack to reveal an **edit** badge (green circle, top-ri
 |---|---|---|
 | Membership | You add and remove images by hand | Determined automatically by filter criteria |
 | Stays current | Only contains what you put in | Picks up new matching photos automatically |
-| Add images via Gallery | Yes (group picker) | No -- membership is dynamic |
+| Add images via Gallery | Yes (group picker) | No - membership is dynamic |
 | Slideshow from stack | Yes (hover badges) | Open the group first, then start a slideshow from full-screen view |
 
 You can rename and delete Smart Groups the same way as regular groups. The Gallery's "Add to Group" picker only shows regular groups, since adding a specific image to a dynamic group would not make sense.

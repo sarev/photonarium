@@ -12,9 +12,9 @@ You can combine multiple filters at once, for example:
 
 At the top of the Search screen, a toggle lets you choose what to search:
 
-- **All** (default) -- searches images and videos together. Results appear in the Gallery, with videos ranked alongside images based on their preferred scene's similarity to your query.
-- **Images** -- searches images only. Videos are excluded from the results.
-- **Videos** -- searches video content at the scene level. Results appear on the [Videos screen](videos.md) with a heatmap showing which scenes in each video match your query and how strongly.
+- **All** (default) - searches images and videos together. Results appear in the Gallery, with videos ranked alongside images based on their preferred scene's similarity to your query.
+- **Images** - searches images only. Videos are excluded from the results.
+- **Videos** - searches video content at the scene level. Results appear on the [Videos screen](videos.md) with a heatmap showing which scenes in each video match your query and how strongly.
 
 Video search analyses every scene in every video independently, so it can find a specific moment even in a long clip. Image search matches against the whole image (and its description, if one has been written).
 
@@ -72,7 +72,7 @@ You can also add people manually using the picker:
 Filter by EXIF camera settings such as Camera, Lens, ISO, Aperture, Shutter Speed, and others. This is useful for finding all images taken with a particular camera body, lens, or shooting settings.
 
 - Click the metadata area or the camera button to open the metadata picker.
-- Type into any field to search -- matching is fuzzy (subsequence), so "nkn" will find "Nikon" and "d85" will find "D850".
+- Type into any field to search - matching is fuzzy (subsequence), so "nkn" will find "Nikon" and "d85" will find "D850".
 - As you type, a dropdown shows matching values from your library.
 - Click **Done** to confirm your choices. Each filled field appears as a chip in the filter bar.
 - Click the **x** on a chip to remove that criterion.
@@ -83,7 +83,7 @@ You can also add metadata filters directly from the Gallery: open the info panel
 ## Applying, saving, or clearing
 
 - **Apply** uses your current filters and returns to the Gallery (or Videos screen, if in Videos mode).
-- **Save as Smart Group** saves your current filters as a [Smart Group](groups.md#smart-groups) -- a dynamic group that re-evaluates the criteria each time you open it.
+- **Save as Smart Group** saves your current filters as a [Smart Group](groups.md#smart-groups) - a dynamic group that re-evaluates the criteria each time you open it.
 - **Clear** removes all filters.
 
 Tip: You can also leave Search with **Escape**, returning to the Gallery.

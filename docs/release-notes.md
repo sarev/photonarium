@@ -1,5 +1,63 @@
 # Release Notes
 
+## v1.2.2-beta.19
+
+### First-Run Setup Assistant
+
+New users are greeted with a guided setup flow that configures Photonarium for their hardware and language before the first scan. The assistant appears automatically when the library is empty and walks through five steps:
+
+1. **Hardware profile** — choose from four presets (Low-end / NAS, Moderate PC, High-end Laptop, High-end Desktop) that tune thread counts, batch sizes, thumbnail cache, STT model size, CLIP model, and captioning model to match your system. A "Manual" option skips tuning for users who prefer to configure settings themselves.
+2. **Language & search models** — choose English (fastest), Multilingual (200+ languages), or Multilingual High Quality. This selects the appropriate CLIP model for semantic search. A note advises that the small Whisper model or above is recommended for non-English audio transcription.
+3. **Review** — a summary table showing exactly which models will be downloaded and their approximate sizes.
+4. **HuggingFace token** (optional) — enter a token for faster, more reliable downloads and access to gated models. The token is used for the download session only and is not saved.
+5. **Download** — launches the model downloader with real-time progress output. Models already cached locally are skipped. You can abort and retry, or skip the download entirely and run `download_models.py` later.
+
+The assistant can be re-launched at any time from the Settings dialog. Hardware presets and language choices update the configuration file, so all settings remain editable afterwards.
+
+### Video Transcription Subtitles
+
+Scene transcriptions now appear as **subtitles** during video playback:
+
+- **Full-screen viewer** — WebVTT captions are loaded automatically for videos with transcriptions. Standard browser subtitle controls apply.
+- **Scene preview popup** — hovering (or long-pressing on mobile) a scene in the Videos timeline shows a popup with the scene's keyframe thumbnail and transcription text.
+
+Speech-to-text is now **enabled by default** with automatic language detection, so new installations transcribe video audio without any configuration.
+
+### Per-Video Language Selection
+
+Each video can have its language set individually for transcription. Right-click a video in the Videos grid to choose a language, then retranscribe with the correct Whisper language hint. Useful for multilingual libraries where auto-detection doesn't always get it right.
+
+### Timeline Collapse Animation
+
+When no single video is selected (multiple selected or none), the scene timeline smoothly collapses to the bottom of the Videos screen with a CSS transition, rather than disappearing abruptly.
+
+### Database Reliability
+
+Several fixes to SQLite lock contention and transaction handling that improve stability during long processing runs:
+
+- **Stage 6 lock contention** — `sync_directory_groups()`, `reassess_unknown_faces()`, and `compute_unknown_face_groups()` previously held the database lock across heavy computation (matrix multiplication, O(n²) similarity). All three are restructured into **READ (lock) → COMPUTE (no lock) → WRITE (lock)** phases, so the lock is only held briefly for actual database I/O.
+- **Stage 7 STT lock contention** — log handler `busy_timeout` increased and batch flush hardened with rollback on failure.
+- **Cascade transaction failures** — added missing `conn.rollback()` calls to seven exception handlers across `pipeline.py`, `imagedb.py`, and `logdb.py`. Without rollback, a failed `commit()` left the connection in a broken transaction state, causing all subsequent operations on that connection to fail for the rest of the pipeline run.
+
+### Filename Date Parsing Fixes
+
+- **Dot-delimited times parsed as dates** — filenames like `2025-07-13 14.02.30.mp4` had their time portion (`14.02.30`) misinterpreted as a DMY date (16 August 1933), which then outscored the real date. The parser now recognises space-preceded triplets in the HH.MM.SS range as times, not dates.
+- **Windows path separators** — the scoring parser now normalises backslash path separators before splitting into components, so filenames produce consistent results regardless of operating system.
+- **Video timestamps not self-healing** — videos with wrong timestamps from earlier parser bugs were not being corrected on rescan because the parser was still producing the same wrong result. Fixed by the two changes above.
+- **Resolution numbers parsed as years** — four-digit numbers like 1080 or 2160 in filenames (e.g. `video_1080p.mp4`) were being interpreted as years. Fixed with a pattern exclusion for common resolution suffixes.
+
+### Bug Fixes
+
+- **Stale video subtitles** — switching between videos in the full-screen viewer could leave subtitle text from the previous clip visible. Caption tracks are now cleared before loading a new video source.
+- **Timeline showing during multi-select** — the Videos timeline continued showing scenes from a previously selected video when multiple videos were selected. The timeline now collapses when more than one video is selected.
+- **Videos toolbar button colours** — hover and active states for the Videos toolbar button now use the correct accent colour.
+
+### Other
+
+- **Test helper scripts** — `tools/test-start.sh` and `tools/test-stop.sh` for quickly spinning up and tearing down isolated test instances with example images and videos.
+
+---
+
 ## v1.2.1-beta.18
 
 ### Sequential Pipeline Orchestrator
@@ -67,12 +125,12 @@ Photonarium now manages videos alongside images as a first-class feature. A new 
 
 **Videos screen:**
 
-- **Video grid** -- a thumbnail grid of all videos (or search results), using the same VirtualGrid, selection model, and keyboard shortcuts as the Gallery. Each card shows the preferred scene thumbnail, a duration badge, and a match score badge when searching. Thumbnail size is adjustable independently from the Gallery.
-- **Scene timeline** -- selecting a video reveals a horizontal strip of scene keyframe thumbnails below the grid. Scenes are proportionally sized by duration, giving an intuitive sense of the video's structure at a glance. Each scene shows a timecode and a preferred star.
-- **Drag-to-scroll and minimap** -- long timelines scroll horizontally with click-and-drag. A minimap bar appears below, showing the full duration with time ticks and a draggable viewport indicator. Click anywhere on the minimap to jump; gradient indicators at the edges signal hidden content. The minimap hides automatically when everything fits on screen.
-- **Video search with heatmap** -- a three-way search mode toggle (Images / Videos / All) on the Search screen lets you search specifically for video content. "Videos" mode performs scene-level semantic search and navigates to the Videos screen with a per-scene heatmap overlay (blue → yellow → red) showing match strength across the timeline. The minimap also displays a smoothed heatmap gradient in search mode.
-- **Preferred scenes** -- each video has a preferred scene that represents it across the app (Gallery thumbnail, Videos grid, search ranking in "All" mode). Click the star on any scene to change it. The first scene is the default.
-- **Sorting** -- videos can be sorted by date, rating, or content similarity. Sort by similarity works like the Gallery: select a video, click the similarity button, and all videos re-order by visual similarity to the selected one. When searching, videos sort by match score.
+- **Video grid** - a thumbnail grid of all videos (or search results), using the same VirtualGrid, selection model, and keyboard shortcuts as the Gallery. Each card shows the preferred scene thumbnail, a duration badge, and a match score badge when searching. Thumbnail size is adjustable independently from the Gallery.
+- **Scene timeline** - selecting a video reveals a horizontal strip of scene keyframe thumbnails below the grid. Scenes are proportionally sized by duration, giving an intuitive sense of the video's structure at a glance. Each scene shows a timecode and a preferred star.
+- **Drag-to-scroll and minimap** - long timelines scroll horizontally with click-and-drag. A minimap bar appears below, showing the full duration with time ticks and a draggable viewport indicator. Click anywhere on the minimap to jump; gradient indicators at the edges signal hidden content. The minimap hides automatically when everything fits on screen.
+- **Video search with heatmap** - a three-way search mode toggle (Images / Videos / All) on the Search screen lets you search specifically for video content. "Videos" mode performs scene-level semantic search and navigates to the Videos screen with a per-scene heatmap overlay (blue → yellow → red) showing match strength across the timeline. The minimap also displays a smoothed heatmap gradient in search mode.
+- **Preferred scenes** - each video has a preferred scene that represents it across the app (Gallery thumbnail, Videos grid, search ranking in "All" mode). Click the star on any scene to change it. The first scene is the default.
+- **Sorting** - videos can be sorted by date, rating, or content similarity. Sort by similarity works like the Gallery: select a video, click the similarity button, and all videos re-order by visual similarity to the selected one. When searching, videos sort by match score.
 - **Double-click scenes** to open the video in the full-screen viewer, seeked to the scene's start time, with autoplay.
 
 **Scene detection:**
@@ -88,7 +146,7 @@ Photonarium now manages videos alongside images as a first-class feature. A new 
 **Transcriptions:**
 
 - Automatic speech-to-text for video audio. Transcription text is displayed below the scene timeline, labelled by timecode.
-- Transcriptions are semantically searchable -- searching for something someone said in a video finds matching scenes.
+- Transcriptions are semantically searchable - searching for something someone said in a video finds matching scenes.
 
 **Videos in the Gallery and full-screen viewer:**
 
@@ -97,14 +155,14 @@ Photonarium now manages videos alongside images as a first-class feature. A new 
 
 ### Videos Screen Theming and Polish
 
-- **Orange accent** -- video card labels and minimap tick labels use the Videos screen accent colour (orange), consistent with each screen having its own accent.
-- **Contrast improvements** -- selected video card labels darken for readability; minimap tick labels and timeline stars use page-background text outlines so they blend naturally in both light and dark themes.
+- **Orange accent** - video card labels and minimap tick labels use the Videos screen accent colour (orange), consistent with each screen having its own accent.
+- **Contrast improvements** - selected video card labels darken for readability; minimap tick labels and timeline stars use page-background text outlines so they blend naturally in both light and dark themes.
 
 ### Documentation Overhaul
 
-- **Sub-documents** -- the monolithic README has been split into focused guides under `docs/`: [Gallery](gallery.md), [Full-screen viewer](fullscreen.md), [Search](search.md), [Videos](videos.md), [Groups](groups.md), [Faces](faces.md), [Database](database.md), [Installation](installation.md). The README is now a concise overview with links.
-- **Feature coverage** -- updated documentation to cover light/dark themes, similarity sort (Gallery and Videos), image histogram, auto-captioning, video transcriptions, Docker/NAS deployment, and the 100k+ image scalability of the thumbnail grid.
-- **Competitive comparison** -- updated the background document with video management and scene-level search rows in the comparison table.
+- **Sub-documents** - the monolithic README has been split into focused guides under `docs/`: [Gallery](gallery.md), [Full-screen viewer](fullscreen.md), [Search](search.md), [Videos](videos.md), [Groups](groups.md), [Faces](faces.md), [Database](database.md), [Installation](installation.md). The README is now a concise overview with links.
+- **Feature coverage** - updated documentation to cover light/dark themes, similarity sort (Gallery and Videos), image histogram, auto-captioning, video transcriptions, Docker/NAS deployment, and the 100k+ image scalability of the thumbnail grid.
+- **Competitive comparison** - updated the background document with video management and scene-level search rows in the comparison table.
 
 ### Bug Fixes
 
@@ -380,28 +438,28 @@ Sharpness, resolution, and compression quality remain percentile-ranked since th
 The toolbar has been visually refreshed with meaningful colour cues throughout:
 
 - **Always-visible navigation:** Screen buttons (Gallery, Database, Groups, Search, Faces) are now always shown. The current screen's button displays in its signature colour (blue, pink, purple, teal, green) rather than being hidden entirely.
-- **Active toggle colours:** Sort buttons highlight yellow when active, face filter buttons highlight green, and the search button highlights teal -- making it easy to see which toggles are on at a glance.
-- **Hover colours:** Most toolbar buttons now show a themed background tint on hover -- blue for slideshow/shuffle/fullscreen, red for trash/delete, purple for group new/rename, teal for refine/clear-filter, indigo for selection controls, and orange for rotation.
+- **Active toggle colours:** Sort buttons highlight yellow when active, face filter buttons highlight green, and the search button highlights teal - making it easy to see which toggles are on at a glance.
+- **Hover colours:** Most toolbar buttons now show a themed background tint on hover - blue for slideshow/shuffle/fullscreen, red for trash/delete, purple for group new/rename, teal for refine/clear-filter, indigo for selection controls, and orange for rotation.
 - **Group filter repositioned:** The group name filter input has been moved next to the Refine button, starts narrower, and smoothly expands on focus.
 
 ### Clearer Database Screen Labels
 
 The Database screen now distinguishes between its two modes of adding images more clearly:
 
-- **Import Images** -- "copies photos into your catalogue, organised by date"
-- **Local Indexed Folders** -- "photos stay where they are, nothing is moved or copied"
+- **Import Images** - "copies photos into your catalogue, organised by date"
+- **Local Indexed Folders** - "photos stay where they are, nothing is moved or copied"
 
 Button labels updated to match: "Add Local Folder" and "Rescan Local Folders". Short explanatory hints appear next to each section heading.
 
 ### Other Improvements
 
 - **Version in toolbar:** The Database screen now shows the Photonarium version (git tag or short commit hash with date) next to the logo.
-- **Friendlier status labels:** The processing queue label "Embedding" has been renamed to "Classifying" -- less technical for end users.
+- **Friendlier status labels:** The processing queue label "Embedding" has been renamed to "Classifying" - less technical for end users.
 - **Tutorial updated:** Screenshot script updated for all beta 9 changes (slideshow/shuffle/trash buttons, Refine groups, import labels, Quick Match percentages). Mouse cursor is now parked in a neutral location before each screenshot to prevent misleading hover highlights on toolbar buttons.
 
 ### Bug Fixes
 
-- **Fullscreen hover invisible on black:** Hover tint on fullscreen viewer controls (buttons, navigation arrows) was darkening from black to darker black -- invisible when viewing a portrait image on a landscape display with black bars. Now uses a white tint that visibly lightens buttons regardless of backdrop.
+- **Fullscreen hover invisible on black:** Hover tint on fullscreen viewer controls (buttons, navigation arrows) was darkening from black to darker black - invisible when viewing a portrait image on a landscape display with black bars. Now uses a white tint that visibly lightens buttons regardless of backdrop.
 - **Search button falsely highlighted:** The Search screen navigation button showed a teal "active" highlight whenever a filter was active, even when viewing a different screen. This made it look like two screens were selected simultaneously. The Clear Filter button already indicates an active filter, so the redundant Search button highlight has been removed.
 - **Preflight dedup docs corrected:** Documentation incorrectly stated that client-side import dedup uses SHA-256 checksums. It actually uses file basename and size pairs for the preflight check (the backend's ImportWorker still uses SHA-256 as a safety net).
 
@@ -416,7 +474,7 @@ A new Import feature lets you copy images from external sources (SD cards, phone
 - **Mobile import:** Pick Photos opens the system photo picker (iOS Camera Roll, Android Files). On Android, a Pick Folder button is also available via the `webkitdirectory` API.
 - **Preflight dedup:** Before uploading from a browser, file names and sizes are sent to the backend for a fast duplicate check against existing images. Only new files are transferred, saving bandwidth when re-importing folders that partially overlap with the existing library. The backend's SHA-256 dedup in the ImportWorker catches any edge cases that slip through.
 - **Backend dedup:** The ImportWorker also checks checksums server-side (for the desktop path and as a safety net for uploads), skipping files already in the library.
-- **ImportWorker:** Modeled on TrashWorker -- daemon thread, queue-fed with `ThreadPoolExecutor` for parallel file copying (`import_threads` setting, 1-16, default 4). Progress is shown on the Database screen. Unfinished items are persisted to `.pending_import.json` on shutdown and recovered on restart.
+- **ImportWorker:** Modeled on TrashWorker - daemon thread, queue-fed with `ThreadPoolExecutor` for parallel file copying (`import_threads` setting, 1-16, default 4). Progress is shown on the Database screen. Unfinished items are persisted to `.pending_import.json` on shutdown and recovered on restart.
 - **Auto-registration:** The catalogue directory is automatically registered as a watched folder. It is shown with a catalogue badge and cannot be removed from the folder list.
 - **No new dependencies:** Uses stdlib `shutil.copy2` and existing `hashlib`.
 
@@ -452,7 +510,7 @@ The application is now launched with `python app/app.py` instead of `python app.
 
 ### Tutorial Automation
 
-The tutorial generator (`tools/mktutorial/tutorial.py`) now supports a `--setup` mode that automates the initial data preparation -- replacing manual steps that previously had to be done before tutorial generation:
+The tutorial generator (`tools/mktutorial/tutorial.py`) now supports a `--setup` mode that automates the initial data preparation - replacing manual steps that previously had to be done before tutorial generation:
 
 - **Automated setup:** `--setup` creates the tutorial config, downloads ML models, starts the server against an empty database, captures the Getting Started screenshots via Playwright, adds the example image folder, and waits for all image processing (indexing, embeddings, faces, duplicates, NIMA scoring) to complete.
 - **Composite screenshots:** The OS folder picker dialog (which cannot be automated as a native widget) is composited from a manually-provided overlay onto an automatically-captured background screenshot using Pillow.
@@ -464,8 +522,8 @@ The tutorial generator (`tools/mktutorial/tutorial.py`) now supports a `--setup`
 - **Orphaned faces after trashing images:** Trashing images only soft-deleted them (`deleted = 1`) without cleaning up associated face records, because the CASCADE DELETE foreign key only fires on hard `DELETE` statements. Orphaned faces continued to appear on the Faces screen, in people's face lists, in auto-recognition, and in semantic search. Fixed by hard-deleting face records during trash, adding `deleted = 0` filters to all face queries, deleting orphaned face thumbnails, and emitting face/people change events for multi-client sync. When the trashed image contained a person's preferred face, the replacement is now chosen by embedding similarity to the old preferred rather than arbitrarily.
 - **Quick Match popup jumping to top-left corner:** When a face reassessment event triggered a grid refresh while the Quick Match popup's async match fetch was in flight, the anchor element was detached from the DOM. The subsequent repositioning call read `getBoundingClientRect()` on the detached element (returning zeros), jumping the card to the top-left corner.
 - **Stale person thumbnails in Quick Match results:** The Quick Match popup used a raw thumbnail URL without cache-busting, so after changing a person's preferred face, the popup continued to show the old face until the browser cache expired.
-- **Face auto-matching never worked:** Three bugs prevented automatic face recognition from assigning detected faces to known people. First, detection-time matching used only the global threshold, ignoring per-person thresholds (so a person with a relaxed 70% threshold was still held to the global 92%). Second, both matching paths used a single-best-match approach -- if the closest known face belonged to a person whose threshold was not met, no fallback was tried, even when other people would have matched. Third, faces belonging to the ignored person ('-') could "steal" the best match from named people. Fixed by grouping matches by person, trying each in descending similarity order against their per-person threshold, and partitioning named people before ignored so named matches are always preferred.
-- **Gallery not refreshing after import:** The Gallery only updated at `processing_complete`, which fires after face detection and duplicate grouping -- often 1-2 minutes after images were actually ready to view. Added an `images_indexed` event that fires as soon as embeddings complete, so imported or newly scanned images appear in the Gallery within seconds.
+- **Face auto-matching never worked:** Three bugs prevented automatic face recognition from assigning detected faces to known people. First, detection-time matching used only the global threshold, ignoring per-person thresholds (so a person with a relaxed 70% threshold was still held to the global 92%). Second, both matching paths used a single-best-match approach - if the closest known face belonged to a person whose threshold was not met, no fallback was tried, even when other people would have matched. Third, faces belonging to the ignored person ('-') could "steal" the best match from named people. Fixed by grouping matches by person, trying each in descending similarity order against their per-person threshold, and partitioning named people before ignored so named matches are always preferred.
+- **Gallery not refreshing after import:** The Gallery only updated at `processing_complete`, which fires after face detection and duplicate grouping - often 1-2 minutes after images were actually ready to view. Added an `images_indexed` event that fires as soon as embeddings complete, so imported or newly scanned images appear in the Gallery within seconds.
 
 ### Improvements
 

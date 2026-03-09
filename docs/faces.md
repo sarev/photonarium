@@ -4,7 +4,7 @@
 
 Faces is where you clean up and organise people so you can later filter the Gallery by who is in the photo. It's designed to be fast to tidy up: name people, ignore false detections, merge duplicates, and choose a good thumbnail for each person.
 
-Face detection runs on images only -- video frames are not scanned for faces.
+Face detection runs on images only - video frames are not scanned for faces.
 
 ## Known People list
 
@@ -81,9 +81,9 @@ When you name (or ignore) a face, it will be 'locked' to the name you've given i
 
 In the background, while you are naming faces, or marking them as ignored, Photonarium will work to see if any of the remaining unknown and unlocked faces can be moved under any of the named people. When it does this, the faces will be named appropriately but *unlocked*, so that they might be automatically moved later as it becomes clearer what each person looks like (more locked faces with that name).
 
-Double-clicking on a person's face in the list of people will open a view where you see all of the faces that have been given that name. The ones with a green padlock symbol are locked, clicking this will unlock the face. Clicking a grey (unlocked) padlock symbol will lock the face. Hovering over a face, you'll see the grey '-' (ignore) and the green 'x' (unname) controls appear. This helps you to fine-tune the faces under this person. You can also select the star badge (turns gold) to choose a single face that Photonarium will use as the 'preferred' face for this person -- this is the one it uses elsewhere in the app when referencing that person.
+Double-clicking on a person's face in the list of people will open a view where you see all of the faces that have been given that name. The ones with a green padlock symbol are locked, clicking this will unlock the face. Clicking a grey (unlocked) padlock symbol will lock the face. Hovering over a face, you'll see the grey '-' (ignore) and the green 'x' (unname) controls appear. This helps you to fine-tune the faces under this person. You can also select the star badge (turns gold) to choose a single face that Photonarium will use as the 'preferred' face for this person - this is the one it uses elsewhere in the app when referencing that person.
 
-A useful trick is to click the open padlock button in the toolbar to show only the unlocked faces for this person (if any). These are all the ones that were automatically assigned. By lowering the "match threshold" slider (and wait a few seconds -- this can take a little time), Photonarium will review all unknown and unlocked faces to see if any can move across under this name. A lower threshold means faces don't have to be quite as similar to be considered a match. You can then lock the faces that you are happy really *do* belong to that person, before raising the matching threshold back up to a more strict level.
+A useful trick is to click the open padlock button in the toolbar to show only the unlocked faces for this person (if any). These are all the ones that were automatically assigned. By lowering the "match threshold" slider (and wait a few seconds - this can take a little time), Photonarium will review all unknown and unlocked faces to see if any can move across under this name. A lower threshold means faces don't have to be quite as similar to be considered a match. You can then lock the faces that you are happy really *do* belong to that person, before raising the matching threshold back up to a more strict level.
 
 Clicking the "Focus on one person" button in the toolbar returns you to the main Faces screen.
 

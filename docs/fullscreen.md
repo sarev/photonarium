@@ -29,7 +29,9 @@ These shortcuts use Ctrl on Windows/Linux and Cmd on macOS:
 
 When a video is opened in full-screen, it displays with standard playback controls (play/pause, seek, volume). Videos start paused so you can decide when to begin watching. The face tagging and rotate buttons are visually disabled for videos, since those features apply only to images.
 
-When opening a video from the [Videos screen](videos.md), the player seeks to the relevant position -- for example, to the start of a matching scene when you've searched for video content.
+When opening a video from the [Videos screen](videos.md), the player seeks to the relevant position - for example, to the start of a matching scene when you've searched for video content.
+
+If a video has been transcribed, **subtitles** are loaded automatically as a WebVTT caption track. Use the browser's built-in subtitle controls to show or hide them.
 
 ---
 
@@ -40,7 +42,7 @@ The slideshow lets you sit back and watch your photos and videos play through au
 ## Starting a slideshow
 
 - In the full-screen viewer, click the **play** button in the toolbar for linear playback (in the current sort order), or the **shuffle** button for random order.
-- On the Groups screen, hover over any group stack to reveal play and shuffle badges -- click one to jump straight into a full-screen slideshow scoped to that group's items.
+- On the Groups screen, hover over any group stack to reveal play and shuffle badges - click one to jump straight into a full-screen slideshow scoped to that group's items.
 - Press **Space** to start a linear slideshow from anywhere in the full-screen viewer.
 
 ## While a slideshow is running
@@ -54,7 +56,7 @@ Clicking the other mode button (play or shuffle) while a slideshow is running sw
 
 ## Videos in slideshows
 
-When a slideshow reaches a video, it begins playing automatically. The slideshow advances to the next item once the video finishes (or after the hold duration, whichever comes first for short clips). During video playback, the standard slideshow controls still work -- you can skip forward, pause, or stop at any time.
+When a slideshow reaches a video, it begins playing automatically. The slideshow advances to the next item once the video finishes (or after the hold duration, whichever comes first for short clips). During video playback, the standard slideshow controls still work - you can skip forward, pause, or stop at any time.
 
 ## Timing
 
@@ -64,7 +66,7 @@ The hold duration (how long each image stays on screen) defaults to 5 seconds an
 
 # Face tagging (in full-screen)
 
-Face tagging helps you name people, ignore false positives, and correct mistakes directly on the photo. It is available for images only -- face detection does not apply to video frames.
+Face tagging helps you name people, ignore false positives, and correct mistakes directly on the photo. It is available for images only - face detection does not apply to video frames.
 
 Turn it on and off using the face icon in the full-screen viewer.
 
