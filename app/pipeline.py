@@ -729,7 +729,28 @@ class PipelineOrchestrator(threading.Thread):
             conn.commit()
             existing_mtime = current_mtime
 
-        if existing['size'] == current_size and existing_mtime == current_mtime:
+        # Determine whether the file content has actually changed.
+        # Size difference → definitely changed.  Mtime-only difference →
+        # compute checksum to distinguish real modifications from benign
+        # mtime drift (Dropbox sync, filesystem precision, backup tools).
+        file_unchanged = existing['size'] == current_size and existing_mtime == current_mtime
+
+        if not file_unchanged and existing['size'] == current_size and existing_checksum:
+            # Same size, different mtime — check if content actually changed
+            current_checksum = self._compute_checksum(path)
+            if current_checksum == existing_checksum:
+                # Content identical — mtime drifted but file wasn't modified.
+                # Update stored mtime so we don't re-checksum every cycle,
+                # then fall through to the unchanged-file path.
+                logger.debug(f'Mtime changed but checksum matches, updating stored mtime: {path}')
+                conn.execute(
+                    'UPDATE images SET mtime = ? WHERE id = ?',
+                    (current_mtime, existing['id']),
+                )
+                conn.commit()
+                file_unchanged = True
+
+        if file_unchanged:
             # File unchanged — backfill missing data
             if not is_video:
                 # Backfill missing checksum
@@ -819,7 +840,7 @@ class PipelineOrchestrator(threading.Thread):
 
             return False
 
-        # File changed (size or mtime differ)
+        # File genuinely changed (different size, or different checksum)
         if is_video:
             self._reingest_changed_video(conn, path, existing, current_size, current_mtime)
         else:
@@ -851,14 +872,42 @@ class PipelineOrchestrator(threading.Thread):
             return
 
         checksum = self._compute_checksum(path)
+
+        # Recompute timestamp from the (possibly renamed) filename / exif
+        ts_conf = existing.get('timestamp_confidence')
+        if ts_conf is not None and ts_conf != 0:
+            new_ts, new_conf = derive_timestamp_with_confidence(
+                path,
+                exif_data=None,  # Videos have no EXIF
+                filename_date_overrides=self._db.config.filename_date_overrides,
+                date_order=self._db.config.date_order,
+            )
+            new_ts_str = new_ts.isoformat() if new_ts else None
+        else:
+            # User-assigned timestamp — preserve it
+            new_ts_str = existing.get('timestamp')
+            new_conf = ts_conf
+
         now_ts = datetime.now().isoformat()
         conn.execute(
             """UPDATE images SET size = ?, width = ?, height = ?, duration = ?,
+               timestamp = ?, timestamp_confidence = ?,
                mtime = ?, checksum = ?, embedding = NULL,
                aesthetic_nima = NULL, aesthetic_laion = NULL,
                thumbnails_pending = 1, updated_at = ?
                WHERE id = ?""",
-            (current_size, vmeta.width, vmeta.height, vmeta.duration, current_mtime, checksum, now_ts, existing['id']),
+            (
+                current_size,
+                vmeta.width,
+                vmeta.height,
+                vmeta.duration,
+                new_ts_str,
+                new_conf,
+                current_mtime,
+                checksum,
+                now_ts,
+                existing['id'],
+            ),
         )
         # Delete old scenes and faces
         conn.execute('DELETE FROM scenes WHERE image_id = ?', (existing['id'],))
