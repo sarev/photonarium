@@ -158,14 +158,25 @@ class FasterWhisperBackend(STTBackend):
             segments, _info = self._model.transcribe(
                 str(audio_path),
                 beam_size=5,
+                word_timestamps=True,
                 **kwargs,
             )
 
             result = []
             for seg in segments:
-                text = seg.text.strip()
-                if text:
-                    result.append(STTSegment(start=seg.start, end=seg.end, text=text))
+                # With word_timestamps=True, each segment carries individual
+                # word timings.  Emit per-word STTSegments so the pipeline
+                # can assign text to scenes with fine granularity.
+                if seg.words:
+                    for word in seg.words:
+                        text = word.word.strip()
+                        if text:
+                            result.append(STTSegment(start=word.start, end=word.end, text=text))
+                else:
+                    # Fallback if words are missing (shouldn't happen)
+                    text = seg.text.strip()
+                    if text:
+                        result.append(STTSegment(start=seg.start, end=seg.end, text=text))
 
             return result
 
@@ -207,3 +218,89 @@ def get_stt_backend(config: Config) -> STTBackend | None:
         return None
 
     return backend
+
+
+# ---------------------------------------------------------------------------
+# CLI test harness
+# ---------------------------------------------------------------------------
+
+if __name__ == '__main__':
+    import argparse
+    import sys
+    import tempfile
+
+    parser = argparse.ArgumentParser(
+        description='Test the STT backend by transcribing an audio or video file.',
+    )
+    parser.add_argument(
+        'file',
+        help='Path to a WAV audio file or a video file.  Video files are '
+        'converted to 16kHz mono WAV automatically via video.extract_audio_segment().',
+    )
+    parser.add_argument(
+        '-m', '--model',
+        default='base',
+        help='Whisper model size: tiny, base, small, medium, large-v3 (default: base)',
+    )
+    parser.add_argument(
+        '-l', '--language',
+        default='',
+        help='Language code (e.g. "en", "fr").  Empty for auto-detect (default).',
+    )
+    args = parser.parse_args()
+
+    logging.basicConfig(level=logging.INFO, format='%(levelname)s: %(message)s')
+
+    backend = FasterWhisperBackend(model_size=args.model)
+    if not backend.is_available():
+        print('ERROR: faster-whisper is not installed.  pip install faster-whisper')
+        sys.exit(1)
+
+    input_path = Path(args.file).resolve()
+    if not input_path.exists():
+        print(f'ERROR: file not found: {input_path}')
+        sys.exit(1)
+
+    # If not a .wav file, try extracting audio from it as a video
+    tmp_wav = None
+    if input_path.suffix.lower() != '.wav':
+        try:
+            from video import extract_audio_segment
+        except ImportError:
+            print('ERROR: video.py not importable (run from the app/ directory)')
+            sys.exit(1)
+
+        tmp_fd, tmp_name = tempfile.mkstemp(suffix='.wav')
+        import os
+        os.close(tmp_fd)
+        tmp_wav = Path(tmp_name)
+
+        print(f'Extracting audio from {input_path.name}...')
+        if not extract_audio_segment(input_path, tmp_wav, 0.0, float('inf')):
+            print('ERROR: failed to extract audio from video')
+            tmp_wav.unlink(missing_ok=True)
+            sys.exit(1)
+        input_path = tmp_wav
+
+    # Transcribe
+    print(f'Transcribing with model={args.model}, language={args.language or "(auto)"}...')
+    segments = backend.transcribe(input_path, language=args.language)
+
+    # Clean up temp file
+    if tmp_wav:
+        tmp_wav.unlink(missing_ok=True)
+
+    if not segments:
+        print('No speech detected.')
+        sys.exit(0)
+
+    # Print results
+    print(f'\n{len(segments)} word segments:\n')
+    print(f'{"Start":>8s}  {"End":>8s}  Text')
+    print(f'{"-----":>8s}  {"---":>8s}  ----')
+    for seg in segments:
+        print(f'{seg.start:8.2f}s {seg.end:8.2f}s  {seg.text}')
+
+    # Also print a reconstructed full transcript
+    full = ' '.join(seg.text for seg in segments)
+    print(f'\nFull transcript:\n{full}')

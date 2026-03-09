@@ -2350,7 +2350,10 @@ class PipelineOrchestrator(threading.Thread):
             if not stt_segments:
                 return
 
-            # Assign STT segments to scenes by temporal overlap
+            # Assign STT segments to scenes by midpoint — each word lands
+            # in exactly one scene, avoiding duplicates at boundaries.
+            # STT timestamps are relative to the extracted audio clip, so
+            # offset them by total_start to align with absolute scene times.
             transcription_updates: list[tuple] = []
             for (scene_start, scene_end), scene_id in zip(scenes, scene_ids, strict=False):
                 if self._stopped():
@@ -2358,9 +2361,10 @@ class PipelineOrchestrator(threading.Thread):
 
                 scene_texts: list[str] = []
                 for seg in stt_segments:
-                    seg_start = getattr(seg, 'start', 0.0)
-                    seg_end = getattr(seg, 'end', 0.0)
-                    if seg_start < scene_end and seg_end > scene_start:
+                    seg_start = getattr(seg, 'start', 0.0) + total_start
+                    seg_end = getattr(seg, 'end', 0.0) + total_start
+                    mid = (seg_start + seg_end) / 2.0
+                    if scene_start <= mid < scene_end:
                         text = getattr(seg, 'text', '').strip()
                         if text:
                             scene_texts.append(text)
