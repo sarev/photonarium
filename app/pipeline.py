@@ -354,6 +354,13 @@ class PipelineOrchestrator(threading.Thread):
                     pass
             self._flush_logs()
 
+        # --- DEBUG: quit after Stage 1 so we can study the TSDEBUG logs ---
+        logger.warning('TSDEBUG: Stage 1 complete — exiting for debug analysis')
+        self._flush_logs()
+        import sys
+        sys.exit(0)
+        # --- END DEBUG ---
+
         # Stages 2-5 are DB-query-driven and lightweight — always run
         for stage_name, stage_fn in [
             ('thumbnails', self._stage_thumbnails),
@@ -808,12 +815,36 @@ class PipelineOrchestrator(threading.Thread):
                 )
                 new_ts_str = new_ts.isoformat() if new_ts else None
                 old_ts = existing.get('timestamp')
+
+                # --- DEBUG: instrument pre-1950 timestamps ---
+                if old_ts and old_ts < '1950':
+                    logger.warning(
+                        f'TSDEBUG pre-1950 | file={path.name} | '
+                        f'old_ts={old_ts} | new_ts={new_ts_str} | '
+                        f'old_conf={ts_conf} | new_conf={new_conf} | '
+                        f'would_update={new_ts_str != old_ts or new_conf != ts_conf} | '
+                        f'exif_data={"yes" if exif_data else "no"}'
+                    )
+                # --- END DEBUG ---
+
                 if new_ts_str != old_ts or new_conf != ts_conf:
                     conn.execute(
                         'UPDATE images SET timestamp = ?, timestamp_confidence = ?, updated_at = ? WHERE id = ?',
                         (new_ts_str, new_conf, datetime.now().isoformat(), existing['id']),
                     )
                     conn.commit()
+
+                    # --- DEBUG: verify the write stuck ---
+                    if old_ts and old_ts < '1950':
+                        verify = conn.execute(
+                            'SELECT timestamp FROM images WHERE id = ?',
+                            (existing['id'],),
+                        ).fetchone()
+                        logger.warning(
+                            f'TSDEBUG post-commit | file={path.name} | '
+                            f'verified_ts={verify[0] if verify else "MISSING"}'
+                        )
+                    # --- END DEBUG ---
 
             # Backfill placeholder thumbnails for items ingested before
             # the placeholder feature was added.  Sets the pending flag
