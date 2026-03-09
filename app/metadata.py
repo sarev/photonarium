@@ -322,6 +322,25 @@ def _parse_hhmm_or_hhmmss(token: str) -> tuple[int, int, int] | None:
 # ---------------------------------------------------------------------------
 
 
+def _extract_resolution_numbers(text: str) -> set[str]:
+    """Find numbers that are part of resolution patterns (e.g. 1920x1080).
+
+    Detects patterns like ``1920x1080``, ``1920_1080``, ``1080-1920``,
+    ``960x540``, etc.  Both numbers must be plausible pixel dimensions
+    (120–8640).  Returns the matched number *strings* so callers can
+    exclude them from year-hint consideration.
+    """
+    excluded: set[str] = set()
+    for m in re.finditer(
+        r'(?<!\d)(\d{3,4})\s*[x×_\-]\s*(\d{3,4})(?!\d)', text, re.IGNORECASE,
+    ):
+        a, b = int(m.group(1)), int(m.group(2))
+        if 120 <= a <= 8640 and 120 <= b <= 8640:
+            excluded.add(m.group(1))
+            excluded.add(m.group(2))
+    return excluded
+
+
 def _extract_year_hints(
     components: Sequence[str],
     *,
@@ -341,10 +360,14 @@ def _extract_year_hints(
 
         weight = _component_weight(i, total)
 
+        # Detect resolution patterns (e.g. 1920x1080, 960_540) so we
+        # don't mistake pixel dimensions for years.
+        resolution_nums = _extract_resolution_numbers(comp)
+
         # Pure 4-digit directory/file stem
         if len(words) == 1 and re.fullmatch(r'\d{4}', words[0]):
             y = int(words[0])
-            if 1800 <= y <= today.year:
+            if 1800 <= y <= today.year and words[0] not in resolution_nums:
                 hints.append((i, y, 4.0 * weight))
                 continue
 
@@ -352,7 +375,7 @@ def _extract_year_hints(
         for w in words:
             if re.fullmatch(r'\d{4}', w):
                 y = int(w)
-                if 1800 <= y <= today.year:
+                if 1800 <= y <= today.year and w not in resolution_nums:
                     hints.append((i, y, 2.5 * weight))
 
         # Apostrophe year, eg '03
@@ -1871,9 +1894,11 @@ def _parse_date_from_string(text: str) -> tuple[int, int, int, int] | None:
             return (year, month, 1, match.end())
 
     # Year only: standalone 4-digit year (e.g., folder "2014" or "Photos 2014")
+    # Skip numbers that are part of resolution patterns (e.g. 1920_1080).
+    resolution_nums = _extract_resolution_numbers(text)
     for match in _PATTERN_DATE_YEAR_ONLY.finditer(text):
         year = int(match.group(1))
-        if 1900 <= year <= 2099:
+        if 1900 <= year <= 2099 and match.group(1) not in resolution_nums:
             return (year, 1, 1, match.end())
 
     return None
@@ -2176,6 +2201,19 @@ if __name__ == '__main__':
         # -- Camera-style --
         ('DSC_20240307_143045.jpg', 'DMY', '2024-03-07', '14:30:45', 'both', 'Camera prefix YYYYMMDD_HHMMSS'),
         ('IMG_20240307.jpg', 'DMY', '2024-03-07', None, 'both', 'Camera prefix YYYYMMDD'),
+
+        # -- Resolution / technical metadata in filenames --
+        ('cars-hd_1920_1080_25fps.mp4', 'DMY', None, None, 'both',
+         'Resolution 1920x1080 not a date'),
+        ('flowers-hd_1080_1920_30fps.mp4', 'DMY', None, None, 'both',
+         'Resolution 1080x1920 (portrait) not a date'),
+        ('apollo2-sd_960_540_30fps.mp4', 'DMY', None, None, 'both',
+         'Resolution 960x540 not a date'),
+
+        # -- Date + time in filename (Windows-style dots for time) --
+        (r'C:\Users\srevi\Dropbox\Photos and Videos\Videos\2025\2025-07-13 14.02.30.mp4',
+         'DMY', '2025-07-13', '14:02:30', 'scoring',
+         'Windows path with date + dot-delimited time'),
 
         # -- Edge cases --
         ('random_photo.jpg', 'DMY', None, None, 'both', 'No date at all'),
