@@ -805,24 +805,6 @@ const Videos = {
             updateIndicators();
         });
         ro.observe(track);
-
-        // Transcription text below timeline
-        const hasTranscriptions = scenes.some(s => s.transcription);
-        if (hasTranscriptions) {
-            const transcripts = App.createElement('div', { className: 'timeline-transcripts' });
-            for (const scene of scenes) {
-                if (!scene.transcription) continue;
-                const entry = App.createElement('div', { className: 'timeline-transcript-entry' });
-                const time = App.createElement('span', { className: 'timeline-transcript-time' });
-                time.textContent = this._formatTime(scene.start_time);
-                const text = App.createElement('span', { className: 'timeline-transcript-text' });
-                text.textContent = scene.transcription;
-                entry.appendChild(time);
-                entry.appendChild(text);
-                transcripts.appendChild(entry);
-            }
-            container.appendChild(transcripts);
-        }
     },
 
     /**
@@ -1131,12 +1113,15 @@ const Videos = {
         const popup = App.createElement('div', { className: 'scene-preview-popup hidden' });
         const img = App.createElement('img', { className: 'scene-preview-img' });
         const score = App.createElement('span', { className: 'scene-preview-score' });
+        const subtitle = App.createElement('span', { className: 'scene-preview-subtitle' });
         popup.appendChild(img);
         popup.appendChild(score);
+        popup.appendChild(subtitle);
         document.body.appendChild(popup);
         this._previewPopup = popup;
         this._previewImg = img;
         this._previewScore = score;
+        this._previewSubtitle = subtitle;
     },
 
     /**
@@ -1162,6 +1147,14 @@ const Videos = {
             scoreEl.style.display = '';
         } else {
             scoreEl.style.display = 'none';
+        }
+
+        const subEl = this._previewSubtitle;
+        if (scene.transcription) {
+            subEl.textContent = scene.transcription;
+            subEl.style.display = '';
+        } else {
+            subEl.style.display = 'none';
         }
 
         popup.classList.remove('hidden');

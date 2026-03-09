@@ -618,6 +618,9 @@ const Fullscreen = {
             }
             this._els.video.load();
 
+            // Add WebVTT captions track for scene transcriptions
+            this._addCaptionTrack(this._els.video, imageId);
+
             // Show filename with duration instead of dimensions
             this._showFilename(metadata.basename, null, null, metadata.duration);
 
@@ -632,6 +635,7 @@ const Fullscreen = {
                 this._els.video.pause();
                 this._els.video.removeAttribute('src');
                 this._els.video.hidden = true;
+                this._removeCaptionTrack(this._els.video);
             }
             this._els.image.hidden = false;
 
@@ -655,6 +659,34 @@ const Fullscreen = {
 
         // Notify AppState (triggers face overlay load, selection sync, etc.)
         AppState.nav.setFullscreenImageId(imageId);
+    },
+
+    /**
+     * Add a WebVTT captions track to a video element for scene transcriptions.
+     * @param {HTMLVideoElement} video - The video element
+     * @param {string} imageId - Image/video UUID for the subtitles API
+     * @private
+     */
+    _addCaptionTrack(video, imageId) {
+        this._removeCaptionTrack(video);
+        const track = document.createElement('track');
+        track.kind = 'captions';
+        track.src = `/api/images/${imageId}/subtitles.vtt`;
+        track.srclang = App.config?.stt_language || 'en';
+        track.label = 'Transcription';
+        track.default = true;
+        video.appendChild(track);
+        track.addEventListener('load', () => { track.track.mode = 'showing'; });
+    },
+
+    /**
+     * Remove any existing caption tracks from a video element.
+     * @param {HTMLVideoElement} video - The video element
+     * @private
+     */
+    _removeCaptionTrack(video) {
+        const existing = video.querySelector('track');
+        if (existing) existing.remove();
     },
 
     /**

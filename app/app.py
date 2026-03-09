@@ -1035,6 +1035,78 @@ def get_image_scenes(image_id):
     return success_response(scenes)
 
 
+@app.route('/api/images/<image_id>/subtitles.vtt', methods=['GET'])
+def get_subtitles_vtt(image_id):
+    """Generate WebVTT subtitles from scene transcriptions for a video.
+
+    Each cue's end time is extended by 2 seconds (capped at the next
+    cue's end time or the video duration) so adjacent cues overlap
+    briefly, creating a smooth scroll effect in the browser's native
+    caption renderer.
+
+    Args:
+        image_id: The unique identifier of the video.
+
+    Returns:
+        WebVTT file with Content-Type text/vtt.
+    """
+    db = get_db()
+    image = db.get_image(image_id)
+    if image is None:
+        return error_response('Image not found', 404)
+
+    if image.get('media_type') != 'video':
+        return error_response('Not a video', 400)
+
+    with db._db_lock:
+        rows = db.conn.execute(
+            """
+            SELECT start_time, end_time, transcription
+            FROM scenes
+            WHERE image_id = ?
+            ORDER BY scene_index ASC
+            """,
+            (image_id,),
+        ).fetchall()
+
+    # Filter to scenes with transcription text
+    cues = [(r['start_time'], r['end_time'], r['transcription'])
+            for r in rows if r['transcription']]
+
+    vtt = 'WEBVTT\n\n'
+
+    if cues:
+        video_duration = image.get('duration') or cues[-1][1]
+        extend_secs = 2.0
+
+        for i, (start, end, text) in enumerate(cues):
+            # Extend cue end time by 2s, capped at the next cue's end
+            # time (allowing overlap with the next cue's start) or the
+            # video duration
+            cap = cues[i + 1][1] if i + 1 < len(cues) else video_duration
+            extended_end = min(end + extend_secs, cap)
+
+            vtt += f'{_format_vtt_time(start)} --> {_format_vtt_time(extended_end)}\n'
+            vtt += f'{text}\n\n'
+
+    return Response(vtt, mimetype='text/vtt; charset=utf-8')
+
+
+def _format_vtt_time(seconds):
+    """Format seconds as a WebVTT timestamp (HH:MM:SS.mmm).
+
+    Args:
+        seconds: Time in seconds (float).
+
+    Returns:
+        Formatted timestamp string.
+    """
+    hours = int(seconds // 3600)
+    minutes = int((seconds % 3600) // 60)
+    secs = seconds % 60
+    return f'{hours:02d}:{minutes:02d}:{secs:06.3f}'
+
+
 def _reveal_path(path):
     """Open a file or folder in the system file manager.
 
@@ -1606,9 +1678,9 @@ def get_config():
     Returns:
         JSON object with headless mode flag, thumbnail settings
         (concurrent_requests, extra_rows, timeout_ms, scroll_throttle_ms),
-        and quality scoring weights (quality_weight_aesthetic,
+        quality scoring weights (quality_weight_aesthetic,
         quality_weight_sharpness, quality_weight_pixels, quality_weight_bpp,
-        quality_alpha, nima_enabled).
+        quality_alpha, nima_enabled), and stt_language for caption tracks.
     """
     db = get_db()
     config = db.config
@@ -1631,6 +1703,7 @@ def get_config():
             'catalogue_dir': str(db.catalogue_dir),
             'image_extensions': sorted(config.image_extensions),
             'video_extensions': sorted(config.video_extensions),
+            'stt_language': config.stt_language,
             'version': _app_version,
         }
     )
