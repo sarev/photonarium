@@ -599,6 +599,7 @@ const Fullscreen = {
             this._els.image.hidden = true;
             this._els.image.src = '';
             this._els.video.hidden = false;
+            this._removeCaptionTrack(this._els.video);
             this._els.video.src = ThumbnailLoader.getFullImageUrl(imageId);
 
             // Seek to requested time and/or autoplay on load
@@ -685,6 +686,12 @@ const Fullscreen = {
      * @private
      */
     _removeCaptionTrack(video) {
+        // Disable all text tracks first to immediately clear displayed cues,
+        // then remove the <track> element.  Without this, stale subtitles
+        // linger on screen while the next video loads.
+        for (const t of video.textTracks) {
+            t.mode = 'disabled';
+        }
         const existing = video.querySelector('track');
         if (existing) existing.remove();
     },

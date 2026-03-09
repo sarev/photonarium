@@ -126,7 +126,7 @@ const Videos = {
                 if (ids.length === 1) {
                     AppState.videos.selectVideo(ids[0]);
                     this._loadScenesIfNeeded(ids[0]);
-                } else if (ids.length === 0) {
+                } else {
                     AppState.videos.selectVideo(null);
                 }
             },
