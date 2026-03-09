@@ -812,7 +812,7 @@ class Config:
     # length when scene detection finds no cuts.
     video_max_scene_duration: float = 8.0
     # Whether to run speech-to-text transcription on video audio.
-    stt_enabled: bool = False
+    stt_enabled: bool = True
     # Whisper model size for transcription.
     stt_model: str = 'base'
     # Language code for transcription (empty = auto-detect).
