@@ -546,6 +546,10 @@ a:hover {
 #btn-sort-people.active,
 #btn-sort-quality.active,
 #btn-sort-direction.active,
+#btn-vid-sort-date.active,
+#btn-vid-sort-rating.active,
+#btn-vid-sort-content.active,
+#btn-vid-sort-direction.active,
 #btn-dup-sort-size.active,
 #btn-dup-sort-alpha.active,
 #btn-dup-sort-semantic.active,
@@ -638,18 +642,22 @@ a:hover {
 @media (pointer: fine) {
     #btn-thumb-smaller:hover,
     #btn-thumb-larger:hover,
+    #btn-vid-thumb-smaller:hover,
+    #btn-vid-thumb-larger:hover,
     #btn-dup-thumb-smaller:hover,
     #btn-dup-thumb-larger:hover {
         background-color: var(--color-pastel-blue-bg);
         color: var(--color-pastel-blue-fg);
     }
 
-    #btn-fullscreen:hover {
+    #btn-fullscreen:hover,
+    #btn-vid-fullscreen:hover {
         background-color: var(--color-pastel-blue-bg);
         color: var(--color-pastel-blue-fg);
     }
 
-    #btn-reveal-folder:hover {
+    #btn-reveal-folder:hover,
+    #btn-vid-reveal-folder:hover {
         background-color: var(--color-pastel-green-bg);
         color: var(--color-pastel-green-fg);
     }
@@ -660,13 +668,16 @@ a:hover {
         color: var(--color-pastel-orange-fg);
     }
 
-    #btn-trash:hover {
+    #btn-trash:hover,
+    #btn-vid-trash:hover {
         background-color: var(--color-face-unknown-light);
         color: var(--color-face-unknown);
     }
 
     #btn-slideshow:hover,
-    #btn-shuffle:hover {
+    #btn-shuffle:hover,
+    #btn-vid-slideshow:hover,
+    #btn-vid-shuffle:hover {
         background-color: var(--color-pastel-blue-bg);
         color: var(--color-pastel-blue-fg);
     }
@@ -724,6 +735,10 @@ a:hover {
     #btn-sort-people:hover,
     #btn-sort-quality:hover,
     #btn-sort-direction:hover,
+    #btn-vid-sort-date:hover,
+    #btn-vid-sort-rating:hover,
+    #btn-vid-sort-content:hover,
+    #btn-vid-sort-direction:hover,
     #btn-dup-sort-size:hover,
     #btn-dup-sort-alpha:hover,
     #btn-dup-sort-semantic:hover,
@@ -735,6 +750,8 @@ a:hover {
 
     #btn-select-all:hover,
     #btn-clear-selection:hover,
+    #btn-vid-select-all:hover,
+    #btn-vid-clear-selection:hover,
     #btn-remove-from-group:hover {
         background-color: var(--color-pastel-indigo-bg);
         color: var(--color-pastel-indigo-fg);
