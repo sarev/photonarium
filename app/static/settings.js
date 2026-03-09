@@ -90,6 +90,17 @@ const Settings = {
         if (!container) return;
         container.innerHTML = '';
 
+        // "Run Setup Wizard" button at the top
+        const wizardBtn = document.createElement('button');
+        wizardBtn.className = 'action-btn wizard-launch-btn';
+        wizardBtn.textContent = 'Run Setup Wizard';
+        wizardBtn.type = 'button';
+        wizardBtn.addEventListener('click', () => {
+            this._dialog.close();
+            SetupWizard.show();
+        });
+        container.appendChild(wizardBtn);
+
         for (const section of schema.sections) {
             // Section heading
             const heading = document.createElement('h4');

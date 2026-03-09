@@ -2663,6 +2663,10 @@ const App = {
             const stats = response.data;
             if (stats.totalImages === 0 && this.getScreen() === 'gallery') {
                 this.navigateTo('database', { pushHistory: false });
+                // Show wizard on first run (not completed before)
+                if (!stats.wizard_completed && typeof SetupWizard !== 'undefined') {
+                    SetupWizard.show();
+                }
             }
         }).catch(error => {
             console.error('Error checking database:', error);

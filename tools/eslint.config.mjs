@@ -28,6 +28,7 @@ export default [
                 Duplicates: 'readonly',
                 Faces: 'readonly',
                 OnThisDay: 'readonly',
+                SetupWizard: 'readonly',
             },
         },
         rules: {

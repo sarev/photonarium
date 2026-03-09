@@ -5912,3 +5912,266 @@ dialog::backdrop {
         font-size: 0.8rem;
     }
 }
+
+
+/* =========================================================================
+   Setup Wizard
+   ========================================================================= */
+
+.wizard-dialog {
+    max-width: 620px;
+    width: 90vw;
+}
+
+.wizard-content {
+    display: flex;
+    flex-direction: column;
+    max-height: 80vh;
+}
+
+.wizard-header {
+    display: flex;
+    flex-direction: column;
+    gap: 0.75rem;
+    margin-bottom: 1rem;
+}
+
+.wizard-header h3 {
+    margin: 0;
+}
+
+.wizard-steps-indicator {
+    display: flex;
+    gap: 0.5rem;
+}
+
+.wizard-step-pill {
+    padding: 0.25rem 0.75rem;
+    border-radius: 999px;
+    font-size: 0.75rem;
+    font-weight: 500;
+    background: var(--color-bg-secondary);
+    color: var(--color-text-secondary);
+    transition: background 0.2s, color 0.2s;
+}
+
+.wizard-step-pill.wizard-step-active {
+    background: var(--color-accent);
+    color: #fff;
+}
+
+.wizard-step-pill.wizard-step-done {
+    background: var(--color-accent-light);
+    color: var(--color-accent);
+}
+
+.wizard-body {
+    flex: 1;
+    overflow-y: auto;
+    min-height: 200px;
+    padding-right: 0.25rem;
+}
+
+.wizard-intro {
+    color: var(--color-text-secondary);
+    margin-bottom: 1rem;
+    line-height: 1.5;
+}
+
+.wizard-note {
+    color: var(--color-text-secondary);
+    font-size: 0.85rem;
+    margin-top: 1rem;
+    line-height: 1.4;
+}
+
+.wizard-cards {
+    display: flex;
+    flex-direction: column;
+    gap: 0.5rem;
+}
+
+.wizard-card {
+    border: 2px solid var(--color-border);
+    border-radius: 8px;
+    padding: 0.75rem 1rem;
+    cursor: pointer;
+    transition: border-color 0.15s, background 0.15s;
+    outline: none;
+}
+
+.wizard-card:hover {
+    border-color: var(--color-accent);
+    background: var(--color-accent-light);
+}
+
+.wizard-card:focus-visible {
+    border-color: var(--color-accent);
+    box-shadow: 0 0 0 2px var(--color-accent-light);
+}
+
+.wizard-card-selected {
+    border-color: var(--color-accent);
+    background: var(--color-accent-light);
+}
+
+.wizard-card-title {
+    font-weight: 600;
+    margin-bottom: 0.25rem;
+}
+
+.wizard-card-desc {
+    font-size: 0.85rem;
+    color: var(--color-text-secondary);
+    line-height: 1.4;
+}
+
+.wizard-summary-table {
+    width: 100%;
+    border-collapse: collapse;
+    margin-bottom: 0.5rem;
+}
+
+.wizard-summary-table th,
+.wizard-summary-table td {
+    text-align: left;
+    padding: 0.5rem 0.75rem;
+    border-bottom: 1px solid var(--color-border-light);
+}
+
+.wizard-summary-table th {
+    font-weight: 600;
+    font-size: 0.85rem;
+    color: var(--color-text-secondary);
+}
+
+.wizard-summary-table td {
+    font-size: 0.9rem;
+}
+
+.wizard-download-actions {
+    display: flex;
+    gap: 0.75rem;
+    margin-bottom: 0.75rem;
+}
+
+.wizard-output {
+    background: var(--color-bg-primary);
+    border: 1px solid var(--color-border);
+    border-radius: 6px;
+    padding: 0.75rem;
+    font-family: monospace;
+    font-size: 0.8rem;
+    line-height: 1.5;
+    max-height: 300px;
+    min-height: 120px;
+    overflow-y: auto;
+    white-space: pre-wrap;
+    word-break: break-all;
+    color: var(--color-text-primary);
+}
+
+.wizard-download-status {
+    margin-top: 0.5rem;
+    font-size: 0.9rem;
+    font-weight: 500;
+    min-height: 1.5em;
+}
+
+.wizard-status-success { color: var(--color-success, #4a8); }
+.wizard-status-error   { color: var(--color-danger); }
+.wizard-status-warning { color: var(--color-warning, #b90); }
+
+.wizard-token-benefits {
+    margin: 0.5rem 0 1rem 1.5rem;
+    font-size: 0.9rem;
+    color: var(--color-text-secondary);
+    line-height: 1.6;
+}
+
+.wizard-token-howto {
+    font-size: 0.9rem;
+    color: var(--color-text-secondary);
+    margin-bottom: 0.25rem;
+}
+
+.wizard-token-link {
+    display: inline-block;
+    font-size: 0.85rem;
+    margin-bottom: 1rem;
+    color: var(--color-accent);
+    text-decoration: none;
+}
+
+.wizard-token-link:hover {
+    text-decoration: underline;
+}
+
+.wizard-token-input-row {
+    display: flex;
+    gap: 0.5rem;
+    align-items: center;
+    margin-bottom: 0.75rem;
+}
+
+.wizard-token-input {
+    flex: 1;
+    padding: 0.5rem 0.75rem;
+    font-family: monospace;
+    font-size: 0.9rem;
+    border: 1px solid var(--color-border);
+    border-radius: 4px;
+    background: var(--color-input-bg);
+    color: var(--color-text-primary);
+}
+
+.wizard-token-input:focus {
+    outline: none;
+    border-color: var(--color-accent);
+    box-shadow: 0 0 0 2px var(--color-accent-bg, rgba(66, 133, 244, 0.15));
+}
+
+.wizard-token-toggle {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 0.4rem;
+    border: 1px solid var(--color-border);
+    border-radius: 4px;
+    background: var(--color-input-bg);
+    color: var(--color-text-secondary);
+    cursor: pointer;
+}
+
+.wizard-token-toggle:hover {
+    color: var(--color-text-primary);
+}
+
+.wizard-token-note {
+    font-size: 0.8rem;
+    font-style: italic;
+    color: var(--color-text-secondary);
+    opacity: 0.8;
+}
+
+.wizard-footer {
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+    padding-top: 1rem;
+}
+
+.wizard-skip-link {
+    font-size: 0.85rem;
+    color: var(--color-text-secondary);
+    text-decoration: underline;
+}
+
+.wizard-skip-link:hover {
+    color: var(--color-text-primary);
+}
+
+.wizard-launch-btn {
+    margin-bottom: 1rem;
+    width: 100%;
+}

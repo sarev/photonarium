@@ -1833,6 +1833,150 @@ def save_config_endpoint():
     return success_response(message='Settings saved. Restart Photonarium for changes to take effect.')
 
 
+# ---------------------------------------------------------------------------
+# Setup Wizard endpoints
+# ---------------------------------------------------------------------------
+
+
+@app.route('/api/wizard/save-config', methods=['POST'])
+def wizard_save_config():
+    """Save config values from the setup wizard and mark wizard as completed.
+
+    Accepts a partial config dict (only wizard-selected values).  Merges
+    with the current config, validates, and writes to disk.  Also sets
+    ``wizard_completed`` in the metadata table.
+
+    Request Body:
+        ``{values: {field_name: value, ...}}``
+
+    Returns:
+        Success response, or 400 on validation error.
+    """
+    from dataclasses import fields as dc_fields
+
+    from config import Config, get_default_config_path
+    from config import save_config as write_config
+    from imagedb import set_metadata
+
+    data = request.get_json(silent=True)
+    if not data or 'values' not in data:
+        return error_response('Request must include "values" object')
+
+    values = data['values']
+    if not isinstance(values, dict):
+        return error_response('"values" must be an object')
+
+    # Coerce types to match the Config dataclass (same logic as save_config_endpoint)
+    type_map = {f.name: f.type for f in dc_fields(Config)}
+    kwargs: dict = {}
+    for key, raw in values.items():
+        if key not in type_map:
+            continue
+        expected = type_map[key]
+        try:
+            if expected == 'bool':
+                kwargs[key] = raw.lower() in ('true', '1', 'yes') if isinstance(raw, str) else bool(raw)
+            elif expected == 'int':
+                kwargs[key] = int(raw)
+            elif expected == 'float':
+                kwargs[key] = float(raw)
+            elif expected == 'str':
+                kwargs[key] = str(raw) if raw is not None else ''
+            elif expected == 'set[str]':
+                kwargs[key] = set(raw)
+            elif expected == 'list[str]':
+                kwargs[key] = [str(item) for item in raw] if isinstance(raw, list) else list(raw)
+            else:
+                kwargs[key] = raw
+        except (ValueError, TypeError) as e:
+            return error_response(f'Invalid value for {key}: {e}')
+
+    # Build a full Config for validation
+    try:
+        new_config = Config(**kwargs)
+    except ValueError as e:
+        return error_response(str(e))
+
+    # Write to disk
+    config_path = _config_file_path
+    if not config_path:
+        config_path = str(get_default_config_path())
+
+    try:
+        write_config(new_config, config_path)
+    except Exception as e:
+        logger.exception('Wizard: failed to save configuration')
+        return error_response(f'Failed to write config file: {e}', 500)
+
+    # Mark wizard as completed in the metadata table
+    try:
+        db = get_db()
+        set_metadata(db.conn, 'wizard_completed', 'true')
+    except Exception:
+        logger.exception('Wizard: failed to set wizard_completed metadata')
+
+    return success_response(message='Wizard configuration saved. Restart Photonarium for changes to take effect.')
+
+
+@app.route('/api/wizard/download', methods=['POST'])
+def wizard_download():
+    """Start the model download subprocess.
+
+    Launches ``download_models.py`` using the current config path and data
+    directory.  The frontend polls ``/api/wizard/download-status`` for
+    real-time output.
+
+    Returns:
+        ``{success: true, data: {status: 'started'}}`` or error.
+    """
+    import wizard
+    from config import get_default_config_path
+
+    config_path = _config_file_path or str(get_default_config_path())
+
+    data = request.get_json(silent=True)
+    hf_token = data.get('hf_token', '').strip() if data else ''
+
+    try:
+        result = wizard.start_download(config_path, _data_dir, hf_token=hf_token or None)
+    except RuntimeError as e:
+        return error_response(str(e))
+    except Exception as e:
+        logger.exception('Wizard: failed to start download')
+        return error_response(f'Failed to start download: {e}', 500)
+
+    return success_response(result)
+
+
+@app.route('/api/wizard/download-status', methods=['GET'])
+def wizard_download_status():
+    """Poll download subprocess output.
+
+    Query Parameters:
+        since: Line index to start from (default 0).
+
+    Returns:
+        ``{state, lines, total_lines, return_code}``
+    """
+    import wizard
+
+    since = request.args.get('since', 0, type=int)
+    return success_response(wizard.get_status(since))
+
+
+@app.route('/api/wizard/download-abort', methods=['POST'])
+def wizard_download_abort():
+    """Abort a running download subprocess.
+
+    Returns:
+        ``{status: 'aborted'}`` or ``{status: 'not_running'}``.
+    """
+    import wizard
+
+    result = wizard.abort_download()
+    return success_response(result)
+
+
 @app.route('/api/rescan', methods=['POST'])
 def rescan_folders():
     """Trigger a rescan of all registered folders.
@@ -2812,7 +2956,15 @@ def get_stats():
             - totalImages: Total number of images in database
             - totalFolders: Number of registered folders
     """
-    stats = get_db().get_stats()
+    from imagedb import get_metadata
+
+    db = get_db()
+    stats = db.get_stats()
+
+    # Include wizard completion status for first-run detection
+    wizard_done = get_metadata(db.conn, 'wizard_completed')
+    stats['wizard_completed'] = wizard_done == 'true'
+
     return success_response(stats)
 
 

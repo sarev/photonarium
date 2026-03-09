@@ -173,6 +173,12 @@ CONFIG_SCHEMA: list[tuple[str, list[tuple[str, list[str]]]]] = [
                     '  - ViT-B-32  (fast, good quality, ~400MB VRAM)',
                     '  - ViT-B-16  (slower, better quality, ~400MB VRAM)',
                     '  - ViT-L-14  (slow, high quality, ~900MB VRAM)',
+                    '',
+                    'For non-English text search, consider multilingual models:',
+                    '  - nllb-clip-base-siglip  (200+ languages, ~600 MB)',
+                    '  - nllb-clip-large-siglip (higher quality, ~1.2 GB)',
+                    'Multilingual models require matching pretrained weights.',
+                    'Changing model requires re-embedding all images and re-running download_models.py.',
                 ],
             ),
             (
@@ -182,6 +188,8 @@ CONFIG_SCHEMA: list[tuple[str, list[tuple[str, list[str]]]]] = [
                     '  - openai           (original CLIP weights)',
                     '  - laion2b_s34b_b79k (trained on LAION-2B, often better for photos)',
                     '  - laion400m_e32    (trained on LAION-400M)',
+                    '  - v1               (for nllb-clip multilingual models)',
+                    'Check open_clip.list_pretrained() for valid model/weight combinations.',
                 ],
             ),
             (
@@ -373,6 +381,8 @@ CONFIG_SCHEMA: list[tuple[str, list[tuple[str, list[str]]]]] = [
                     '  - Salesforce/blip-image-captioning-large  (~2GB, better quality)',
                     '  - Salesforce/blip2-opt-2.7b               (~5GB, BLIP-2, best quality)',
                     '  - Salesforce/blip2-flan-t5-xl             (~8GB, BLIP-2, most descriptive)',
+                    'All BLIP/BLIP-2 models generate English-only captions.',
+                    'BLIP-2 models require significantly more VRAM.',
                 ],
             ),
             (
@@ -517,11 +527,12 @@ CONFIG_SCHEMA: list[tuple[str, list[tuple[str, list[str]]]]] = [
                 [
                     'Whisper model size for transcription. Larger models are more accurate',
                     'but slower and require more VRAM.',
-                    '  tiny   - fastest, least accurate (~75MB)',
-                    '  base   - good balance (~140MB)',
-                    '  small  - better accuracy (~460MB)',
-                    '  medium - high accuracy (~1.5GB)',
-                    '  large-v3 - best accuracy (~3GB)',
+                    '  tiny   - fastest, English-focused (~75MB)',
+                    '  base   - good balance for English (~140MB)',
+                    '  small  - good multilingual accuracy (~460MB)',
+                    '  medium - high accuracy, strong multilingual (~1.5GB)',
+                    '  large-v3 - best accuracy, best for non-English (~3GB)',
+                    'For non-English audio, small or above is strongly recommended.',
                 ],
             ),
             (
@@ -529,6 +540,8 @@ CONFIG_SCHEMA: list[tuple[str, list[tuple[str, list[str]]]]] = [
                 [
                     'Language code for transcription (e.g. "en", "fr", "de").',
                     'Leave empty for automatic language detection.',
+                    'Auto-detection works well with small model and above;',
+                    'less reliable with tiny and base.',
                 ],
             ),
             (
@@ -730,6 +743,115 @@ _STT_LANGUAGES_DEFAULT = [
 FIELD_CHOICES: dict[str, list[str]] = {
     'date_order': ['DMY', 'MDY', 'YMD'],
     'stt_model': ['tiny', 'base', 'small', 'medium', 'large-v3'],
+}
+
+
+# ---------------------------------------------------------------------------
+# HARDWARE_PRESETS — pre-built performance profiles for common hardware
+# ---------------------------------------------------------------------------
+# Each entry is (id, label, values_dict).  The wizard applies values_dict to
+# the config; fields not listed here keep their defaults.  Feature flags
+# (face_detection_enabled, nima_enabled, stt_enabled) are deliberately
+# excluded — those are user decisions, not hardware-dependent.
+
+HARDWARE_PRESETS: list[tuple[str, str, dict[str, Any]]] = [
+    (
+        'low',
+        'Low-end / NAS (ARM \u00b7 2-4 GB \u00b7 no GPU)',
+        {
+            'indexing_threads': 2,
+            'trash_threads': 4,
+            'import_threads': 2,
+            'embedding_batch_size': 4,
+            'face_detection_batch_size': 4,
+            'nima_batch_size': 4,
+            'thumbnail_cache_size_mb': 25,
+            'thumbnail_concurrent_requests': 3,
+            'stt_model': 'tiny',
+            'openclip_model': 'ViT-B-32',
+            'openclip_pretrained': 'openai',
+            'caption_model': 'Salesforce/blip-image-captioning-base',
+        },
+    ),
+    (
+        'moderate',
+        'Moderate PC (8-16 GB \u00b7 SSD \u00b7 no GPU)',
+        {
+            'indexing_threads': 4,
+            'trash_threads': 8,
+            'import_threads': 4,
+            'embedding_batch_size': 8,
+            'face_detection_batch_size': 8,
+            'nima_batch_size': 8,
+            'thumbnail_cache_size_mb': 100,
+            'thumbnail_concurrent_requests': 6,
+            'stt_model': 'base',
+            'openclip_model': 'ViT-B-32',
+            'openclip_pretrained': 'openai',
+            'caption_model': 'Salesforce/blip-image-captioning-large',
+        },
+    ),
+    (
+        'high_laptop',
+        'High-end laptop (32 GB \u00b7 RTX GPU)',
+        {
+            'indexing_threads': 8,
+            'trash_threads': 12,
+            'import_threads': 8,
+            'embedding_batch_size': 32,
+            'face_detection_batch_size': 32,
+            'nima_batch_size': 32,
+            'thumbnail_cache_size_mb': 200,
+            'thumbnail_concurrent_requests': 8,
+            'stt_model': 'small',
+            'openclip_model': 'ViT-B-16',
+            'openclip_pretrained': 'laion2b_s34b_b88k',
+            'caption_model': 'Salesforce/blip-image-captioning-large',
+        },
+    ),
+    (
+        'high_desktop',
+        'High-end desktop (64 GB \u00b7 RTX 5090)',
+        {
+            'indexing_threads': 12,
+            'trash_threads': 16,
+            'import_threads': 8,
+            'embedding_batch_size': 64,
+            'face_detection_batch_size': 64,
+            'nima_batch_size': 64,
+            'thumbnail_cache_size_mb': 400,
+            'thumbnail_concurrent_requests': 10,
+            'stt_model': 'medium',
+            'openclip_model': 'ViT-L-14',
+            'openclip_pretrained': 'laion2b_s32b_b82k',
+            'caption_model': 'Salesforce/blip2-opt-2.7b',
+        },
+    ),
+]
+
+
+# ---------------------------------------------------------------------------
+# LANGUAGE_RECOMMENDATIONS — model overrides for multilingual use
+# ---------------------------------------------------------------------------
+# The wizard applies the relevant overrides on top of the hardware preset.
+# STT language guidance is surfaced in UI text, not as a constant.
+
+LANGUAGE_RECOMMENDATIONS: dict[str, dict[str, str]] = {
+    'english': {
+        'description': 'English only \u2014 best quality for English text search and captions.',
+        'openclip_model': 'ViT-B-32',
+        'openclip_pretrained': 'openai',
+    },
+    'multilingual': {
+        'description': 'Non-English or mixed \u2014 enables search in 200+ languages.',
+        'openclip_model': 'nllb-clip-base-siglip',
+        'openclip_pretrained': 'v1',
+    },
+    'multilingual_hq': {
+        'description': 'Non-English, higher quality \u2014 larger model, better accuracy.',
+        'openclip_model': 'nllb-clip-large-siglip',
+        'openclip_pretrained': 'v1',
+    },
 }
 
 
@@ -1190,7 +1312,11 @@ def get_config_schema(config: Config) -> dict[str, Any]:
             }
         )
 
-    return {'sections': sections}
+    return {
+        'sections': sections,
+        'presets': [{'id': pid, 'label': lbl, 'values': vals} for pid, lbl, vals in HARDWARE_PRESETS],
+        'language_recommendations': LANGUAGE_RECOMMENDATIONS,
+    }
 
 
 # ---------------------------------------------------------------------------

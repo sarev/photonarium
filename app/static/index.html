@@ -986,6 +986,18 @@
             </div>
         </dialog>
 
+        <!-- Setup wizard dialog (first-run + re-launchable from Settings) -->
+        <dialog id="dialog-wizard" class="wizard-dialog">
+            <div class="dialog-content wizard-content">
+                <div class="wizard-header">
+                    <h3>Setup Wizard</h3>
+                    <div class="wizard-steps-indicator"></div>
+                </div>
+                <div class="wizard-body"></div>
+                <div class="wizard-footer dialog-actions"></div>
+            </div>
+        </dialog>
+
         <!-- Server log viewer dialog -->
         <dialog id="dialog-logs">
             <div class="dialog-content logs-dialog">
@@ -1075,6 +1087,7 @@
     <script src="gallery.js"></script>
     <script src="fullscreen.js"></script>
     <script src="database.js"></script>
+    <script src="wizard.js"></script>
     <script src="settings.js"></script>
     <script src="search.js"></script>
     <script src="duplicates.js"></script>

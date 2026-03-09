@@ -37,6 +37,7 @@ import json
 import os
 import subprocess
 import sys
+import time
 import urllib.request
 
 
@@ -157,19 +158,26 @@ def download_laion_head(model: str, pretrained: str, data_dir: str = '.') -> boo
         print(f'LAION aesthetic head already exists: {dest}')
         return True
 
-    try:
-        print(f'Downloading from: {url}')
-        urllib.request.urlretrieve(url, dest)
-        file_size = os.path.getsize(dest)
-        print(f'LAION aesthetic head downloaded successfully ({file_size:,} bytes)')
-        return True
-    except Exception as e:
-        print(f'Error downloading LAION aesthetic head: {e}', file=sys.stderr)
-        print('Aesthetic scoring will be disabled — quality ranking will fall back to sharpness/resolution.')
-        # Clean up partial download
-        if os.path.exists(dest):
-            os.remove(dest)
-        return True  # Non-fatal — app works without it
+    max_retries = 3
+    for attempt in range(max_retries):
+        try:
+            print(f'Downloading from: {url}')
+            urllib.request.urlretrieve(url, dest)
+            file_size = os.path.getsize(dest)
+            print(f'LAION aesthetic head downloaded successfully ({file_size:,} bytes)')
+            return True
+        except Exception as e:
+            # Clean up partial download before retry
+            if os.path.exists(dest):
+                os.remove(dest)
+            if attempt < max_retries - 1:
+                wait = 5 * (attempt + 1)
+                print(f'Download failed ({e}), retrying in {wait}s ({attempt + 1}/{max_retries})...')
+                time.sleep(wait)
+            else:
+                print(f'Error downloading LAION aesthetic head after {max_retries} attempts: {e}', file=sys.stderr)
+                print('Aesthetic scoring will be disabled — quality ranking will fall back to sharpness/resolution.')
+                return True  # Non-fatal — app works without it
 
 
 def download_facenet_models() -> bool:
@@ -275,7 +283,7 @@ def download_stt_model(model_size: str = 'base') -> bool:
 
     try:
         # Loading the model triggers the download from HuggingFace
-        print(f'Downloading model (this may take a while for larger sizes)...')
+        print('Downloading model (this may take a while for larger sizes)...')
         _model = WhisperModel(model_size, device='cpu', compute_type='int8')
         del _model
         print('STT model downloaded successfully')
