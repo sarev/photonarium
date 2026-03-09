@@ -326,6 +326,11 @@ def _attach_db_log_handler() -> None:
     handler.setFormatter(logging.Formatter('%(message)s'))
     logging.getLogger().addHandler(handler)
 
+    # Store reference on the DB instance so the pipeline can flush at stage
+    # boundaries and shutdown can close it before the main DB connection.
+    if db is not None:
+        db._log_handler = handler
+
 
 def get_db() -> ImageDatabase:
     """Get the database instance, initialising if necessary.

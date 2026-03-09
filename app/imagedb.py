@@ -3588,6 +3588,11 @@ class ImageDatabase:
         # Create event queue
         self.event_queue = EventQueue()
 
+        # Set by app.py after attaching the DatabaseLogHandler — used by
+        # the pipeline for stage-boundary flushes and by close() for
+        # orderly shutdown.
+        self._log_handler = None
+
         # Create thread control events
         self._stop_event = threading.Event()
         self._pause_event = threading.Event()
@@ -4288,6 +4293,19 @@ class ImageDatabase:
             while self._active_rotations > 0:
                 logger.info(f'Waiting for {self._active_rotations} rotation(s) to complete...')
                 self._rotations_done.wait(timeout=5.0)
+
+        # Close the log handler before the main DB connection — this stops
+        # the flush thread, writes any remaining buffered records, and closes
+        # the handler's own SQLite connection.  removeHandler() prevents
+        # post-close log messages (e.g. "Database connection closed") from
+        # hitting the closed handler.
+        if self._log_handler is not None:
+            try:
+                self._log_handler.close()
+            except Exception:
+                pass
+            logging.getLogger().removeHandler(self._log_handler)
+            self._log_handler = None
 
         with self._db_lock:
             if self.conn:

@@ -311,6 +311,7 @@ class PipelineOrchestrator(threading.Thread):
             had_work = self._run_pipeline()
             if not had_work and not self._rerun_requested:
                 self._set_stage(None, 0, 0)
+                self._flush_logs()
                 self._stop_event.wait(timeout=2.0)
             # If _rerun_requested was set during pipeline, loop immediately
 
@@ -351,6 +352,7 @@ class PipelineOrchestrator(threading.Thread):
                     self._db.conn.rollback()
                 except Exception:
                     pass
+            self._flush_logs()
 
         # Stages 2-5 are DB-query-driven and lightweight — always run
         for stage_name, stage_fn in [
@@ -372,6 +374,7 @@ class PipelineOrchestrator(threading.Thread):
                     self._db.conn.rollback()
                 except Exception:
                     pass
+        self._flush_logs()
 
         # Run grouping and STT when data stages did work, OR when
         # finalisation was explicitly requested (startup self-healing,
@@ -394,6 +397,7 @@ class PipelineOrchestrator(threading.Thread):
                         self._db.conn.rollback()
                     except Exception:
                         pass
+            self._flush_logs()
 
         if had_work:
             elapsed = time.perf_counter() - t0
@@ -404,6 +408,16 @@ class PipelineOrchestrator(threading.Thread):
     # -----------------------------------------------------------------
     # Helpers
     # -----------------------------------------------------------------
+
+    def _flush_logs(self) -> None:
+        """Flush buffered log records to the database.
+
+        Called at pipeline stage boundaries to ensure log records are
+        persisted before the next stage begins its own DB-intensive work.
+        """
+        handler = self._db._log_handler
+        if handler is not None:
+            handler.flush()
 
     def _set_stage(self, stage: str | None, total: int, done: int) -> None:
         """Update stage progress atomically."""

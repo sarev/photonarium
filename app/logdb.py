@@ -6,11 +6,15 @@ API endpoint.
 
 Thread-safety model
 -------------------
-- **DatabaseLogHandler** opens its own dedicated SQLite connection (WAL mode,
-  ``check_same_thread=False``) and serialises writes via an internal
-  ``threading.Lock``.  This matches the pattern used throughout ``imagedb.py``
-  — every connection has its own lock because SQLite connections are not
-  thread-safe.
+- **DatabaseLogHandler** buffers records in a RAM :class:`collections.deque`
+  and batch-flushes them to the database every 3 seconds via a background
+  timer thread.  This eliminates the per-record INSERT+COMMIT that previously
+  caused SQLite write contention ("database is locked") during intensive
+  pipeline stages.
+- ``emit()`` only appends to the deque (thread-safe in CPython) — no DB
+  access, no locks.
+- ``flush()`` drains the deque and writes a single ``executemany`` +
+  ``commit``.  A non-blocking ``_flush_lock`` prevents concurrent flushes.
 - **get_logs()** opens a short-lived read-only connection per call (cheap for
   SQLite), so it requires no lock.  WAL mode safely supports concurrent
   readers alongside the handler's single writer.
@@ -22,8 +26,10 @@ but operate on fully independent connections — no contention with the main
 
 from __future__ import annotations
 
+import collections
 import logging
 import sqlite3
+import sys
 import threading
 
 # ---------------------------------------------------------------------------
@@ -51,26 +57,51 @@ CREATE INDEX IF NOT EXISTS idx_logs_level ON logs (level)
 
 
 class DatabaseLogHandler(logging.Handler):
-    """Logging handler that persists records into an SQLite ``logs`` table.
+    """Logging handler that buffers records in RAM and batch-flushes to SQLite.
 
-    The handler maintains its own dedicated connection and lock, independent
-    of any other database connections in the application.
+    Records are appended to a :class:`collections.deque` in ``emit()`` (no DB
+    access) and periodically flushed to the ``logs`` table by a background
+    daemon thread every 3 seconds.  This eliminates per-record write
+    transactions that cause SQLite lock contention during intensive pipeline
+    stages.
+
+    The handler maintains its own dedicated connection, independent of any
+    other database connections in the application.
 
     Args:
         db_path: Path to the SQLite database file.
         max_lines: Maximum number of log rows to keep.  Older rows are
-            trimmed periodically (every ~100 inserts).
+            trimmed periodically (every ~500 inserts).
     """
+
+    # Flush interval in seconds — controls maximum log latency in the
+    # in-app log viewer.
+    _FLUSH_INTERVAL = 3.0
+
+    # Safety cap on the RAM buffer (~1 MB at ~200 bytes/record).
+    _BUFFER_MAXLEN = 5000
+
+    # Trim the logs table every this many inserts (less frequent than the
+    # previous per-record handler to reduce write amplification).
+    _TRIM_INTERVAL = 500
 
     def __init__(self, db_path: str, max_lines: int) -> None:
         super().__init__()
         self._max_lines = max_lines
-        self._lock_db = threading.Lock()
         self._insert_count = 0
 
         # Track silent failures so we can surface the first few via stderr
         # (can't use ``logger`` inside a handler — infinite recursion).
         self._error_count = 0
+
+        # RAM buffer — deque.append() is thread-safe in CPython.
+        self._buffer: collections.deque[tuple[str, str, str, str]] = collections.deque(
+            maxlen=self._BUFFER_MAXLEN,
+        )
+
+        # Non-blocking lock prevents concurrent flushes (timer thread vs.
+        # explicit flush() calls from the pipeline or shutdown).
+        self._flush_lock = threading.Lock()
 
         # Open a dedicated connection for log writes.  The ``logs`` table is
         # created by imagedb.init_database() during startup — the handler must
@@ -80,46 +111,96 @@ class DatabaseLogHandler(logging.Handler):
         self._conn.execute('PRAGMA busy_timeout=5000')
         self._conn.commit()
 
-    def emit(self, record: logging.LogRecord) -> None:
-        """Write a log record to the database.
+        # Background daemon thread that periodically flushes buffered records.
+        self._stop_event = threading.Event()
+        self._flush_thread = threading.Thread(
+            target=self._flush_loop,
+            name='log-flush',
+            daemon=True,
+        )
+        self._flush_thread.start()
 
-        Wrapped in a blanket ``try/except`` so that logging failures never
-        propagate and crash the application.
+    def emit(self, record: logging.LogRecord) -> None:
+        """Buffer a log record for later batch write.
+
+        No database access or locking — just a deque append.  If formatting
+        fails the record is silently dropped (standard logging behaviour).
         """
         try:
             msg = self.format(record)
             ts = self._format_timestamp(record)
-            with self._lock_db:
-                self._conn.execute(
-                    'INSERT INTO logs (timestamp, level, logger, message) VALUES (?, ?, ?, ?)',
-                    (ts, record.levelname, record.name, msg),
-                )
-                self._conn.commit()
-                self._insert_count += 1
-                if self._insert_count % 100 == 0:
-                    self._trim()
+            self._buffer.append((ts, record.levelname, record.name, msg))
+        except Exception:
+            pass
+
+    def flush(self) -> None:
+        """Batch-write all buffered records to the database.
+
+        Safe to call from any thread (pipeline stage boundaries, shutdown,
+        or the background flush thread).  Uses a non-blocking lock so
+        concurrent callers skip rather than queue up.
+        """
+        if not self._buffer:
+            return
+
+        if not self._flush_lock.acquire(blocking=False):
+            return  # Another flush in progress — skip
+
+        try:
+            # Drain the buffer into a local list.
+            batch: list[tuple[str, str, str, str]] = []
+            while self._buffer:
+                try:
+                    batch.append(self._buffer.popleft())
+                except IndexError:
+                    break  # Concurrent drain — deque emptied
+
+            if not batch:
+                return
+
+            self._conn.executemany(
+                'INSERT INTO logs (timestamp, level, logger, message) VALUES (?, ?, ?, ?)',
+                batch,
+            )
+            self._conn.commit()
+
+            self._insert_count += len(batch)
+            if self._insert_count >= self._TRIM_INTERVAL:
+                self._trim()
+                self._insert_count = 0
         except Exception as exc:
-            # Must never crash the application — but surface the first few
-            # failures to stderr for diagnostics (can't use logger here).
             self._error_count += 1
             if self._error_count <= 3:
-                import sys
-
                 print(
-                    f'[DatabaseLogHandler] emit failed ({type(exc).__name__}: {exc})',
+                    f'[DatabaseLogHandler] flush failed ({type(exc).__name__}: {exc})',
                     file=sys.stderr,
                 )
+        finally:
+            self._flush_lock.release()
 
     def close(self) -> None:
-        """Close the dedicated database connection."""
-        with self._lock_db:
-            try:
-                self._conn.close()
-            except Exception:
-                pass
+        """Stop the flush thread, perform a final flush, and close the connection."""
+        # Signal the flush thread to stop (it does a final flush before exiting).
+        self._stop_event.set()
+        self._flush_thread.join(timeout=5.0)
+
+        # Belt-and-braces final flush in case the thread didn't complete.
+        self.flush()
+
+        try:
+            self._conn.close()
+        except Exception:
+            pass
         super().close()
 
     # -- internal helpers ----------------------------------------------------
+
+    def _flush_loop(self) -> None:
+        """Background loop: flush buffered records every ``_FLUSH_INTERVAL`` seconds."""
+        while not self._stop_event.wait(timeout=self._FLUSH_INTERVAL):
+            self.flush()
+        # Final flush before the thread exits.
+        self.flush()
 
     @staticmethod
     def _format_timestamp(record: logging.LogRecord) -> str:
