@@ -156,6 +156,23 @@ AppState.videos = (function() {
         },
 
         /**
+         * Invalidate cached scenes for a video so the next access
+         * triggers a fresh load from the backend.  If the video is
+         * currently selected, broadcasts a ``scenes`` change so the
+         * timeline re-renders.
+         *
+         * @param {string} videoId
+         */
+        invalidateScenes(videoId) {
+            if (_sceneCache[videoId]) {
+                delete _sceneCache[videoId];
+                if (_selectedVideoId === videoId) {
+                    broadcast({ type: 'changed', property: 'scenes' });
+                }
+            }
+        },
+
+        /**
          * Load all videos for browse mode.
          * Filters AppState.images to videos only.
          */
@@ -220,6 +237,73 @@ AppState.videos = (function() {
                         }
                         broadcast({
                             type: 'changed', property: 'preferredScene',
+                            imageId: videoId,
+                        });
+                    });
+                    throw err;
+                }
+            });
+        },
+
+        /**
+         * Update the STT language for a video (two-phase optimistic).
+         *
+         * Clears the scene cache for the video (transcriptions will be
+         * re-fetched after the pipeline retranscribes) and persists the
+         * change to the backend.
+         *
+         * @param {string} videoId
+         * @param {string} language - ISO 639-1 code or '' for auto-detect
+         * @returns {Promise<void>}
+         */
+        setSttLanguage(videoId, language) {
+            // PHASE 1: Synchronous optimistic update
+            const img = AppState.images.getById(videoId);
+            const prevLanguage = img?.stt_language;
+            // Snapshot current transcriptions for rollback
+            const cachedScenes = _sceneCache[videoId];
+            const prevTranscriptions = cachedScenes
+                ? cachedScenes.map(s => ({ transcription: s.transcription, transcription_embedding: s.transcription_embedding }))
+                : null;
+            transaction(() => {
+                if (img) {
+                    img.stt_language = language;
+                }
+                // Null transcriptions in place — keeps timeline scenes visible
+                // (the backend is nulling them too and will retranscribe)
+                if (cachedScenes) {
+                    for (const scene of cachedScenes) {
+                        scene.transcription = null;
+                        scene.transcription_embedding = null;
+                    }
+                }
+                broadcast({
+                    type: 'changed', property: 'sttLanguage',
+                    imageId: videoId,
+                });
+            });
+
+            // PHASE 2: Persist to backend (rollback on error)
+            return queueTransaction(async () => {
+                try {
+                    await App.apiPut(`/images/${videoId}/stt-language`, {
+                        language,
+                    });
+                } catch (err) {
+                    console.error('[AppState.videos.setSttLanguage] Persist failed:', err);
+                    transaction(() => {
+                        if (img) {
+                            img.stt_language = prevLanguage;
+                        }
+                        // Restore transcriptions
+                        if (cachedScenes && prevTranscriptions) {
+                            for (let i = 0; i < cachedScenes.length; i++) {
+                                cachedScenes[i].transcription = prevTranscriptions[i].transcription;
+                                cachedScenes[i].transcription_embedding = prevTranscriptions[i].transcription_embedding;
+                            }
+                        }
+                        broadcast({
+                            type: 'changed', property: 'sttLanguage',
                             imageId: videoId,
                         });
                     });

@@ -70,7 +70,13 @@ const Videos = {
             timelineSection: App.$('videos-timeline-section'),
             timeline: App.$('videos-timeline'),
             timelineEmpty: App.$('videos-timeline-empty'),
+            languageSelect: App.$('vid-stt-language'),
+            languageControl: document.querySelector('.vid-language-control'),
+            languageSeparator: document.querySelector('.vid-language-separator'),
         };
+
+        // Populate language dropdown from config
+        this._populateLanguageDropdown();
 
         // Create VirtualGrid with 16:9 aspect ratio cells
         this._grid = VirtualGrid.create({
@@ -114,6 +120,7 @@ const Videos = {
                 // Feed selection into App so toolbar button states update
                 App.setSelectedImages(ids);
                 this._updateContentSortButton(ids);
+                this._updateLanguageDropdown(ids);
 
                 // Single selection: show timeline for the selected video
                 if (ids.length === 1) {
@@ -130,6 +137,16 @@ const Videos = {
                 this._deleteVideos(ids);
             },
         });
+
+        // Language dropdown change handler
+        if (this._els.languageSelect) {
+            this._els.languageSelect.addEventListener('change', () => {
+                const videoId = AppState.videos.getSelectedVideoId();
+                if (videoId) {
+                    AppState.videos.setSttLanguage(videoId, this._els.languageSelect.value);
+                }
+            });
+        }
 
         // Respond to toolbar events (select all, trash)
         App.on('selectAll', () => {
@@ -170,7 +187,20 @@ const Videos = {
                 } else {
                     this._needsRefresh = true;
                 }
-            } else if (event.property === 'selectedVideo' || event.property === 'scenes') {
+            } else if (event.property === 'selectedVideo') {
+                this._renderTimeline();
+                this._updateLanguageDropdown();
+            } else if (event.property === 'scenes') {
+                // Scenes invalidated (e.g. after retranscription) — reload
+                // from backend if the cache is now empty for the selected video
+                const selId = AppState.videos.getSelectedVideoId();
+                if (selId && !AppState.videos.getScenes(selId)) {
+                    this._loadScenesIfNeeded(selId);
+                }
+                this._renderTimeline();
+                this._updateLanguageDropdown();
+            } else if (event.property === 'sttLanguage') {
+                this._updateLanguageDropdown();
                 this._renderTimeline();
             } else if (event.property === 'preferredScene') {
                 this._renderTimeline();
@@ -417,6 +447,131 @@ const Videos = {
     _updateContentSortButton(selection) {
         const btn = document.getElementById('btn-vid-sort-content');
         if (btn) btn.disabled = selection.length !== 1;
+    },
+
+    // =========================================================================
+    // LANGUAGE DROPDOWN
+    // =========================================================================
+
+    /**
+     * Language code to display name map (ISO 639-1 → English name).
+     * Covers all Whisper-supported languages; only codes present in
+     * App.config.stt_languages are shown in the dropdown.
+     * @private
+     */
+    _LANGUAGE_NAMES: {
+        af: 'Afrikaans', am: 'Amharic', ar: 'Arabic', as: 'Assamese',
+        az: 'Azerbaijani', ba: 'Bashkir', be: 'Belarusian', bg: 'Bulgarian',
+        bn: 'Bengali', bo: 'Tibetan', br: 'Breton', bs: 'Bosnian',
+        ca: 'Catalan', cs: 'Czech', cy: 'Welsh', da: 'Danish',
+        de: 'German', el: 'Greek', en: 'English', es: 'Spanish',
+        et: 'Estonian', eu: 'Basque', fa: 'Persian', fi: 'Finnish',
+        fo: 'Faroese', fr: 'French', gl: 'Galician', gu: 'Gujarati',
+        ha: 'Hausa', haw: 'Hawaiian', he: 'Hebrew', hi: 'Hindi',
+        hr: 'Croatian', ht: 'Haitian Creole', hu: 'Hungarian', hy: 'Armenian',
+        id: 'Indonesian', is: 'Icelandic', it: 'Italian', ja: 'Japanese',
+        jw: 'Javanese', ka: 'Georgian', kk: 'Kazakh', km: 'Khmer',
+        kn: 'Kannada', ko: 'Korean', la: 'Latin', lb: 'Luxembourgish',
+        ln: 'Lingala', lo: 'Lao', lt: 'Lithuanian', lv: 'Latvian',
+        mg: 'Malagasy', mi: 'Maori', mk: 'Macedonian', ml: 'Malayalam',
+        mn: 'Mongolian', mr: 'Marathi', ms: 'Malay', mt: 'Maltese',
+        my: 'Myanmar', ne: 'Nepali', nl: 'Dutch', nn: 'Nynorsk',
+        no: 'Norwegian', oc: 'Occitan', pa: 'Punjabi', pl: 'Polish',
+        ps: 'Pashto', pt: 'Portuguese', ro: 'Romanian', ru: 'Russian',
+        sa: 'Sanskrit', sd: 'Sindhi', si: 'Sinhala', sk: 'Slovak',
+        sl: 'Slovenian', sn: 'Shona', so: 'Somali', sq: 'Albanian',
+        sr: 'Serbian', su: 'Sundanese', sv: 'Swedish', sw: 'Swahili',
+        ta: 'Tamil', te: 'Telugu', tg: 'Tajik', th: 'Thai',
+        tk: 'Turkmen', tl: 'Tagalog', tr: 'Turkish', tt: 'Tatar',
+        uk: 'Ukrainian', ur: 'Urdu', uz: 'Uzbek', vi: 'Vietnamese',
+        yo: 'Yoruba', yue: 'Cantonese', zh: 'Chinese',
+    },
+
+    /**
+     * Populate the language dropdown from App.config.stt_languages.
+     * Called once during init.
+     * @private
+     */
+    /** @type {boolean} Whether the language dropdown has been populated. @private */
+    _languagePopulated: false,
+
+    _populateLanguageDropdown() {
+        const select = this._els.languageSelect;
+        if (!select || this._languagePopulated) return;
+
+        const codes = App.getSttLanguages();
+        // Config may not have loaded yet — will retry from _updateLanguageDropdown
+        if (!codes.length) return;
+        this._languagePopulated = true;
+
+        // Always prepend auto-detect option
+        const auto = document.createElement('option');
+        auto.value = '';
+        auto.textContent = 'Auto-detect';
+        select.appendChild(auto);
+
+        for (const code of codes) {
+            const opt = document.createElement('option');
+            opt.value = code;
+            opt.textContent = this._LANGUAGE_NAMES[code] || code;
+            select.appendChild(opt);
+        }
+    },
+
+    /**
+     * Show/hide the language dropdown and sync its value to the selected
+     * video.  Visible only when: exactly 1 video is selected, STT is
+     * enabled, scenes are loaded, and at least one scene has a transcription.
+     *
+     * @param {string[]} [selection] - Currently selected video IDs.
+     *     Falls back to reading the selected video from AppState if omitted.
+     * @private
+     */
+    _updateLanguageDropdown(selection) {
+        const control = this._els.languageControl;
+        const separator = this._els.languageSeparator;
+        const select = this._els.languageSelect;
+        if (!control || !select) return;
+
+        // Lazily populate if config wasn't ready at init time
+        this._populateLanguageDropdown();
+
+        // Use provided selection, or derive from AppState.videos
+        const ids = selection
+            || (AppState.videos.getSelectedVideoId() ? [AppState.videos.getSelectedVideoId()] : []);
+        let visible = false;
+
+        if (ids.length === 1 && App.isSttEnabled()) {
+            const videoId = ids[0];
+            const scenes = AppState.videos.getScenes(videoId);
+            const hasTranscription = scenes && scenes.some(s => s.transcription);
+            // Show only if scenes are loaded and at least one has a transcription
+            if (hasTranscription) {
+                visible = true;
+                const img = AppState.images.getById(videoId);
+                const lang = img?.stt_language || '';
+
+                // If the video has a language not in the config list, add it
+                // temporarily so the dropdown reflects the actual value
+                if (lang && !select.querySelector(`option[value="${CSS.escape(lang)}"]`)) {
+                    const opt = document.createElement('option');
+                    opt.value = lang;
+                    opt.textContent = (this._LANGUAGE_NAMES[lang] || lang) + ' *';
+                    opt.dataset.temporary = 'true';
+                    select.appendChild(opt);
+                }
+
+                select.value = lang;
+            }
+        }
+
+        // Remove any temporary options when hiding
+        if (!visible) {
+            select.querySelectorAll('option[data-temporary]').forEach(o => o.remove());
+        }
+
+        control.hidden = !visible;
+        if (separator) separator.hidden = !visible;
     },
 
     /**

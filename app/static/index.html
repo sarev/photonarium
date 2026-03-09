@@ -204,6 +204,12 @@
                     <button id="btn-vid-trash" class="toolbar-btn" title="Move to trash" disabled>
                         <span class="icon" data-icon="delete">🗑</span>
                     </button>
+                    <div class="toolbar-separator vid-language-separator" hidden></div>
+                    <div class="vid-language-control" hidden>
+                        <select id="vid-stt-language" title="Transcription language">
+                            <!-- Populated dynamically from App.config.stt_languages -->
+                        </select>
+                    </div>
                 </div>
 
                 <!-- Duplicates controls (visible when data-screen="duplicates") -->

@@ -276,6 +276,9 @@ _SQL_MIGRATIONS = [
     'DROP TABLE IF EXISTS scene_embeddings',
     # → No backfill needed (0 = has real thumbnails, 1 = still has placeholder)
     'ALTER TABLE images ADD COLUMN thumbnails_pending INTEGER NOT NULL DEFAULT 0',
+    # → No backfill needed (NULL = use global default, '' = auto-detect,
+    #   ISO code = user-chosen language for STT transcription)
+    'ALTER TABLE images ADD COLUMN stt_language TEXT',
 ]
 
 # SQL schema for the image_metadata table (indexed EXIF key-value pairs for search)
@@ -849,7 +852,7 @@ def get_all_images_lightweight(conn: sqlite3.Connection) -> list[dict[str, Any]]
     cursor = conn.execute("""
         SELECT id, path, basename, size, width, height, timestamp, timestamp_confidence,
                rating, description, aesthetic_laion, aesthetic_nima, laplacian_var,
-               media_type, duration, preferred_scene_id
+               media_type, duration, preferred_scene_id, stt_language
         FROM images
         WHERE deleted = 0
         ORDER BY timestamp DESC
@@ -913,7 +916,7 @@ def get_images_delta(
         """
         SELECT id, path, basename, size, width, height, timestamp, timestamp_confidence,
                rating, description, aesthetic_laion, aesthetic_nima, laplacian_var,
-               media_type, duration, preferred_scene_id, deleted, updated_at
+               media_type, duration, preferred_scene_id, stt_language, deleted, updated_at
         FROM images
         WHERE updated_at > ?
         ORDER BY updated_at ASC
@@ -973,7 +976,7 @@ def get_image(conn: sqlite3.Connection, image_id: str) -> dict[str, Any] | None:
         SELECT id, path, basename, size, width, height, timestamp,
                timestamp_confidence, checksum, perceptual_hash, laplacian_var,
                lossless, description, rating, deleted, created_at, updated_at,
-               mtime, media_type, duration, preferred_scene_id
+               mtime, media_type, duration, preferred_scene_id, stt_language
         FROM images
         WHERE id = ?
     """,

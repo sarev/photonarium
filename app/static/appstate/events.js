@@ -481,6 +481,11 @@ AppState.events = (function() {
         }
         if (data?.updated_ids?.length) {
             await AppState.images.refreshByIds(data.updated_ids);
+            // Invalidate scene caches for any updated videos so the
+            // Videos screen picks up new transcriptions from the pipeline.
+            for (const id of data.updated_ids) {
+                AppState.videos.invalidateScenes(id);
+            }
         }
     }
 

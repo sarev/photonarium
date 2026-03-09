@@ -1010,6 +1010,9 @@ const App = {
                 alpha: data.quality_alpha ?? 0.60,
                 nimaEnabled: data.nima_enabled ?? false,
             };
+            // STT config for video language dropdown
+            this._sttEnabled = data.stt_enabled ?? false;
+            this._sttLanguages = data.stt_languages || [];
         } catch (error) {
             console.warn('Failed to load thumbnail config, using defaults:', error);
         }
@@ -1067,6 +1070,22 @@ const App = {
      */
     isImportableExtension(ext) {
         return (this._imageExtensions?.has(ext) || this._videoExtensions?.has(ext)) ?? false;
+    },
+
+    /**
+     * Check whether STT (speech-to-text) is enabled in the config.
+     * @returns {boolean}
+     */
+    isSttEnabled() {
+        return this._sttEnabled ?? false;
+    },
+
+    /**
+     * Get the list of language codes for the per-video STT dropdown.
+     * @returns {string[]}
+     */
+    getSttLanguages() {
+        return this._sttLanguages || [];
     },
 
     /* ----------------------------------------------------------------------

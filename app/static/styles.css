@@ -866,6 +866,27 @@ a:hover {
     border-color: var(--color-accent);
 }
 
+/* Video language control */
+.vid-language-control {
+    display: flex;
+    align-items: center;
+    gap: 0.25rem;
+}
+.vid-language-control select {
+    height: 28px;
+    padding: 0 0.5rem;
+    font-size: 0.85rem;
+    border: 1px solid var(--color-border);
+    border-radius: 4px;
+    background: var(--color-bg-primary);
+    color: var(--color-text-primary);
+    cursor: pointer;
+    outline: none;
+}
+.vid-language-control select:focus {
+    border-color: var(--color-accent);
+}
+
 /* Gallery toolbar similarity control */
 .gallery-similarity-control {
     display: flex;

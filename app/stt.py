@@ -33,12 +33,19 @@ class STTSegment(NamedTuple):
     text: str
 
 
+class STTResult(NamedTuple):
+    """Result of a transcription with detected language info."""
+
+    segments: list[STTSegment]
+    language: str  # ISO 639-1 code (e.g. 'en'), empty if unknown
+
+
 class STTBackend(ABC):
     """Abstract base class for speech-to-text backends."""
 
     @abstractmethod
-    def transcribe(self, audio_path: Path, language: str = '') -> list[STTSegment]:
-        """Transcribe an audio file and return timed segments.
+    def transcribe(self, audio_path: Path, language: str = '') -> STTResult:
+        """Transcribe an audio file and return timed segments with language.
 
         Args:
             audio_path: Path to a WAV audio file (16kHz mono).
@@ -46,8 +53,8 @@ class STTBackend(ABC):
                 auto-detect.
 
         Returns:
-            List of STTSegment named tuples with start/end times and text.
-            Returns an empty list on failure.
+            STTResult with segments and detected language code.
+            Returns STTResult(segments=[], language='') on failure.
         """
         ...
 
@@ -137,7 +144,7 @@ class FasterWhisperBackend(STTBackend):
                 self._load_failed = True
                 return False
 
-    def transcribe(self, audio_path: Path, language: str = '') -> list[STTSegment]:
+    def transcribe(self, audio_path: Path, language: str = '') -> STTResult:
         """Transcribe audio using faster-whisper.
 
         Args:
@@ -145,22 +152,24 @@ class FasterWhisperBackend(STTBackend):
             language: Language code or empty for auto-detect.
 
         Returns:
-            List of STTSegment tuples, or empty list on failure.
+            STTResult with segments and detected language code.
         """
         if not self._load_model():
-            return []
+            return STTResult(segments=[], language='')
 
         try:
             kwargs = {}
             if language:
                 kwargs['language'] = language
 
-            segments, _info = self._model.transcribe(
+            segments, info = self._model.transcribe(
                 str(audio_path),
                 beam_size=5,
                 word_timestamps=True,
                 **kwargs,
             )
+
+            detected_language = getattr(info, 'language', '') or ''
 
             result = []
             for seg in segments:
@@ -178,7 +187,7 @@ class FasterWhisperBackend(STTBackend):
                     if text:
                         result.append(STTSegment(start=seg.start, end=seg.end, text=text))
 
-            return result
+            return STTResult(segments=result, language=detected_language)
 
         except (MemoryError, RuntimeError) as e:
             logger.error(f'OOM during transcription of {audio_path}: {e}')
@@ -190,10 +199,10 @@ class FasterWhisperBackend(STTBackend):
                     torch.cuda.empty_cache()
             except ImportError:
                 pass
-            return []
+            return STTResult(segments=[], language='')
         except Exception as e:
             logger.error(f'Transcription failed for {audio_path}: {e}')
-            return []
+            return STTResult(segments=[], language='')
 
 
 def get_stt_backend(config: Config) -> STTBackend | None:
@@ -238,12 +247,14 @@ if __name__ == '__main__':
         'converted to 16kHz mono WAV automatically via video.extract_audio_segment().',
     )
     parser.add_argument(
-        '-m', '--model',
+        '-m',
+        '--model',
         default='base',
         help='Whisper model size: tiny, base, small, medium, large-v3 (default: base)',
     )
     parser.add_argument(
-        '-l', '--language',
+        '-l',
+        '--language',
         default='',
         help='Language code (e.g. "en", "fr").  Empty for auto-detect (default).',
     )
@@ -272,6 +283,7 @@ if __name__ == '__main__':
 
         tmp_fd, tmp_name = tempfile.mkstemp(suffix='.wav')
         import os
+
         os.close(tmp_fd)
         tmp_wav = Path(tmp_name)
 
@@ -284,23 +296,26 @@ if __name__ == '__main__':
 
     # Transcribe
     print(f'Transcribing with model={args.model}, language={args.language or "(auto)"}...')
-    segments = backend.transcribe(input_path, language=args.language)
+    stt_result = backend.transcribe(input_path, language=args.language)
 
     # Clean up temp file
     if tmp_wav:
         tmp_wav.unlink(missing_ok=True)
 
-    if not segments:
+    if stt_result.language:
+        print(f'Detected language: {stt_result.language}')
+
+    if not stt_result.segments:
         print('No speech detected.')
         sys.exit(0)
 
     # Print results
-    print(f'\n{len(segments)} word segments:\n')
+    print(f'\n{len(stt_result.segments)} word segments:\n')
     print(f'{"Start":>8s}  {"End":>8s}  Text')
     print(f'{"-----":>8s}  {"---":>8s}  ----')
-    for seg in segments:
+    for seg in stt_result.segments:
         print(f'{seg.start:8.2f}s {seg.end:8.2f}s  {seg.text}')
 
     # Also print a reconstructed full transcript
-    full = ' '.join(seg.text for seg in segments)
+    full = ' '.join(seg.text for seg in stt_result.segments)
     print(f'\nFull transcript:\n{full}')

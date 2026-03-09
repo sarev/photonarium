@@ -531,6 +531,21 @@ CONFIG_SCHEMA: list[tuple[str, list[tuple[str, list[str]]]]] = [
                     'Leave empty for automatic language detection.',
                 ],
             ),
+            (
+                'stt_languages',
+                [
+                    'List of language codes available in the per-video language dropdown.',
+                    'Only these languages appear as options in the UI; all Whisper-supported',
+                    'codes still work if set via the API.',
+                    'Whisper-supported codes: af, am, ar, as, az, ba, be, bg, bn, bo, br,',
+                    '  bs, ca, cs, cy, da, de, el, en, es, et, eu, fa, fi, fo, fr, gl, gu,',
+                    '  ha, haw, he, hi, hr, ht, hu, hy, id, is, it, ja, jw, ka, kk, km, kn,',
+                    '  ko, la, lb, ln, lo, lt, lv, mg, mi, mk, ml, mn, mr, ms, mt, my, ne,',
+                    '  nl, nn, no, oc, pa, pl, ps, pt, ro, ru, sa, sd, si, sk, sl, sn, so,',
+                    '  sq, sr, su, sv, sw, ta, te, tg, th, tk, tl, tr, tt, uk, ur, uz, vi,',
+                    '  yo, zh, yue',
+                ],
+            ),
         ],
     ),
     (
@@ -687,6 +702,26 @@ FIELD_CONSTRAINTS: dict[str, dict[str, int | float | bool]] = {
     'log_retention_lines': {'min': 100, 'max': 100000, 'step': 100, 'special_zero': True},
 }
 
+# STT_LANGUAGES_DEFAULT — top 15 global languages for the per-video dropdown
+# ---------------------------------------------------------------------------
+_STT_LANGUAGES_DEFAULT = [
+    'en',
+    'zh',
+    'es',
+    'ar',
+    'hi',
+    'fr',
+    'pt',
+    'ru',
+    'ja',
+    'de',
+    'ko',
+    'it',
+    'nl',
+    'tr',
+    'sv',
+]
+
 # FIELD_CHOICES — single source of truth for enumerated string options
 # ---------------------------------------------------------------------------
 # Maps field name → list of valid values.  Used by _validate() and
@@ -817,6 +852,8 @@ class Config:
     stt_model: str = 'base'
     # Language code for transcription (empty = auto-detect).
     stt_language: str = ''
+    # Language codes available in the per-video language dropdown.
+    stt_languages: list[str] = field(default_factory=lambda: list(_STT_LANGUAGES_DEFAULT))
     # Seconds each image is displayed during a slideshow (1.0-60.0).
     slideshow_interval: float = 5.0
     # Path to trash directory. Empty string means <data-dir>/trash/.
@@ -887,6 +924,12 @@ class Config:
             raise ValueError('filename_date_overrides must be a list')
         if not all(isinstance(p, str) for p in self.filename_date_overrides):
             raise ValueError('filename_date_overrides entries must be strings')
+
+        # --- stt_languages: must be a list of language code strings ---
+        if not isinstance(self.stt_languages, (list, tuple)):
+            raise ValueError('stt_languages must be a list')
+        if not all(isinstance(c, str) and c for c in self.stt_languages):
+            raise ValueError('stt_languages entries must be non-empty strings')
 
         # --- image_extensions: coerce to set of dotted lowercase strings ---
         if not isinstance(self.image_extensions, (set, list, tuple)):

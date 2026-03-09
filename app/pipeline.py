@@ -2235,7 +2235,7 @@ class PipelineOrchestrator(threading.Thread):
 
         with self._db._db_lock:
             cursor = self._db.conn.execute("""
-                SELECT DISTINCT i.id, i.path, i.basename
+                SELECT DISTINCT i.id, i.path, i.basename, i.stt_language
                 FROM images i
                 JOIN scenes s ON s.image_id = i.id
                 WHERE i.deleted = 0
@@ -2288,7 +2288,18 @@ class PipelineOrchestrator(threading.Thread):
 
             logger.info(f'Transcribing {basename} ({len(scenes)} scenes)')
             clip = self._get_clip_model()
-            self._transcribe_scenes(image_id, video_path, scenes, scene_ids, clip)
+            self._transcribe_scenes(
+                image_id,
+                video_path,
+                scenes,
+                scene_ids,
+                clip,
+                language=row['stt_language'],
+            )
+
+            # Notify frontend clients that this video's scenes have been
+            # (re-)transcribed so they can refresh the scene cache.
+            self._db.event_queue.emit('images_changed', {'updated_ids': [image_id]})
 
             count += 1
             self._update_done(count)
@@ -2305,6 +2316,7 @@ class PipelineOrchestrator(threading.Thread):
         scenes: list[tuple[float, float]],
         scene_ids: list[str],
         clip: OpenCLIPModel,
+        language: str | None = None,
     ) -> None:
         """Transcribe the entire video and assign text to scenes by overlap.
 
@@ -2314,6 +2326,9 @@ class PipelineOrchestrator(threading.Thread):
             scenes: List of (start, end) scene boundaries.
             scene_ids: Corresponding scene UUIDs.
             clip: OpenCLIP model for computing text embeddings.
+            language: Per-video language override from ``images.stt_language``.
+                None or NULL means use the global ``stt_language`` config.
+                Empty string means auto-detect.
         """
         import tempfile
 
@@ -2339,8 +2354,11 @@ class PipelineOrchestrator(threading.Thread):
                 tmp_path.unlink(missing_ok=True)
                 return
 
-            # Transcribe whole clip
-            stt_segments = stt.transcribe(tmp_path, language=self._db.config.stt_language)
+            # Resolve effective language: per-video override > global config
+            effective_language = language if language is not None else self._db.config.stt_language
+            stt_result = stt.transcribe(tmp_path, language=effective_language)
+            stt_segments = stt_result.segments
+            detected_language = stt_result.language
 
             try:
                 tmp_path.unlink(missing_ok=True)
@@ -2380,6 +2398,7 @@ class PipelineOrchestrator(threading.Thread):
                 transcription_updates.append((full_text, text_emb_blob, now_ts, scene_id))
 
             if transcription_updates:
+                now = datetime.now().isoformat()
                 with self._db._db_lock:
                     self._db.conn.executemany(
                         """UPDATE scenes SET transcription = ?, transcription_embedding = ?,
@@ -2387,6 +2406,14 @@ class PipelineOrchestrator(threading.Thread):
                         WHERE id = ?""",
                         transcription_updates,
                     )
+                    # Write detected language back to images.stt_language,
+                    # but only when the user hasn't explicitly chosen a language
+                    if detected_language:
+                        self._db.conn.execute(
+                            'UPDATE images SET stt_language = ?, updated_at = ? '
+                            "WHERE id = ? AND (stt_language IS NULL OR stt_language = '')",
+                            (detected_language, now, image_id),
+                        )
                     self._db.conn.commit()
 
         except Exception as e:

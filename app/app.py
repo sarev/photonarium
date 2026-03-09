@@ -1070,8 +1070,7 @@ def get_subtitles_vtt(image_id):
         ).fetchall()
 
     # Filter to scenes with transcription text
-    cues = [(r['start_time'], r['end_time'], r['transcription'])
-            for r in rows if r['transcription']]
+    cues = [(r['start_time'], r['end_time'], r['transcription']) for r in rows if r['transcription']]
 
     vtt = 'WEBVTT\n\n'
 
@@ -1703,7 +1702,9 @@ def get_config():
             'catalogue_dir': str(db.catalogue_dir),
             'image_extensions': sorted(config.image_extensions),
             'video_extensions': sorted(config.video_extensions),
+            'stt_enabled': config.stt_enabled,
             'stt_language': config.stt_language,
+            'stt_languages': config.stt_languages,
             'version': _app_version,
         }
     )
@@ -2625,9 +2626,59 @@ def update_preferred_scene(image_id):
         db.conn.commit()
 
     # Emit event so other clients sync
-    db.event_queue.emit('images_changed', {'image_ids': [image_id]})
+    db.event_queue.emit('images_changed', {'updated_ids': [image_id]})
 
     return success_response({'preferred_scene_id': scene_id})
+
+
+@app.route('/api/images/<image_id>/stt-language', methods=['PUT'])
+def update_stt_language(image_id):
+    """Update the transcription language for a video.
+
+    Sets ``images.stt_language`` and clears existing scene transcriptions
+    so the pipeline re-transcribes with the new language on its next run.
+
+    Request Body:
+        JSON object with:
+        - language (str): ISO 639-1 code (e.g. 'fr') or '' for auto-detect.
+
+    Returns:
+        JSON with the new stt_language value.
+    """
+    db = get_db()
+    image = db.get_image(image_id)
+    if not image:
+        return error_response('Image not found', 404)
+    if image.get('media_type') != 'video':
+        return error_response('Not a video', 400)
+
+    data = request.get_json(silent=True) or {}
+    language = data.get('language')
+    if language is None or not isinstance(language, str):
+        return error_response('language is required and must be a string')
+
+    from datetime import datetime as dt
+
+    now = dt.now().isoformat()
+    with db._db_lock:
+        db.conn.execute(
+            'UPDATE images SET stt_language = ?, updated_at = ? WHERE id = ?',
+            (language, now, image_id),
+        )
+        # Clear existing transcriptions so the pipeline re-transcribes
+        db.conn.execute(
+            'UPDATE scenes SET transcription = NULL, transcription_embedding = NULL, updated_at = ? WHERE image_id = ?',
+            (now, image_id),
+        )
+        db.conn.commit()
+
+    # Trigger pipeline rerun to pick up the retranscription work
+    db.queue_rescan_all()
+
+    # Notify other clients
+    db.event_queue.emit(EVENT_IMAGES_CHANGED, {'updated_ids': [image_id]})
+
+    return success_response({'stt_language': language})
 
 
 @app.route('/api/similar/<image_id>', methods=['GET'])
