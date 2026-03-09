@@ -564,6 +564,20 @@ def _extract_delimited_numeric_triplets(
     for m in re.finditer(r'(?<!\d)(\d{1,4})[._/\-](\d{1,2})[._/\-](\d{1,4})(?!\d)', component):
         s1, s2, s3 = m.groups()
         a, b, c_val = int(s1), int(s2), int(s3)
+
+        # Skip triplets that look like HH.MM.SS times rather than dates.
+        # A triplet is time-like when all values fit valid time ranges AND
+        # it's preceded by whitespace (e.g. "2024-05-17 16.08.33") — the
+        # space indicates it follows a date, making it a time suffix.
+        if (
+            m.start() > 0
+            and component[m.start() - 1] == ' '
+            and 0 <= a <= 23
+            and 0 <= b <= 59
+            and 0 <= c_val <= 59
+        ):
+            continue
+
         out.extend(
             _numeric_triplet_candidates(
                 a,
@@ -853,7 +867,11 @@ def _parse_timestamp_scoring(
     today = _dt.date.today()
     policy = _ParsePolicy(date_order=date_order)
 
-    path_str = str(path)
+    # Normalise path separators so that Windows backslash paths are split
+    # into components consistently regardless of host OS.  Without this,
+    # PosixPath treats 'C:\foo\bar\file.jpg' as a single component while
+    # WindowsPath correctly splits it into ['C:\\', 'foo', 'bar', 'file.jpg'].
+    path_str = str(path).replace('\\', '/')
     p = Path(path_str)
 
     components = [part for part in p.parts if part not in ('', '/', '\\')]
@@ -2210,10 +2228,32 @@ if __name__ == '__main__':
         ('apollo2-sd_960_540_30fps.mp4', 'DMY', None, None, 'both',
          'Resolution 960x540 not a date'),
 
-        # -- Date + time in filename (Windows-style dots for time) --
+        # -- Date + time in filename (dot-delimited time after date) --
+        # The HH.MM.SS portion must not be parsed as a DMY date.  These
+        # tests use forward slashes so path splitting works on all platforms.
+        ('C:/Users/srevi/Dropbox/Photos and Videos/Videos/2025/2025-07-13 14.02.30.mp4',
+         'DMY', '2025-07-13', '14:02:30', 'scoring',
+         'Date + dot time (14.02.30 not a date)'),
+        ('C:/Users/srevi/Dropbox/Photos and Videos/Videos/2024/2024-05-17 16.08.33.jpg',
+         'DMY', '2024-05-17', '16:08:33', 'scoring',
+         'Date + dot time (16.08.33 not a date)'),
+        ('C:/Users/srevi/Dropbox/Photos and Videos/Videos/2018/2018-12-14 17.11.33.mp4',
+         'DMY', '2018-12-14', '17:11:33', 'scoring',
+         'Date + dot time (17.11.33 not a date)'),
+        ('C:/Users/srevi/Dropbox/Photos and Videos/Videos/2018/2018-01-06 11.10.40.mp4',
+         'DMY', '2018-01-06', '11:10:40', 'scoring',
+         'Date + dot time (11.10.40 not a date)'),
+        ('C:/Users/srevi/Dropbox/Photos and Videos/Videos/2018/2018-08-04 21.01.52.mp4',
+         'DMY', '2018-08-04', '21:01:52', 'scoring',
+         'Date + dot time (21.01.52 not a date)'),
+        # Time where middle value > 12 — already worked (can't be a month)
+        ('C:/Users/srevi/Dropbox/Photos and Videos/Videos/2018/2018-02-10 10.36.08.mp4',
+         'DMY', '2018-02-10', '10:36:08', 'scoring',
+         'Date + dot time (10.36.08 — minute > 12)'),
+        # Backslash variant — must also work (normalised internally)
         (r'C:\Users\srevi\Dropbox\Photos and Videos\Videos\2025\2025-07-13 14.02.30.mp4',
          'DMY', '2025-07-13', '14:02:30', 'scoring',
-         'Windows path with date + dot-delimited time'),
+         'Backslash path with date + dot time'),
 
         # -- Edge cases --
         ('random_photo.jpg', 'DMY', None, None, 'both', 'No date at all'),
