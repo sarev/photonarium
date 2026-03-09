@@ -2404,6 +2404,7 @@ def batch_identify_faces(
 
 def reassess_unknown_faces(
     conn: sqlite3.Connection,
+    db_lock: threading.Lock,
     threshold: float = FACE_RECOGNITION_DEFAULT_THRESHOLD,
     person_id: str | None = None,
 ) -> list[tuple[str, str, float]]:
@@ -2412,8 +2413,13 @@ def reassess_unknown_faces(
     Uses vectorized numpy operations for fast comparison.
     Supports per-person recognition thresholds (overrides global threshold).
 
+    Uses READ → COMPUTE → WRITE pattern to minimise db_lock hold time:
+    the lock is only held during DB reads and the final batched write,
+    not during the matrix multiplication and matching loop.
+
     Args:
         conn: Database connection.
+        db_lock: The database lock for thread safety.
         threshold: Default minimum cosine similarity for auto-match.
         person_id: If specified, only compare against this person's faces.
 
@@ -2422,14 +2428,54 @@ def reassess_unknown_faces(
     """
     logger.debug(f'Reassessing unknown faces with default threshold={threshold:.3f}, person_id={person_id}')
 
-    # Load per-person thresholds and identify ignored people (name == '-')
-    person_thresholds: dict[str, float | None] = {}
-    ignored_person_ids: set[str] = set()
-    cursor = conn.execute('SELECT id, name, recognition_threshold FROM people')
-    for row in cursor.fetchall():
-        person_thresholds[row['id']] = row['recognition_threshold']
-        if row['name'] == '-':
-            ignored_person_ids.add(row['id'])
+    # ── READ phase (lock): load all data needed for computation ──
+    with db_lock:
+        # Load per-person thresholds and identify ignored people (name == '-')
+        person_thresholds: dict[str, float | None] = {}
+        ignored_person_ids: set[str] = set()
+        cursor = conn.execute('SELECT id, name, recognition_threshold FROM people')
+        for row in cursor.fetchall():
+            person_thresholds[row['id']] = row['recognition_threshold']
+            if row['name'] == '-':
+                ignored_person_ids.add(row['id'])
+
+        # Get known embeddings
+        if person_id:
+            cursor = conn.execute(
+                """SELECT f.id, f.person_id, f.embedding
+                   FROM faces f
+                   JOIN images i ON f.image_id = i.id
+                   WHERE f.person_id = ? AND f.suppressed = 0 AND i.deleted = 0""",
+                (person_id,),
+            )
+            known_embeddings = []
+            for row in cursor.fetchall():
+                embedding = np.frombuffer(row['embedding'], dtype=np.float32)
+                known_embeddings.append((row['id'], row['person_id'], embedding))
+        else:
+            known_embeddings = get_cached_known_embeddings(conn)
+
+        # Get candidate embeddings: unknown faces AND unlocked faces
+        # This allows faces to be reassigned to better-matching people
+        cursor = conn.execute(
+            """SELECT f.id, f.embedding, f.person_id
+               FROM faces f
+               JOIN images i ON f.image_id = i.id
+               WHERE (f.person_id IS NULL OR f.manually_tagged = 0)
+                 AND f.suppressed = 0 AND f.embedding IS NOT NULL
+                 AND i.deleted = 0"""
+        )
+        candidate_embeddings = []
+        candidate_person_ids: dict[str, str | None] = {}  # face_id -> current person_id
+        for row in cursor.fetchall():
+            embedding = np.frombuffer(row['embedding'], dtype=np.float32)
+            candidate_embeddings.append((row['id'], embedding))
+            candidate_person_ids[row['id']] = row['person_id']
+
+    if not known_embeddings or not candidate_embeddings:
+        return []
+
+    # ── COMPUTE phase (no lock): matrix operations and matching ──
 
     # Diagnostic: check embedding health (DEBUG level)
     def diagnose_embeddings(name, embeddings_list):
@@ -2452,7 +2498,6 @@ def reassess_unknown_faces(
         # Check for zeros/constants
         std_vals = np.std(emb_matrix, axis=0)
         overall_std = np.std(emb_matrix)
-        # mean_vals = np.mean(emb_matrix, axis=0)
 
         logger.debug(
             f'{name}: overall std={overall_std:.6f}, per-dim std range=[{std_vals.min():.6f}, {std_vals.max():.6f}]'
@@ -2467,44 +2512,6 @@ def reassess_unknown_faces(
             off_diag = pairwise[np.triu_indices(sample_size, k=1)]
             logger.debug(f'{name}: sample pairwise similarities (should vary): {off_diag}')
 
-    # Get embeddings (from cache if available)
-    if person_id:
-        # Only get embeddings for the specified person
-        cursor = conn.execute(
-            """SELECT f.id, f.person_id, f.embedding
-               FROM faces f
-               JOIN images i ON f.image_id = i.id
-               WHERE f.person_id = ? AND f.suppressed = 0 AND i.deleted = 0""",
-            (person_id,),
-        )
-        known_embeddings = []
-        for row in cursor.fetchall():
-            embedding = np.frombuffer(row['embedding'], dtype=np.float32)
-            known_embeddings.append((row['id'], row['person_id'], embedding))
-    else:
-        known_embeddings = get_cached_known_embeddings(conn)
-
-    # Get candidate embeddings: unknown faces AND unlocked faces
-    # This allows faces to be reassigned to better-matching people
-    cursor = conn.execute(
-        """SELECT f.id, f.embedding, f.person_id
-           FROM faces f
-           JOIN images i ON f.image_id = i.id
-           WHERE (f.person_id IS NULL OR f.manually_tagged = 0)
-             AND f.suppressed = 0 AND f.embedding IS NOT NULL
-             AND i.deleted = 0"""
-    )
-    candidate_embeddings = []
-    candidate_person_ids: dict[str, str | None] = {}  # face_id -> current person_id
-    for row in cursor.fetchall():
-        embedding = np.frombuffer(row['embedding'], dtype=np.float32)
-        candidate_embeddings.append((row['id'], embedding))
-        candidate_person_ids[row['id']] = row['person_id']
-
-    if not known_embeddings or not candidate_embeddings:
-        return []
-
-    # Diagnostic: check embedding health
     diagnose_embeddings('Known', known_embeddings)
     diagnose_embeddings('Candidates (sample)', candidate_embeddings[:100])  # Sample to avoid log spam
 
@@ -2616,18 +2623,28 @@ def reassess_unknown_faces(
             f'(best similarity: {overall_max_similarity:.3f}, threshold: {threshold:.2f})'
         )
 
-    # Apply matches (auto-matched, not manually tagged)
-    for face_id, matched_person_id, similarity in matched:
-        logger.debug(f'Auto-matched face {face_id} to person {matched_person_id} (similarity: {similarity:.3f})')
-        update_face_person(conn, face_id, matched_person_id, manually_tagged=False)
-
-    # Unassign faces that no longer meet any threshold
-    for face_id in unmatched:
-        logger.debug(f'Unassigned face {face_id} (below all thresholds)')
-        update_face_person(conn, face_id, None, manually_tagged=False)
-
-    # Invalidate cache if we made changes
+    # ── WRITE phase (lock): apply matches in a single batched transaction ──
     if matched or unmatched:
+        # Prepare batched update parameters
+        assign_params = [(pid, face_id) for face_id, pid, _ in matched]
+        unassign_params = [(face_id,) for face_id in unmatched]
+
+        for face_id, matched_person_id, similarity in matched:
+            logger.debug(f'Auto-matched face {face_id} to person {matched_person_id} (similarity: {similarity:.3f})')
+        for face_id in unmatched:
+            logger.debug(f'Unassigned face {face_id} (below all thresholds)')
+
+        with db_lock:
+            conn.executemany(
+                "UPDATE faces SET person_id = ?, manually_tagged = 0, updated_at = datetime('now') WHERE id = ?",
+                assign_params,
+            )
+            conn.executemany(
+                "UPDATE faces SET person_id = NULL, manually_tagged = 0, updated_at = datetime('now') WHERE id = ?",
+                unassign_params,
+            )
+            conn.commit()
+
         invalidate_embedding_cache()
 
     return matched
@@ -2651,12 +2668,17 @@ _grouping_status: dict | None = None  # {status: 'idle'|'computing'|'done', prog
 
 def compute_unknown_face_groups(
     conn: sqlite3.Connection,
+    db_lock: threading.Lock,
     threshold: float = FACE_RECOGNITION_DEFAULT_THRESHOLD,
 ) -> int:
     """Compute similarity groups for unknown faces using UnionFind clustering.
 
     Unknown faces that are similar to each other (above threshold) are grouped
     together. This helps users identify the same unknown person across images.
+
+    Uses READ → COMPUTE → WRITE pattern to minimise db_lock hold time:
+    the lock is only held during the initial DB read and the final write,
+    not during the O(n²) chunked similarity computation.
 
     The algorithm:
     1. Load all unknown face embeddings (already L2-normalised)
@@ -2666,6 +2688,7 @@ def compute_unknown_face_groups(
 
     Args:
         conn: Database connection.
+        db_lock: The database lock for thread safety.
         threshold: Minimum cosine similarity to group faces together.
 
     Returns:
@@ -2678,7 +2701,7 @@ def compute_unknown_face_groups(
         _grouping_status = {'status': 'computing'}
 
     try:
-        return _compute_unknown_face_groups_impl(conn, threshold)
+        return _compute_unknown_face_groups_impl(conn, db_lock, threshold)
     finally:
         # Clear status when done
         with _grouping_lock:
@@ -2687,23 +2710,28 @@ def compute_unknown_face_groups(
 
 def _compute_unknown_face_groups_impl(
     conn: sqlite3.Connection,
+    db_lock: threading.Lock,
     threshold: float,
 ) -> int:
-    """Internal implementation of face grouping."""
-    # Load unknown faces with embeddings
-    cursor = conn.execute("""
-        SELECT f.id, f.embedding
-        FROM faces f
-        WHERE f.person_id IS NULL AND f.suppressed = 0
-        ORDER BY f.id
-    """)
+    """Internal implementation of face grouping.
 
-    face_ids = []
-    embeddings = []
-    for row in cursor:
-        face_ids.append(row[0])
-        embedding = np.frombuffer(row[1], dtype=np.float32)
-        embeddings.append(embedding)
+    Uses READ → COMPUTE → WRITE pattern with db_lock.
+    """
+    # ── READ phase (lock): load unknown face embeddings ──
+    with db_lock:
+        cursor = conn.execute("""
+            SELECT f.id, f.embedding
+            FROM faces f
+            WHERE f.person_id IS NULL AND f.suppressed = 0
+            ORDER BY f.id
+        """)
+
+        face_ids = []
+        embeddings = []
+        for row in cursor:
+            face_ids.append(row[0])
+            embedding = np.frombuffer(row[1], dtype=np.float32)
+            embeddings.append(embedding)
 
     if not face_ids:
         logger.info('No unknown faces to group')
@@ -2711,6 +2739,8 @@ def _compute_unknown_face_groups_impl(
 
     n_faces = len(face_ids)
     logger.info(f'Computing groups for {n_faces} unknown faces')
+
+    # ── COMPUTE phase (no lock): matrix ops and clustering ──
 
     # Stack embeddings into a matrix (already L2-normalised)
     try:
@@ -2756,28 +2786,33 @@ def _compute_unknown_face_groups_impl(
     groups = uf.extract_groups_by_id()
     logger.info(f'Found {len(groups)} distinct clusters, assigning group IDs...')
 
-    # Clear all existing group IDs first (set updated_at per concurrency contract)
-    conn.execute(
-        "UPDATE faces SET unknown_group_id = NULL, updated_at = datetime('now') "
-        'WHERE person_id IS NULL AND unknown_group_id IS NOT NULL'
-    )
+    # ── WRITE phase (lock): clear old groups and assign new ones ──
+    with db_lock:
+        # Clear all existing group IDs first (set updated_at per concurrency contract)
+        conn.execute(
+            "UPDATE faces SET unknown_group_id = NULL, updated_at = datetime('now') "
+            'WHERE person_id IS NULL AND unknown_group_id IS NOT NULL'
+        )
 
-    # Assign new group IDs (batch to avoid SQLite variable limit of ~999)
-    BATCH_SIZE = 500  # Leave room for the group_id parameter
-    n_groups = 0
-    for _root_id, members in groups.items():
-        if len(members) > 1:
-            # Generate a group ID
-            group_id = str(uuid.uuid4())[:8]
-            n_groups += 1
+        # Assign new group IDs (batch to avoid SQLite variable limit of ~999)
+        BATCH_SIZE = 500  # Leave room for the group_id parameter
+        n_groups = 0
+        for _root_id, members in groups.items():
+            if len(members) > 1:
+                # Generate a group ID
+                group_id = str(uuid.uuid4())[:8]
+                n_groups += 1
 
-            # Update faces in batches to avoid "too many SQL variables" error
-            for i in range(0, len(members), BATCH_SIZE):
-                batch = members[i : i + BATCH_SIZE]
-                placeholders = sql_placeholders(batch)
-                conn.execute(f'UPDATE faces SET unknown_group_id = ? WHERE id IN ({placeholders})', [group_id] + batch)
+                # Update faces in batches to avoid "too many SQL variables" error
+                for i in range(0, len(members), BATCH_SIZE):
+                    batch = members[i : i + BATCH_SIZE]
+                    placeholders = sql_placeholders(batch)
+                    conn.execute(
+                        f'UPDATE faces SET unknown_group_id = ? WHERE id IN ({placeholders})', [group_id] + batch
+                    )
 
-    conn.commit()
+        conn.commit()
+
     logger.info(f'Created {n_groups} unknown face groups')
     return n_groups
 

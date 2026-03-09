@@ -169,6 +169,11 @@ class DatabaseLogHandler(logging.Handler):
                 self._trim()
                 self._insert_count = 0
         except Exception as exc:
+            # Re-buffer failed records so they aren't lost — prepend them
+            # back so the next flush picks them up.  The deque's maxlen cap
+            # will silently drop the oldest if the buffer overflows.
+            for row in reversed(batch):
+                self._buffer.appendleft(row)
             self._error_count += 1
             if self._error_count <= 3:
                 print(

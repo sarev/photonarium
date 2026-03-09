@@ -2076,6 +2076,8 @@ class DuplicateManager:
         share the same basename (e.g. /Photos/Holiday/Beach and /Photos/Birthday/Beach),
         parent path components are prepended until names are unique.
 
+        Uses READ → COMPUTE → WRITE pattern to minimise db_lock hold time.
+
         Called at the end of processing (on_final_complete) and after folder removal.
 
         Args:
@@ -2083,14 +2085,20 @@ class DuplicateManager:
             db_lock: The database lock for thread safety.
         """
         import os
+        import uuid
         from datetime import datetime as dt
 
         now = dt.now().isoformat()
 
-        # ── Step 1: gather directories with non-deleted images ──
+        # ── READ phase (lock): gather current state from DB ──
         with db_lock:
             cursor = conn.execute('SELECT id, path FROM images WHERE deleted = 0')
             rows = cursor.fetchall()
+
+            cursor = conn.execute('SELECT group_hash, source_path FROM custom_groups WHERE source_path IS NOT NULL')
+            existing = {row['source_path']: row['group_hash'] for row in cursor.fetchall()}
+
+        # ── COMPUTE phase (no lock): prepare all SQL parameters ──
 
         # Map directory → set of image IDs
         dir_to_images: dict[str, set[str]] = {}
@@ -2100,94 +2108,90 @@ class DuplicateManager:
                 dir_to_images[parent] = set()
             dir_to_images[parent].add(row['id'])
 
-        # ── Step 2: get existing directory groups ──
-        with db_lock:
-            cursor = conn.execute('SELECT group_hash, source_path FROM custom_groups WHERE source_path IS NOT NULL')
-            existing = {row['source_path']: row['group_hash'] for row in cursor.fetchall()}
-
-        # ── Step 3: compute shortest-unique-suffix display names ──
         all_dirs = list(dir_to_images.keys())
         display_names = _compute_unique_dir_names(all_dirs)
+        needed_paths = set(all_dirs)
 
-        # ── Step 4: sync groups ──
+        # Prepare batched SQL parameters
+        delete_membership_params: list[tuple] = []  # (level, group_hash)
+        insert_membership_params: list[tuple] = []  # (level, group_hash, image_id, now)
+        update_name_params: list[tuple] = []  # (name, now, group_hash)
+        create_group_params: list[tuple] = []  # (group_hash, name, source_path, now, now)
+        remove_dup_params: list[tuple] = []  # (level, group_hash)
+        remove_group_hashes: list[tuple] = []  # (group_hash,)
+
+        # Track newly created group hashes for cache rebuild
+        new_groups: dict[str, str] = {}  # dir_path → group_hash
+
         created = 0
         updated = 0
         removed = 0
 
-        # Directories that should have groups
-        needed_paths = set(all_dirs)
+        for dir_path in all_dirs:
+            image_ids = dir_to_images[dir_path]
+            display_name = display_names[dir_path]
 
+            if dir_path in existing:
+                # Group exists — sync membership and name
+                group_hash = existing[dir_path]
+                delete_membership_params.append((LEVEL_DIRECTORY, group_hash))
+                for image_id in image_ids:
+                    insert_membership_params.append((LEVEL_DIRECTORY, group_hash, image_id, now))
+                update_name_params.append((display_name, now, group_hash))
+                updated += 1
+            else:
+                # New directory — create group
+                group_hash = str(uuid.uuid4())
+                new_groups[dir_path] = group_hash
+                create_group_params.append((group_hash, display_name, dir_path, now, now))
+                for image_id in image_ids:
+                    insert_membership_params.append((LEVEL_DIRECTORY, group_hash, image_id, now))
+                created += 1
+
+        # Stale groups whose source_path no longer has images
+        for source_path, group_hash in existing.items():
+            if source_path not in needed_paths:
+                remove_dup_params.append((LEVEL_DIRECTORY, group_hash))
+                remove_group_hashes.append((group_hash,))
+                removed += 1
+
+        # ── WRITE phase (lock): execute all batched SQL in one transaction ──
         with db_lock:
-            for dir_path in all_dirs:
-                image_ids = dir_to_images[dir_path]
-                display_name = display_names[dir_path]
-
-                if dir_path in existing:
-                    # Group exists — sync membership and name
-                    group_hash = existing[dir_path]
-                    conn.execute(
-                        'DELETE FROM duplicate_groups WHERE level = ? AND group_hash = ?', (LEVEL_DIRECTORY, group_hash)
-                    )
-                    for image_id in image_ids:
-                        conn.execute(
-                            'INSERT INTO duplicate_groups'
-                            ' (level, group_hash, image_id, updated_at)'
-                            ' VALUES (?, ?, ?, ?)',
-                            (LEVEL_DIRECTORY, group_hash, image_id, now),
-                        )
-                    conn.execute(
-                        'UPDATE custom_groups SET name = ?, updated_at = ? WHERE group_hash = ?',
-                        (display_name, now, group_hash),
-                    )
-                    updated += 1
-                else:
-                    # New directory — create group
-                    import uuid
-
-                    group_hash = str(uuid.uuid4())
-                    conn.execute(
-                        'INSERT INTO custom_groups (group_hash, name, source_path, created_at, updated_at) '
-                        'VALUES (?, ?, ?, ?, ?)',
-                        (group_hash, display_name, dir_path, now, now),
-                    )
-                    for image_id in image_ids:
-                        conn.execute(
-                            'INSERT INTO duplicate_groups'
-                            ' (level, group_hash, image_id, updated_at)'
-                            ' VALUES (?, ?, ?, ?)',
-                            (LEVEL_DIRECTORY, group_hash, image_id, now),
-                        )
-                    created += 1
-
-            # Remove directory groups whose source_path no longer has images
-            for source_path, group_hash in existing.items():
-                if source_path not in needed_paths:
-                    conn.execute(
-                        'DELETE FROM duplicate_groups WHERE level = ? AND group_hash = ?', (LEVEL_DIRECTORY, group_hash)
-                    )
-                    conn.execute('DELETE FROM custom_groups WHERE group_hash = ?', (group_hash,))
-                    removed += 1
-
+            conn.executemany(
+                'DELETE FROM duplicate_groups WHERE level = ? AND group_hash = ?',
+                delete_membership_params,
+            )
+            conn.executemany(
+                'INSERT INTO custom_groups (group_hash, name, source_path, created_at, updated_at) '
+                'VALUES (?, ?, ?, ?, ?)',
+                create_group_params,
+            )
+            conn.executemany(
+                'INSERT INTO duplicate_groups (level, group_hash, image_id, updated_at) VALUES (?, ?, ?, ?)',
+                insert_membership_params,
+            )
+            conn.executemany(
+                'UPDATE custom_groups SET name = ?, updated_at = ? WHERE group_hash = ?',
+                update_name_params,
+            )
+            conn.executemany(
+                'DELETE FROM duplicate_groups WHERE level = ? AND group_hash = ?',
+                remove_dup_params,
+            )
+            conn.executemany(
+                'DELETE FROM custom_groups WHERE group_hash = ?',
+                remove_group_hashes,
+            )
             conn.commit()
 
-        # Invalidate level-4 cache so next access reloads from DB
+        # Rebuild level-4 cache from the data we just wrote (no DB query needed)
         with self._cache_lock:
             if self._cache_loaded and self._group_cache is not None:
                 self._group_cache[LEVEL_DIRECTORY] = {}
 
-                # Rebuild level-4 cache from the data we just wrote
                 for dir_path in all_dirs:
                     image_ids = dir_to_images[dir_path]
-                    group_hash = existing.get(dir_path)
-                    if group_hash is None:
-                        # Look up newly created group hash
-                        with db_lock:
-                            cursor = conn.execute(
-                                'SELECT group_hash FROM custom_groups WHERE source_path = ?', (dir_path,)
-                            )
-                            row = cursor.fetchone()
-                            if row:
-                                group_hash = row['group_hash']
+                    group_hash = existing.get(dir_path) or new_groups.get(dir_path)
                     if group_hash:
                         self._group_cache[LEVEL_DIRECTORY][group_hash] = set(image_ids)
 

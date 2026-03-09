@@ -2214,11 +2214,11 @@ class PipelineOrchestrator(threading.Thread):
         # 6d: Compute unknown face groups
         if self._db.config.face_detection_enabled and not self._stopped():
             try:
-                with self._db._db_lock:
-                    compute_unknown_face_groups(
-                        self._db.conn,
-                        threshold=self._db.config.face_recognition_threshold,
-                    )
+                compute_unknown_face_groups(
+                    self._db.conn,
+                    self._db._db_lock,
+                    threshold=self._db.config.face_recognition_threshold,
+                )
             except Exception as e:
                 logger.error(f'Failed to compute unknown face groups: {e}')
 

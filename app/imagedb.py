@@ -5891,8 +5891,7 @@ class ImageDatabase:
             self._face_reassess_status = {'status': 'computing'}
 
         try:
-            with self._db_lock:
-                matches = reassess_unknown_faces(self.conn, threshold=self.config.face_recognition_threshold)
+            matches = reassess_unknown_faces(self.conn, self._db_lock, threshold=self.config.face_recognition_threshold)
             if matches:
                 logger.info(f'Face reassessment: matched {len(matches)} faces to known people')
                 # Build per-face update list for the frontend (same format as
