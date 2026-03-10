@@ -30,7 +30,7 @@ from PIL import Image, ImageFilter
 from thumbnails import sharpen_thumbnail
 
 if TYPE_CHECKING:
-    pass
+    from collections.abc import Callable
 
 logger = logging.getLogger(__name__)
 
@@ -83,7 +83,9 @@ class VideoMetadata:
     duration: float  # seconds
     width: int
     height: int
-    codec: str
+    codec: str  # video codec (e.g. 'h264', 'hevc')
+    codec_audio: str | None  # audio codec (e.g. 'aac', 'eac3') or None
+    codec_container: str | None  # container format (e.g. 'matroska', 'mov')
     creation_time: datetime | None
 
 
@@ -125,8 +127,14 @@ def get_video_metadata(path: Path) -> VideoMetadata | None:
             if rotation in (90, 270):
                 width, height = height, width
 
-            # Codec name
+            # Codec names
             codec = video_stream.codec_context.name or 'unknown'
+
+            codec_audio = None
+            if container.streams.audio:
+                codec_audio = container.streams.audio[0].codec_context.name or None
+
+            codec_container = container.format.name or None
 
             # Creation time from container metadata
             creation_time = None
@@ -143,6 +151,8 @@ def get_video_metadata(path: Path) -> VideoMetadata | None:
                 width=width,
                 height=height,
                 codec=codec,
+                codec_audio=codec_audio,
+                codec_container=codec_container,
                 creation_time=creation_time,
             )
     except Exception as e:
@@ -763,4 +773,164 @@ def extract_audio_segment(
 
     except Exception as e:
         logger.error(f'Failed to extract audio segment from {video_path}: {e}')
+        return False
+
+
+# ---------------------------------------------------------------------------
+# Browser compatibility detection
+# ---------------------------------------------------------------------------
+
+# Codecs that HTML5 <video> can decode natively in most modern browsers
+_BROWSER_VIDEO_CODECS = {'h264', 'vp8', 'vp9', 'av1', 'theora'}
+_BROWSER_AUDIO_CODECS = {'aac', 'mp3', 'opus', 'vorbis', 'flac'}
+
+
+def is_browser_compatible(
+    codec_video: str | None,
+    codec_audio: str | None,
+    codec_container: str | None = None,
+) -> bool:
+    """Check whether a video's codecs are expected to play in HTML5 ``<video>``.
+
+    Tests the video and audio codecs against known browser-supported sets.
+    Container format is currently informational only — browsers are generally
+    flexible with containers as long as the codecs are supported.
+
+    Args:
+        codec_video: Video codec name (e.g. ``'h264'``, ``'hevc'``).
+        codec_audio: Audio codec name, or None if no audio stream.
+        codec_container: Container format (unused, reserved for future checks).
+
+    Returns:
+        True if all codecs are browser-compatible, False otherwise.
+    """
+    if codec_video and codec_video not in _BROWSER_VIDEO_CODECS:
+        return False
+    return not (codec_audio and codec_audio not in _BROWSER_AUDIO_CODECS)
+
+
+# ---------------------------------------------------------------------------
+# On-demand transcoding to browser-compatible format
+# ---------------------------------------------------------------------------
+
+
+def transcode_video(
+    src: Path,
+    dest: Path,
+    *,
+    copy_video: bool = True,
+    progress_callback: Callable[[float], None] | None = None,
+) -> bool:
+    """Transcode a video to browser-compatible MP4 (H.264 video / AAC audio).
+
+    Uses ``ffmpeg`` (from ``ffmpeg-binaries`` or system PATH) to remux or
+    transcode the source video into an MP4 container with ``faststart``
+    for streaming.
+
+    Args:
+        src: Source video file path.
+        dest: Destination MP4 file path. A temporary file is written
+            alongside and renamed on success to avoid partial files.
+        copy_video: If True, copy the video stream without re-encoding
+            (``-c:v copy``). Set to False to re-encode to H.264 when the
+            source codec is not browser-compatible.
+        progress_callback: Optional callable receiving progress as a float
+            in ``[0.0, 1.0]``. Called periodically during transcoding.
+
+    Returns:
+        True on success, False on failure.
+    """
+    import re
+    import shutil
+
+    ffmpeg_bin = shutil.which('ffmpeg')
+    if not ffmpeg_bin:
+        logger.error('ffmpeg not found on PATH — cannot transcode')
+        return False
+
+    # Get duration for progress reporting
+    meta = get_video_metadata(src)
+    total_duration = meta.duration if meta else 0.0
+
+    # Build ffmpeg command
+    tmp_dest = dest.with_suffix('.tmp.mp4')
+    cmd = [
+        ffmpeg_bin,
+        '-y',  # overwrite temp file if exists
+        '-i',
+        str(src),
+    ]
+
+    # Video codec: copy if already compatible, otherwise re-encode
+    if copy_video:
+        cmd.extend(['-c:v', 'copy'])
+    else:
+        cmd.extend(['-c:v', 'libx264', '-crf', '18', '-preset', 'medium'])
+
+    # Audio codec: always re-encode to stereo AAC
+    cmd.extend(['-c:a', 'aac', '-b:a', '192k', '-ac', '2'])
+
+    # Output as MP4 with faststart for streaming
+    cmd.extend(['-f', 'mp4', '-movflags', '+faststart'])
+
+    # Progress reporting via pipe
+    cmd.extend(['-progress', 'pipe:1'])
+
+    cmd.append(str(tmp_dest))
+
+    try:
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        process = subprocess.Popen(
+            cmd,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+        )
+
+        # Parse progress output from ffmpeg
+        time_re = re.compile(r'^out_time_us=(\d+)')
+        progress_re = re.compile(r'^progress=(\w+)')
+
+        for line in process.stdout:
+            line = line.strip()
+            if progress_callback and total_duration > 0:
+                m = time_re.match(line)
+                if m:
+                    current_us = int(m.group(1))
+                    pct = min(1.0, current_us / (total_duration * 1_000_000))
+                    progress_callback(pct)
+            m = progress_re.match(line)
+            if m and m.group(1) == 'end':
+                break
+
+        process.wait(timeout=10)
+
+        if process.returncode != 0:
+            stderr = process.stderr.read() if process.stderr else ''
+            logger.error(f'ffmpeg exited with code {process.returncode}: {stderr[:500]}')
+            tmp_dest.unlink(missing_ok=True)
+            return False
+
+        # Verify output file exists and is non-empty
+        if not tmp_dest.exists() or tmp_dest.stat().st_size == 0:
+            logger.error('ffmpeg produced empty or missing output file')
+            tmp_dest.unlink(missing_ok=True)
+            return False
+
+        # Atomic rename to final destination
+        tmp_dest.rename(dest)
+        if progress_callback:
+            progress_callback(1.0)
+
+        logger.info(f'Transcoded {src.name} -> {dest.name}')
+        return True
+
+    except subprocess.TimeoutExpired:
+        logger.error(f'ffmpeg timed out waiting for exit after transcoding {src}')
+        process.kill()
+        tmp_dest.unlink(missing_ok=True)
+        return False
+    except Exception as e:
+        logger.error(f'Transcode failed for {src}: {e}')
+        tmp_dest.unlink(missing_ok=True)
         return False

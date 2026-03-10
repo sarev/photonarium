@@ -25,6 +25,101 @@
 
 'use strict';
 
+/* --------------------------------------------------------------------------
+   Browser codec compatibility detection
+   -------------------------------------------------------------------------- */
+
+/** @type {Set<string>} Video codecs that HTML5 <video> can decode natively. */
+const _BROWSER_VIDEO_CODECS = new Set(['h264', 'vp8', 'vp9', 'av1', 'theora']);
+
+/** @type {Set<string>} Audio codecs that HTML5 <video> can decode natively. */
+const _BROWSER_AUDIO_CODECS = new Set(['aac', 'mp3', 'opus', 'vorbis', 'flac']);
+
+/**
+ * Check whether a video's codecs are expected to play in HTML5 <video>.
+ * @param {string|null} codecVideo - Video codec name (e.g. 'h264', 'hevc').
+ * @param {string|null} codecAudio - Audio codec name (e.g. 'aac', 'eac3').
+ * @returns {boolean} True if all codecs are browser-compatible.
+ */
+function isCodecBrowserCompatible(codecVideo, codecAudio) {
+    if (codecVideo && !_BROWSER_VIDEO_CODECS.has(codecVideo)) return false;
+    if (codecAudio && !_BROWSER_AUDIO_CODECS.has(codecAudio)) return false;
+    return true;
+}
+
+/**
+ * Open the transcode confirmation dialog for one or more videos.
+ *
+ * This is a global function so it can be called from both the Videos
+ * screen and the Gallery screen (where codec warning badges appear).
+ *
+ * @param {string[]} videoIds - IDs of incompatible videos to transcode.
+ * @param {Object|Object[]} [videoData] - Optional video data object(s)
+ *     with codec_video/codec_audio fields (avoids re-lookup).
+ */
+function openTranscodeDialog(videoIds, videoData) {
+    if (!videoIds || videoIds.length === 0) return;
+
+    const dialog = document.getElementById('dialog-transcode');
+    if (!dialog) return;
+
+    // Collect problematic codecs for display
+    const codecSet = new Set();
+    const items = Array.isArray(videoData) ? videoData : (videoData ? [videoData] : []);
+    for (const v of items) {
+        if (v?.codec_video && !_BROWSER_VIDEO_CODECS.has(v.codec_video)) {
+            codecSet.add(`Video: ${v.codec_video}`);
+        }
+        if (v?.codec_audio && !_BROWSER_AUDIO_CODECS.has(v.codec_audio)) {
+            codecSet.add(`Audio: ${v.codec_audio}`);
+        }
+    }
+
+    const count = videoIds.length;
+    const noun = count === 1 ? 'video has' : `${count} videos have`;
+    const info = document.getElementById('dialog-transcode-info');
+    info.textContent = `${count === 1 ? 'This' : 'These'} ${noun} codecs that browsers cannot play natively.`;
+    if (codecSet.size > 0) {
+        const pre = document.createElement('pre');
+        pre.className = 'dialog-codec-list';
+        pre.textContent = [...codecSet].map(c => `\u2022 ${c} \u2014 not supported by browsers`).join('\n');
+        info.appendChild(pre);
+    }
+
+    // Reset checkbox
+    const trashCheckbox = document.getElementById('dialog-transcode-trash');
+    if (trashCheckbox) trashCheckbox.checked = false;
+
+    dialog.showModal();
+
+    const cancelBtn = document.getElementById('dialog-transcode-cancel');
+    const okBtn = document.getElementById('dialog-transcode-ok');
+
+    const closeDialog = () => dialog.close();
+
+    const handleOk = async () => {
+        dialog.close();
+        const trashOriginal = trashCheckbox ? trashCheckbox.checked : false;
+
+        try {
+            const queued = await AppState.videos.requestTranscode(videoIds, trashOriginal);
+            if (queued > 0) {
+                App.showInfo(`Queued ${queued} video${queued > 1 ? 's' : ''} for transcoding`);
+            } else {
+                App.showInfo('No videos were queued for transcoding');
+            }
+        } catch (err) {
+            App.showError(`Failed to start transcoding: ${err.message}`);
+        }
+    };
+
+    cancelBtn.onclick = closeDialog;
+    okBtn.onclick = handleOk;
+    dialog.onclick = (e) => {
+        if (e.target === dialog) closeDialog();
+    };
+}
+
 /**
  * Videos screen module.
  * @namespace
@@ -136,6 +231,35 @@ const Videos = {
             onDeleteRequested: (ids) => {
                 this._deleteVideos(ids);
             },
+        });
+
+        // Delegated click handler for codec compatibility warning badges
+        this._els.grid.addEventListener('click', (e) => {
+            const badge = e.target.closest('.video-compat-badge');
+            if (!badge) return;
+            e.stopPropagation(); // Prevent selection/activation
+
+            // Collect incompatible video IDs: if the clicked video is
+            // part of a selection, include all selected incompatible videos
+            const card = badge.closest('.video-card');
+            const clickedId = card?.dataset?.id;
+            if (!clickedId) return;
+
+            const selectedIds = this._selection ? this._selection.getSelected() : [];
+            let targetIds;
+
+            if (selectedIds.includes(clickedId)) {
+                // Use all selected incompatible videos
+                const videos = this._getVideoList();
+                targetIds = selectedIds.filter(id => {
+                    const v = videos.find(vid => vid.id === id);
+                    return v && !isCodecBrowserCompatible(v.codec_video, v.codec_audio);
+                });
+            } else {
+                targetIds = [clickedId];
+            }
+
+            this._openTranscodeDialog(targetIds);
         });
 
         // Language dropdown change handler
@@ -724,6 +848,14 @@ const Videos = {
             card.appendChild(badge);
         }
 
+        // Codec compatibility warning badge
+        if (!isCodecBrowserCompatible(video.codec_video, video.codec_audio)) {
+            const warnBadge = App.createElement('span', { className: 'video-compat-badge' });
+            warnBadge.innerHTML = App.icon('warning', '\u26A0');
+            warnBadge.title = 'This video may not play correctly in the browser. Click to transcode this (and other selected) videos.';
+            card.appendChild(warnBadge);
+        }
+
         // Score badge (search mode only)
         if (isSearch && video.normalised_score != null) {
             const scoreBadge = App.createElement('span', { className: 'video-score-badge' });
@@ -988,6 +1120,19 @@ const Videos = {
      * @param {string[]} ids - Video image IDs to delete
      * @private
      */
+    /**
+     * Open the transcode confirmation dialog for the given video IDs.
+     * Collects video data from the current list and delegates to the
+     * global ``openTranscodeDialog()`` function.
+     * @param {string[]} videoIds - IDs of incompatible videos to transcode.
+     * @private
+     */
+    _openTranscodeDialog(videoIds) {
+        const videos = this._getVideoList();
+        const videoData = videoIds.map(id => videos.find(v => v.id === id)).filter(Boolean);
+        openTranscodeDialog(videoIds, videoData);
+    },
+
     async _deleteVideos(ids) {
         if (!ids || ids.length === 0) return;
 

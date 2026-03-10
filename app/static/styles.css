@@ -84,6 +84,7 @@
 
     --color-success: #5a765b;
     --color-warning: #ffc107;
+    --color-warning-badge: #f57c00;
     --color-ignore: #8a837d;
 
     --shadow-sm: 0 1px 2px rgba(46, 40, 46, 0.08);
@@ -204,6 +205,7 @@
 
     --color-success: #7c9d7c;
     --color-warning: #ffca28;
+    --color-warning-badge: #f57c00;
     --color-ignore: #6a625d;
 
     --shadow-sm: 0 1px 2px rgba(10, 4, 5, 0.2);
@@ -1077,6 +1079,39 @@ a:hover {
     line-height: 1.4;
     pointer-events: none;
     z-index: 2;
+}
+
+.video-compat-badge {
+    position: absolute;
+    top: 0.5rem;
+    left: 0.5rem;
+    width: 26px;
+    height: 26px;
+    border: none;
+    border-radius: 50%;
+    background: var(--color-warning-badge);
+    color: var(--color-overlay-text);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 0.75rem;
+    line-height: 1;
+    padding: 0;
+    cursor: pointer;
+    z-index: 10;
+}
+
+.video-compat-badge:hover {
+    filter: brightness(1.15);
+}
+
+.video-compat-badge .material-symbols-outlined {
+    font-size: 0.85rem;
+}
+
+.info-warning {
+    color: var(--color-warning);
+    font-size: 0.85em;
 }
 
 .video-play-overlay {
@@ -4649,6 +4684,51 @@ dialog::backdrop {
     display: flex;
     justify-content: flex-end;
     gap: 0.75rem;
+}
+
+.dialog-radio-group {
+    display: flex;
+    flex-direction: column;
+    gap: 0.5rem;
+    margin-bottom: 1rem;
+}
+
+.dialog-radio {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    cursor: pointer;
+    font-size: 0.9rem;
+}
+
+.dialog-radio input[type="radio"] {
+    margin: 0;
+    accent-color: var(--color-action-primary);
+}
+
+.dialog-codec-list {
+    margin: 0.5rem 0;
+    padding: 0.5rem 0.75rem;
+    font-size: 0.8rem;
+    font-family: inherit;
+    background: var(--color-bg-secondary);
+    border-radius: 4px;
+    white-space: pre-wrap;
+    color: var(--color-text-secondary);
+}
+
+.dialog-checkbox {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    margin-bottom: 1rem;
+    cursor: pointer;
+    font-size: 0.9rem;
+}
+
+.dialog-checkbox input[type="checkbox"] {
+    margin: 0;
+    accent-color: var(--color-action-primary);
 }
 
 .dialog-input {

@@ -1046,6 +1046,15 @@ const Gallery = {
             const playOverlay = App.createElement('div', { className: 'video-play-overlay' });
             playOverlay.innerHTML = App.icon('play_arrow', '▶');
             item.appendChild(playOverlay);
+            // Codec compatibility warning badge (informational only —
+            // transcode action is on the Videos screen)
+            if (typeof isCodecBrowserCompatible === 'function'
+                && !isCodecBrowserCompatible(img.codec_video, img.codec_audio)) {
+                const warnBadge = App.createElement('span', { className: 'video-compat-badge' });
+                warnBadge.innerHTML = App.icon('warning', '\u26A0');
+                warnBadge.title = 'This video may not play correctly in the browser. Use the Videos screen to transcode.';
+                item.appendChild(warnBadge);
+            }
         }
 
         item.appendChild(label);
@@ -1483,6 +1492,18 @@ const Gallery = {
                     <span class="info-label">Resolution</span>
                     <span class="info-value">${App.formatDimensions(img.width, img.height)}</span>
                 </div>
+                ${img.codec_video ? `<div class="info-row">
+                    <span class="info-label">Video codec</span>
+                    <span class="info-value">${App.escapeHtml(img.codec_video)}</span>
+                </div>` : ''}
+                ${img.codec_audio != null ? `<div class="info-row">
+                    <span class="info-label">Audio codec</span>
+                    <span class="info-value">${App.escapeHtml(img.codec_audio || 'None')}${
+                        img.codec_audio && typeof isCodecBrowserCompatible === 'function'
+                            && !isCodecBrowserCompatible(null, img.codec_audio)
+                            ? ' <span class="info-warning" title="Not supported by browsers">\u26A0</span>' : ''
+                    }</span>
+                </div>` : ''}
                 ` : `
                 <div class="info-row">
                     <span class="info-label">Dimensions</span>

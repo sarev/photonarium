@@ -1574,6 +1574,42 @@ def import_upload():
 
 
 # =============================================================================
+# Video Transcoding
+# =============================================================================
+
+
+@app.route('/api/videos/transcode', methods=['POST'])
+def transcode_videos():
+    """Queue videos for transcoding to browser-compatible MP4 (H.264/AAC).
+
+    Accepts a list of video IDs and an optional ``trash_original`` flag.
+    A browser-compatible MP4 copy is always created in the catalogue.
+    Only videos (media_type='video') are accepted; non-video IDs are
+    silently skipped.
+
+    Request body:
+        ``{"ids": ["uuid1", "uuid2"], "trash_original": false}``
+
+    Returns:
+        Success response with ``queued`` count.
+    """
+    data = request.get_json()
+    ids = data.get('ids', [])
+    trash_original = bool(data.get('trash_original', False))
+
+    if not ids:
+        return error_response('No video IDs provided', 400)
+
+    db = get_db()
+    try:
+        queued = db.enqueue_transcode(ids, trash_original=trash_original)
+    except ValueError as e:
+        return error_response(str(e), 400)
+
+    return success_response({'queued': queued})
+
+
+# =============================================================================
 # Health Check
 # =============================================================================
 
@@ -1668,6 +1704,11 @@ def get_status():
     import_progress = db.get_import_progress()
     if import_progress:
         status['import_progress'] = import_progress
+
+    # Add transcode status
+    transcode_progress = db.get_transcode_progress()
+    if transcode_progress:
+        status['transcode_progress'] = transcode_progress
 
     return success_response(status)
 

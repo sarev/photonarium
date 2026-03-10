@@ -590,6 +590,7 @@
                             <p id="video-queue-row" hidden><span class="queue-label">Video:</span> <span id="video-count">0</span><span id="video-step" class="queue-eta"></span></p>
                             <p id="trash-queue-row" hidden><span class="queue-label">Trashing:</span> <span id="trash-queue-count">0</span> remaining</p>
                             <p id="import-queue-row" hidden><span class="queue-label">Importing:</span> <span id="import-queue-count">0</span> remaining (<span id="import-skipped-count">0</span> skipped)</p>
+                            <p id="transcode-queue-row" hidden><span class="queue-label">Transcoding:</span> <span id="transcode-queue-count">0</span> remaining<span id="transcode-step" class="queue-eta"></span></p>
                             <p id="duplicates-row" hidden><span class="queue-label">Finding Duplicates:</span> <span id="duplicates-status">level 0</span></p>
                             <p id="face-grouping-row" hidden><span class="queue-label">Organizing Faces:</span> <span id="face-grouping-status">computing</span></p>
                             <p id="face-reassess-row" hidden><span class="queue-label">Finding Matches:</span> <span id="face-reassess-status">computing</span></p>
@@ -814,6 +815,22 @@
                 <div class="dialog-actions">
                     <button id="dialog-confirm-cancel" class="action-btn">Cancel</button>
                     <button id="dialog-confirm-ok" class="action-btn primary">OK</button>
+                </div>
+            </div>
+        </dialog>
+
+        <!-- Transcode dialog -->
+        <dialog id="dialog-transcode">
+            <div class="dialog-content">
+                <h3>Transcode for Browser Playback</h3>
+                <p id="dialog-transcode-info"></p>
+                <label class="dialog-checkbox">
+                    <input type="checkbox" id="dialog-transcode-trash">
+                    <span>Move original to trash</span>
+                </label>
+                <div class="dialog-actions">
+                    <button id="dialog-transcode-cancel" class="action-btn">Cancel</button>
+                    <button id="dialog-transcode-ok" class="action-btn primary">Transcode</button>
                 </div>
             </div>
         </dialog>

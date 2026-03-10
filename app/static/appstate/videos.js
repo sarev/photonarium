@@ -313,6 +313,25 @@ AppState.videos = (function() {
         },
 
         /**
+         * Queue videos for transcoding to browser-compatible MP4.
+         * @param {string[]} videoIds - Video IDs to transcode.
+         * @param {boolean} trashOriginal - Whether to trash the original after transcoding.
+         * @returns {Promise<number>} Number of videos queued.
+         */
+        async requestTranscode(videoIds, trashOriginal = false) {
+            try {
+                const response = await App.apiPost('/videos/transcode', {
+                    ids: videoIds,
+                    trash_original: trashOriginal,
+                });
+                return response?.data?.queued || 0;
+            } catch (err) {
+                console.error('[AppState.videos.requestTranscode] Error:', err);
+                throw err;
+            }
+        },
+
+        /**
          * Clear all videos state.
          */
         clear() {

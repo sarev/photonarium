@@ -906,7 +906,8 @@ class PipelineOrchestrator(threading.Thread):
                timestamp = ?, timestamp_confidence = ?,
                mtime = ?, checksum = ?, embedding = NULL,
                aesthetic_nima = NULL, aesthetic_laion = NULL,
-               thumbnails_pending = 1, updated_at = ?
+               thumbnails_pending = 1, updated_at = ?,
+               codec_video = ?, codec_audio = ?, codec_container = ?
                WHERE id = ?""",
             (
                 current_size,
@@ -918,6 +919,9 @@ class PipelineOrchestrator(threading.Thread):
                 current_mtime,
                 checksum,
                 now_ts,
+                vmeta.codec,
+                vmeta.codec_audio,
+                vmeta.codec_container,
                 existing['id'],
             ),
         )
@@ -1088,6 +1092,9 @@ class PipelineOrchestrator(threading.Thread):
             media_type='video',
             duration=vmeta.duration,
             thumbnails_pending=True,
+            codec_video=vmeta.codec,
+            codec_audio=vmeta.codec_audio,
+            codec_container=vmeta.codec_container,
         )
 
         if checksum:

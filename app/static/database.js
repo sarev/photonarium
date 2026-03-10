@@ -151,6 +151,9 @@ const Database = {
             importQueueRow: App.$('import-queue-row'),
             importQueueCount: App.$('import-queue-count'),
             importSkippedCount: App.$('import-skipped-count'),
+            transcodeQueueRow: App.$('transcode-queue-row'),
+            transcodeQueueCount: App.$('transcode-queue-count'),
+            transcodeStep: App.$('transcode-step'),
             // Phase 4 status elements
             duplicatesRow: App.$('duplicates-row'),
             duplicatesStatus: App.$('duplicates-status'),
@@ -749,6 +752,24 @@ const Database = {
                     }
                 } else {
                     this._els.importQueueRow.hidden = true;
+                }
+            }
+
+            // Show/hide transcode queue row
+            if (this._els.transcodeQueueRow && this._els.transcodeQueueCount) {
+                const tp = status.transcode_progress;
+                if (tp) {
+                    const remaining = (tp.total || 0) - (tp.done || 0);
+                    this._els.transcodeQueueRow.hidden = false;
+                    this._els.transcodeQueueCount.textContent = remaining;
+                    if (this._els.transcodeStep && tp.current_basename) {
+                        const pct = tp.current_pct != null ? ` (${Math.round(tp.current_pct * 100)}%)` : '';
+                        this._els.transcodeStep.textContent = ` \u2014 ${tp.current_basename}${pct}`;
+                    } else if (this._els.transcodeStep) {
+                        this._els.transcodeStep.textContent = '';
+                    }
+                } else {
+                    this._els.transcodeQueueRow.hidden = true;
                 }
             }
 

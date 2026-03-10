@@ -279,6 +279,10 @@ _SQL_MIGRATIONS = [
     # → No backfill needed (NULL = use global default, '' = auto-detect,
     #   ISO code = user-chosen language for STT transcription)
     'ALTER TABLE images ADD COLUMN stt_language TEXT',
+    # → _migrate_backfill_video_codecs() — populated from video metadata
+    'ALTER TABLE images ADD COLUMN codec_video TEXT',
+    'ALTER TABLE images ADD COLUMN codec_audio TEXT',
+    'ALTER TABLE images ADD COLUMN codec_container TEXT',
 ]
 
 # SQL schema for the image_metadata table (indexed EXIF key-value pairs for search)
@@ -852,7 +856,8 @@ def get_all_images_lightweight(conn: sqlite3.Connection) -> list[dict[str, Any]]
     cursor = conn.execute("""
         SELECT id, path, basename, size, width, height, timestamp, timestamp_confidence,
                rating, description, aesthetic_laion, aesthetic_nima, laplacian_var,
-               media_type, duration, preferred_scene_id, stt_language
+               media_type, duration, preferred_scene_id, stt_language,
+               codec_video, codec_audio, codec_container
         FROM images
         WHERE deleted = 0
         ORDER BY timestamp DESC
@@ -976,7 +981,8 @@ def get_image(conn: sqlite3.Connection, image_id: str) -> dict[str, Any] | None:
         SELECT id, path, basename, size, width, height, timestamp,
                timestamp_confidence, checksum, perceptual_hash, laplacian_var,
                lossless, description, rating, deleted, created_at, updated_at,
-               mtime, media_type, duration, preferred_scene_id, stt_language
+               mtime, media_type, duration, preferred_scene_id, stt_language,
+               codec_video, codec_audio, codec_container
         FROM images
         WHERE id = ?
     """,
@@ -1093,6 +1099,9 @@ def create_image(
     duration: float | None = None,
     preferred_scene_id: str | None = None,
     thumbnails_pending: bool = False,
+    codec_video: str | None = None,
+    codec_audio: str | None = None,
+    codec_container: str | None = None,
 ) -> dict[str, Any]:
     """Create a new image record in the database.
 
@@ -1123,6 +1132,9 @@ def create_image(
         preferred_scene_id: UUID of the preferred scene (for videos).
         thumbnails_pending: Whether the image still has placeholder thumbnails
             (True = placeholder, False = real thumbnails).
+        codec_video: Video codec name (e.g. 'h264', 'hevc').
+        codec_audio: Audio codec name (e.g. 'aac', 'eac3').
+        codec_container: Container format (e.g. 'matroska', 'mov').
 
     Returns:
         Dictionary with the created image record.
@@ -1144,8 +1156,9 @@ def create_image(
             checksum, perceptual_hash, laplacian_var, lossless, mtime,
             description, rating, embedding, deleted, created_at, updated_at,
             exif_data, import_name, media_type, duration, preferred_scene_id,
-            thumbnails_pending
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, 0, ?, ?, ?, ?, ?, ?, ?, ?)
+            thumbnails_pending, codec_video, codec_audio, codec_container
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, 0, ?, ?, ?, ?, ?, ?, ?, ?,
+                  ?, ?, ?)
     """,
         (
             image_id,
@@ -1171,6 +1184,9 @@ def create_image(
             duration,
             preferred_scene_id,
             int(thumbnails_pending),
+            codec_video,
+            codec_audio,
+            codec_container,
         ),
     )
 
@@ -2719,6 +2735,7 @@ EVENT_IMAGES_CHANGED = 'images_changed'
 EVENT_GROUPS_CHANGED = 'groups_changed'
 EVENT_IMPORT_COMPLETE = 'import_complete'
 EVENT_VIDEO_PROCESSED = 'video_processed'
+EVENT_TRANSCODE_COMPLETE = 'transcode_complete'
 
 
 @dataclass
@@ -3426,6 +3443,347 @@ class ImportWorker(threading.Thread):
 
 
 # =============================================================================
+# TRANSCODE WORKER THREAD
+# =============================================================================
+
+
+class TranscodeWorker(threading.Thread):
+    """Background thread for on-demand video transcoding to browser-compatible format.
+
+    Reads ``TranscodeJob`` items from a queue and transcodes each video to
+    MP4 (H.264 video / AAC audio) using ``video.transcode_video()``.
+    Processing is single-threaded because transcoding is CPU-intensive.
+
+    Two modes are supported:
+        - **'add'**: Create a new compatible copy alongside the original.
+          The new file is placed in the same directory with a ``_compatible``
+          suffix (or in ``<catalogue>/transcoded/`` for external files).
+          A pipeline rescan is triggered so the new MP4 gets ingested.
+        - **'replace'**: Replace the original file with the transcoded
+          version.  The DB record is updated in-place (path, size, checksum,
+          codecs, mtime) and old thumbnails/embeddings are cleared.
+
+    Progress is reported via ``_transcode_progress`` on the owning
+    ``ImageDatabase`` so ``/api/status`` can report live numbers.
+
+    Follows the same daemon-thread + graceful-shutdown pattern as
+    :class:`TrashWorker` and :class:`ImportWorker`.
+    """
+
+    @dataclass
+    class Job:
+        """A single transcode work item."""
+
+        image_id: str
+        src_path: Path
+        dest_path: Path
+        trash_original: bool  # move original to trash after success
+        copy_video: bool  # True = remux (fast), False = re-encode
+
+    def __init__(
+        self,
+        transcode_queue: queue.Queue[TranscodeWorker.Job],
+        stop_event: threading.Event,
+        db: ImageDatabase,
+        progress: dict | None,
+        progress_lock: threading.Lock,
+    ):
+        """Initialise the transcode worker thread.
+
+        Args:
+            transcode_queue: Queue of ``TranscodeWorker.Job`` items.
+            stop_event: Event to signal thread should stop.
+            db: Reference to the owning ImageDatabase for DB updates and
+                event emission.
+            progress: Shared ``_transcode_progress`` dict reference.
+            progress_lock: Lock protecting progress mutations.
+        """
+        super().__init__(name='TranscodeWorker', daemon=True)
+        self._queue = transcode_queue
+        self._stop_event = stop_event
+        self._db = db
+        self._progress = progress
+        self._progress_lock = progress_lock
+
+    def run(self) -> None:
+        """Main loop — process one transcode job at a time."""
+        logger.info('Transcode worker thread started')
+
+        try:
+            while not self._stop_event.is_set():
+                try:
+                    job = self._queue.get(timeout=0.5)
+                except queue.Empty:
+                    continue
+
+                self._process_job(job)
+
+        except Exception:
+            logger.exception('Transcode worker thread crashed')
+        finally:
+            logger.info('Transcode worker thread stopped')
+
+    def _process_job(self, job: TranscodeWorker.Job) -> None:
+        """Transcode a single video and update the DB accordingly."""
+        from video import transcode_video
+
+        basename = Path(job.src_path).name
+        logger.info(f'Transcoding {basename} (trash_original={job.trash_original}, copy_video={job.copy_video})')
+
+        # Update progress with current file info
+        with self._progress_lock:
+            if self._progress is not None:
+                self._progress['current_id'] = job.image_id
+                self._progress['current_basename'] = basename
+                self._progress['current_pct'] = 0.0
+
+        def on_progress(pct: float) -> None:
+            with self._progress_lock:
+                if self._progress is not None:
+                    self._progress['current_pct'] = round(pct, 3)
+
+        ok = transcode_video(
+            job.src_path,
+            job.dest_path,
+            copy_video=job.copy_video,
+            progress_callback=on_progress,
+        )
+
+        if not ok:
+            logger.error(f'Transcode failed for {basename}')
+            with self._progress_lock:
+                if self._progress is not None:
+                    self._progress['done'] = self._progress.get('done', 0) + 1
+            return
+
+        # Clone the original's DB record, scenes, and thumbnails so the
+        # new file appears immediately without re-running the pipeline.
+        try:
+            new_id = self._clone_video_record(job)
+        except Exception:
+            logger.exception(f'Clone failed for {basename}; transcoded file exists but has no DB record')
+            new_id = ''
+
+        # Optionally trash the original (only if clone succeeded)
+        if job.trash_original and new_id:
+            self._trash_original(job)
+
+        # Update progress counter
+        with self._progress_lock:
+            if self._progress is not None:
+                self._progress['done'] = self._progress.get('done', 0) + 1
+
+        # Emit completion event
+        self._db.event_queue.emit(
+            EVENT_TRANSCODE_COMPLETE,
+            {
+                'image_id': job.image_id,
+                'new_id': new_id,
+                'trash_original': job.trash_original,
+                'new_path': str(job.dest_path),
+            },
+        )
+
+        # Invalidate status counts cache
+        self._db._status_counts = None
+
+    def _clone_video_record(self, job: TranscodeWorker.Job) -> str:
+        """Clone the original video's DB record for the transcoded copy.
+
+        Creates a new image record with the original's metadata (timestamp,
+        description, rating, EXIF, duration, etc.) but the new file's path,
+        size, checksum, mtime, and updated codec fields (h264/aac/mp4).
+
+        Copies all scene records (with new UUIDs) and their on-disk
+        thumbnails, so the transcoded video is immediately browsable
+        without re-running the pipeline.
+
+        Args:
+            job: The completed transcode job.
+
+        Returns:
+            The new image ID.
+        """
+        import shutil
+        import uuid
+
+        db = self._db
+        dest = job.dest_path
+
+        # -- Compute new file metadata --
+        new_checksum = compute_checksum(dest)
+        stat = dest.stat()
+        new_size = stat.st_size
+        new_mtime = stat.st_mtime
+
+        # -- Read the original record (separate connection for thread safety) --
+        ro_conn = sqlite3.connect(db.db_path, timeout=5.0)
+        ro_conn.row_factory = sqlite3.Row
+        try:
+            orig = get_image(ro_conn, job.image_id)
+            if orig is None:
+                logger.error(f'Clone: original record {job.image_id} not found')
+                return ''
+
+            orig_scenes = ro_conn.execute(
+                """SELECT id, scene_index, start_time, end_time, keyframe_time,
+                          transcription, transcription_embedding, embedding
+                   FROM scenes WHERE image_id = ? ORDER BY scene_index""",
+                (job.image_id,),
+            ).fetchall()
+        finally:
+            ro_conn.close()
+
+        # -- Create new image record --
+        new_id = str(uuid.uuid4())
+
+        # Map old scene IDs to new ones for preferred_scene_id remapping
+        scene_id_map: dict[str, str] = {}
+        for row in orig_scenes:
+            scene_id_map[row['id']] = str(uuid.uuid4())
+
+        # Remap preferred_scene_id
+        old_pref = orig.get('preferred_scene_id')
+        new_pref = scene_id_map.get(old_pref) if old_pref else None
+
+        with db._db_lock:
+            try:
+                create_image(
+                    db.conn,
+                    image_id=new_id,
+                    path=dest,
+                    size=new_size,
+                    width=orig['width'],
+                    height=orig['height'],
+                    timestamp=datetime.fromisoformat(orig['timestamp']) if orig.get('timestamp') else None,
+                    timestamp_confidence=orig.get('timestamp_confidence', CONFIDENCE_UNKNOWN),
+                    checksum=new_checksum,
+                    perceptual_hash=orig.get('perceptual_hash'),
+                    laplacian_var=orig.get('laplacian_var'),
+                    lossless=False,
+                    mtime=new_mtime,
+                    description=orig.get('description', ''),
+                    rating=orig.get('rating', ''),
+                    media_type='video',
+                    duration=orig.get('duration'),
+                    preferred_scene_id=new_pref,
+                    thumbnails_pending=False,
+                    codec_video='h264',
+                    codec_audio='aac',
+                    codec_container='mov,mp4,m4a,3gp,3g2,mj2',
+                )
+
+                # Copy the embedding from the original image row
+                if orig.get('checksum'):
+                    db.conn.execute(
+                        'UPDATE images SET embedding = (SELECT embedding FROM images WHERE id = ?) WHERE id = ?',
+                        (job.image_id, new_id),
+                    )
+
+                # Copy stt_language if present
+                if orig.get('stt_language'):
+                    db.conn.execute(
+                        'UPDATE images SET stt_language = ? WHERE id = ?',
+                        (orig['stt_language'], new_id),
+                    )
+
+                # -- Clone scene records (batch insert to minimise lock hold) --
+                now_ts = datetime.now().isoformat()
+                scene_params = [
+                    (
+                        scene_id_map[row['id']],
+                        new_id,
+                        row['scene_index'],
+                        row['start_time'],
+                        row['end_time'],
+                        row['keyframe_time'],
+                        row['transcription'],
+                        row['transcription_embedding'],
+                        row['embedding'],
+                        now_ts,
+                        now_ts,
+                    )
+                    for row in orig_scenes
+                ]
+                if scene_params:
+                    db.conn.executemany(
+                        """INSERT INTO scenes
+                           (id, image_id, scene_index, start_time, end_time,
+                            keyframe_time, transcription, transcription_embedding,
+                            embedding, created_at, updated_at)
+                           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                        scene_params,
+                    )
+                db.conn.commit()
+            except Exception:
+                # create_image() commits its own INSERT, so on any
+                # subsequent failure we must clean up the partial record
+                # (cascade deletes its scenes too).
+                db.conn.rollback()
+                try:
+                    db.conn.execute('DELETE FROM images WHERE id = ?', (new_id,))
+                    db.conn.commit()
+                except Exception:
+                    logger.exception('Clone cleanup also failed')
+                raise
+
+        # -- Update checksum cache --
+        with db._checksum_cache_lock:
+            db._checksum_cache[new_id] = new_checksum
+
+        # -- Copy thumbnail files --
+        thumb_dir = db.thumbnail_dir
+
+        # Scene thumbnails: scenes/<size>/<id[:2]>/<id>.jpg
+        for old_sid, new_sid in scene_id_map.items():
+            for size in (200, 400):
+                old_path = thumb_dir / 'scenes' / str(size) / old_sid[:2] / f'{old_sid}.jpg'
+                if old_path.exists():
+                    new_path = thumb_dir / 'scenes' / str(size) / new_sid[:2] / f'{new_sid}.jpg'
+                    new_path.parent.mkdir(parents=True, exist_ok=True)
+                    try:
+                        shutil.copy2(str(old_path), str(new_path))
+                    except OSError as e:
+                        logger.warning(f'Clone: failed to copy scene thumbnail {old_sid}->{new_sid}: {e}')
+
+        # Poster thumbnails: <size>/<checksum[:2]>/<checksum>.jpg
+        old_checksum = orig.get('checksum')
+        if old_checksum:
+            for size in (200, 400):
+                old_path = get_thumbnail_cache_path(old_checksum, size, thumb_dir)
+                if old_path.exists():
+                    new_path = get_thumbnail_cache_path(new_checksum, size, thumb_dir)
+                    new_path.parent.mkdir(parents=True, exist_ok=True)
+                    try:
+                        shutil.copy2(str(old_path), str(new_path))
+                    except OSError as e:
+                        logger.warning(f'Clone: failed to copy poster thumbnail: {e}')
+
+        logger.info(
+            f'Cloned video record {job.image_id} -> {new_id} '
+            f'({len(orig_scenes)} scenes, dest={dest.name})'
+        )
+        return new_id
+
+    def _trash_original(self, job: TranscodeWorker.Job) -> None:
+        """Move the original video to trash after successful transcoding.
+
+        Uses the existing trash infrastructure (soft-delete + queue for
+        async file move) so the operation is consistent with user-initiated
+        trashing.
+        """
+        if not getattr(self._db, '_trash_enabled', False):
+            logger.warning(f'Cannot trash original {job.src_path.name}: trash is disabled')
+            return
+
+        try:
+            self._db.enqueue_trash([job.image_id])
+            logger.info(f'Trashed original: {job.src_path.name}')
+        except Exception as e:
+            logger.error(f'Failed to trash original {job.src_path.name}: {e}')
+
+
+# =============================================================================
 # SCAN TIMER THREAD (HEADLESS/DOCKER SCHEDULED RESCANS)
 # =============================================================================
 
@@ -3620,17 +3978,23 @@ class ImageDatabase:
         self._import_names: dict[str, str] = {}
         self._import_names_lock = threading.Lock()
 
-        # Queues for independent workers (trash, import)
+        # Queues for independent workers (trash, import, transcode)
         self._trash_queue: queue.Queue[tuple[str, str]] = queue.Queue()  # (image_id, file_path)
         self._import_queue: queue.Queue[str] = queue.Queue()  # source file paths
+        self._transcode_queue: queue.Queue[TranscodeWorker.Job] = queue.Queue()
 
         # Shared OpenCLIP model instance (used by pipeline and search)
         self._shared_clip_model: OpenCLIPModel | None = None
+
+        # Transcode progress tracking
+        self._transcode_progress: dict | None = None  # {total, done, current_id, current_basename, current_pct}
+        self._transcode_progress_lock = threading.Lock()
 
         # Pipeline orchestrator and independent thread references
         self._orchestrator: PipelineOrchestrator | None = None
         self._trash_thread: TrashWorker | None = None
         self._import_thread: ImportWorker | None = None
+        self._transcode_thread: TranscodeWorker | None = None
         self._scan_timer_thread: ScanTimerThread | None = None
 
         # Phase 4 status tracking (post-processing after queues empty)
@@ -3700,6 +4064,7 @@ class ImageDatabase:
         self._migrate_add_exif_metadata()
         self._migrate_add_logs_table()
         self._migrate_backfill_silent_scene_transcriptions()
+        self._migrate_backfill_video_codecs()
 
         # Steps 6-7: Start background threads
         self.start_threads()
@@ -4195,11 +4560,56 @@ class ImageDatabase:
             except Exception:
                 self.conn.rollback()
                 raise
-            logger.info(
-                f'Backfilled {len(scene_ids)} silent scenes with empty transcription (one-time migration)'
-            )
+            logger.info(f'Backfilled {len(scene_ids)} silent scenes with empty transcription (one-time migration)')
         else:
             logger.info('No silent scenes to backfill (one-time migration)')
+
+        record_migration(self.conn, migration_id)
+
+    def _migrate_backfill_video_codecs(self) -> None:
+        """One-time migration to populate codec_video/codec_audio/codec_container.
+
+        Re-reads video metadata for all videos with ``codec_video IS NULL``
+        that have valid dimensions (non-stub records).  Runs once; tracked
+        via the migrations table.
+        """
+        migration_id = 'backfill_video_codecs_v1'
+
+        if has_migration_run(self.conn, migration_id):
+            return
+
+        from video import get_video_metadata
+
+        cursor = self.conn.execute("""
+            SELECT id, path FROM images
+            WHERE media_type = 'video'
+              AND codec_video IS NULL
+              AND width > 0
+              AND deleted = 0
+        """)
+        rows = cursor.fetchall()
+
+        if rows:
+            updated = 0
+            for row in rows:
+                try:
+                    vmeta = get_video_metadata(Path(row['path']))
+                    if vmeta is None:
+                        continue
+                    self.conn.execute(
+                        """UPDATE images
+                           SET codec_video = ?, codec_audio = ?, codec_container = ?
+                           WHERE id = ?""",
+                        (vmeta.codec, vmeta.codec_audio, vmeta.codec_container, row['id']),
+                    )
+                    updated += 1
+                except Exception as e:
+                    logger.debug(f'Failed to backfill codecs for {row["path"]}: {e}')
+            if updated:
+                self.conn.commit()
+            logger.info(f'Backfilled video codecs for {updated}/{len(rows)} videos (one-time migration)')
+        else:
+            logger.info('No videos need codec backfill (one-time migration)')
 
         record_migration(self.conn, migration_id)
 
@@ -4284,6 +4694,16 @@ class ImageDatabase:
             )
             self._trash_thread.start()
 
+        # Start transcode worker thread (on-demand video transcoding)
+        self._transcode_thread = TranscodeWorker(
+            transcode_queue=self._transcode_queue,
+            stop_event=self._stop_event,
+            db=self,
+            progress=self._transcode_progress,
+            progress_lock=self._transcode_progress_lock,
+        )
+        self._transcode_thread.start()
+
         # Start import worker thread (copies files into catalogue)
         if getattr(self, '_import_enabled', False):
             self._import_thread = ImportWorker(
@@ -4337,6 +4757,11 @@ class ImageDatabase:
             self._import_thread.join(timeout=timeout)
             if self._import_thread.is_alive():
                 logger.warning('Import worker thread did not stop in time')
+
+        if self._transcode_thread is not None:
+            self._transcode_thread.join(timeout=timeout)
+            if self._transcode_thread.is_alive():
+                logger.warning('Transcode worker thread did not stop in time')
 
         if self._scan_timer_thread is not None:
             self._scan_timer_thread.join(timeout=timeout)
@@ -4501,39 +4926,48 @@ class ImageDatabase:
 
     def get_all_images(self, include_deleted: bool = False) -> list[dict[str, Any]]:
         """Get all images."""
-        return get_all_images(self.conn, include_deleted)
+        with self._db_lock:
+            return get_all_images(self.conn, include_deleted)
 
     def get_all_images_lightweight(self) -> list[dict[str, Any]]:
         """Get all images with minimal fields for gallery grid."""
-        return get_all_images_lightweight(self.conn)
+        with self._db_lock:
+            return get_all_images_lightweight(self.conn)
 
     def get_images_for_thumbnail_generation(self) -> list[dict[str, Any]]:
         """Get images with fields needed for bulk thumbnail generation."""
-        return get_images_for_thumbnail_generation(self.conn)
+        with self._db_lock:
+            return get_images_for_thumbnail_generation(self.conn)
 
     def get_images_delta(self, since: str) -> dict[str, Any]:
         """Get image changes since a given timestamp."""
-        return get_images_delta(self.conn, since)
+        with self._db_lock:
+            return get_images_delta(self.conn, since)
 
     def get_current_epoch(self) -> str | None:
         """Get the current epoch (max updated_at timestamp)."""
-        return get_current_epoch(self.conn)
+        with self._db_lock:
+            return get_current_epoch(self.conn)
 
     def get_image(self, image_id: str) -> dict[str, Any] | None:
         """Get a single image by ID."""
-        return get_image(self.conn, image_id)
+        with self._db_lock:
+            return get_image(self.conn, image_id)
 
     def get_image_exif(self, image_id: str) -> dict[str, str] | None:
         """Get parsed EXIF metadata for a single image (lazy-loaded)."""
-        return get_image_exif(self.conn, image_id)
+        with self._db_lock:
+            return get_image_exif(self.conn, image_id)
 
     def search_image_metadata(self, criteria: dict[str, str]) -> list[str]:
         """Search for images matching EXIF metadata criteria."""
-        return search_image_metadata(self.conn, criteria)
+        with self._db_lock:
+            return search_image_metadata(self.conn, criteria)
 
     def get_metadata_keys(self) -> list[str]:
         """Get all distinct metadata keys in the database."""
-        return get_metadata_keys(self.conn)
+        with self._db_lock:
+            return get_metadata_keys(self.conn)
 
     def get_metadata_values(self, key: str) -> list[str]:
         """Get all distinct values for a given metadata key."""
@@ -4931,6 +5365,131 @@ class ImageDatabase:
             name='import-rescan',
         )
         scan_thread.start()
+
+    # =========================================================================
+    # TRANSCODE
+    # =========================================================================
+
+    def get_transcode_progress(self) -> dict | None:
+        """Get progress of the current transcode operation, if any.
+
+        Returns:
+            Dict with ``total``, ``done``, ``current_id``, ``current_basename``,
+            and ``current_pct`` keys while transcoding is in progress,
+            or None when idle.
+        """
+        with self._transcode_progress_lock:
+            return dict(self._transcode_progress) if self._transcode_progress else None
+
+    def enqueue_transcode(self, image_ids: list[str], *, trash_original: bool = False) -> int:
+        """Enqueue videos for transcoding to browser-compatible MP4.
+
+        A compatible copy is always created inside the catalogue directory
+        (under a ``transcoded/`` subdirectory) with a ``_compatible``
+        suffix.  A cloned DB record is created immediately so the new
+        file is browsable without re-running the pipeline.  If
+        *trash_original* is True, the original file is moved to trash
+        after successful transcoding.
+
+        Args:
+            image_ids: List of image/video UUIDs to transcode.
+            trash_original: Whether to trash the original file after
+                transcoding succeeds.
+
+        Returns:
+            Number of videos queued for transcoding.
+        """
+        from video import _BROWSER_VIDEO_CODECS
+
+        jobs: list[TranscodeWorker.Job] = []
+
+        # Use a separate read-only connection to avoid collisions with
+        # concurrent queries on self.conn (e.g. status polling).
+        ro_conn = sqlite3.connect(self.db_path, timeout=5.0)
+        ro_conn.row_factory = sqlite3.Row
+        try:
+            for vid in image_ids:
+                row = get_image(ro_conn, vid)
+                if row is None or row.get('media_type') != 'video':
+                    continue
+
+                src = Path(row['path'])
+                if not src.exists():
+                    logger.warning(f'Transcode: source file missing, skipping: {src}')
+                    continue
+
+                codec_video = row.get('codec_video') or ''
+                copy_video = codec_video in _BROWSER_VIDEO_CODECS
+
+                # Destination: catalogue transcoded/ subdirectory
+                stem = src.stem
+                transcode_dir = self.catalogue_dir / 'transcoded'
+                transcode_dir.mkdir(parents=True, exist_ok=True)
+                dest = transcode_dir / f'{stem}_compatible.mp4'
+                # Avoid overwriting existing files
+                counter = 1
+                while dest.exists():
+                    dest = transcode_dir / f'{stem}_compatible_{counter}.mp4'
+                    counter += 1
+
+                jobs.append(
+                    TranscodeWorker.Job(
+                        image_id=vid,
+                        src_path=src,
+                        dest_path=dest,
+                        trash_original=trash_original,
+                        copy_video=copy_video,
+                    )
+                )
+        finally:
+            ro_conn.close()
+
+        if not jobs:
+            return 0
+
+        # Set up progress tracking
+        with self._transcode_progress_lock:
+            if self._transcode_progress is not None:
+                # Append to existing transcode operation
+                self._transcode_progress['total'] += len(jobs)
+            else:
+                self._transcode_progress = {
+                    'total': len(jobs),
+                    'done': 0,
+                    'current_id': None,
+                    'current_basename': None,
+                    'current_pct': 0.0,
+                }
+            # Update the worker's reference
+            if self._transcode_thread is not None:
+                self._transcode_thread._progress = self._transcode_progress
+
+        for job in jobs:
+            self._transcode_queue.put(job)
+
+        logger.info(f'Queued {len(jobs)} video(s) for transcoding (trash_original={trash_original})')
+        return len(jobs)
+
+    def _is_in_catalogue(self, path: Path) -> bool:
+        """Check if a file path is within a registered folder.
+
+        Args:
+            path: Path to check.
+
+        Returns:
+            True if the path is inside any registered folder.
+        """
+        resolved = path.resolve()
+        with self._db_lock:
+            folders = get_folders(self.conn)
+        for folder in folders:
+            folder_path = Path(folder['path']).resolve()
+            try:
+                if resolved.is_relative_to(folder_path):
+                    return True
+            except (ValueError, TypeError):
+                continue
+        return False
 
     @staticmethod
     def _find_closest_face(
@@ -5699,32 +6258,37 @@ class ImageDatabase:
 
     def get_stats(self) -> dict[str, Any]:
         """Get database statistics."""
-        cursor = self.conn.execute("SELECT COUNT(*) as count FROM images WHERE deleted = 0 AND media_type = 'image'")
-        total_images = cursor.fetchone()['count']
-
-        cursor = self.conn.execute("SELECT COUNT(*) as count FROM images WHERE deleted = 0 AND media_type = 'video'")
-        total_videos = cursor.fetchone()['count']
-
-        cursor = self.conn.execute('SELECT COUNT(*) as count FROM folders')
-        total_folders = cursor.fetchone()['count']
-
-        # people/faces tables are created by FaceDB, which may not have
-        # initialised yet when the frontend first polls /api/status.
-        try:
-            cursor = self.conn.execute('SELECT COUNT(*) as count FROM people')
-            total_people = cursor.fetchone()['count']
-        except Exception:
-            total_people = 0
-
-        try:
+        with self._db_lock:
             cursor = self.conn.execute(
-                """SELECT COUNT(*) as count FROM faces f
-                   JOIN images i ON f.image_id = i.id
-                   WHERE f.suppressed = 0 AND i.deleted = 0"""
+                "SELECT COUNT(*) as count FROM images WHERE deleted = 0 AND media_type = 'image'"
             )
-            total_faces = cursor.fetchone()['count']
-        except Exception:
-            total_faces = 0
+            total_images = cursor.fetchone()['count']
+
+            cursor = self.conn.execute(
+                "SELECT COUNT(*) as count FROM images WHERE deleted = 0 AND media_type = 'video'"
+            )
+            total_videos = cursor.fetchone()['count']
+
+            cursor = self.conn.execute('SELECT COUNT(*) as count FROM folders')
+            total_folders = cursor.fetchone()['count']
+
+            # people/faces tables are created by FaceDB, which may not have
+            # initialised yet when the frontend first polls /api/status.
+            try:
+                cursor = self.conn.execute('SELECT COUNT(*) as count FROM people')
+                total_people = cursor.fetchone()['count']
+            except Exception:
+                total_people = 0
+
+            try:
+                cursor = self.conn.execute(
+                    """SELECT COUNT(*) as count FROM faces f
+                       JOIN images i ON f.image_id = i.id
+                       WHERE f.suppressed = 0 AND i.deleted = 0"""
+                )
+                total_faces = cursor.fetchone()['count']
+            except Exception:
+                total_faces = 0
 
         return {
             'totalImages': total_images,
@@ -5763,6 +6327,7 @@ class ImageDatabase:
 
         trash_count = self._trash_queue.qsize()
         import_count = self._import_queue.qsize()
+        transcode_count = self._transcode_queue.qsize()
 
         # Auto-clear trash progress when queue has drained
         if trash_count == 0:
@@ -5771,6 +6336,18 @@ class ImageDatabase:
                     self._trash_progress = None
                     if self._trash_thread is not None:
                         self._trash_thread._progress = None
+
+        # Auto-clear transcode progress when queue has drained and all done
+        with self._transcode_progress_lock:
+            transcode_progress = dict(self._transcode_progress) if self._transcode_progress else None
+            if transcode_progress and transcode_count == 0:
+                done = transcode_progress.get('done', 0)
+                total = transcode_progress.get('total', 0)
+                if done >= total:
+                    self._transcode_progress = None
+                    if self._transcode_thread is not None:
+                        self._transcode_thread._progress = None
+                    transcode_progress = None
 
         # Import progress is NOT auto-cleared here — the ImportWorker's
         # _check_completion() callback fires _on_import_complete() which
@@ -5798,7 +6375,13 @@ class ImageDatabase:
         # because the ImportWorker dequeues items before copying — qsize()
         # can be 0 while files are still being processed.
         pipeline_idle = current is None
-        queues_empty = pipeline_idle and trash_count == 0 and import_count == 0 and import_progress is None
+        queues_empty = (
+            pipeline_idle
+            and trash_count == 0
+            and import_count == 0
+            and import_progress is None
+            and transcode_progress is None
+        )
         phase4_idle = not (
             duplicates_computing or face_grouping_computing or face_embedding_computing or face_reassess_computing
         )
@@ -5882,6 +6465,10 @@ class ImageDatabase:
         # Include import progress if active (total, done, skipped)
         if import_progress is not None:
             result['import_progress'] = import_progress
+
+        # Include transcode progress if active
+        if transcode_progress is not None:
+            result['transcode_progress'] = transcode_progress
 
         # Include duplicate status if computing
         if duplicates_computing:

@@ -122,6 +122,13 @@ AppState.events = (function() {
                 AppState.images.load();
                 break;
 
+            case 'transcode_complete':
+                // A video has been transcoded to browser-compatible format
+                // data: { image_id, mode, new_path }
+                console.log('[AppState.events] Transcode complete:', data);
+                AppState.images.load();
+                break;
+
             case 'images_indexed':
                 // New images have been ingested and embedded — ready for display.
                 // This fires well before processing_complete (which waits for
