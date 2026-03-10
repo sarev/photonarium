@@ -3073,9 +3073,11 @@ class ImportWorker(threading.Thread):
         checksum_cache: dict[str, str],
         checksum_cache_lock: threading.Lock,
         image_extensions: set[str],
-        import_names: dict[str, str],
+        import_names: dict[str, tuple[str, datetime]],
         import_names_lock: threading.Lock,
         on_complete: Callable[[dict], None] | None = None,
+        filename_date_overrides: list[str] | None = None,
+        date_order: str = 'DMY',
     ):
         """Initialise the import worker thread.
 
@@ -3089,12 +3091,15 @@ class ImportWorker(threading.Thread):
             checksum_cache: Shared image_id -> checksum cache for dedup.
             checksum_cache_lock: Lock protecting checksum cache reads.
             image_extensions: Set of supported image file extensions.
-            import_names: Shared dict mapping catalogue dest path to original
-                filename, consumed by ``_process_image()`` during ingestion.
+            import_names: Shared dict mapping catalogue dest path to
+                ``(original_filename, derived_timestamp)`` tuple, consumed
+                by ``_process_image()`` during ingestion.
             import_names_lock: Lock protecting the import_names dict.
             on_complete: Callback invoked when all queued files have been
                 processed (``done >= total``).  Receives the final progress
                 snapshot dict.  Called from the ImportWorker thread.
+            filename_date_overrides: Config patterns for filename date parsing.
+            date_order: Day/month order for ambiguous dates ('DMY' or 'MDY').
         """
         super().__init__(name='ImportWorker', daemon=True)
         self._queue = import_queue
@@ -3109,6 +3114,8 @@ class ImportWorker(threading.Thread):
         self._on_complete = on_complete
         self._import_names = import_names
         self._import_names_lock = import_names_lock
+        self._filename_date_overrides = filename_date_overrides
+        self._date_order = date_order
 
     def run(self) -> None:
         """Main loop - drain queue items and copy files in parallel.
@@ -3343,7 +3350,7 @@ class ImportWorker(threading.Thread):
             # was renamed to avoid a collision (e.g. IMG_1234_1.jpg).
             canon_dest = str(canonicalise_path(dest))
             with self._import_names_lock:
-                self._import_names[canon_dest] = src.name
+                self._import_names[canon_dest] = (src.name, file_date)
 
             with self._progress_lock:
                 if self._progress is not None:
@@ -3386,13 +3393,17 @@ class ImportWorker(threading.Thread):
             except Exception:
                 logger.exception('ImportWorker: on_complete callback failed')
 
-    @staticmethod
-    def _get_file_date(path: Path) -> datetime:
+    def _get_file_date(self, path: Path) -> datetime:
         """Get the best date for organising the file into date-based directories.
 
-        Tries EXIF DateTimeOriginal first, then falls back to the file's
-        modification time. This determines which ``YYYY/YYYY-MM-DD/`` subdirectory
-        the file lands in.
+        Tries EXIF DateTimeOriginal first, then filename parsing with the
+        user's config, then falls back to the file's modification time.
+        This determines which ``YYYY/YYYY-MM-DD/`` subdirectory the file
+        lands in.
+
+        This timestamp is authoritative for imported files — it is derived
+        from the *original* file before copying into the catalogue, so FS
+        timestamps are still trustworthy at this point.
 
         Args:
             path: Path to the image file.
@@ -3401,9 +3412,13 @@ class ImportWorker(threading.Thread):
             datetime for the file's date.
         """
         try:
-            from metadata import derive_timestamp
+            from metadata import derive_timestamp_with_confidence
 
-            ts = derive_timestamp(path)
+            ts, _conf = derive_timestamp_with_confidence(
+                path,
+                filename_date_overrides=self._filename_date_overrides,
+                date_order=self._date_order,
+            )
             if ts is not None:
                 return ts
         except Exception as e:
@@ -3656,7 +3671,12 @@ class TranscodeWorker(threading.Thread):
                     width=orig['width'],
                     height=orig['height'],
                     timestamp=datetime.fromisoformat(orig['timestamp']) if orig.get('timestamp') else None,
-                    timestamp_confidence=orig.get('timestamp_confidence', CONFIDENCE_UNKNOWN),
+                    # Pin to 'manual' (0) so the pipeline won't re-derive
+                    # and overwrite with junk from the transcoded filename.
+                    timestamp_confidence=(
+                        0 if orig.get('timestamp_confidence', CONFIDENCE_UNKNOWN) < CONFIDENCE_UNKNOWN
+                        else CONFIDENCE_UNKNOWN
+                    ),
                     checksum=new_checksum,
                     perceptual_hash=orig.get('perceptual_hash'),
                     laplacian_var=orig.get('laplacian_var'),
@@ -3972,10 +3992,12 @@ class ImageDatabase:
         # Import directory state — resolved in startup() after folders are verified
         self._import_progress: dict | None = None  # {total, done, skipped, started_at}
         self._import_progress_lock = threading.Lock()  # Protects _import_progress mutations
-        # Maps catalogue destination path → original import filename, so the
-        # ingestion pipeline can set import_name when the file is first indexed.
+        # Maps catalogue destination path → (original filename, derived timestamp),
+        # so the ingestion pipeline can set import_name and use the pre-derived
+        # timestamp (from the original file, before copy) instead of re-deriving
+        # from the catalogue copy's unreliable FS metadata.
         # Populated by ImportWorker, consumed by _process_image().
-        self._import_names: dict[str, str] = {}
+        self._import_names: dict[str, tuple[str, datetime]] = {}
         self._import_names_lock = threading.Lock()
 
         # Queues for independent workers (trash, import, transcode)
@@ -4719,6 +4741,8 @@ class ImageDatabase:
                 import_names=self._import_names,
                 import_names_lock=self._import_names_lock,
                 on_complete=self._on_import_complete,
+                filename_date_overrides=self.config.filename_date_overrides,
+                date_order=self.config.date_order,
             )
             self._import_thread.start()
 
@@ -5358,13 +5382,7 @@ class ImageDatabase:
 
         # Trigger a rescan so the newly imported files get picked up by
         # the existing ingestion pipeline.
-        scan_thread = threading.Thread(
-            target=self._scan_and_queue_folder,
-            args=(str(self.catalogue_dir),),
-            daemon=True,
-            name='import-rescan',
-        )
-        scan_thread.start()
+        self.queue_rescan_all()
 
     # =========================================================================
     # TRANSCODE

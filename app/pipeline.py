@@ -141,9 +141,9 @@ Stages
 Finalisation
 ------------
 Stages 1–5 are "data" stages.  Stages 6–7 ("finalisation") only run
-when a data stage did work, or when `_finalisation_requested` is set
-(on startup for self-healing, or by `request_rerun()`).  This avoids
-repeated no-op grouping every 2 s poll cycle.
+when a data stage actually did work.  This avoids repeated no-op
+grouping on every restart or poll cycle — important for large libraries
+where duplicate computation can take minutes.
 """
 
 from __future__ import annotations
@@ -252,11 +252,9 @@ class PipelineOrchestrator(threading.Thread):
         # Per-video progress tracking (for status endpoint)
         self._current_video: dict[str, Any] | None = None
 
-        # Finalisation flag: when True, stages 6-7 (grouping/STT) will run
-        # even if data stages found no work.  Set on startup (self-healing
-        # for interrupted grouping/STT) and by request_rerun() (rescans,
-        # GUI triggers, etc.).
-        self._finalisation_requested = True
+        # Finalisation flag: reserved for future use.  Stages 6-7 now
+        # only run when a data stage actually did work (``had_work``).
+        self._finalisation_requested = False
 
         # Ingestion throttle: after a full file walk that found nothing
         # new, skip Stage 1 on subsequent idle polls until a rescan is
@@ -376,10 +374,14 @@ class PipelineOrchestrator(threading.Thread):
                     pass
         self._flush_logs()
 
-        # Run grouping and STT when data stages did work, OR when
-        # finalisation was explicitly requested (startup self-healing,
-        # rescans, GUI triggers, etc.).
-        run_finalisation = had_work or self._finalisation_requested
+        # Run grouping and STT when data stages did work.  Previously
+        # this also ran on every ``request_rerun()`` (startup, rescan
+        # button) regardless of whether any stage found work, which
+        # meant Stage 6 re-ran duplicate computation on every restart
+        # even when nothing had changed — very expensive on large
+        # libraries.  Now we only finalise when a data stage actually
+        # modified something.
+        run_finalisation = had_work
         self._finalisation_requested = False
 
         if run_finalisation and not self._stop_event.is_set():
@@ -956,14 +958,23 @@ class PipelineOrchestrator(threading.Thread):
             logger.warning(f'Failed to extract metadata for changed image: {path}')
             return
 
+        # Preserve manual (0) confidence — imported files have junk FS
+        # timestamps, so re-deriving would overwrite the correct date.
+        img_ts = metadata.timestamp
+        img_ts_conf = metadata.timestamp_confidence
+        existing_conf = existing.get('timestamp_confidence')
+        if existing_conf is not None and existing_conf == 0:
+            img_ts = datetime.fromisoformat(existing['timestamp']) if existing.get('timestamp') else metadata.timestamp
+            img_ts_conf = 0
+
         update_image_metadata(
             conn,
             existing['id'],
             size=metadata.size,
             width=metadata.width,
             height=metadata.height,
-            timestamp=metadata.timestamp,
-            timestamp_confidence=metadata.timestamp_confidence,
+            timestamp=img_ts,
+            timestamp_confidence=img_ts_conf,
             checksum=metadata.checksum,
             perceptual_hash=metadata.perceptual_hash,
             laplacian_var=metadata.laplacian_var,
@@ -1066,16 +1077,24 @@ class PipelineOrchestrator(threading.Thread):
         image_id = str(uuid.uuid4())
         checksum = self._compute_checksum(path)
 
-        ts, ts_conf = derive_timestamp_with_confidence(
-            path,
-            exif_data=None,
-            filename_date_overrides=self._db.config.filename_date_overrides,
-            date_order=self._db.config.date_order,
-        )
-
         path_str_canon = str(canonicalise_path(path))
         with self._db._import_names_lock:
-            import_name = self._db._import_names.pop(path_str_canon, None)
+            import_info = self._db._import_names.pop(path_str_canon, None)
+
+        if import_info:
+            # Use the timestamp derived by ImportWorker from the original
+            # file (before copy), and pin to manual (0) so self-healing
+            # never overwrites it with the catalogue copy's FS metadata.
+            import_name, ts = import_info
+            ts_conf = 0
+        else:
+            import_name = None
+            ts, ts_conf = derive_timestamp_with_confidence(
+                path,
+                exif_data=None,
+                filename_date_overrides=self._db.config.filename_date_overrides,
+                date_order=self._db.config.date_order,
+            )
 
         create_image(
             conn,
@@ -1157,7 +1176,18 @@ class PipelineOrchestrator(threading.Thread):
 
         path_str_canon = str(canonicalise_path(path))
         with self._db._import_names_lock:
-            import_name = self._db._import_names.pop(path_str_canon, None)
+            import_info = self._db._import_names.pop(path_str_canon, None)
+
+        if import_info:
+            # Use the timestamp derived by ImportWorker from the original
+            # file (before copy), and pin to manual (0) so self-healing
+            # never overwrites it with the catalogue copy's FS metadata.
+            import_name, img_ts = import_info
+            img_ts_conf = 0
+        else:
+            import_name = None
+            img_ts = metadata.timestamp
+            img_ts_conf = metadata.timestamp_confidence
 
         create_image(
             conn,
@@ -1166,8 +1196,8 @@ class PipelineOrchestrator(threading.Thread):
             size=metadata.size,
             width=metadata.width,
             height=metadata.height,
-            timestamp=metadata.timestamp,
-            timestamp_confidence=metadata.timestamp_confidence,
+            timestamp=img_ts,
+            timestamp_confidence=img_ts_conf,
             checksum=metadata.checksum,
             perceptual_hash=metadata.perceptual_hash,
             laplacian_var=metadata.laplacian_var,
