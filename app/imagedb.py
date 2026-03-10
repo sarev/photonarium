@@ -3699,6 +3699,7 @@ class ImageDatabase:
         self._migrate_initial_directory_groups()
         self._migrate_add_exif_metadata()
         self._migrate_add_logs_table()
+        self._migrate_backfill_silent_scene_transcriptions()
 
         # Steps 6-7: Start background threads
         self.start_threads()
@@ -4143,6 +4144,63 @@ class ImageDatabase:
             return
 
         logger.info('Added database log storage — viewable from Management > View Logs (one-time migration)')
+        record_migration(self.conn, migration_id)
+
+    def _migrate_backfill_silent_scene_transcriptions(self) -> None:
+        """One-time migration to mark silent scenes as transcribed.
+
+        Before this fix, scenes with no detected speech were skipped during
+        transcription, leaving their ``transcription`` column as NULL.  This
+        caused Stage 7 to perpetually re-select their parent videos for
+        re-transcription on every pipeline run.
+
+        This migration sets ``transcription = ''`` on all NULL scenes that
+        belong to videos which already have at least one transcribed scene,
+        so those videos won't be needlessly re-processed.
+
+        Only runs once; tracked via the migrations table.
+        """
+        migration_id = 'backfill_silent_scene_transcriptions_v1'
+
+        if has_migration_run(self.conn, migration_id):
+            return
+
+        # Find all NULL scenes on videos that have already been through
+        # the transcription pipeline.  This covers two cases:
+        #   1. Videos with some transcribed scenes but silent gaps (mixed)
+        #   2. Videos with no audio at all (every scene still NULL)
+        # We identify "already processed" videos as those that have an
+        # embedding and a preferred_scene_id (set during earlier pipeline
+        # stages), matching the Stage 7 selection criteria.
+        cursor = self.conn.execute("""
+            SELECT s.id
+            FROM scenes s
+            JOIN images i ON i.id = s.image_id
+            WHERE s.transcription IS NULL
+              AND i.media_type = 'video'
+              AND i.deleted = 0
+              AND i.preferred_scene_id IS NOT NULL
+              AND i.embedding IS NOT NULL
+        """)
+        scene_ids = [row[0] for row in cursor.fetchall()]
+
+        if scene_ids:
+            try:
+                now = datetime.now().isoformat()
+                self.conn.executemany(
+                    "UPDATE scenes SET transcription = '', updated_at = ? WHERE id = ?",
+                    [(now, sid) for sid in scene_ids],
+                )
+                self.conn.commit()
+            except Exception:
+                self.conn.rollback()
+                raise
+            logger.info(
+                f'Backfilled {len(scene_ids)} silent scenes with empty transcription (one-time migration)'
+            )
+        else:
+            logger.info('No silent scenes to backfill (one-time migration)')
+
         record_migration(self.conn, migration_id)
 
     def _load_checksum_cache(self) -> None:

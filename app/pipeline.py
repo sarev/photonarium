@@ -723,6 +723,18 @@ class PipelineOrchestrator(threading.Thread):
         existing_size = existing.get('size', 0)
         is_video = existing.get('media_type') == 'video'
 
+        # Stub record from a previous failed ingestion (unreadable file).
+        # Skip if unchanged; if the file has been replaced on disk (different
+        # size or mtime), fall through to the normal re-extraction path.
+        is_stub = (existing.get('width') or 0) == 0 and (existing.get('height') or 0) == 0
+        if (
+            is_stub
+            and current_size == existing_size
+            and existing_mtime is not None
+            and abs(current_mtime - existing_mtime) < 1.0
+        ):
+            return False
+
         # Backfill mtime if missing
         if existing_mtime is None and existing['size'] == current_size:
             conn.execute('UPDATE images SET mtime = ? WHERE id = ?', (current_mtime, existing['id']))
@@ -1020,8 +1032,32 @@ class PipelineOrchestrator(threading.Thread):
 
         vmeta = get_video_metadata(path)
         if vmeta is None:
-            logger.warning(f'Failed to extract video metadata: {path}')
-            return False
+            # Create a stub record so we don't retry this file every startup.
+            # width=0, height=0 acts as a sentinel for unreadable files.
+            logger.warning(f'Failed to read video, creating stub record: {path}')
+            image_id = str(uuid.uuid4())
+            checksum = self._compute_checksum(path)
+            ts, ts_conf = derive_timestamp_with_confidence(
+                path,
+                exif_data=None,
+                filename_date_overrides=self._db.config.filename_date_overrides,
+                date_order=self._db.config.date_order,
+            )
+            create_image(
+                conn,
+                image_id=image_id,
+                path=path,
+                size=current_size,
+                width=0,
+                height=0,
+                timestamp=ts,
+                timestamp_confidence=ts_conf,
+                checksum=checksum,
+                mtime=current_mtime,
+                media_type='video',
+            )
+            conn.commit()
+            return True
 
         image_id = str(uuid.uuid4())
         checksum = self._compute_checksum(path)
@@ -1086,8 +1122,29 @@ class PipelineOrchestrator(threading.Thread):
             self._db.config.date_order,
         )
         if metadata is None:
-            logger.warning(f'Failed to extract metadata for new image: {path}')
-            return False
+            # Create a stub record so we don't retry this file every startup.
+            # width=0, height=0 acts as a sentinel for unreadable files.
+            logger.warning(f'Failed to read image, creating stub record: {path}')
+            image_id = str(uuid.uuid4())
+            ts, ts_conf = derive_timestamp_with_confidence(
+                path,
+                exif_data=None,
+                filename_date_overrides=self._db.config.filename_date_overrides,
+                date_order=self._db.config.date_order,
+            )
+            create_image(
+                conn,
+                image_id=image_id,
+                path=path,
+                size=current_size,
+                width=0,
+                height=0,
+                timestamp=ts,
+                timestamp_confidence=ts_conf,
+                mtime=current_mtime,
+            )
+            conn.commit()
+            return True
 
         image_id = str(uuid.uuid4())
 
@@ -1436,6 +1493,7 @@ class PipelineOrchestrator(threading.Thread):
             cursor = self._db.conn.execute("""
                 SELECT id, path FROM images
                 WHERE embedding IS NULL AND deleted = 0 AND media_type = 'image'
+                AND width > 0
             """)
             rows = cursor.fetchall()
 
@@ -2372,6 +2430,21 @@ class PipelineOrchestrator(threading.Thread):
             logger.info(f'Stage 7 complete: transcribed {count} videos')
         return count > 0
 
+    def _mark_scenes_silent(self, scene_ids: list[str], image_id: str) -> None:
+        """Set ``transcription = ''`` on all given scenes.
+
+        Called when a video has no audio stream or no detected speech, so
+        that Stage 7's ``WHERE transcription IS NULL`` query won't
+        perpetually re-select the video for transcription.
+        """
+        now = datetime.now().isoformat()
+        with self._db._db_lock:
+            self._db.conn.executemany(
+                "UPDATE scenes SET transcription = '', updated_at = ? WHERE id = ?",
+                [(now, sid) for sid in scene_ids],
+            )
+            self._db.conn.commit()
+
     def _transcribe_scenes(
         self,
         image_id: str,
@@ -2415,6 +2488,9 @@ class PipelineOrchestrator(threading.Thread):
 
             if not extract_audio_segment(video_path, tmp_path, total_start, total_end):
                 tmp_path.unlink(missing_ok=True)
+                # No audio stream — mark all scenes as transcribed (empty)
+                # so Stage 7 won't re-select this video on the next run.
+                self._mark_scenes_silent(scene_ids, image_id)
                 return
 
             # Resolve effective language: per-video override > global config
@@ -2429,6 +2505,9 @@ class PipelineOrchestrator(threading.Thread):
                 pass
 
             if not stt_segments:
+                # Audio present but no speech detected — mark all scenes
+                # as transcribed (empty) to prevent re-selection.
+                self._mark_scenes_silent(scene_ids, image_id)
                 return
 
             # Assign STT segments to scenes by midpoint — each word lands
@@ -2450,11 +2529,8 @@ class PipelineOrchestrator(threading.Thread):
                         if text:
                             scene_texts.append(text)
 
-                if not scene_texts:
-                    continue
-
-                full_text = ' '.join(scene_texts)
-                text_emb = clip.encode_text(full_text) if clip else None
+                full_text = ' '.join(scene_texts) if scene_texts else ''
+                text_emb = clip.encode_text(full_text) if clip and full_text else None
                 text_emb_blob = text_emb.astype(np.float32).tobytes() if text_emb is not None else None
 
                 now_ts = datetime.now().isoformat()
