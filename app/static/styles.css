@@ -4023,6 +4023,85 @@ a:hover {
     border-radius: 4px;
 }
 
+/* Subtitle editor panel — appears above the timeline track when editing */
+.vid-subtitle-editor {
+    flex: 0 0 auto;
+    padding: 0.5rem 0.75rem;
+    border-bottom: 1px solid var(--color-border);
+    background: var(--color-bg-elevated);
+}
+.vid-subtitle-editor-header {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    margin-bottom: 0.35rem;
+}
+.vid-subtitle-editor-label {
+    font-size: 0.8rem;
+    font-weight: 600;
+    color: var(--color-text-primary);
+}
+.vid-subtitle-scene-time {
+    font-size: 0.75rem;
+    color: var(--color-text-secondary);
+}
+.vid-subtitle-editor-body {
+    display: flex;
+    gap: 0.5rem;
+    align-items: flex-start;
+}
+.vid-subtitle-text {
+    flex: 1 1 0;
+    padding: 0.4rem 0.5rem;
+    font-family: inherit;
+    font-size: 0.85rem;
+    background-color: var(--color-bg-elevated);
+    border: 1px solid var(--color-border);
+    border-radius: 4px;
+    color: var(--color-text-primary);
+    resize: vertical;
+    min-height: 2.4em;
+}
+.vid-subtitle-text:focus {
+    outline: none;
+    border-color: var(--color-accent);
+    box-shadow: 0 0 0 2px var(--color-accent-light);
+}
+.vid-subtitle-save {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 36px;
+    height: 36px;
+    padding: 0;
+    border: 1px solid var(--color-border);
+    border-radius: 4px;
+    background: var(--color-bg-elevated);
+    color: var(--color-text-secondary);
+    cursor: pointer;
+    transition: background-color 0.15s, border-color 0.15s, color 0.15s;
+}
+.vid-subtitle-save:hover:not(:disabled) {
+    background-color: var(--color-accent-light);
+    border-color: var(--color-accent);
+}
+.vid-subtitle-save:disabled {
+    opacity: 0.5;
+    cursor: default;
+}
+.vid-subtitle-save .icon {
+    font-size: 1rem;
+}
+#btn-vid-edit-subs.active {
+    background-color: var(--color-pastel-orange-bg);
+    color: var(--color-pastel-orange-fg);
+}
+@media (pointer: fine) {
+    #btn-vid-edit-subs:hover {
+        background-color: var(--color-pastel-orange-bg);
+    }
+}
+
 .videos-timeline {
     display: flex;
     flex-direction: column;

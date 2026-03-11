@@ -119,10 +119,12 @@ import hashlib
 import json
 import logging
 import queue
+import shutil
 import signal
 import sqlite3
 import threading
 import time
+import uuid
 import warnings
 from collections import defaultdict
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -143,15 +145,19 @@ from faces import (
     generate_face_thumbnail,
     generate_face_thumbnails_for_image,
     get_all_faces_for_thumbnail_regen,
+    get_cached_known_embeddings,
     get_face,
     get_face_thumbnail_path,
     get_faces_for_image,
     get_faces_without_semantic_embedding,
     get_group_computation_status,
     init_face_tables,
+    invalidate_embedding_cache,
+    reassess_unknown_faces,
     rotate_faces_for_image,
     update_face_semantic_embedding,
 )
+from logdb import SQL_CREATE_LOGS, SQL_CREATE_LOGS_INDEX
 from metadata import (
     CONFIDENCE_UNKNOWN,
     derive_timestamp,
@@ -438,8 +444,6 @@ def init_database(db_path: Path | str) -> sqlite3.Connection:
     conn.execute(_SQL_CREATE_SCENES)
 
     # Create log storage table (database-backed log viewer)
-    from logdb import SQL_CREATE_LOGS, SQL_CREATE_LOGS_INDEX
-
     conn.execute(SQL_CREATE_LOGS)
     conn.execute(SQL_CREATE_LOGS_INDEX)
 
@@ -2480,6 +2484,47 @@ def semantic_search(
     return results
 
 
+def update_scene_transcription(
+    conn: sqlite3.Connection,
+    scene_id: str,
+    transcription: str,
+    transcription_embedding: bytes | None = None,
+) -> str | None:
+    """Update a scene's transcription text and optional embedding.
+
+    The caller must hold ``db._db_lock`` before calling this function.
+
+    Args:
+        conn: Database connection.
+        scene_id: UUID of the scene to update.
+        transcription: New transcription text (empty string to clear).
+        transcription_embedding: Pre-computed OpenCLIP text embedding blob,
+            or ``None`` to clear.
+
+    Returns:
+        The ``image_id`` of the parent video, or ``None`` if the scene
+        was not found.
+    """
+    now = datetime.now().isoformat()
+    row = conn.execute('SELECT image_id FROM scenes WHERE id = ?', (scene_id,)).fetchone()
+    if not row:
+        return None
+
+    try:
+        conn.execute(
+            'UPDATE scenes SET transcription = ?, transcription_embedding = ?, updated_at = ? WHERE id = ?',
+            (transcription, transcription_embedding, now, scene_id),
+        )
+        conn.commit()
+    except Exception:
+        try:
+            conn.rollback()
+        except Exception:
+            pass
+        raise
+    return row[0]
+
+
 def video_search(
     conn: sqlite3.Connection,
     query_embedding: np.ndarray,
@@ -3267,8 +3312,6 @@ class ImportWorker(threading.Thread):
             source_path: Absolute path to the source image file.
             known_checksums: Snapshot of checksums already in the database.
         """
-        import shutil
-
         try:
             src = Path(source_path)
             if not src.is_file():
@@ -3412,8 +3455,6 @@ class ImportWorker(threading.Thread):
             datetime for the file's date.
         """
         try:
-            from metadata import derive_timestamp_with_confidence
-
             ts, _conf = derive_timestamp_with_confidence(
                 path,
                 filename_date_overrides=self._filename_date_overrides,
@@ -3619,9 +3660,6 @@ class TranscodeWorker(threading.Thread):
         Returns:
             The new image ID.
         """
-        import shutil
-        import uuid
-
         db = self._db
         dest = job.dest_path
 
@@ -3674,7 +3712,8 @@ class TranscodeWorker(threading.Thread):
                     # Pin to 'manual' (0) so the pipeline won't re-derive
                     # and overwrite with junk from the transcoded filename.
                     timestamp_confidence=(
-                        0 if orig.get('timestamp_confidence', CONFIDENCE_UNKNOWN) < CONFIDENCE_UNKNOWN
+                        0
+                        if orig.get('timestamp_confidence', CONFIDENCE_UNKNOWN) < CONFIDENCE_UNKNOWN
                         else CONFIDENCE_UNKNOWN
                     ),
                     checksum=new_checksum,
@@ -3779,10 +3818,7 @@ class TranscodeWorker(threading.Thread):
                     except OSError as e:
                         logger.warning(f'Clone: failed to copy poster thumbnail: {e}')
 
-        logger.info(
-            f'Cloned video record {job.image_id} -> {new_id} '
-            f'({len(orig_scenes)} scenes, dest={dest.name})'
-        )
+        logger.info(f'Cloned video record {job.image_id} -> {new_id} ({len(orig_scenes)} scenes, dest={dest.name})')
         return new_id
 
     def _trash_original(self, job: TranscodeWorker.Job) -> None:
@@ -5686,8 +5722,6 @@ class ImageDatabase:
 
         # Invalidate the known-embedding cache since faces were removed
         if affected_person_ids:
-            from faces import invalidate_embedding_cache
-
             invalidate_embedding_cache()
 
         # Update trashed count and invalidate caches
@@ -6568,8 +6602,6 @@ class ImageDatabase:
         Uses synchronous reassessment to ensure completion before
         emit_processing_complete is called.
         """
-        from faces import get_cached_known_embeddings, reassess_unknown_faces
-
         # Check if there are any known people with locked faces to match against
         with self._db_lock:
             known_embeddings = get_cached_known_embeddings(self.conn)

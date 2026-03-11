@@ -18,7 +18,10 @@ All functions degrade gracefully if PyAV is not installed — the module-level
 
 from __future__ import annotations
 
+import json
 import logging
+import re
+import shutil
 import subprocess
 from dataclasses import dataclass
 from datetime import datetime
@@ -179,9 +182,6 @@ def _get_video_rotation(path: Path) -> int:
     Returns:
         Rotation in degrees (0, 90, 180, 270).  Always a multiple of 90.
     """
-    import json
-    import shutil
-
     ffprobe_bin = shutil.which('ffprobe')
     if not ffprobe_bin:
         return 0
@@ -411,9 +411,6 @@ def _detect_scenes_ffmpeg(
     Returns a list of scene-start timestamps (always starts with 0.0).
     Returns ``[0.0]`` (i.e. no cuts found) on any failure.
     """
-    import re
-    import shutil
-
     ffmpeg_bin = shutil.which('ffmpeg')
     if not ffmpeg_bin:
         logger.debug('ffmpeg not found on PATH, skipping scene detection')
@@ -840,9 +837,6 @@ def transcode_video(
     Returns:
         True on success, False on failure.
     """
-    import re
-    import shutil
-
     ffmpeg_bin = shutil.which('ffmpeg')
     if not ffmpeg_bin:
         logger.error('ffmpeg not found on PATH — cannot transcode')

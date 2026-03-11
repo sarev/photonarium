@@ -60,10 +60,14 @@ import sys
 import threading
 import time
 import traceback
+import uuid
 from concurrent.futures import ThreadPoolExecutor
 from concurrent.futures import TimeoutError as FuturesTimeoutError
+from dataclasses import fields as dc_fields
+from datetime import datetime
 from pathlib import Path
 
+import numpy as np
 import orjson
 from flask import Flask, Response, abort, request, send_file
 from flask import jsonify as flask_jsonify
@@ -85,6 +89,13 @@ def jsonify(data):
 
 
 from caption import CaptionGenerator
+from config import (
+    Config,
+    get_config_schema,
+    get_default_config_path,
+    load_config,
+    save_config,
+)
 from faces import (
     batch_identify_faces,
     clear_reassessment_result,
@@ -128,8 +139,12 @@ from imagedb import (
     EVENT_IMAGES_CHANGED,
     EVENT_PEOPLE_CHANGED,
     ImageDatabase,
+    get_metadata,
     register_signal_handlers,
+    set_metadata,
+    update_scene_transcription,
 )
+from logdb import get_logs
 from rawimage import is_raw_format
 from rawimage import open_image as raw_open_image
 from thumbnails import (
@@ -997,8 +1012,6 @@ def get_image_scenes(image_id):
 
     scenes = []
     if query:
-        import numpy as np
-
         TRANSCRIPT_BOOST = 0.15
         query_embedding = db._get_clip_model().encode_semantic_query(query)
 
@@ -1186,8 +1199,6 @@ def reveal():
     elif target == 'config':
         path = _config_file_path
         if not path:
-            from config import get_default_config_path
-
             path = str(get_default_config_path())
         path = os.path.abspath(path)
         if not os.path.exists(path):
@@ -1544,9 +1555,7 @@ def import_upload():
     staging_dir.mkdir(parents=True, exist_ok=True)
 
     # Use a unique subdirectory per upload to avoid collisions
-    import uuid as _uuid
-
-    batch_dir = staging_dir / _uuid.uuid4().hex
+    batch_dir = staging_dir / uuid.uuid4().hex
     batch_dir.mkdir(parents=True, exist_ok=True)
 
     saved_paths = []
@@ -1767,8 +1776,6 @@ def get_config_schema_endpoint():
     Returns:
         JSON with ``sections`` array and ``config_path`` string.
     """
-    from config import get_config_schema, load_config
-
     # Read from disk so the dialog shows the on-disk state, not the
     # stale in-memory state from when the server started.
     config_path = _config_file_path or None
@@ -1799,10 +1806,6 @@ def save_config_endpoint():
         Success response on valid save, or 400 with the validation error
         message if any value is out of range or cross-field checks fail.
     """
-    from dataclasses import fields as dc_fields
-
-    from config import Config, get_default_config_path, save_config
-
     data = request.get_json(silent=True)
     if not data or 'values' not in data:
         return error_response('Request must include "values" object')
@@ -1893,12 +1896,6 @@ def wizard_save_config():
     Returns:
         Success response, or 400 on validation error.
     """
-    from dataclasses import fields as dc_fields
-
-    from config import Config, get_default_config_path
-    from config import save_config as write_config
-    from imagedb import set_metadata
-
     data = request.get_json(silent=True)
     if not data or 'values' not in data:
         return error_response('Request must include "values" object')
@@ -1944,7 +1941,7 @@ def wizard_save_config():
         config_path = str(get_default_config_path())
 
     try:
-        write_config(new_config, config_path)
+        save_config(new_config, config_path)
     except Exception as e:
         logger.exception('Wizard: failed to save configuration')
         return error_response(f'Failed to write config file: {e}', 500)
@@ -1971,7 +1968,6 @@ def wizard_download():
         ``{success: true, data: {status: 'started'}}`` or error.
     """
     import wizard
-    from config import get_default_config_path
 
     config_path = _config_file_path or str(get_default_config_path())
 
@@ -2805,9 +2801,7 @@ def update_preferred_scene(image_id):
         return error_response('Scene not found for this video', 404)
 
     # Update images table
-    from datetime import datetime as dt
-
-    now = dt.now().isoformat()
+    now = datetime.now().isoformat()
     with db._db_lock:
         db.conn.execute(
             'UPDATE images SET preferred_scene_id = ?, embedding = ?, updated_at = ? WHERE id = ?',
@@ -2847,9 +2841,7 @@ def update_stt_language(image_id):
     if language is None or not isinstance(language, str):
         return error_response('language is required and must be a string')
 
-    from datetime import datetime as dt
-
-    now = dt.now().isoformat()
+    now = datetime.now().isoformat()
     with db._db_lock:
         db.conn.execute(
             'UPDATE images SET stt_language = ?, updated_at = ? WHERE id = ?',
@@ -2869,6 +2861,57 @@ def update_stt_language(image_id):
     db.event_queue.emit(EVENT_IMAGES_CHANGED, {'updated_ids': [image_id]})
 
     return success_response({'stt_language': language})
+
+
+@app.route('/api/scenes/<scene_id>/transcription', methods=['PUT'])
+def update_scene_transcription_endpoint(scene_id):
+    """Update the transcription text for a single scene.
+
+    Recomputes the transcription embedding via OpenCLIP so that
+    semantic search reflects the edited text.
+
+    Request Body:
+        JSON object with:
+        - transcription (str): New subtitle text, or '' to clear.
+
+    Returns:
+        Success response with the updated transcription.
+    """
+    db = get_db()
+
+    data = request.get_json(silent=True) or {}
+    transcription = data.get('transcription')
+    if transcription is None or not isinstance(transcription, str):
+        return error_response('transcription is required and must be a string')
+
+    transcription = transcription.strip()
+
+    # Compute text embedding for non-empty transcriptions
+    emb_blob = None
+    if transcription:
+        try:
+            clip = db._get_clip_model()
+            emb = clip.encode_text(transcription)
+            emb_blob = emb.astype(np.float32).tobytes()
+        except Exception as e:
+            logger.warning('Failed to encode transcription embedding: %s', e)
+            # Proceed without embedding — text still saved
+
+    with db._db_lock:
+        image_id = update_scene_transcription(
+            db.conn,
+            scene_id,
+            transcription,
+            emb_blob,
+        )
+
+    if not image_id:
+        return error_response('Scene not found', 404)
+
+    # Notify other clients
+    db.event_queue.emit(EVENT_IMAGES_CHANGED, {'updated_ids': [image_id]})
+
+    return success_response({'transcription': transcription})
 
 
 @app.route('/api/similar/<image_id>', methods=['GET'])
@@ -2997,8 +3040,6 @@ def get_stats():
             - totalImages: Total number of images in database
             - totalFolders: Number of registered folders
     """
-    from imagedb import get_metadata
-
     db = get_db()
     stats = db.get_stats()
 
@@ -3084,8 +3125,6 @@ def get_logs_endpoint():
         JSON array of {timestamp, level, logger, message} objects,
         ordered oldest-first (most recent at the end).
     """
-    from logdb import get_logs
-
     config = get_db().config
     max_limit = config.log_retention_lines if config.log_retention_lines > 0 else 500
     level = request.args.get('level', '').strip() or None

@@ -313,6 +313,54 @@ AppState.videos = (function() {
         },
 
         /**
+         * Update a scene's transcription text (two-phase optimistic).
+         *
+         * Immediately patches the cached scene object so the UI reflects
+         * the edit, then persists to the backend.  Rolls back on error.
+         *
+         * @param {string} videoId - Parent video ID.
+         * @param {string} sceneId - Scene UUID to update.
+         * @param {string} transcription - New subtitle text ('' to clear).
+         * @returns {Promise<void>}
+         */
+        updateSceneTranscription(videoId, sceneId, transcription) {
+            // PHASE 1: Synchronous optimistic update
+            const cachedScenes = _sceneCache[videoId];
+            const scene = cachedScenes?.find(s => s.id === sceneId);
+            const prevTranscription = scene?.transcription;
+            if (scene) {
+                transaction(() => {
+                    scene.transcription = transcription;
+                    broadcast({
+                        type: 'changed', property: 'scenes',
+                        imageId: videoId,
+                    });
+                });
+            }
+
+            // PHASE 2: Persist to backend (rollback on error)
+            return queueTransaction(async () => {
+                try {
+                    await App.apiPut(`/scenes/${sceneId}/transcription`, {
+                        transcription,
+                    });
+                } catch (err) {
+                    console.error('[AppState.videos.updateSceneTranscription] Persist failed:', err);
+                    if (scene) {
+                        transaction(() => {
+                            scene.transcription = prevTranscription;
+                            broadcast({
+                                type: 'changed', property: 'scenes',
+                                imageId: videoId,
+                            });
+                        });
+                    }
+                    throw err;
+                }
+            });
+        },
+
+        /**
          * Queue videos for transcoding to browser-compatible MP4.
          * @param {string[]} videoIds - Video IDs to transcode.
          * @param {boolean} trashOriginal - Whether to trash the original after transcoding.

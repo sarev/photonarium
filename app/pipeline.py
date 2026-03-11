@@ -152,7 +152,9 @@ import hashlib
 import json
 import logging
 import os
+import shutil
 import sqlite3
+import tempfile
 import threading
 import time
 import uuid
@@ -176,7 +178,15 @@ from faces import (
 )
 from metadata import derive_timestamp_with_confidence, extract_exif_data
 from thumbnails import generate_thumbnail, get_thumbnail_cache_path
-from video import get_video_metadata, is_video_supported
+from video import (
+    _get_video_rotation,
+    detect_scenes,
+    extract_audio_segment,
+    extract_frame,
+    generate_scene_thumbnails,
+    get_video_metadata,
+    is_video_supported,
+)
 
 if TYPE_CHECKING:
     from imagedb import ImageDatabase, OpenCLIPModel
@@ -205,8 +215,6 @@ class PipelineOrchestrator(threading.Thread):
         immediately (with the Photonarium logo) rather than as blank
         spaces while waiting for real thumbnail generation.
         """
-        import shutil
-
         for size_px, src_path in self._PLACEHOLDER_PATHS.items():
             thumb_path = get_thumbnail_cache_path(
                 checksum,
@@ -1360,13 +1368,6 @@ class PipelineOrchestrator(threading.Thread):
         Returns:
             Number of videos processed.
         """
-        from video import (
-            _get_video_rotation,
-            detect_scenes,
-            extract_frame,
-            generate_scene_thumbnails,
-        )
-
         if not is_video_supported():
             return 0
 
@@ -2503,10 +2504,6 @@ class PipelineOrchestrator(threading.Thread):
                 None or NULL means use the global ``stt_language`` config.
                 Empty string means auto-detect.
         """
-        import tempfile
-
-        from video import extract_audio_segment
-
         stt = self._get_stt_backend()
         if stt is None:
             return

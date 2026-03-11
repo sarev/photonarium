@@ -22,8 +22,10 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import sqlite3
 import threading
+import uuid
 from datetime import datetime
 from typing import Any
 
@@ -72,8 +74,6 @@ def _compute_unique_dir_names(dir_paths: list[str]) -> dict[str, str]:
     Returns:
         Dict mapping each full path to its shortest unique display name.
     """
-    import os
-
     if not dir_paths:
         return {}
 
@@ -2084,11 +2084,7 @@ class DuplicateManager:
             conn: Shared database connection (caller holds db_lock for the queries).
             db_lock: The database lock for thread safety.
         """
-        import os
-        import uuid
-        from datetime import datetime as dt
-
-        now = dt.now().isoformat()
+        now = datetime.now().isoformat()
 
         # ── READ phase (lock): gather current state from DB ──
         with db_lock:

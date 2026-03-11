@@ -155,6 +155,15 @@ const Videos = {
     /** @type {boolean} Flag to suppress click after long-press preview. @private */
     _previewShown: false,
 
+    /** @type {boolean} Whether subtitle edit mode is active. @private */
+    _editMode: false,
+
+    /** @type {string|null} Scene ID currently loaded in the subtitle editor. @private */
+    _editingSceneId: null,
+
+    /** @type {string} Original transcription text before editing, for Escape rollback. @private */
+    _editingOriginalText: '',
+
     /**
      * Initialise the videos module.
      */
@@ -168,6 +177,12 @@ const Videos = {
             languageSelect: App.$('vid-stt-language'),
             languageControl: document.querySelector('.vid-language-control'),
             languageSeparator: document.querySelector('.vid-language-separator'),
+            editSubsBtn: App.$('btn-vid-edit-subs'),
+            editSubsSeparator: document.querySelector('.vid-edit-separator'),
+            subtitleEditor: App.$('vid-subtitle-editor'),
+            subtitleText: App.$('vid-subtitle-text'),
+            subtitleSave: App.$('btn-vid-subtitle-save'),
+            subtitleSceneTime: App.$('vid-subtitle-scene-time'),
         };
 
         // Populate language dropdown from config
@@ -216,6 +231,7 @@ const Videos = {
                 App.setSelectedImages(ids);
                 this._updateContentSortButton(ids);
                 this._updateLanguageDropdown(ids);
+                this._updateEditSubsButton(ids);
 
                 // Single selection: show timeline for the selected video
                 if (ids.length === 1) {
@@ -272,6 +288,33 @@ const Videos = {
             });
         }
 
+        // Subtitle edit toggle button
+        if (this._els.editSubsBtn) {
+            this._els.editSubsBtn.addEventListener('click', () => {
+                this._toggleEditMode();
+            });
+        }
+
+        // Subtitle save button
+        if (this._els.subtitleSave) {
+            this._els.subtitleSave.addEventListener('click', () => {
+                this._saveSubtitle();
+            });
+        }
+
+        // Keyboard shortcuts in the subtitle textarea
+        if (this._els.subtitleText) {
+            this._els.subtitleText.addEventListener('keydown', (e) => {
+                if (e.key === 'Enter') {
+                    e.preventDefault();
+                    this._saveSubtitle();
+                } else if (e.key === 'Escape') {
+                    e.preventDefault();
+                    this._cancelSubtitleEdit();
+                }
+            });
+        }
+
         // Respond to toolbar events (select all, trash)
         App.on('selectAll', () => {
             if (AppState.nav.getScreen() === 'videos' && this._selection) {
@@ -314,6 +357,7 @@ const Videos = {
             } else if (event.property === 'selectedVideo') {
                 this._renderTimeline();
                 this._updateLanguageDropdown();
+                this._updateEditSubsButton();
             } else if (event.property === 'scenes') {
                 // Scenes invalidated (e.g. after retranscription) — reload
                 // from backend if the cache is now empty for the selected video
@@ -321,8 +365,15 @@ const Videos = {
                 if (selId && !AppState.videos.getScenes(selId)) {
                     this._loadScenesIfNeeded(selId);
                 }
-                this._renderTimeline();
+                // Skip timeline re-render while actively editing a scene's
+                // subtitle — re-rendering destroys the DOM elements and
+                // loses the selected-scene highlight.  The transcription
+                // text lives in AppState, not the DOM, so skipping is safe.
+                if (!this._editingSceneId) {
+                    this._renderTimeline();
+                }
                 this._updateLanguageDropdown();
+                this._updateEditSubsButton();
             } else if (event.property === 'sttLanguage') {
                 this._updateLanguageDropdown();
                 this._renderTimeline();
@@ -699,6 +750,165 @@ const Videos = {
     },
 
     /**
+     * Update the visibility of the subtitle edit toggle button.
+     * Shown when exactly 1 video is selected and scenes are loaded.
+     *
+     * @param {string[]} [selection] - Currently selected video IDs.
+     * @private
+     */
+    _updateEditSubsButton(selection) {
+        const btn = this._els.editSubsBtn;
+        const sep = this._els.editSubsSeparator;
+        if (!btn) return;
+
+        const ids = selection
+            || (AppState.videos.getSelectedVideoId()
+                ? [AppState.videos.getSelectedVideoId()] : []);
+        let visible = false;
+
+        if (ids.length === 1) {
+            const scenes = AppState.videos.getScenes(ids[0]);
+            if (scenes && scenes.length > 0) {
+                visible = true;
+            }
+        }
+
+        btn.hidden = !visible;
+        if (sep) sep.hidden = !visible;
+
+        // Deactivate edit mode when button is hidden — but not while
+        // actively editing a scene, because invalidateScenes temporarily
+        // clears the cache (visible becomes false) before the reload
+        // repopulates it.
+        if (!visible && this._editMode && !this._editingSceneId) {
+            this._deactivateEditMode();
+        }
+    },
+
+    /**
+     * Toggle subtitle edit mode on/off.
+     * @private
+     */
+    _toggleEditMode() {
+        if (this._editMode) {
+            this._deactivateEditMode();
+        } else {
+            this._editMode = true;
+            this._els.editSubsBtn?.classList.add('active');
+            if (this._els.subtitleEditor) {
+                this._els.subtitleEditor.hidden = false;
+            }
+        }
+    },
+
+    /**
+     * Deactivate subtitle edit mode and reset editor state.
+     * @private
+     */
+    _deactivateEditMode() {
+        this._editMode = false;
+        this._editingSceneId = null;
+        this._editingOriginalText = '';
+        this._els.editSubsBtn?.classList.remove('active');
+        if (this._els.subtitleEditor) {
+            this._els.subtitleEditor.hidden = true;
+        }
+        if (this._els.subtitleText) {
+            this._els.subtitleText.value = '';
+        }
+        if (this._els.subtitleSave) {
+            this._els.subtitleSave.disabled = true;
+        }
+        if (this._els.subtitleSceneTime) {
+            this._els.subtitleSceneTime.textContent = '';
+        }
+    },
+
+    /**
+     * Load a scene's transcription into the subtitle editor.
+     *
+     * @param {object} scene - Scene object with id, transcription,
+     *     start_time, end_time.
+     * @private
+     */
+    _loadSceneIntoEditor(scene) {
+        this._editingSceneId = scene.id;
+        this._editingOriginalText = scene.transcription || '';
+
+        if (this._els.subtitleText) {
+            this._els.subtitleText.value = scene.transcription || '';
+            this._els.subtitleText.focus();
+        }
+        if (this._els.subtitleSceneTime) {
+            this._els.subtitleSceneTime.textContent =
+                this._formatTime(scene.start_time) + ' \u2013 ' +
+                this._formatTime(scene.end_time);
+        }
+        if (this._els.subtitleSave) {
+            this._els.subtitleSave.disabled = false;
+            // Reset button text in case "Saved" feedback is still showing
+            this._els.subtitleSave.innerHTML =
+                '<span class="icon" data-icon="send">\u27A4</span>';
+        }
+    },
+
+    /**
+     * Persist the subtitle editor's current text to AppState and backend.
+     * @private
+     */
+    _saveSubtitle() {
+        const sceneId = this._editingSceneId;
+        const videoId = AppState.videos.getSelectedVideoId();
+        if (!sceneId || !videoId) return;
+
+        const text = (this._els.subtitleText?.value || '').trim();
+
+        // Update the baseline so Escape after save doesn't revert
+        this._editingOriginalText = text;
+
+        AppState.videos.updateSceneTranscription(videoId, sceneId, text);
+
+        // Brief checkmark feedback, then restore send icon
+        const btn = this._els.subtitleSave;
+        if (btn) {
+            btn.innerHTML = '<span class="icon" data-icon="check">\u2713</span>';
+            btn.disabled = true;
+            setTimeout(() => {
+                if (this._editingSceneId === sceneId) {
+                    btn.innerHTML =
+                        '<span class="icon" data-icon="send">\u27A4</span>';
+                    btn.disabled = false;
+                }
+            }, 1500);
+        }
+    },
+
+    /**
+     * Cancel the current subtitle edit — restore original text and
+     * deselect the scene in the editor (edit mode stays active).
+     * @private
+     */
+    _cancelSubtitleEdit() {
+        if (this._els.subtitleText) {
+            this._els.subtitleText.value = this._editingOriginalText;
+        }
+        this._editingSceneId = null;
+        this._editingOriginalText = '';
+        if (this._els.subtitleSave) {
+            this._els.subtitleSave.disabled = true;
+            this._els.subtitleSave.innerHTML =
+                '<span class="icon" data-icon="send">\u27A4</span>';
+        }
+        if (this._els.subtitleSceneTime) {
+            this._els.subtitleSceneTime.textContent = '';
+        }
+        if (this._els.subtitleText) {
+            this._els.subtitleText.value = '';
+            this._els.subtitleText.blur();
+        }
+    },
+
+    /**
      * Load content similarity data for the selected video.
      * Mirrors Gallery._loadContentSimilarities().
      * @private
@@ -1031,6 +1241,11 @@ const Videos = {
                     s => s.classList.remove('selected'),
                 );
                 sceneEl.classList.add('selected');
+
+                // Load scene into subtitle editor when edit mode is active
+                if (this._editMode) {
+                    this._loadSceneIntoEditor(scene);
+                }
             });
 
             sceneEl.addEventListener('dblclick', () => {

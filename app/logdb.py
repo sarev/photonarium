@@ -31,6 +31,7 @@ import logging
 import sqlite3
 import sys
 import threading
+import time
 
 # ---------------------------------------------------------------------------
 # Table DDL — imported by imagedb._init_database() for schema creation
@@ -216,10 +217,8 @@ class DatabaseLogHandler(logging.Handler):
     @staticmethod
     def _format_timestamp(record: logging.LogRecord) -> str:
         """Format the record's creation time as an ISO-ish string."""
-        import time as _time
-
-        t = _time.localtime(record.created)
-        return _time.strftime('%Y-%m-%d %H:%M:%S', t)
+        t = time.localtime(record.created)
+        return time.strftime('%Y-%m-%d %H:%M:%S', t)
 
     def _trim(self) -> None:
         """Delete rows exceeding *max_lines*, keeping the most recent."""

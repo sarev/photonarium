@@ -210,6 +210,10 @@
                             <!-- Populated dynamically from App.config.stt_languages -->
                         </select>
                     </div>
+                    <div class="toolbar-separator vid-edit-separator" hidden></div>
+                    <button id="btn-vid-edit-subs" class="toolbar-btn" title="Edit subtitles" hidden>
+                        <span class="icon" data-icon="edit_note">✎</span>
+                    </button>
                 </div>
 
                 <!-- Duplicates controls (visible when data-screen="duplicates") -->
@@ -748,6 +752,19 @@
                     <div id="videos-grid" class="videos-grid"></div>
                 </div>
                 <div class="videos-divider"></div>
+                <div id="vid-subtitle-editor" class="vid-subtitle-editor" hidden>
+                    <div class="vid-subtitle-editor-header">
+                        <span class="vid-subtitle-editor-label">Scene subtitle</span>
+                        <span id="vid-subtitle-scene-time" class="vid-subtitle-scene-time"></span>
+                    </div>
+                    <div class="vid-subtitle-editor-body">
+                        <textarea id="vid-subtitle-text" class="vid-subtitle-text" rows="2"
+                            placeholder="Click a scene below to edit its subtitle"></textarea>
+                        <button id="btn-vid-subtitle-save" class="vid-subtitle-save" title="Save subtitle" disabled>
+                            <span class="icon" data-icon="send">➤</span>
+                        </button>
+                    </div>
+                </div>
                 <div id="videos-timeline-section" class="videos-section timeline">
                     <div id="videos-timeline" class="videos-timeline">
                         <div id="videos-timeline-empty" class="empty-state">
