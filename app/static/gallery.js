@@ -111,34 +111,6 @@ const Gallery = {
     _throbTargetId: null,
 
     /**
-     * Scroll indicator overlay element.
-     * @type {HTMLElement|null}
-     * @private
-     */
-    _scrollOverlay: null,
-
-    /**
-     * Timer for hiding the scroll indicator overlay.
-     * @type {number|null}
-     * @private
-     */
-    _scrollOverlayTimer: null,
-
-    /**
-     * Current mouse position for overlay positioning.
-     * @type {{x: number, y: number}}
-     * @private
-     */
-    _mousePos: { x: 0, y: 0 },
-
-    /**
-     * Scroll state when overlay was first shown.
-     * @type {{scrollTop: number, overlayY: number}|null}
-     * @private
-     */
-    _scrollOverlayAnchor: null,
-
-    /**
      * DOM element references.
      * @type {Object}
      * @private
@@ -275,9 +247,6 @@ const Gallery = {
             btnRemoveFromGroup: App.$('btn-remove-from-group'),
         };
 
-        // Create scroll indicator overlay
-        this._createScrollOverlay();
-
         // Info panel collapse toggle
         this._initInfoPanelCollapse();
 
@@ -312,23 +281,6 @@ const Gallery = {
             }
         });
 
-        // Track pointer position for scroll overlay positioning
-        this._mouseTracker = (e) => {
-            this._mousePos.x = e.clientX;
-            this._mousePos.y = e.clientY;
-        };
-        document.addEventListener('mousemove', this._mouseTracker, { passive: true });
-
-        // On touch devices, also track touch position so the scroll overlay
-        // anchors near the finger rather than a stale/absent mouse position
-        this._touchTracker = (e) => {
-            if (e.touches.length === 1) {
-                this._mousePos.x = e.touches[0].clientX;
-                this._mousePos.y = e.touches[0].clientY;
-            }
-        };
-        document.addEventListener('touchmove', this._touchTracker, { passive: true });
-
         // Create VirtualGrid instance
         this._grid = VirtualGrid.create({
             container: this._els.grid,
@@ -345,6 +297,16 @@ const Gallery = {
                 return App.thumbnailUrl(thumbId);
             },
             itemSelector: '.gallery-item',
+            getScrollOverlayText: (item) => {
+                const { by } = App.getSort();
+                if (by === 'date' && item.timestamp) {
+                    return VirtualGrid.formatScrollDate(new Date(item.timestamp));
+                }
+                if (by === 'rating') {
+                    return item.rating || 'No rating';
+                }
+                return null;
+            },
             onItemCreated: (id, el) => {
                 // Sync selection state when item is added to DOM
                 if (this._selection && this._selection.isSelected(id)) {
@@ -492,16 +454,8 @@ const Gallery = {
     onLeave() {
         // Unbind selection handlers
         this._selection.unbind();
-        // Unbind grid scroll handler
+        // Unbind grid scroll handler (also hides scroll overlay)
         this._grid.unbind();
-        // Hide scroll indicator overlay
-        if (this._scrollOverlayTimer) {
-            clearTimeout(this._scrollOverlayTimer);
-            this._scrollOverlayTimer = null;
-        }
-        if (this._scrollOverlay) {
-            this._scrollOverlay.hidden = true;
-        }
     },
 
     /**
@@ -961,17 +915,8 @@ const Gallery = {
         ThumbnailLoader.clear();
         this._grid.render();
 
-        // Add scroll indicator overlay
-        if (this._scrollOverlay) {
-            this._scrollOverlay.hidden = true;
-            grid.appendChild(this._scrollOverlay);
-        }
-
         // Bind selection
         this._selection.bind();
-
-        // Set up scroll overlay updates
-        this._bindScrollOverlay();
     },
 
     /**
@@ -1083,20 +1028,6 @@ const Gallery = {
         this._els.grid.style.setProperty('--thumb-size', size + 'px');
     },
 
-    /* ----------------------------------------------------------------------
-       SCROLL OVERLAY
-       ---------------------------------------------------------------------- */
-
-    /**
-     * Creates the scroll indicator overlay element.
-     * @private
-     */
-    _createScrollOverlay() {
-        this._scrollOverlay = document.createElement('div');
-        this._scrollOverlay.className = 'scroll-overlay';
-        this._scrollOverlay.hidden = true;
-    },
-
     /**
      * Initialise info panel collapse behaviour.
      * Binds the toggle button, subscribes to state changes, handles auto-collapse
@@ -1162,173 +1093,6 @@ const Gallery = {
         const infoPanelWidth = 300;
         const shouldCollapse = infoPanelWidth > window.innerWidth * 0.2;
         AppState.view.setInfoPanelCollapsed(shouldCollapse);
-    },
-
-    /**
-     * Binds scroll overlay updates to grid scroll.
-     * @private
-     */
-    _bindScrollOverlay() {
-        const grid = this._els.grid;
-        if (!grid) return;
-
-        // Remove old listener if exists
-        if (this._scrollOverlayHandler) {
-            grid.removeEventListener('scroll', this._scrollOverlayHandler);
-        }
-
-        this._scrollOverlayHandler = () => {
-            this._updateScrollOverlay(grid.scrollTop);
-        };
-        grid.addEventListener('scroll', this._scrollOverlayHandler, { passive: true });
-    },
-
-    /**
-     * Updates the scroll indicator overlay.
-     * @param {number} scrollTop
-     * @private
-     */
-    _updateScrollOverlay(scrollTop) {
-        const { by } = App.getSort();
-
-        if (by !== 'date' && by !== 'rating') {
-            if (this._scrollOverlay) {
-                this._scrollOverlay.hidden = true;
-            }
-            return;
-        }
-
-        const displayList = AppState.images.getDisplayList();
-        if (displayList.length === 0) return;
-
-        // Calculate first visible image
-        const itemHeight = this._grid.getItemHeight();
-        const itemsPerRow = this._grid.getItemsPerRow();
-        if (!itemHeight || !itemsPerRow) return;
-
-        const firstVisibleRow = Math.floor(scrollTop / itemHeight);
-        const firstVisibleIndex = firstVisibleRow * itemsPerRow;
-
-        if (firstVisibleIndex < 0 || firstVisibleIndex >= displayList.length) return;
-
-        const img = displayList[firstVisibleIndex];
-        if (!img) return;
-
-        if (by === 'date' && img.timestamp) {
-            const date = new Date(img.timestamp);
-            const formatted = this._formatScrollDate(date);
-            if (formatted) {
-                this._showScrollOverlay(formatted, scrollTop);
-            }
-        } else if (by === 'rating') {
-            const rating = img.rating || 'No rating';
-            this._showScrollOverlay(rating, scrollTop);
-        }
-    },
-
-    /**
-     * Shows the scroll indicator overlay.
-     * @param {string} text
-     * @param {number} scrollTop
-     * @private
-     */
-    _showScrollOverlay(text, scrollTop) {
-        if (!this._scrollOverlay || !text) return;
-
-        const wasHidden = this._scrollOverlay.hidden;
-        this._scrollOverlay.textContent = text;
-        this._scrollOverlay.hidden = false;
-
-        if (wasHidden) {
-            this._positionScrollOverlayAtMouse();
-            // Cache rects when overlay first appears to avoid reflows during scroll
-            this._cachedGridRect = this._els.grid?.getBoundingClientRect();
-            this._cachedOverlayHeight = this._scrollOverlay.getBoundingClientRect().height;
-            this._scrollOverlayAnchor = {
-                scrollTop: scrollTop,
-                overlayY: parseFloat(this._scrollOverlay.style.top) || 0,
-            };
-        } else {
-            this._updateScrollOverlayFromScroll(scrollTop);
-        }
-
-        if (this._scrollOverlayTimer) {
-            clearTimeout(this._scrollOverlayTimer);
-        }
-
-        this._scrollOverlayTimer = setTimeout(() => {
-            this._scrollOverlay.hidden = true;
-            this._scrollOverlayAnchor = null;
-            this._cachedGridRect = null;
-            this._cachedOverlayHeight = null;
-        }, 1000);
-    },
-
-    /**
-     * Positions the scroll overlay at the mouse.
-     * @private
-     */
-    _positionScrollOverlayAtMouse() {
-        if (!this._scrollOverlay) return;
-
-        const rect = this._scrollOverlay.getBoundingClientRect();
-        const padding = 12;
-
-        const left = this._mousePos.x - rect.width - padding;
-        const top = this._mousePos.y - rect.height / 2;
-
-        const clampedLeft = Math.max(8, left);
-        const clampedTop = Math.max(8, Math.min(top, window.innerHeight - rect.height - 8));
-
-        this._scrollOverlay.style.left = clampedLeft + 'px';
-        this._scrollOverlay.style.top = clampedTop + 'px';
-    },
-
-    /**
-     * Updates overlay position based on scroll.
-     * @param {number} scrollTop
-     * @private
-     */
-    _updateScrollOverlayFromScroll(scrollTop) {
-        if (!this._scrollOverlay || !this._scrollOverlayAnchor) return;
-
-        const grid = this._els.grid;
-        if (!grid) return;
-
-        const scrollDelta = scrollTop - this._scrollOverlayAnchor.scrollTop;
-        const scrollableHeight = grid.scrollHeight - grid.clientHeight;
-
-        if (scrollableHeight <= 0) return;
-
-        // Use cached rects to avoid forced reflows on every scroll event
-        const trackHeight = this._cachedGridRect?.height || grid.getBoundingClientRect().height;
-        const thumbDelta = (scrollDelta / scrollableHeight) * trackHeight;
-
-        const newTop = this._scrollOverlayAnchor.overlayY + thumbDelta;
-        const overlayHeight = this._cachedOverlayHeight || 30;
-        const clampedTop = Math.max(8, Math.min(newTop, window.innerHeight - overlayHeight - 8));
-
-        this._scrollOverlay.style.top = clampedTop + 'px';
-    },
-
-    /**
-     * Formats a date for the scroll overlay.
-     * @param {Date} date
-     * @returns {string}
-     * @private
-     */
-    _formatScrollDate(date) {
-        if (!(date instanceof Date) || isNaN(date)) return '';
-
-        const now = new Date();
-        const isThisYear = date.getFullYear() === now.getFullYear();
-
-        const options = { month: 'short', day: 'numeric' };
-        if (!isThisYear) {
-            options.year = 'numeric';
-        }
-
-        return date.toLocaleDateString(undefined, options);
     },
 
     /* ----------------------------------------------------------------------

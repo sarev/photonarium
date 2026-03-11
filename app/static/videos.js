@@ -206,6 +206,16 @@ const Videos = {
                 return App.thumbnailUrl(thumbId);
             },
             itemSelector: '.video-card',
+            getScrollOverlayText: (video) => {
+                const { by } = AppState.view.getSort();
+                if (by === 'date' && video.timestamp) {
+                    return VirtualGrid.formatScrollDate(new Date(video.timestamp));
+                }
+                if (by === 'rating') {
+                    return video.rating || 'No rating';
+                }
+                return null;
+            },
             getItemHeight: (_thumbSize, itemWidth) => {
                 // 16:9 thumbnail + label area (matching gallery pattern)
                 const thumbnailHeight = Math.round(itemWidth * 9 / 16);

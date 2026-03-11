@@ -502,6 +502,7 @@ const VirtualGrid = {
                 onItemCreated: config.onItemCreated || null,
                 getThumbnailUrl: config.getThumbnailUrl || null,
                 getThumbSize: config.getThumbSize || null,
+                getScrollOverlayText: config.getScrollOverlayText || null,
             },
 
             // ---------------------------------------------------------------
@@ -540,6 +541,21 @@ const VirtualGrid = {
             _pendingRenderFrame: null,  // Track pending RAF for render retry
             _bound: false,
 
+            // ---------------------------------------------------------------
+            // SCROLL OVERLAY STATE
+            // ---------------------------------------------------------------
+            // Managed internally when config.getScrollOverlayText is provided.
+            // Shows a floating date/rating hint while scrolling.
+            _scrollOverlay: null,
+            _scrollOverlayTimer: null,
+            _scrollOverlayAnchor: null,
+            _cachedGridRect: null,
+            _cachedOverlayHeight: null,
+            _mousePos: { x: 0, y: 0 },
+            _mouseTracker: null,
+            _touchTracker: null,
+            _scrollOverlayHandler: null,
+
             /**
              * Initialises the virtual grid.
              */
@@ -558,6 +574,11 @@ const VirtualGrid = {
                 }, 100);
 
                 window.addEventListener('resize', this._resizeHandler);
+
+                // Initialise scroll overlay if caller provides the callback
+                if (this._config.getScrollOverlayText) {
+                    this._initScrollOverlay();
+                }
             },
 
             /**
@@ -988,6 +1009,12 @@ const VirtualGrid = {
                 this._updateGridPattern();
                 container.appendChild(this._innerContainer);
 
+                // Append scroll overlay after inner container (if enabled)
+                if (this._scrollOverlay) {
+                    this._scrollOverlay.hidden = true;
+                    container.appendChild(this._scrollOverlay);
+                }
+
                 // Restore scroll position (clamped to new max)
                 const maxScroll = Math.max(0, this._state.totalHeight - container.clientHeight);
                 container.scrollTop = Math.min(savedScrollTop, maxScroll);
@@ -998,6 +1025,11 @@ const VirtualGrid = {
                 // Attach scroll listener
                 this._attachScrollListener();
                 this._bound = true;
+
+                // Attach scroll overlay listener (if enabled)
+                if (this._config.getScrollOverlayText) {
+                    this._bindScrollOverlay();
+                }
             },
 
             /**
@@ -1190,6 +1222,206 @@ const VirtualGrid = {
                 return ids;
             },
 
+            /* ----------------------------------------------------------
+               SCROLL OVERLAY (optional)
+               ---------------------------------------------------------- */
+
+            /**
+             * Creates the scroll overlay element and pointer trackers.
+             * Called from _init() when getScrollOverlayText is configured.
+             * @private
+             */
+            _initScrollOverlay() {
+                this._scrollOverlay = document.createElement('div');
+                this._scrollOverlay.className = 'scroll-overlay';
+                this._scrollOverlay.hidden = true;
+
+                this._mouseTracker = (e) => {
+                    this._mousePos.x = e.clientX;
+                    this._mousePos.y = e.clientY;
+                };
+                document.addEventListener('mousemove', this._mouseTracker, { passive: true });
+
+                this._touchTracker = (e) => {
+                    if (e.touches.length === 1) {
+                        this._mousePos.x = e.touches[0].clientX;
+                        this._mousePos.y = e.touches[0].clientY;
+                    }
+                };
+                document.addEventListener('touchmove', this._touchTracker, { passive: true });
+            },
+
+            /**
+             * Attaches the scroll overlay scroll listener to the container.
+             * @private
+             */
+            _bindScrollOverlay() {
+                const container = this._config.container;
+                if (!container) return;
+
+                if (this._scrollOverlayHandler) {
+                    container.removeEventListener('scroll', this._scrollOverlayHandler);
+                }
+
+                this._scrollOverlayHandler = () => {
+                    this._onScroll_updateOverlay(container.scrollTop);
+                };
+                container.addEventListener('scroll', this._scrollOverlayHandler, { passive: true });
+            },
+
+            /**
+             * Detaches the scroll overlay scroll listener.
+             * @private
+             */
+            _unbindScrollOverlay() {
+                const container = this._config.container;
+                if (container && this._scrollOverlayHandler) {
+                    container.removeEventListener('scroll', this._scrollOverlayHandler);
+                }
+                // Hide overlay and clear timer
+                if (this._scrollOverlayTimer) {
+                    clearTimeout(this._scrollOverlayTimer);
+                    this._scrollOverlayTimer = null;
+                }
+                if (this._scrollOverlay) {
+                    this._scrollOverlay.hidden = true;
+                }
+            },
+
+            /**
+             * Scroll handler: calculates the first visible item and asks the
+             * caller what text to show via getScrollOverlayText().
+             * @param {number} scrollTop - Current scroll offset
+             * @private
+             */
+            _onScroll_updateOverlay(scrollTop) {
+                const { itemHeight, itemsPerRow } = this._state;
+                if (!itemHeight || !itemsPerRow) return;
+
+                const items = this._config.getItems();
+                if (items.length === 0) return;
+
+                const firstVisibleRow = Math.floor(scrollTop / itemHeight);
+                const firstVisibleIndex = firstVisibleRow * itemsPerRow;
+                if (firstVisibleIndex < 0 || firstVisibleIndex >= items.length) return;
+
+                const item = items[firstVisibleIndex];
+                if (!item) return;
+
+                const text = this._config.getScrollOverlayText(item);
+                if (text) {
+                    this._showScrollOverlay(text, scrollTop);
+                } else if (this._scrollOverlay) {
+                    this._scrollOverlay.hidden = true;
+                }
+            },
+
+            /**
+             * Shows the scroll overlay with the given text, positioned near
+             * the pointer. Uses a 1s auto-hide timer.
+             * @param {string} text - Text to display
+             * @param {number} scrollTop - Current scroll offset
+             * @private
+             */
+            _showScrollOverlay(text, scrollTop) {
+                if (!this._scrollOverlay || !text) return;
+
+                const wasHidden = this._scrollOverlay.hidden;
+                this._scrollOverlay.textContent = text;
+                this._scrollOverlay.hidden = false;
+
+                if (wasHidden) {
+                    this._positionScrollOverlayAtMouse();
+                    this._cachedGridRect = this._config.container?.getBoundingClientRect();
+                    this._cachedOverlayHeight = this._scrollOverlay.getBoundingClientRect().height;
+                    this._scrollOverlayAnchor = {
+                        scrollTop: scrollTop,
+                        overlayY: parseFloat(this._scrollOverlay.style.top) || 0,
+                    };
+                } else {
+                    this._updateScrollOverlayFromScroll(scrollTop);
+                }
+
+                if (this._scrollOverlayTimer) {
+                    clearTimeout(this._scrollOverlayTimer);
+                }
+
+                this._scrollOverlayTimer = setTimeout(() => {
+                    this._scrollOverlay.hidden = true;
+                    this._scrollOverlayAnchor = null;
+                    this._cachedGridRect = null;
+                    this._cachedOverlayHeight = null;
+                }, 1000);
+            },
+
+            /**
+             * Positions the scroll overlay to the left of the current pointer.
+             * @private
+             */
+            _positionScrollOverlayAtMouse() {
+                if (!this._scrollOverlay) return;
+
+                const rect = this._scrollOverlay.getBoundingClientRect();
+                const padding = 48;
+
+                const left = this._mousePos.x - rect.width - padding;
+                const top = this._mousePos.y - rect.height / 2;
+
+                const clampedLeft = Math.max(8, left);
+                const clampedTop = Math.max(8, Math.min(top, window.innerHeight - rect.height - 8));
+
+                this._scrollOverlay.style.left = clampedLeft + 'px';
+                this._scrollOverlay.style.top = clampedTop + 'px';
+            },
+
+            /**
+             * Updates overlay vertical position proportionally as the user scrolls.
+             * @param {number} scrollTop - Current scroll offset
+             * @private
+             */
+            _updateScrollOverlayFromScroll(scrollTop) {
+                if (!this._scrollOverlay || !this._scrollOverlayAnchor) return;
+
+                const container = this._config.container;
+                if (!container) return;
+
+                const scrollDelta = scrollTop - this._scrollOverlayAnchor.scrollTop;
+                const scrollableHeight = container.scrollHeight - container.clientHeight;
+                if (scrollableHeight <= 0) return;
+
+                const trackHeight = this._cachedGridRect?.height || container.getBoundingClientRect().height;
+                const thumbDelta = (scrollDelta / scrollableHeight) * trackHeight;
+
+                const newTop = this._scrollOverlayAnchor.overlayY + thumbDelta;
+                const overlayHeight = this._cachedOverlayHeight || 30;
+                const clampedTop = Math.max(8, Math.min(newTop, window.innerHeight - overlayHeight - 8));
+
+                this._scrollOverlay.style.top = clampedTop + 'px';
+            },
+
+            /**
+             * Removes the scroll overlay element and pointer listeners.
+             * @private
+             */
+            _destroyScrollOverlay() {
+                if (this._scrollOverlayTimer) {
+                    clearTimeout(this._scrollOverlayTimer);
+                    this._scrollOverlayTimer = null;
+                }
+                if (this._mouseTracker) {
+                    document.removeEventListener('mousemove', this._mouseTracker);
+                    this._mouseTracker = null;
+                }
+                if (this._touchTracker) {
+                    document.removeEventListener('touchmove', this._touchTracker);
+                    this._touchTracker = null;
+                }
+                if (this._scrollOverlay) {
+                    this._scrollOverlay.remove();
+                    this._scrollOverlay = null;
+                }
+            },
+
             /**
              * Unbinds scroll listener and cancels pending operations.
              *
@@ -1216,6 +1448,11 @@ const VirtualGrid = {
                     this._pendingRenderFrame = null;
                 }
                 this._bound = false;
+
+                // Detach scroll overlay listener
+                if (this._config.getScrollOverlayText) {
+                    this._unbindScrollOverlay();
+                }
             },
 
             /**
@@ -1236,6 +1473,11 @@ const VirtualGrid = {
                 // Ensure visible items are rendered (fixes blank grid on re-enter)
                 if (this._config.container && this._state.itemHeight > 0) {
                     this._updateVisibleItems(this._config.container.scrollTop);
+                }
+
+                // Re-attach scroll overlay listener
+                if (this._config.getScrollOverlayText) {
+                    this._bindScrollOverlay();
                 }
             },
 
@@ -1274,6 +1516,11 @@ const VirtualGrid = {
                 this._state.pendingItems.clear();
                 this._config.container.innerHTML = '';
                 this._bound = false;
+
+                // Clean up scroll overlay element and listeners
+                if (this._config.getScrollOverlayText) {
+                    this._destroyScrollOverlay();
+                }
             },
 
             /**
@@ -1301,6 +1548,26 @@ const VirtualGrid = {
         instance._init();
 
         return instance;
+    },
+
+    /**
+     * Formats a date for scroll overlay display.
+     * Shows "Mon DD" for this year, "Mon DD, YYYY" for other years.
+     * @param {Date} date
+     * @returns {string} Formatted date, or empty string if invalid
+     */
+    formatScrollDate(date) {
+        if (!(date instanceof Date) || isNaN(date)) return '';
+
+        const now = new Date();
+        const isThisYear = date.getFullYear() === now.getFullYear();
+
+        const options = { month: 'short', day: 'numeric' };
+        if (!isThisYear) {
+            options.year = 'numeric';
+        }
+
+        return date.toLocaleDateString(undefined, options);
     },
 };
 
