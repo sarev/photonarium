@@ -201,6 +201,14 @@ const Search = {
         // Initialise search mode toggle
         this._initSearchModeToggle();
 
+        // Subscribe to filter changes — if the filter is cleared externally
+        // (e.g. toolbar clear button) while on the Search screen, reset the form
+        AppState.filter.onChanged(() => {
+            if (AppState.nav.getScreen() === 'search') {
+                this._populateForm();
+            }
+        });
+
         // Subscribe to AppState.people for deletions and dialog updates
         AppState.people.onChanged(() => {
             this._pruneDeletedPeople();

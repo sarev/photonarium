@@ -27,6 +27,7 @@ HEVC/H.265 videos are now recognised as browser-compatible (Chrome 107+, Firefox
 ### Bug Fixes
 
 - **Subtitle editor not resetting when switching videos** — clicking a different video while the transcription editor was active left stale text in the editor and could cause the timeline to get stuck on "Loading scenes...".
+- **Clear filter button not resetting the Search screen** — pressing the toolbar's clear filter button while on the Search screen cleared the active filter but left the form fields populated with the old values.
 
 ---
 
