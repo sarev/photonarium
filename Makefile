@@ -28,9 +28,6 @@ TORCH_CU118 := https://download.pytorch.org/whl/cu118
 TORCH_CU126 := https://download.pytorch.org/whl/cu126
 TORCH_CU128 := https://download.pytorch.org/whl/cu128
 
-# Number of recent release versions to keep (override: make prune-all KEEP=3)
-KEEP ?= 2
-
 # Compose file location
 COMPOSE_FILE := docker/docker-compose.yml
 PHOTOS_OVERLAY := docker/docker-compose.photos.yml
@@ -79,7 +76,7 @@ VARIANT_DEPS := docker/Dockerfile docker/requirements-ml.txt docker/entrypoint.s
 .PHONY: models base-x64 base-arm64 build build-cpu build-cu118 build-cu126 build-cu128 build-intel build-arm64 \
         all-x64 all-images use test test-photos up up-photos down logs shell \
         push-base push-latest push-cu118 push-cu126 push-cu128 push-intel push-arm64 push \
-        prune prune-all clean clean-all help
+        prune clean clean-all help
 
 # =============================================================================
 # Model download (depends on config.py)
@@ -414,73 +411,38 @@ clean-all:  ## Remove all images, markers, and prune Docker build cache
 	docker builder prune -f
 	@echo "Done."
 
-prune:  ## Remove non-release versioned images (intermediate commits)
-	@echo "Pruning non-release $(IMAGE_NAME) images..."
-	@# Non-release versions have a git-describe suffix: -<N>-g<hex>
-	@# e.g. v1.1.4-beta.14-3-gdd3bbbe vs release v1.1.4-beta.14
-	@all_tags=$$(docker images $(IMAGE_NAME) --format '{{.Tag}}' 2>/dev/null \
-		| grep '^v' | sort -u); \
-	if [ -z "$$all_tags" ]; then \
-		echo "No versioned images found."; \
+prune:  ## Remove old images, keeping the latest release and any newer builds
+	@echo "Pruning old $(IMAGE_NAME) images..."
+	@# Find the newest release version (no git-describe -N-gHEX suffix)
+	@latest=$$(docker images $(IMAGE_NAME) --format '{{.CreatedAt}}\t{{.Tag}}' 2>/dev/null \
+		| grep '	v' | sort -r \
+		| awk -F'\t' '{print $$2}' \
+		| sed -E 's/-(cpu|cu118|cu126|cu128|intel|arm64)$$//' \
+		| grep -vE -- '-[0-9]+-g[0-9a-f]+$$' \
+		| awk '!seen[$$0]++' \
+		| head -1); \
+	if [ -z "$$latest" ]; then \
+		echo "No release images found, nothing to prune."; \
 	else \
+		echo "Latest release: $$latest"; \
 		removed=0; \
-		for tag in $$all_tags; do \
-			base=$$(echo "$$tag" | sed -E 's/-(cpu|cu118|cu126|cu128|intel|arm64)$$//'); \
-			if echo "$$base" | grep -qE -- '-[0-9]+-g[0-9a-f]+$$'; then \
-				echo "  $(IMAGE_NAME):$$tag"; \
-				docker rmi "$(IMAGE_NAME):$$tag" 2>/dev/null || true; \
-				removed=$$((removed + 1)); \
-			fi; \
+		for tag in $$(docker images $(IMAGE_NAME) --format '{{.Tag}}' 2>/dev/null \
+			| grep '^v' | sort -u); do \
+			case "$$tag" in "$$latest"*) continue ;; esac; \
+			echo "  Removing $(IMAGE_NAME):$$tag"; \
+			docker rmi "$(IMAGE_NAME):$$tag" 2>/dev/null || true; \
+			removed=$$((removed + 1)); \
 		done; \
 		if [ "$$removed" -eq 0 ]; then \
-			echo "No non-release images found."; \
+			echo "No old images to remove."; \
 		else \
-			echo "Removed $$removed non-release tag(s)."; \
+			echo "Removed $$removed image tag(s)."; \
 		fi; \
 	fi
-	@echo "Pruning dangling images..."
-	@docker image prune -f
-	@echo "Pruning build cache..."
-	@docker builder prune -f
-	@echo "Done."
-
-prune-all: prune  ## Also remove old releases, keeping KEEP=2 most recent
-	@echo "Pruning old release versions (keeping $(KEEP))..."
-	@all_tags=$$(docker images $(IMAGE_NAME) --format '{{.Tag}}' 2>/dev/null \
-		| grep '^v' | sort -u); \
-	if [ -z "$$all_tags" ]; then \
-		echo "No release images remaining."; \
-	else \
-		base_versions=$$(docker images $(IMAGE_NAME) \
-			--format '{{.CreatedAt}}\t{{.Tag}}' 2>/dev/null \
-			| grep '	v' | sort -r \
-			| awk -F'\t' '{print $$2}' \
-			| sed -E 's/-(cpu|cu118|cu126|cu128|intel|arm64)$$//' \
-			| awk '!seen[$$0]++'); \
-		total=$$(echo "$$base_versions" | wc -l); \
-		if [ "$$total" -le "$(KEEP)" ]; then \
-			echo "Only $$total release(s) found, nothing to prune."; \
-		else \
-			keep=$$(echo "$$base_versions" | head -n $(KEEP)); \
-			remove=$$(echo "$$base_versions" | tail -n +$$(($(KEEP) + 1))); \
-			echo "Keeping:"; \
-			echo "$$keep" | while read -r ver; do echo "  $$ver"; done; \
-			echo "Removing:"; \
-			removed=0; \
-			for ver in $$remove; do \
-				matching=$$(echo "$$all_tags" \
-					| grep -E "^$${ver}(-(cpu|cu118|cu126|cu128|intel|arm64))?$$"); \
-				for tag in $$matching; do \
-					echo "  $(IMAGE_NAME):$$tag"; \
-					docker rmi "$(IMAGE_NAME):$$tag" 2>/dev/null || true; \
-					removed=$$((removed + 1)); \
-				done; \
-			done; \
-			echo "Removed $$removed release tag(s)."; \
-		fi; \
-	fi
-	@docker image prune -f
-	@echo "Done."
+	@before=$$(docker system df --format '{{.Size}}' | head -1); \
+	docker image prune -f > /dev/null 2>&1; \
+	after=$$(docker system df --format '{{.Size}}' | head -1); \
+	echo "Images: $$before → $$after"
 
 # =============================================================================
 # Help
@@ -518,7 +480,7 @@ help:  ## Show this help
 		awk 'BEGIN {FS = ":.*##"}; {printf "  $(CYAN)%-14s$(RESET) %s\n", $$1, $$2}'
 	@echo ""
 	@echo "$(CYAN)Cleanup:$(RESET)"
-	@grep -E '^(prune|prune-all|clean).*:.*##' $(MAKEFILE_LIST) | \
+	@grep -E '^(prune|clean).*:.*##' $(MAKEFILE_LIST) | \
 		awk 'BEGIN {FS = ":.*##"}; {printf "  $(CYAN)%-14s$(RESET) %s\n", $$1, $$2}'
 	@echo ""
 	@echo "Examples:"
@@ -527,7 +489,7 @@ help:  ## Show this help
 	@echo "  make build-cu126  Build CUDA 12.6 image for RTX 30xx/40xx"
 	@echo "  make build-arm64  Build ARM64 image for Raspberry Pi/Apple Silicon"
 	@echo "  make all-images   Build all image variants"
-	@echo "  make prune        Remove intermediate commit images"
+	@echo "  make prune        Remove old images, keep latest release"
 	@echo "  make push         Push all built images to DockerHub"
 	@echo "  make up           Start the container"
 	@echo "  make logs         Follow container output"
