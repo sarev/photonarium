@@ -4612,7 +4612,12 @@ class ImageDatabase:
         rows = cursor.fetchall()
 
         if rows:
+            logger.info(
+                f'Backfilling codec metadata for {len(rows)} videos '
+                f'(one-time migration, this may take a few minutes)...',
+            )
             updated = 0
+            batch_size = 50
             for row in rows:
                 try:
                     vmeta = get_video_metadata(Path(row['path']))
@@ -4625,6 +4630,12 @@ class ImageDatabase:
                         (vmeta.codec, vmeta.codec_audio, vmeta.codec_container, row['id']),
                     )
                     updated += 1
+                    # Commit in batches to avoid holding the connection for
+                    # minutes on large libraries (prevents "database is locked"
+                    # errors from other threads like the log handler).
+                    if updated % batch_size == 0:
+                        self.conn.commit()
+                        logger.info(f'  Codec backfill: {updated}/{len(rows)} videos...')
                 except Exception as e:
                     logger.debug(f'Failed to backfill codecs for {row["path"]}: {e}')
             if updated:
