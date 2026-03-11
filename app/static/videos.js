@@ -30,7 +30,7 @@
    -------------------------------------------------------------------------- */
 
 /** @type {Set<string>} Video codecs that HTML5 <video> can decode natively. */
-const _BROWSER_VIDEO_CODECS = new Set(['h264', 'vp8', 'vp9', 'av1', 'theora']);
+const _BROWSER_VIDEO_CODECS = new Set(['h264', 'hevc', 'h265', 'vp8', 'vp9', 'av1', 'theora']);
 
 /** @type {Set<string>} Audio codecs that HTML5 <video> can decode natively. */
 const _BROWSER_AUDIO_CODECS = new Set(['aac', 'mp3', 'opus', 'vorbis', 'flac']);
@@ -1036,10 +1036,18 @@ const Videos = {
         const card = App.createElement('div', { className: 'video-card loaded', dataId: video.id });
 
         // Thumbnail image (blob URL managed by VirtualGrid/ThumbnailLoader)
+        // Build tooltip: path on first line, resolution + codecs on second
+        let tooltip = video.path || video.basename || '';
+        const infoParts = [];
+        if (video.width && video.height) infoParts.push(video.width + '\u00D7' + video.height);
+        if (video.codec_video) infoParts.push(video.codec_video.toUpperCase());
+        if (video.codec_audio) infoParts.push(video.codec_audio.toUpperCase());
+        if (infoParts.length) tooltip += '\n' + infoParts.join(' \u2022 ');
+
         const img = App.createElement('img', {
             src: blobUrl,
             alt: video.basename || '',
-            title: video.path || video.basename || '',
+            title: tooltip,
         });
         card.appendChild(img);
 

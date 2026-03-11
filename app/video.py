@@ -778,7 +778,7 @@ def extract_audio_segment(
 # ---------------------------------------------------------------------------
 
 # Codecs that HTML5 <video> can decode natively in most modern browsers
-_BROWSER_VIDEO_CODECS = {'h264', 'vp8', 'vp9', 'av1', 'theora'}
+_BROWSER_VIDEO_CODECS = {'h264', 'hevc', 'h265', 'vp8', 'vp9', 'av1', 'theora'}
 _BROWSER_AUDIO_CODECS = {'aac', 'mp3', 'opus', 'vorbis', 'flac'}
 
 
