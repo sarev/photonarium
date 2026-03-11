@@ -69,7 +69,7 @@ The minimap hides automatically when the timeline fits without scrolling. Each s
 
 ### Interacting with scenes
 
-- **Single click** highlights a scene.
+- **Single click** highlights a scene. When subtitle editing is active, this also loads the scene's transcription into the editor.
 - **Double click** opens the video in the full-screen viewer, seeked to that scene's start time, and begins playback automatically.
 - **Click the star** to make that scene the video's preferred scene (updates the thumbnail in the Gallery and Videos grid immediately).
 
@@ -77,13 +77,19 @@ The minimap hides automatically when the timeline fits without scrolling. Each s
 
 When a video has audio, Photonarium automatically transcribes speech during processing (enabled by default with automatic language detection). The transcription text appears below the scene timeline, with each segment labelled by its timecode. Transcriptions are semantically searchable - searching for a phrase someone said in a video will find matching scenes.
 
+### Editing subtitles
+
+Click the **edit** button in the Videos toolbar to enter subtitle editing mode. An editor panel appears above the timeline. Click any scene to load its transcription into the editor, make your changes, and press **Enter** to save or **Escape** to cancel and restore the original text. The editor stays active so you can click through scenes and edit them in sequence without toggling the button each time.
+
+Edits take effect immediately - the updated text is used for semantic search, shown in scene preview popups, and displayed as subtitles during playback. You can add transcriptions to scenes that have none (e.g. scenes with background music but no speech) or correct auto-generated text that the speech-to-text model got wrong.
+
 ### Subtitles in playback
 
 Transcriptions are also displayed as **subtitles** when playing videos in the full-screen viewer. Standard browser subtitle controls apply.
 
 ### Per-video language
 
-Right-click a video in the grid to set its transcription language. This is useful for multilingual libraries where automatic detection may not always pick the right language. After changing the language, you can retranscribe the video to get more accurate results.
+Select a video and use the **language dropdown** in the Videos toolbar to set its transcription language. This is useful for multilingual libraries where automatic detection may not always pick the right language. Changing the language clears the existing transcriptions and queues the video for retranscription with the correct language hint.
 
 ## Browse mode vs search mode
 

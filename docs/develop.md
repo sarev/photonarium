@@ -122,11 +122,12 @@ Mutation endpoints prefer batch format (arrays, not single items).
 | GET | `/api/events` | Fetch and clear pending events |
 | GET | `/api/events/count` | Get count of pending events (lightweight) |
 
-#### Scenes (2 routes)
+#### Scenes (3 routes)
 
 | Method | Endpoint | Description |
 |--------|----------|-------------|
 | GET | `/api/scenes/:id/thumbnail` | Get scene keyframe thumbnail |
+| PUT | `/api/scenes/:id/transcription` | Update scene subtitle text `{transcription}` |
 | PUT | `/api/images/:id/preferred-scene` | Set preferred scene for a video `{scene_id}` |
 
 #### Utility (1 route)

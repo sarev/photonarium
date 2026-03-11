@@ -1,5 +1,33 @@
 # Release Notes
 
+## v1.2.3-beta
+
+### Inline Subtitle Editor
+
+A new **edit** toggle in the Videos toolbar opens a subtitle editor panel above the scene timeline. Click any scene to load its transcription, edit the text, and press **Enter** to save or **Escape** to cancel. The editor stays active for editing multiple scenes in sequence. You can correct auto-generated transcriptions or add subtitles to scenes that have none. Edits update the semantic search embedding so edited text is immediately searchable.
+
+### Codec-Aware Video Transcoding
+
+Videos encoded with browser-incompatible codecs (e.g. EAC-3/Dolby Digital Plus audio in MKV containers) now show a **warning badge** on their thumbnails. Clicking the badge opens a transcoding dialog that converts the video to MP4/H.264/AAC using ffmpeg. The transcoded copy inherits the original's scenes, transcriptions, thumbnails, and embeddings — no pipeline re-processing required. Progress is reported on the Database screen.
+
+Video and audio codec metadata is extracted during ingestion and stored in the database. A one-time backfill migration runs on upgrade to populate codec data for existing videos.
+
+### Import Timestamp Pinning
+
+Files imported into the catalogue previously had their filesystem timestamps replaced with the copy date, making date-based sorting unreliable after import. The importer now derives the authoritative timestamp from the original file (using EXIF, filename parsing, and filesystem metadata while they're still trustworthy) and stores it with manual confidence, preventing the self-healing logic from overwriting correct dates on subsequent scans.
+
+### Bug Fixes
+
+- **Perpetual re-indexing of unreadable files** — files that fail metadata extraction (zero-byte, corrupt, unsupported) were silently skipped with no DB record, causing the pipeline to retry them on every startup and triggering a full Stage 6 run each time. Stub records are now created so they're recognised as existing on subsequent runs, but self-heal if the file is replaced on disk.
+- **Silent videos re-processed every run** — videos with no audio or no detected speech had scene transcriptions left as NULL, causing Stage 7 to re-select them every restart. Silent scenes are now marked with empty transcription strings, with a one-time migration to backfill existing silent scenes.
+- **Unnecessary Stage 6 on restart** — grouping and duplicate computation ran on every restart even when nothing had changed, significant for large libraries where this takes minutes. Now skipped when no new or changed files are detected.
+- **Import completion callback** — fixed a call to a non-existent method that could cause errors after import.
+- **Codec backfill migration logging** — the one-time codec backfill job now logs "this may take a few minutes" before starting and commits in batches of 50 (instead of one giant transaction), releasing the DB connection between batches so the log handler and other operations can proceed.
+- **Thread-safety in read-only DB methods** — several read-only database methods were called from Waitress request threads without the connection lock, causing intermittent crashes under concurrent load.
+- **Inline Python imports** — moved ~30 inline stdlib imports to top-level across 8 backend files for consistency and readability.
+
+---
+
 ## v1.2.2-beta.19
 
 ### First-Run Setup Assistant
