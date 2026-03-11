@@ -365,6 +365,11 @@ const Videos = {
                     this._needsRefresh = true;
                 }
             } else if (event.property === 'selectedVideo') {
+                // Reset the subtitle editor when switching videos so stale
+                // text from the previous video's scene doesn't linger.
+                if (this._editingSceneId) {
+                    this._cancelSubtitleEdit();
+                }
                 this._renderTimeline();
                 this._updateLanguageDropdown();
                 this._updateEditSubsButton();
