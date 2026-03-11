@@ -1452,7 +1452,8 @@ a:hover {
 
 /* Dark mode support for date inputs */
 [data-theme="dark"] .info-timestamp,
-[data-theme="dark"] .date-range input[type="date"] {
+[data-theme="dark"] .date-month-select,
+[data-theme="dark"] .date-day-select {
     color-scheme: dark;
     background-color: var(--color-bg-elevated);
     color: var(--color-text-primary);
@@ -3330,26 +3331,26 @@ a:hover {
    ========================================================================== */
 
 #screen-search {
-    justify-content: center;
     align-items: center;
-    padding: 2rem;
+    padding: 1.25rem;
     overflow-y: auto;
 }
 
 .search-container {
     width: 100%;
     max-width: 700px;
+    margin: auto;
 }
 
 .search-section {
     background-color: var(--color-bg-elevated);
     border-radius: 8px;
-    padding: 1.5rem;
+    padding: 1.25rem;
     box-shadow: var(--shadow-sm);
 }
 
 .search-section h2 {
-    margin-bottom: 1.5rem;
+    margin-bottom: 1rem;
     color: var(--color-text-teal);
 }
 
@@ -3357,7 +3358,7 @@ a:hover {
 .search-mode-toggle {
     display: flex;
     gap: 0;
-    margin-bottom: 1.25rem;
+    margin-bottom: 0.75rem;
     border: 1px solid var(--color-border);
     border-radius: 6px;
     overflow: hidden;
@@ -3385,7 +3386,7 @@ a:hover {
 }
 
 .filter-group {
-    margin-bottom: 1.25rem;
+    margin-bottom: 0.75rem;
 }
 
 .filter-group label {
@@ -3393,13 +3394,12 @@ a:hover {
     font-size: 0.9rem;
     font-weight: 500;
     color: var(--color-text-secondary);
-    margin-bottom: 0.5rem;
+    margin-bottom: 0.3rem;
 }
 
-.filter-group input[type="text"],
-.filter-group input[type="date"] {
+.filter-group input[type="text"] {
     width: 100%;
-    padding: 0.6rem 0.75rem;
+    padding: 0.45rem 0.65rem;
     font-family: inherit;
     font-size: 0.95rem;
     background-color: var(--color-bg-primary);
@@ -3431,25 +3431,99 @@ a:hover {
     opacity: 0.85;
 }
 
-.date-range {
+/* Date filter: header with label + range toggle */
+.date-filter-header {
     display: flex;
     align-items: center;
-    gap: 0.75rem;
+    justify-content: space-between;
 }
 
-.date-range input {
-    flex: 1;
+.date-filter-header label {
+    margin-bottom: 0;
 }
 
-/* Light mode date inputs */
+.date-range-toggle {
+    padding: 0.15rem 0.4rem;
+    font-size: 0.85rem;
+}
+
+.date-range-toggle.active {
+    background-color: var(--color-accent-light);
+    color: var(--color-accent);
+}
+
+/* Date component row: year + month + day + calendar */
+.date-component-row {
+    display: flex;
+    align-items: center;
+    gap: 0.35rem;
+    margin-top: 0.4rem;
+}
+
+.date-component-row.disabled {
+    opacity: 0.35;
+    pointer-events: none;
+}
+
+.date-year-input {
+    width: 4.2rem;
+    padding: 0.4rem 0.35rem;
+    font-family: inherit;
+    font-size: 0.85rem;
+    background-color: var(--color-bg-primary);
+    border: 1px solid var(--color-border);
+    border-radius: 4px;
+    color: var(--color-text-primary);
+    text-align: center;
+}
+
+.date-month-select,
+.date-day-select {
+    padding: 0.4rem 0.2rem;
+    font-size: 0.85rem;
+    font-family: inherit;
+    border: 1px solid var(--color-border);
+    border-radius: 4px;
+    background: var(--color-bg-primary);
+    color: var(--color-text-primary);
+    cursor: pointer;
+    outline: none;
+}
+
+.date-month-select {
+    width: 4.2rem;
+}
+
+.date-day-select {
+    width: 3.6rem;
+}
+
+.date-year-input:focus,
+.date-month-select:focus,
+.date-day-select:focus {
+    outline: none;
+    border-color: var(--color-accent);
+    box-shadow: 0 0 0 2px var(--color-accent-light);
+}
+
+.date-picker-btn {
+    padding: 0.2rem 0.3rem;
+    font-size: 0.85rem;
+}
+
+.date-hidden-picker {
+    position: absolute;
+    width: 0;
+    height: 0;
+    opacity: 0;
+    pointer-events: none;
+}
+
+/* Light mode date component inputs */
 [data-theme="light"] .info-timestamp,
-[data-theme="light"] .date-range input[type="date"] {
+[data-theme="light"] .date-month-select,
+[data-theme="light"] .date-day-select {
     color-scheme: light;
-}
-
-.date-separator {
-    color: var(--color-text-muted);
-    font-size: 0.9rem;
 }
 
 .rating-filter {
@@ -3462,17 +3536,27 @@ a:hover {
 }
 
 .similarity-slider {
-    margin-top: 0.75rem;
-    padding: 0.75rem;
+    margin-top: 0.5rem;
+    padding: 0.5rem 0.75rem;
     background-color: var(--color-bg-secondary);
     border-radius: 6px;
+    display: grid;
+    grid-template-columns: auto 1fr;
+    grid-template-rows: auto auto;
+    column-gap: 0.75rem;
+    align-items: center;
 }
 
 .similarity-slider label {
-    display: block;
     font-size: 0.85rem;
     color: var(--color-text-secondary);
-    margin-bottom: 0.5rem;
+    white-space: nowrap;
+    grid-row: 1;
+}
+
+.similarity-slider .similarity-hints {
+    grid-column: 2;
+    grid-row: 2;
 }
 
 .similarity-slider label span {
@@ -3481,6 +3565,7 @@ a:hover {
 }
 
 .similarity-slider input[type="range"] {
+    grid-row: 1;
     width: 100%;
     height: 6px;
     border-radius: 3px;
@@ -3523,8 +3608,8 @@ a:hover {
 .filter-actions {
     display: flex;
     gap: 0.75rem;
-    margin-top: 1.5rem;
-    padding-top: 1.5rem;
+    margin-top: 1rem;
+    padding-top: 1rem;
     border-top: 1px solid var(--color-border-light);
 }
 
@@ -3543,8 +3628,8 @@ a:hover {
     display: flex;
     flex-wrap: wrap;
     gap: 0.25rem;
-    padding: 0.5rem;
-    min-height: 2.5rem;
+    padding: 0.4rem;
+    min-height: 2.2rem;
     background-color: var(--color-bg-primary);
     border: 1px solid var(--color-border);
     border-radius: 4px;

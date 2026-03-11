@@ -179,21 +179,18 @@ AppState.duplicates = (function() {
         let candidates = AppState.images.getAll();
         if (!candidates.length) return [];
 
-        // Date range filter
-        if (filter.dateStart) {
-            const start = new Date(filter.dateStart);
-            candidates = candidates.filter(img => {
-                if (!img.timestamp) return false;
-                return new Date(img.timestamp) >= start;
-            });
-        }
-        if (filter.dateEnd) {
-            const end = new Date(filter.dateEnd);
-            end.setHours(23, 59, 59, 999);
-            candidates = candidates.filter(img => {
-                if (!img.timestamp) return false;
-                return new Date(img.timestamp) <= end;
-            });
+        // Normalise legacy ISO-string date format from older saved groups
+        AppState.filter.normaliseLegacyDates(filter);
+
+        // Date filter (component-based with wildcard support)
+        if (filter.dateFrom || filter.dateTo) {
+            const isRange = !!filter.dateRange;
+            candidates = candidates.filter(img =>
+                AppState.filter.matchDate(
+                    img.timestamp, filter.dateFrom || null,
+                    filter.dateTo || null, isRange,
+                ),
+            );
         }
 
         // Rating filter

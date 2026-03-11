@@ -247,12 +247,10 @@ AppState.images = (function() {
         const idSet = Array.isArray(currentFilter.imageIds) ? new Set(currentFilter.imageIds.map(String)) : null;
         const scores = isSemantic ? (currentFilter.scores || {}) : null;
         const textLower = (!isSemantic && currentFilter.text) ? currentFilter.text.toLowerCase() : null;
-        const dateStart = currentFilter.dateStart ? new Date(currentFilter.dateStart) : null;
-        let dateEnd = null;
-        if (currentFilter.dateEnd) {
-            dateEnd = new Date(currentFilter.dateEnd);
-            dateEnd.setHours(23, 59, 59, 999);
-        }
+        const dateFrom = currentFilter.dateFrom || null;
+        const dateTo = currentFilter.dateTo || null;
+        const isDateRange = !!currentFilter.dateRange;
+        const hasDateFilter = dateFrom !== null || dateTo !== null;
         const filterEmoji = currentFilter.rating ? [...currentFilter.rating] : null;
         const peopleImageIds = (currentFilter.people && currentFilter.peopleImageIds) || null;
         const metadataImageIds = currentFilter.metadataImageIds || null;
@@ -268,10 +266,8 @@ AppState.images = (function() {
                 const desc = (img.description || '').toLowerCase();
                 if (!desc.includes(textLower)) return false;
             }
-            if (dateStart || dateEnd) {
-                const imgDate = new Date(img.timestamp);
-                if (dateStart && imgDate < dateStart) return false;
-                if (dateEnd && imgDate > dateEnd) return false;
+            if (hasDateFilter) {
+                if (!AppState.filter.matchDate(img.timestamp, dateFrom, dateTo, isDateRange)) return false;
             }
             if (filterEmoji) {
                 if (!filterEmoji.some(e => img.rating && img.rating.includes(e))) return false;

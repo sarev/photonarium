@@ -331,8 +331,9 @@ const App = {
      * Sets the filter criteria.
      * @param {Object|null} filter - The filter criteria or null to clear
      * @param {string} [filter.text] - Text to search in descriptions
-     * @param {string} [filter.dateStart] - Start date (ISO string)
-     * @param {string} [filter.dateEnd] - End date (ISO string)
+     * @param {DateComponents} [filter.dateFrom] - From-date components (null fields = wildcard)
+     * @param {DateComponents} [filter.dateTo] - To-date components (null fields = wildcard)
+     * @param {boolean} [filter.dateRange] - Whether range mode is active
      * @param {string} [filter.rating] - Rating emoji to filter by
      * @param {Object} [options] - Options for filter setting
      * @param {boolean} [options.silent] - If true, don't emit filterChanged event

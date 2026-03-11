@@ -326,7 +326,7 @@
                     <!-- Sort controls -->
                     <div class="sort-controls">
                         <button id="btn-sort-date" class="toolbar-btn active" title="Sort by date">
-                            <span class="icon" data-icon="calendar_month">📅</span>
+                            <span class="icon" data-icon="calendar_month">&#x1F4C5;</span>
                         </button>
                         <button id="btn-sort-rating" class="toolbar-btn" title="Sort by rating">
                             <span class="icon" data-icon="star">★</span>
@@ -367,7 +367,7 @@
                 <div class="toolbar-group" data-for-screen="videos">
                     <div class="sort-controls">
                         <button id="btn-vid-sort-date" class="toolbar-btn active" title="Sort by date">
-                            <span class="icon" data-icon="calendar_month">📅</span>
+                            <span class="icon" data-icon="calendar_month">&#x1F4C5;</span>
                         </button>
                         <button id="btn-vid-sort-rating" class="toolbar-btn" title="Sort by rating">
                             <span class="icon" data-icon="star">★</span>
@@ -633,17 +633,17 @@
                     <h2>Search Filters</h2>
 
                     <!-- Search mode toggle -->
-                    <div class="search-mode-toggle" title="Choose what to search">
-                        <button data-mode="all" class="active">All</button>
-                        <button data-mode="images">Images</button>
-                        <button data-mode="videos">Videos</button>
+                    <div class="search-mode-toggle">
+                        <button data-mode="all" class="active" tabindex="-1" title="Search both images and videos">All</button>
+                        <button data-mode="images" tabindex="-1" title="Search images only">Images</button>
+                        <button data-mode="videos" tabindex="-1" title="Search videos only">Videos</button>
                     </div>
 
                     <!-- Text description search -->
                     <div class="filter-group">
                         <label for="filter-text">Description</label>
                         <div class="filter-text-wrapper">
-                            <input type="text" id="filter-text" placeholder="Search by description..." title="Describe what you're looking for. Use -word to exclude concepts. More terms = better results (e.g. 'beach sand sea -people -crowd' works better than 'beach -people').">
+                            <input type="text" id="filter-text" placeholder="Search by description..." title="Describe what you're looking for. Use -word to exclude concepts. More terms = better results (e.g. 'beach sand sea -people -crowd' works better than 'beach -people'). Leave blank to skip.">
                             <span id="filter-text-warning" class="filter-text-warning" hidden title="Descriptions containing only names may return empty results. Use the 'People' section below for people searches.">&#x26A0;</span>
                         </div>
                         <div class="similarity-slider">
@@ -660,22 +660,68 @@
                     <div class="filter-group" id="filter-people-group">
                         <label>People</label>
                         <div class="people-filter">
-                            <div id="filter-people-chips" class="people-chips">
+                            <div id="filter-people-chips" class="people-chips"
+                                 title="Filter by recognised people. Leave blank to show everyone.">
                                 <span class="people-placeholder">Click to add people...</span>
                             </div>
                             <button id="btn-people-picker" class="toolbar-btn" title="Select people">
-                                <span class="icon" data-icon="person_add">🏷️</span>
+                                <span class="icon" data-icon="person_add">&#x2795;</span>
                             </button>
                         </div>
                     </div>
 
-                    <!-- Date range filter -->
-                    <div class="filter-group">
-                        <label id="filter-date-label">Date Range</label>
-                        <div class="date-range">
-                            <input type="date" id="filter-date-start" placeholder="Start date">
-                            <span class="date-separator">to</span>
-                            <input type="date" id="filter-date-end" placeholder="End date">
+                    <!-- Date filter (component-based with optional range) -->
+                    <div class="filter-group" id="filter-date-group">
+                        <div class="date-filter-header">
+                            <label id="filter-date-label">Date</label>
+                            <button id="btn-date-range-toggle" class="toolbar-btn date-range-toggle"
+                                    title="Toggle date range">
+                                <span class="icon" data-icon="swap_horiz">&#x21C4;</span>
+                            </button>
+                        </div>
+                        <div class="date-component-row" id="date-from-row">
+                            <input type="text" id="date-from-year" class="date-year-input"
+                                   placeholder="Year" maxlength="4" inputmode="numeric"
+                                   title="Year (leave empty for any year)">
+                            <select id="date-from-month" class="date-month-select" title="Month">
+                                <option value="">Any</option>
+                                <option value="1">Jan</option><option value="2">Feb</option>
+                                <option value="3">Mar</option><option value="4">Apr</option>
+                                <option value="5">May</option><option value="6">Jun</option>
+                                <option value="7">Jul</option><option value="8">Aug</option>
+                                <option value="9">Sep</option><option value="10">Oct</option>
+                                <option value="11">Nov</option><option value="12">Dec</option>
+                            </select>
+                            <select id="date-from-day" class="date-day-select" title="Day">
+                                <option value="">Any</option>
+                            </select>
+                            <input type="date" id="date-from-picker" class="date-hidden-picker">
+                            <button class="toolbar-btn date-picker-btn" data-target="from"
+                                    title="Pick from calendar">
+                                <span class="icon" data-icon="calendar_month">&#x1F4C5;</span>
+                            </button>
+                        </div>
+                        <div class="date-component-row" id="date-to-row">
+                            <input type="text" id="date-to-year" class="date-year-input"
+                                   placeholder="Year" maxlength="4" inputmode="numeric"
+                                   title="Year (leave empty for any year)">
+                            <select id="date-to-month" class="date-month-select" title="Month">
+                                <option value="">Any</option>
+                                <option value="1">Jan</option><option value="2">Feb</option>
+                                <option value="3">Mar</option><option value="4">Apr</option>
+                                <option value="5">May</option><option value="6">Jun</option>
+                                <option value="7">Jul</option><option value="8">Aug</option>
+                                <option value="9">Sep</option><option value="10">Oct</option>
+                                <option value="11">Nov</option><option value="12">Dec</option>
+                            </select>
+                            <select id="date-to-day" class="date-day-select" title="Day">
+                                <option value="">Any</option>
+                            </select>
+                            <input type="date" id="date-to-picker" class="date-hidden-picker">
+                            <button class="toolbar-btn date-picker-btn" data-target="to"
+                                    title="Pick from calendar">
+                                <span class="icon" data-icon="calendar_month">&#x1F4C5;</span>
+                            </button>
                         </div>
                     </div>
 
@@ -683,9 +729,9 @@
                     <div class="filter-group">
                         <label for="filter-rating">Rating</label>
                         <div class="rating-filter">
-                            <input type="text" id="filter-rating" placeholder="Enter emoji ratings...">
+                            <input type="text" id="filter-rating" placeholder="Enter emoji ratings..." title="Show only images with these rating emoji. Leave blank to skip.">
                             <button id="btn-emoji-picker" class="toolbar-btn" title="Open emoji picker">
-                                <span class="icon" data-icon="add_reaction">👍</span>
+                                <span class="icon" data-icon="add_reaction">&#x263A;</span>
                             </button>
                         </div>
                     </div>
@@ -694,11 +740,12 @@
                     <div class="filter-group" id="filter-metadata-group">
                         <label>Metadata</label>
                         <div class="metadata-filter">
-                            <div id="filter-metadata-chips" class="metadata-chips">
+                            <div id="filter-metadata-chips" class="metadata-chips"
+                                 title="Filter by camera, lens, ISO, or other EXIF metadata. Leave blank to skip.">
                                 <span class="metadata-placeholder">Click to add metadata filters...</span>
                             </div>
                             <button id="btn-metadata-picker" class="toolbar-btn" title="Select metadata criteria">
-                                <span class="icon" data-icon="photo_camera">📷</span>
+                                <span class="icon" data-icon="photo_camera">&#x1F4F7;</span>
                             </button>
                         </div>
                     </div>
@@ -713,7 +760,7 @@
                             <span class="icon" data-icon="bookmark_add">&#x2606;</span>
                             Save as Smart Group
                         </button>
-                        <button id="btn-apply-filter" class="action-btn primary" title="Apply filter to gallery">
+                        <button id="btn-apply-filter" class="action-btn primary" title="Apply these filters to the Gallery and Videos screens. Only matching images and videos will be shown.">
                             <span class="icon" data-icon="search">&#x1F50D;</span>
                             Apply Filter
                         </button>

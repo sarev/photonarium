@@ -161,8 +161,16 @@ const Search = {
             similaritySlider: App.$('filter-similarity'),
             similarityValue: App.$('similarity-value'),
             dateLabel: App.$('filter-date-label'),
-            dateStart: App.$('filter-date-start'),
-            dateEnd: App.$('filter-date-end'),
+            dateFromYear: App.$('date-from-year'),
+            dateFromMonth: App.$('date-from-month'),
+            dateFromDay: App.$('date-from-day'),
+            dateFromPicker: App.$('date-from-picker'),
+            dateToYear: App.$('date-to-year'),
+            dateToMonth: App.$('date-to-month'),
+            dateToDay: App.$('date-to-day'),
+            dateToPicker: App.$('date-to-picker'),
+            dateToRow: App.$('date-to-row'),
+            dateRangeToggle: App.$('btn-date-range-toggle'),
             ratingInput: App.$('filter-rating'),
             emojiBtn: App.$('btn-emoji-picker'),
             applyBtn: App.$('btn-apply-filter'),
@@ -288,7 +296,7 @@ const Search = {
             });
         });
 
-        // Easter egg: clicking the "Date Range" label triggers On This Day
+        // Easter egg: clicking the "Date" label triggers On This Day
         if (this._els.dateLabel) {
             this._els.dateLabel.addEventListener('click', () => {
                 if (typeof OnThisDay !== 'undefined' && OnThisDay.tryShowNow) {
@@ -296,6 +304,9 @@ const Search = {
                 }
             });
         }
+
+        // Date component events
+        this._bindDateEvents();
 
         // Allow Enter key to apply filter from text input
         this._els.textInput.addEventListener('keydown', (e) => {
@@ -458,6 +469,243 @@ const Search = {
                 }
             }
         }
+    },
+
+    /* ------------------------------------------------------------------
+       DATE COMPONENT HELPERS
+       ------------------------------------------------------------------ */
+
+    /**
+     * Populates day options 1-31 in a day `<select>`, preserving the
+     * current selection when possible.
+     * @param {HTMLSelectElement} daySelect
+     * @private
+     */
+    _populateDayOptions(daySelect) {
+        if (!daySelect) return;
+        const cur = daySelect.value;
+        // Keep "Any" option, rebuild numeric options
+        while (daySelect.options.length > 1) {
+            daySelect.remove(1);
+        }
+        for (let i = 1; i <= 31; i++) {
+            const opt = document.createElement('option');
+            opt.value = String(i);
+            opt.textContent = String(i);
+            daySelect.appendChild(opt);
+        }
+        // Restore previous selection if still valid
+        if (cur) daySelect.value = cur;
+    },
+
+    /**
+     * Binds all event listeners for the date component fields.
+     * @private
+     */
+    _bindDateEvents() {
+        // Populate day dropdowns with 1-31
+        this._populateDayOptions(this._els.dateFromDay);
+        this._populateDayOptions(this._els.dateToDay);
+
+        // Start with "to" row disabled
+        this._setDateRangeMode(false);
+
+        // Range toggle button
+        if (this._els.dateRangeToggle) {
+            this._els.dateRangeToggle.addEventListener('click', () => {
+                const enabling = !this._isDateRangeMode();
+                if (enabling) {
+                    // Copy "from" values into "to" fields
+                    this._els.dateToYear.value = this._els.dateFromYear.value;
+                    this._els.dateToMonth.value = this._els.dateFromMonth.value;
+                    this._els.dateToDay.value = this._els.dateFromDay.value;
+                    this._updateDayValidity(this._els.dateToMonth, this._els.dateToDay, this._els.dateToYear);
+                }
+                this._setDateRangeMode(enabling);
+            });
+        }
+
+        // Year inputs: digits only
+        for (const el of [this._els.dateFromYear, this._els.dateToYear]) {
+            if (!el) continue;
+            el.addEventListener('input', () => {
+                el.value = el.value.replace(/\D/g, '');
+            });
+        }
+
+        // Month change: update day validity
+        if (this._els.dateFromMonth) {
+            this._els.dateFromMonth.addEventListener('change', () => {
+                this._updateDayValidity(this._els.dateFromMonth, this._els.dateFromDay, this._els.dateFromYear);
+            });
+        }
+        if (this._els.dateToMonth) {
+            this._els.dateToMonth.addEventListener('change', () => {
+                this._updateDayValidity(this._els.dateToMonth, this._els.dateToDay, this._els.dateToYear);
+            });
+        }
+
+        // Year change: update day validity (for Feb 29 leap year)
+        if (this._els.dateFromYear) {
+            this._els.dateFromYear.addEventListener('change', () => {
+                this._updateDayValidity(this._els.dateFromMonth, this._els.dateFromDay, this._els.dateFromYear);
+            });
+        }
+        if (this._els.dateToYear) {
+            this._els.dateToYear.addEventListener('change', () => {
+                this._updateDayValidity(this._els.dateToMonth, this._els.dateToDay, this._els.dateToYear);
+            });
+        }
+
+        // Calendar picker buttons (delegated from the date group)
+        const dateGroup = App.$('filter-date-group');
+        if (dateGroup) {
+            dateGroup.addEventListener('click', (e) => {
+                const btn = e.target.closest('.date-picker-btn');
+                if (!btn) return;
+                const target = btn.dataset.target; // 'from' or 'to'
+                const picker = target === 'to'
+                    ? this._els.dateToPicker
+                    : this._els.dateFromPicker;
+                if (picker && typeof picker.showPicker === 'function') {
+                    picker.showPicker();
+                }
+            });
+        }
+
+        // When the hidden date picker changes, populate the component fields
+        if (this._els.dateFromPicker) {
+            this._els.dateFromPicker.addEventListener('change', () => {
+                this._applyPickerToFields(this._els.dateFromPicker,
+                    this._els.dateFromYear, this._els.dateFromMonth, this._els.dateFromDay);
+            });
+        }
+        if (this._els.dateToPicker) {
+            this._els.dateToPicker.addEventListener('change', () => {
+                this._applyPickerToFields(this._els.dateToPicker,
+                    this._els.dateToYear, this._els.dateToMonth, this._els.dateToDay);
+            });
+        }
+    },
+
+    /**
+     * Apply a native date picker's value to the component fields.
+     * @param {HTMLInputElement} picker - Hidden date input
+     * @param {HTMLInputElement} yearInput
+     * @param {HTMLSelectElement} monthSelect
+     * @param {HTMLSelectElement} daySelect
+     * @private
+     */
+    _applyPickerToFields(picker, yearInput, monthSelect, daySelect) {
+        if (!picker.value) return;
+        const dt = new Date(picker.value + 'T00:00:00');
+        yearInput.value = String(dt.getFullYear());
+        monthSelect.value = String(dt.getMonth() + 1);
+        this._updateDayValidity(monthSelect, daySelect, yearInput);
+        daySelect.value = String(dt.getDate());
+    },
+
+    /**
+     * Disable day options that exceed the max for the selected month/year.
+     * If the current selection is out of range, reset to "Any".
+     * @param {HTMLSelectElement} monthSelect
+     * @param {HTMLSelectElement} daySelect
+     * @param {HTMLInputElement} yearInput
+     * @private
+     */
+    _updateDayValidity(monthSelect, daySelect, yearInput) {
+        if (!monthSelect || !daySelect) return;
+        const month = parseInt(monthSelect.value, 10);
+        let maxDay = 31;
+        if (month) {
+            // Use year if provided, otherwise assume leap year (permissive)
+            const yearVal = parseInt(yearInput?.value, 10);
+            const year = (yearVal && yearVal > 0) ? yearVal : 2000;
+            // Day 0 of next month = last day of this month
+            maxDay = new Date(year, month, 0).getDate();
+        }
+        for (let i = 1; i < daySelect.options.length; i++) {
+            const opt = daySelect.options[i];
+            opt.disabled = parseInt(opt.value, 10) > maxDay;
+        }
+        // Reset if current selection is now invalid
+        const cur = parseInt(daySelect.value, 10);
+        if (cur > maxDay) {
+            daySelect.value = '';
+        }
+    },
+
+    /**
+     * Check whether range mode is currently active.
+     * @returns {boolean}
+     * @private
+     */
+    _isDateRangeMode() {
+        return this._els.dateRangeToggle?.classList.contains('active') || false;
+    },
+
+    /**
+     * Set range mode on or off, toggling the "to" row and button state.
+     * @param {boolean} enabled
+     * @private
+     */
+    _setDateRangeMode(enabled) {
+        if (this._els.dateRangeToggle) {
+            this._els.dateRangeToggle.classList.toggle('active', enabled);
+        }
+        if (this._els.dateToRow) {
+            this._els.dateToRow.classList.toggle('disabled', !enabled);
+        }
+        if (!enabled) {
+            // Clear "to" fields when disabling range
+            if (this._els.dateToYear) this._els.dateToYear.value = '';
+            if (this._els.dateToMonth) this._els.dateToMonth.value = '';
+            if (this._els.dateToDay) this._els.dateToDay.value = '';
+        }
+    },
+
+    /**
+     * Read the three component fields for one date row into a
+     * DateComponents object, or null if all fields are "Any"/empty.
+     * @param {'from'|'to'} prefix
+     * @returns {DateComponents|null}
+     * @private
+     */
+    _readDateComponents(prefix) {
+        const yearEl = prefix === 'to' ? this._els.dateToYear : this._els.dateFromYear;
+        const monthEl = prefix === 'to' ? this._els.dateToMonth : this._els.dateFromMonth;
+        const dayEl = prefix === 'to' ? this._els.dateToDay : this._els.dateFromDay;
+
+        const yearStr = yearEl?.value.trim() || '';
+        const monthStr = monthEl?.value || '';
+        const dayStr = dayEl?.value || '';
+
+        // All empty = no constraint
+        if (!yearStr && !monthStr && !dayStr) return null;
+
+        const year = yearStr.length === 4 ? parseInt(yearStr, 10) : null;
+        const month = monthStr ? parseInt(monthStr, 10) : null;
+        const day = dayStr ? parseInt(dayStr, 10) : null;
+
+        return { year, month, day };
+    },
+
+    /**
+     * Populate the component fields for one date row from a
+     * DateComponents object.
+     * @param {'from'|'to'} prefix
+     * @param {DateComponents|null} dc
+     * @private
+     */
+    _setDateComponents(prefix, dc) {
+        const yearEl = prefix === 'to' ? this._els.dateToYear : this._els.dateFromYear;
+        const monthEl = prefix === 'to' ? this._els.dateToMonth : this._els.dateFromMonth;
+        const dayEl = prefix === 'to' ? this._els.dateToDay : this._els.dateFromDay;
+
+        if (yearEl) yearEl.value = dc?.year != null ? String(dc.year) : '';
+        if (monthEl) monthEl.value = dc?.month != null ? String(dc.month) : '';
+        this._updateDayValidity(monthEl, dayEl, yearEl);
+        if (dayEl) dayEl.value = dc?.day != null ? String(dc.day) : '';
     },
 
     /**
@@ -896,8 +1144,12 @@ const Search = {
 
         if (filter) {
             this._els.textInput.value = filter.text || '';
-            this._els.dateStart.value = filter.dateStart || '';
-            this._els.dateEnd.value = filter.dateEnd || '';
+            this._setDateComponents('from', filter.dateFrom || null);
+            const rangeOn = !!filter.dateRange;
+            this._setDateRangeMode(rangeOn);
+            if (rangeOn) {
+                this._setDateComponents('to', filter.dateTo || null);
+            }
             this._els.ratingInput.value = filter.rating || '';
 
             // Sync similarity slider from filter threshold if available
@@ -941,8 +1193,9 @@ const Search = {
         if (this._els.textWarning) this._els.textWarning.hidden = true;
         this._els.similaritySlider.value = 20;
         this._els.similarityValue.textContent = '20%';
-        this._els.dateStart.value = '';
-        this._els.dateEnd.value = '';
+        this._setDateComponents('from', null);
+        this._setDateComponents('to', null);
+        this._setDateRangeMode(false);
         this._els.ratingInput.value = '';
         this._selectedPeople = [];
         this._autoAddedPeopleIds = new Set();
@@ -961,22 +1214,24 @@ const Search = {
      */
     _readForm() {
         const text = this._els.textInput.value.trim();
-        const dateStart = this._els.dateStart.value;
-        const dateEnd = this._els.dateEnd.value;
+        const dateFrom = this._readDateComponents('from');
+        const isRange = this._isDateRangeMode();
+        const dateTo = isRange ? this._readDateComponents('to') : null;
         const rating = this._els.ratingInput.value.trim();
         const people = this._selectedPeople.length > 0 ? [...this._selectedPeople] : null;
         const metadata = Object.keys(this._selectedMetadata).length > 0
             ? { ...this._selectedMetadata } : null;
 
         // Return null if all fields are empty
-        if (!text && !dateStart && !dateEnd && !rating && !people && !metadata) {
+        if (!text && !dateFrom && !dateTo && !rating && !people && !metadata) {
             return null;
         }
 
         return {
             text: text || null,
-            dateStart: dateStart || null,
-            dateEnd: dateEnd || null,
+            dateFrom: dateFrom,
+            dateTo: dateTo,
+            dateRange: isRange && (dateFrom || dateTo) ? true : undefined,
             rating: rating || null,
             people: people,
             metadata: metadata,
@@ -995,8 +1250,8 @@ const Search = {
     _hasFormValues() {
         return !!(
             this._els.textInput.value.trim() ||
-            this._els.dateStart.value ||
-            this._els.dateEnd.value ||
+            this._readDateComponents('from') ||
+            (this._isDateRangeMode() && this._readDateComponents('to')) ||
             this._els.ratingInput.value.trim() ||
             this._selectedPeople.length > 0 ||
             Object.keys(this._selectedMetadata).length > 0
@@ -1015,18 +1270,38 @@ const Search = {
      * @private
      */
     _validate() {
-        const dateStart = this._els.dateStart.value;
-        const dateEnd = this._els.dateEnd.value;
+        // Validate year fields (must be 4 digits or empty)
+        for (const el of [this._els.dateFromYear, this._els.dateToYear]) {
+            const v = el?.value.trim();
+            if (v && (v.length !== 4 || isNaN(parseInt(v, 10)))) {
+                return { valid: false, message: 'Year must be 4 digits' };
+            }
+        }
 
-        // Check date range validity
-        if (dateStart && dateEnd) {
-            const start = new Date(dateStart);
-            const end = new Date(dateEnd);
-            if (start > end) {
-                return {
-                    valid: false,
-                    message: 'Start date cannot be after end date',
-                };
+        // Range validation: when both sides have a year, "from" must not
+        // be after "to".  When both years are null (recurring pattern),
+        // wrap-around is intentional and always valid.
+        if (this._isDateRangeMode()) {
+            const from = this._readDateComponents('from');
+            const to = this._readDateComponents('to');
+            if (from?.year != null && to?.year != null) {
+                if (from.year > to.year) {
+                    return { valid: false, message: 'Start year cannot be after end year' };
+                }
+                if (from.year === to.year) {
+                    const fm = from.month || 0;
+                    const tm = to.month || 13;
+                    if (fm > tm) {
+                        return { valid: false, message: 'Start month cannot be after end month' };
+                    }
+                    if (fm === tm && fm > 0) {
+                        const fd = from.day || 0;
+                        const td = to.day || 32;
+                        if (fd > td) {
+                            return { valid: false, message: 'Start day cannot be after end day' };
+                        }
+                    }
+                }
             }
         }
 
@@ -1202,8 +1477,9 @@ const Search = {
         // not computed fields (imageIds, scores, metadataImageIds, type)
         const filterJson = {};
         if (form.text) filterJson.text = form.text;
-        if (form.dateStart) filterJson.dateStart = form.dateStart;
-        if (form.dateEnd) filterJson.dateEnd = form.dateEnd;
+        if (form.dateFrom) filterJson.dateFrom = form.dateFrom;
+        if (form.dateTo) filterJson.dateTo = form.dateTo;
+        if (form.dateRange) filterJson.dateRange = true;
         if (form.rating) filterJson.rating = form.rating;
         if (form.people) filterJson.people = form.people.map(p => ({ id: p.id, name: p.name }));
         if (form.metadata) filterJson.metadata = form.metadata;
