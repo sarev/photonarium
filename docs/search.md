@@ -5,8 +5,8 @@
 Search lets you narrow a large library down to "just the photos and videos I mean". It builds a filter, then the Gallery (or Videos screen) shows only the matching results.
 
 You can combine multiple filters at once, for example:
-- "summer holiday" + "***" + People ("Sam")
-- "Red steam train on sunny day"
+- "summer holiday" + ⭐⭐⭐ rating + People: Sam
+- "Red steam train on sunny day" + Date: any June
 
 ## Search mode
 
@@ -57,10 +57,32 @@ You can also add people manually using the picker:
 - **Enter** confirms (unless you're typing in the search box).
 - **Escape** cancels.
 
-## Date range
+## Date
 
-- Set a start date and/or end date.
-- Leave either blank to make it open-ended.
+Each date is entered as three separate fields — **Year**, **Month**, and **Day** — and any field can be left as **Any** to act as a wildcard. This lets you search for recurring patterns that a conventional date picker can't express.
+
+Examples:
+
+| What you want | Year | Month | Day |
+|---|---|---|---|
+| All photos from May 14th, any year | Any | May | 14 |
+| Everything taken in March | Any | Mar | Any |
+| A specific date | 2023 | Jun | 15 |
+| An entire year | 2022 | Any | Any |
+
+### Range mode
+
+Click the **⇄** button to toggle range mode. A second row of fields appears (prepopulated from the first row) and you can set a "from" and "to" date. Ranges work with wildcards too:
+
+- **Apr 2002 to Oct 2024** — set both years, months, and leave days as Any.
+- **March to June, any year** — leave both years blank.
+- **October to February, any year** — a wrap-around range that matches Oct, Nov, Dec, Jan, and Feb regardless of year.
+
+Click the **⇄** button again to switch back to single-date mode.
+
+### Calendar picker
+
+Each row has a small calendar button that opens your browser's native date picker. Choosing a date fills in all three fields at once — handy when you know the exact date and want to avoid typing.
 
 ## Rating
 

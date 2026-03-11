@@ -42,28 +42,21 @@ Find out more about the motivations behind Photonarium in [`BACKGROUND.md`](docs
 
 ## What it can do
 
-- **100% free and open source** - Apache 2.0 licensed, no cloud, no accounts, no tracking. Runs entirely on your machine; your files never leave your computer.
-- **Runs anywhere** - install directly or use Docker on a NAS, home server, or Proxmox LXC. Access from any device on your network.
-- **Light and dark themes** - switch instantly between light and dark mode. Your preference is remembered across sessions.
-- **Photos and videos** - manages images and video files side by side. Videos are broken into scenes with keyframe thumbnails, and can be searched at the scene level.
-- **Multi-device sync** - use Photonarium from multiple devices at once. Changes made on one (naming faces, rating photos) appear on all others within seconds.
-- **Mobile friendly** - browse your library from any device on your network. The responsive layout adapts to phones and tablets in both portrait and landscape.
-- **AI-powered search** that understands what you type (e.g. "sunset over mountains", "birthday cake"), with negative terms to exclude concepts (e.g. "beach -people"). Named people in your search text are detected automatically. Search images, videos, or both - video search finds matching scenes within clips, with a heatmap showing match strength across the timeline.
-- **Sort by similarity** - select any image or video and sort the entire collection by visual similarity to it. Great for finding related shots.
+- **AI-powered search** that understands what you type (e.g. "sunset over mountains", "birthday cake"), with negative terms to exclude concepts (e.g. "beach -people"). Named people in your search text are detected automatically. **Wildcard date filtering** lets you search for patterns like "every May 14th" or "October through February, any year". Search images, videos, or both - video search finds matching scenes within clips, with a heatmap showing match strength across the timeline.
 - **Face recognition** - automatic face detection and recognition. Name faces and Photonarium finds them across your library. Easily pick a preferred face (avatar) for each person, and ignore faces of strangers.
-- **Quality scoring** - AI aesthetic scoring ranks your images by visual quality. Find your best shots instantly.
-- **Fast and scalable** - lag-free scrolling through collections with 100,000+ images using a virtualised thumbnail grid with efficient loading.
-- **Slideshow** mode in the full-screen viewer with smooth cross-fade transitions, linear or shuffled playback, configurable timing, and video autoplay
-- **Smart Groups** - saved searches that stay up to date automatically. Set your filter criteria once and matching items appear whenever you open the group, even files added later.
-- **Duplicate detection** at four levels of similarity (identical, near-identical, similar, related) plus auto-generated **directory groups** and user-curated **custom groups** (albums), with **Refine Groups** to filter by quality and view the best (or worst) images in the Gallery, or prune duplicates to trash
-- **Camera RAW support** - native support for 20+ camera RAW formats alongside JPEG, PNG, and other standard image types. No conversion needed.
-- **Video formats** - `.mp4`, `.mkv`, `.avi`, `.mov`, `.webm`, `.m4v`, `.wmv`, `.flv` with automatic scene detection, keyframe extraction, speech transcription, and easily pick a preferred scene thumbnail for each video
-- **Automatic captioning** - generate image descriptions using AI (BLIP/BLIP-2), then edit them if needed. Captions are searchable.
+- **Photos and videos** - manages images and video files side by side. Videos are broken into scenes with keyframe thumbnails, and can be searched at the scene level.
 - **Video transcriptions** - automatic speech-to-text for video audio, enabled by default with automatic language detection. Transcription text is displayed as subtitles during playback, shown in scene preview popups, and is semantically searchable. Edit or add subtitles inline on the Videos screen, and set each video's language individually for accurate transcription of multilingual libraries.
+- **Duplicate detection** at four levels of similarity (identical, near-identical, similar, related) plus auto-generated **directory groups** and user-curated **custom groups** (albums), with **Refine Groups** to filter by quality and view the best (or worst) images in the Gallery, or prune duplicates to trash
+- **100% free and open source** - Apache 2.0 licensed, no cloud, no accounts, no tracking. Runs entirely on your machine; your files never leave your computer.
+- **Automatic captioning** - generate image descriptions using AI (BLIP/BLIP-2), then edit them if needed. Captions are searchable.
+- **Quality scoring** - AI aesthetic scoring ranks your images by visual quality. Find your best shots instantly.
+- **Sort by similarity** - select any image or video and sort the entire collection by visual similarity to it. Great for finding related shots.
+- **Smart Groups** - saved searches that stay up to date automatically. Set your filter criteria once and matching items appear whenever you open the group, even files added later.
+- **Camera RAW support** - native support for 20+ camera RAW formats alongside JPEG, PNG, and other standard image types. No conversion needed.
+- **Multi-device sync** - use Photonarium from multiple devices at once. Changes made on one (naming faces, rating photos) appear on all others within seconds.
 - **Setup assistant** - a guided first-run flow that configures Photonarium for your hardware and preferred search language, then downloads the required AI models. Choose from hardware presets (NAS, laptop, desktop) and language options (English or multilingual) without touching config files.
 - **Camera data and histogram** - full EXIF metadata extraction with image histogram display. Search and filter by camera, lens, ISO, aperture, shutter speed, and more.
-- **Import into catalogue** - copy images and videos from SD cards, phone uploads, or downloads into a managed catalogue directory, organised by date. Preflight dedup avoids importing files you already have.
-- **Ratings and descriptions** - rate your images with any text and/or emojis to build your own favourites system
+- **Slideshow** mode in the full-screen viewer with smooth cross-fade transitions, linear or shuffled playback, configurable timing, and video autoplay
 
 Once you have run the model downloader, the models stay on your machine. Everything runs locally.
 

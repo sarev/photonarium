@@ -1,5 +1,35 @@
 # Release Notes
 
+## v1.2.4-beta
+
+### Wildcard Date Filter
+
+The date filter on the Search screen has been redesigned. Instead of two date-picker inputs, each date is now entered as separate **Year**, **Month**, and **Day** fields. Any field can be left as "Any" to act as a wildcard, making it easy to search for recurring date patterns:
+
+- **Every May 14th** — leave Year blank, set Month to May, Day to 14
+- **All of March, any year** — leave Year and Day blank, set Month to Mar
+- **April 2002 through October 2024** — fill in both dates with the range toggle on
+
+A compact **range toggle** (⇄) switches between single-date and range mode. When enabled, a second row of fields appears, prepopulated with the "from" values. Range mode supports **wrap-around month ranges** — for example, "Oct to Feb" matches October through February regardless of year, useful for finding winter or summer photos across your entire library.
+
+Each date row includes a **calendar picker** button for quick entry via the browser's native date picker. Existing Smart Groups saved with the old date format are automatically converted when opened.
+
+The Search screen layout has also been tightened to reduce vertical space, with helpful tooltips added to all filter fields.
+
+### Scroll Date Hint on Videos Screen
+
+The floating date hint that appears while scrolling the Gallery thumbnail grid is now also shown on the Videos screen. As you scroll through your video library, a small overlay near the cursor shows the date of the videos at that position.
+
+### HEVC Codec Support
+
+HEVC/H.265 videos are now recognised as browser-compatible (Chrome 107+, Firefox 130+, Safari), removing false-positive transcoding warning badges. Video thumbnails on the Videos screen now show resolution and codec information in their tooltip (e.g. 1920×1080 · HEVC · AAC).
+
+### Bug Fixes
+
+- **Subtitle editor not resetting when switching videos** — clicking a different video while the transcription editor was active left stale text in the editor and could cause the timeline to get stuck on "Loading scenes...".
+
+---
+
 ## v1.2.3-beta
 
 ### Inline Subtitle Editor
