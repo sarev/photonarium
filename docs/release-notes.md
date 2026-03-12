@@ -12,8 +12,32 @@ All SQLite database access now routes through a new `SafeConnection` wrapper (`a
 - **Retry on transient lock errors** — retries up to 3 times with linear back-off before giving up.
 - **Rollback on failure** — if the final retry fails, the pending transaction is automatically rolled back so the connection stays usable for subsequent operations.
 - **Context manager** — `with safe_conn:` provides broader atomic scope for read-modify-write patterns.
+- **Diagnostic logging** — lock wait times, retries, and rollbacks are logged at DEBUG/WARNING level with named connections for diagnosing contention.
 
 Every `sqlite3.connect()` call in the codebase is now wrapped in `SafeConnection`, including the shared connection (`ImageDatabase.safe_conn`), per-thread pipeline worker connections, `DuplicateManager` connections, and log handler connections. This gives a single point of control for all database contention.
+
+### Per-Folder Rescan
+
+The "Rescan this folder" button on the Database screen now correctly rescans only the selected folder rather than triggering a full rescan of all registered folders. Multiple per-folder rescans can be queued and are processed together. A full rescan (via the Rescan button or `scan_interval_minutes`) still walks all folders.
+
+### GIL Contention Improvements
+
+Several threaded loops that held the Python GIL for extended periods have been improved to allow other threads (particularly Flask request handlers) to run:
+
+- **Pipeline ingestion** — replaced busy-spin polling of futures with `concurrent.futures.wait()`, which blocks and releases the GIL until a worker completes.
+- **Face matching** — `find_best_match()` vectorised from a per-face `np.dot()` loop into a single `known_matrix @ embedding` matrix multiply.
+- **Face reassessment** — periodic GIL yield every 200 candidates in the matching loop.
+- **Union-find clustering** — periodic GIL yield every 500 rows in post-matrix-multiply union loops (both face grouping and duplicate detection).
+
+### Pipeline Stage Logging
+
+All seven pipeline stages now log clear INFO-level messages at both start and completion, making it straightforward to confirm each stage ran and how long it took. Model loading (MTCNN, InceptionResnetV1, Whisper, NIMA) now includes timing in log messages.
+
+### Bug Fixes
+
+- **Stage 1 deadlock causing 100% CPU** — the ingestion loop had no exit condition when all work was done; it spun indefinitely after processing all files. Fixed by breaking out of the loop when all futures are complete.
+- **Thumbnail placeholders persisting in Gallery** — two issues: (1) Stage 2a thumbnail generation crashed on the first pipeline cycle with "signal only works in main thread" because importing `get_thumbnail_cache` from `app.py` triggered a second module initialisation (app.py runs as `__main__`). Fixed by storing the cache reference on `ImageDatabase`. (2) The RAM thumbnail cache served stale placeholder bytes after real thumbnails were generated on disk. Fixed by evicting checksums from the cache after Stage 2a/2b overwrites placeholders.
+- **Video search results missing media_type** — videos were not returned in search results due to a missing `media_type` field in the search response.
 
 ### Server Startup Responsiveness
 
