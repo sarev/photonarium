@@ -4089,6 +4089,12 @@ class ImageDatabase:
         # Ensure thumbnail directory exists
         self.thumbnail_dir.mkdir(parents=True, exist_ok=True)
 
+        # Optional reference to the RAM thumbnail cache (ThumbnailCache).
+        # Set by app.py after initialisation so the pipeline can evict
+        # stale placeholder entries after generating real thumbnails.
+        # Avoids a circular import (pipeline → app → imagedb).
+        self.thumbnail_ram_cache = None
+
         if auto_start:
             self.startup()
 

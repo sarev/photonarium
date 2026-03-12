@@ -373,6 +373,11 @@ def get_db() -> ImageDatabase:
 
         db.startup()
         register_signal_handlers(db)
+        # Eagerly initialise the thumbnail RAM cache and attach it to the
+        # ImageDatabase so the pipeline thread can evict stale placeholder
+        # entries without importing app.py (which would create a separate
+        # module scope because app.py runs as __main__).
+        db.thumbnail_ram_cache = get_thumbnail_cache()
         logger.info('ImageDatabase initialised')
         # Pre-populate images cache in background so it doesn't delay
         # server startup.  The /api/images endpoint handles cache misses

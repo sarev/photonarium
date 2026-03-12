@@ -25,6 +25,7 @@ import logging
 import os
 import sqlite3
 import threading
+import time
 import uuid
 from datetime import datetime
 from typing import Any
@@ -903,6 +904,11 @@ def _compute_embedding_duplicates_chunked(
         # Vectorized: find all pairs above threshold in upper triangle
         # We only want pairs where i_global < j to avoid duplicates
         for i_local in range(chunk_len):
+            # Yield GIL periodically so other threads aren't starved
+            # during large pairwise comparisons.
+            if i_local % 500 == 499:
+                time.sleep(0)
+
             i_global = chunk_start + i_local
             # Only check j > i_global (upper triangle)
             if i_global + 1 < n:

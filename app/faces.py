@@ -2189,27 +2189,37 @@ def find_best_match(
     if not np.isclose(emb_norm, 1.0, atol=0.01):
         embedding = embedding / emb_norm
 
-    # Compute similarity to each known face, group by person keeping best
-    person_best: dict[str, tuple[str, float]] = {}  # person_id -> (face_id, similarity)
-    max_similarity = -1.0
-
+    # Vectorised similarity computation — single matrix multiply releases
+    # the GIL for the entire batch instead of holding it per-face in a
+    # Python loop.
+    face_ids_list = []
+    person_ids_list = []
+    emb_list = []
     for face_id, person_id, known_embedding in known_embeddings:
-        # Ensure known embedding is normalised (skip zero-norm)
         known_norm = np.linalg.norm(known_embedding)
         if known_norm == 0:
             continue
         if not np.isclose(known_norm, 1.0, atol=0.01):
             known_embedding = known_embedding / known_norm
+        face_ids_list.append(face_id)
+        person_ids_list.append(person_id)
+        emb_list.append(known_embedding)
 
-        similarity = float(np.dot(embedding, known_embedding))
-
-        if similarity > max_similarity:
-            max_similarity = similarity
-        if person_id not in person_best or similarity > person_best[person_id][1]:
-            person_best[person_id] = (face_id, similarity)
-
-    if not person_best:
+    if not emb_list:
         return None
+
+    # (num_known, 512) @ (512,) → (num_known,) — single GIL-releasing call
+    known_matrix = np.vstack(emb_list)
+    similarities = known_matrix @ embedding
+
+    # Group by person, keeping best similarity per person
+    person_best: dict[str, tuple[str, float]] = {}  # person_id -> (face_id, similarity)
+    for idx, sim_val in enumerate(similarities):
+        pid = person_ids_list[idx]
+        fid = face_ids_list[idx]
+        sim_f = float(sim_val)
+        if pid not in person_best or sim_f > person_best[pid][1]:
+            person_best[pid] = (fid, sim_f)
 
     # Sort persons by similarity descending
     sorted_persons = sorted(person_best.items(), key=lambda x: x[1][1], reverse=True)
@@ -2231,7 +2241,7 @@ def find_best_match(
             return (face_id, person_id, similarity)
 
     # No match — log the best similarity for diagnostics
-    if max_similarity > -1.0:
+    if sorted_persons:
         best_pid = sorted_persons[0][0]
         best_sim = sorted_persons[0][1][1]
         eff = threshold
@@ -2573,6 +2583,11 @@ def reassess_unknown_faces(
     matched = []
     unmatched = []  # Faces that need to be unassigned (below all thresholds)
     for i, candidate_face_id in enumerate(candidate_ids):
+        # Yield GIL periodically so other threads (Flask request handlers)
+        # aren't starved during large reassessments.
+        if i % 200 == 199:
+            time.sleep(0)
+
         current_person_id = candidate_person_ids.get(candidate_face_id)
         row = similarities[i]
 
@@ -2771,6 +2786,11 @@ def _compute_unknown_face_groups_impl(
         # Vectorised: find all pairs above threshold in upper triangle
         # (mirrors the approach in duplicates.py to avoid O(n²) Python loops)
         for local_idx in range(chunk_end - i):
+            # Yield GIL periodically so other threads aren't starved
+            # during large pairwise comparisons.
+            if local_idx % 500 == 499:
+                time.sleep(0)
+
             global_idx = i + local_idx
             # Only check j > global_idx to avoid duplicate pairs
             if global_idx + 1 < n_faces:

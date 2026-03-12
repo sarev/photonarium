@@ -156,7 +156,7 @@ import tempfile
 import threading
 import time
 import uuid
-from concurrent.futures import Future, ThreadPoolExecutor
+from concurrent.futures import FIRST_COMPLETED, Future, ThreadPoolExecutor, wait
 from datetime import datetime
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, ClassVar
@@ -590,10 +590,12 @@ class PipelineOrchestrator(threading.Thread):
                     )
                     pending_futures[future] = path
 
-                # Check for completed futures
+                # Wait for at least one future to complete (releases GIL,
+                # avoids busy-spin polling).  Short timeout so we can
+                # still check _stopped() and _pause_event periodically.
                 if pending_futures:
-                    done_futures = [f for f in pending_futures if f.done()]
-                    for future in done_futures:
+                    done, _ = wait(pending_futures, timeout=0.1, return_when=FIRST_COMPLETED)
+                    for future in done:
                         path = pending_futures.pop(future)
                         try:
                             was_changed = future.result()
@@ -1314,6 +1316,11 @@ class PipelineOrchestrator(threading.Thread):
                 try:
                     if future.result():
                         count += 1
+                        # Evict stale placeholder bytes from the RAM cache
+                        # so the next request reads the real thumbnail from
+                        # disk instead of serving the cached placeholder.
+                        if self._db.thumbnail_ram_cache is not None:
+                            self._db.thumbnail_ram_cache.remove(checksum)
                 except Exception as e:
                     logger.warning(f'Thumbnail generation failed: {e}')
                 # Clear the pending flag regardless of success — if it
@@ -1464,6 +1471,13 @@ class PipelineOrchestrator(threading.Thread):
                     (scene_ids[0], datetime.now().isoformat(), image_id),
                 )
                 self._db.safe_conn.commit()
+
+            # Evict stale placeholder from the RAM thumbnail cache so
+            # the next request reads the real scene-based thumbnail.
+            if self._db.thumbnail_ram_cache is not None:
+                checksum = self._db.get_checksum(image_id)
+                if checksum:
+                    self._db.thumbnail_ram_cache.remove(checksum)
 
             count += 1
             self._update_done(count)
