@@ -1,5 +1,30 @@
 # Release Notes
 
+## v1.2.5-beta
+
+### SafeConnection Database Abstraction
+
+All SQLite database access now routes through a new `SafeConnection` wrapper (`app/safeconn.py`). This is a comprehensive fix for the "database is locked" connection-poisoning problem that could make face tagging and other write operations fail permanently until restart.
+
+`SafeConnection` wraps every `execute()`, `executemany()`, and `commit()` call with:
+
+- **Automatic RLock serialisation** — thread-safe by default, no manual lock management needed at call sites.
+- **Retry on transient lock errors** — retries up to 3 times with linear back-off before giving up.
+- **Rollback on failure** — if the final retry fails, the pending transaction is automatically rolled back so the connection stays usable for subsequent operations.
+- **Context manager** — `with safe_conn:` provides broader atomic scope for read-modify-write patterns.
+
+Every `sqlite3.connect()` call in the codebase is now wrapped in `SafeConnection`, including the shared connection (`ImageDatabase.safe_conn`), per-thread pipeline worker connections, `DuplicateManager` connections, and log handler connections. This gives a single point of control for all database contention.
+
+### Server Startup Responsiveness
+
+The images cache pre-population step that previously blocked server startup has been moved to a background thread. The Waitress server now starts immediately and is fully functional while the cache warms up in the background — the `/api/images` endpoint handles cache misses gracefully by querying the database directly.
+
+### Debug Logging Cleanup
+
+PIL/Pillow plugin import messages are now suppressed when running with `--debug`, eliminating hundreds of noisy log lines that obscured useful output.
+
+---
+
 ## v1.2.4-beta
 
 ### Wildcard Date Filter

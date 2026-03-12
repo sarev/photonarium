@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import logging
 import threading
+import time
 from abc import ABC, abstractmethod
 from pathlib import Path
 from typing import TYPE_CHECKING, NamedTuple
@@ -120,12 +121,16 @@ class FasterWhisperBackend(STTBackend):
                 compute_type = 'auto'
 
                 logger.info(f'Loading faster-whisper model: {self._model_size}')
+                t0 = time.perf_counter()
                 self._model = WhisperModel(
                     self._model_size,
                     device=device,
                     compute_type=compute_type,
                 )
-                logger.info(f'faster-whisper model loaded: {self._model_size}')
+                logger.info(
+                    'faster-whisper model loaded: %s (%.1fs)',
+                    self._model_size, time.perf_counter() - t0,
+                )
                 return True
 
             except (MemoryError, RuntimeError) as e:

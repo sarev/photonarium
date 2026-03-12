@@ -177,6 +177,20 @@ Mutation endpoints prefer batch format (arrays, not single items).
 | POST | `/api/faces/reassess-ack` | Acknowledge reassessment completion |
 | GET | `/api/faces/group-status` | Get face grouping status |
 
+### `app/safeconn.py` - Thread-Safe SQLite Connection Wrapper
+
+Wraps `sqlite3.Connection` with automatic `RLock` serialisation, retry on
+transient "database is locked" errors, and rollback on failure. Every
+`execute()`, `executemany()`, and `commit()` call acquires the lock, retries up
+to 3 times with linear back-off, and rolls back if the final attempt fails —
+preventing the connection-poisoning problem where a failed transaction leaves
+the connection permanently unusable.
+
+Used as a context manager (`with safe_conn:`) for broader atomic spans
+(read-modify-write patterns). The `RLock` is reentrant, so calls inside a
+`with` block nest harmlessly. All database access across the entire backend
+must go through `SafeConnection` — see `CLAUDE.md` for the full contract.
+
 ### `app/imagedb.py` - Image Database Engine
 
 The core backend module. Maintains a SQLite database of image files and their
@@ -229,8 +243,15 @@ groups, face reassessment), and transcription. Each stage explicitly unloads its
 model before the next begins, eliminating GPU contention. Stages query the
 database for incomplete rows (e.g. `embedding IS NULL`) so a killed process
 resumes where it left off. A scan timer triggers periodic rescans at
-configurable intervals. The database connection is shared and protected by
-`threading.RLock`.
+configurable intervals.
+
+**Database access:** All SQLite access goes through `SafeConnection`
+(`app/safeconn.py`), which wraps `sqlite3.Connection` with an `RLock`,
+automatic retry on transient "database is locked" errors, and rollback on
+failure to prevent connection poisoning. The shared connection
+(`ImageDatabase.safe_conn`) uses the same `RLock` as the legacy `_db_lock`;
+pipeline worker threads and `DuplicateManager` create private connections with
+their own `RLock`s. See `CLAUDE.md` for the full contract.
 
 ### `app/faces.py` - Face Detection and Recognition
 

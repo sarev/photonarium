@@ -13,8 +13,8 @@ Benefits
   stage explicitly unloads its model (`del model` + `empty_cache()`)
   before the next stage begins.
 - **No DB lock contention** — stages run sequentially, so the shared
-  `_db_lock` is only briefly held for reads/writes, never contested
-  between stages.
+  lock inside ``safe_conn`` is only briefly held for reads/writes, never
+  contested between stages.
 - **Self-healing** — each stage discovers its own work by querying the
   DB for incomplete rows (e.g. `embedding IS NULL`, `thumbnails_pending
   = 1`).  If the process is killed mid-pipeline, restarting picks up
@@ -27,11 +27,10 @@ Stages
 1. **Ingestion** — Walk registered folders, create/update DB records.
 
    *Threading*: `ThreadPoolExecutor` with `config.indexing_threads`
-   workers (capped at 16).  Each worker gets its own SQLite connection
-   via `_get_worker_conn()` (WAL mode, `busy_timeout=10 s`) to
-   avoid contention on the shared connection.  Transient "database is
-   locked" errors are retried up to 5 times per file.  Worker
-   connections are closed after the stage completes.
+   workers (capped at 16).  Each worker gets its own ``SafeConnection``
+   via ``_get_worker_conn()`` (WAL mode, ``busy_timeout=10 s``) for
+   parallel DB operations.  SafeConnection handles transient "database
+   is locked" errors with retry and auto-rollback.
 
    *No GPU, no batching* — work is I/O-bound (stat, read, hash, EXIF).
 
@@ -153,7 +152,6 @@ import json
 import logging
 import os
 import shutil
-import sqlite3
 import tempfile
 import threading
 import time
@@ -177,6 +175,7 @@ from faces import (
     get_face_thumbnail_path,
 )
 from metadata import derive_timestamp_with_confidence, extract_exif_data
+from safeconn import SafeConnection
 from thumbnails import generate_thumbnail, get_thumbnail_cache_path
 from video import (
     _get_video_rotation,
@@ -269,9 +268,13 @@ class PipelineOrchestrator(threading.Thread):
         # explicitly requested.  The first cycle always runs Stage 1.
         self._ingestion_needed = True
 
-        # Thread-local storage for per-worker DB connections (Stage 1)
+        # Thread-local storage for per-worker DB connections (Stage 1).
+        # Workers need their own connections for parallel I/O — serialising
+        # 16 threads through a single RLock would eliminate all parallelism.
+        # Each worker connection is wrapped in SafeConnection (private RLock)
+        # for retry and rollback on transient "database is locked" errors.
         self._thread_local = threading.local()
-        self._worker_conns: list[sqlite3.Connection] = []
+        self._worker_conns: list[SafeConnection] = []
         self._worker_conns_lock = threading.Lock()
 
     # -----------------------------------------------------------------
@@ -321,7 +324,6 @@ class PipelineOrchestrator(threading.Thread):
                 self._stop_event.wait(timeout=2.0)
             # If _rerun_requested was set during pipeline, loop immediately
 
-        # Clean up worker connections
         self._close_worker_conns()
         logger.info('Pipeline orchestrator stopped')
 
@@ -355,7 +357,7 @@ class PipelineOrchestrator(threading.Thread):
             except Exception:
                 logger.exception('Error in pipeline stage "ingestion"')
                 try:
-                    self._db.conn.rollback()
+                    self._db.safe_conn.rollback()
                 except Exception:
                     pass
             self._flush_logs()
@@ -377,7 +379,7 @@ class PipelineOrchestrator(threading.Thread):
             except Exception:
                 logger.exception(f'Error in pipeline stage "{stage_name}"')
                 try:
-                    self._db.conn.rollback()
+                    self._db.safe_conn.rollback()
                 except Exception:
                     pass
         self._flush_logs()
@@ -404,7 +406,7 @@ class PipelineOrchestrator(threading.Thread):
                 except Exception:
                     logger.exception(f'Error in pipeline stage "{stage_name}"')
                     try:
-                        self._db.conn.rollback()
+                        self._db.safe_conn.rollback()
                     except Exception:
                         pass
             self._flush_logs()
@@ -457,19 +459,25 @@ class PipelineOrchestrator(threading.Thread):
             )
         return self._clip_model
 
-    def _get_worker_conn(self) -> sqlite3.Connection:
+    def _get_worker_conn(self) -> SafeConnection:
         """Get or create a thread-local database connection for worker threads.
 
-        Each ThreadPoolExecutor worker gets its own SQLite connection, avoiding
-        contention on the shared connection.
+        Each ThreadPoolExecutor worker gets its own SQLite connection
+        wrapped in :class:`SafeConnection` (with a private RLock).
+        This allows parallel DB operations across workers while
+        SafeConnection handles retry and rollback on transient
+        "database is locked" errors from SQLite-level write contention.
         """
         conn = getattr(self._thread_local, 'conn', None)
         if conn is None:
-            conn = sqlite3.connect(str(self._db.db_path), timeout=10.0)
-            conn.execute('PRAGMA journal_mode=WAL')
-            conn.execute('PRAGMA busy_timeout=10000')
-            conn.execute('PRAGMA foreign_keys=ON')
-            conn.row_factory = sqlite3.Row
+            import sqlite3
+
+            raw = sqlite3.connect(str(self._db.db_path), timeout=10.0)
+            raw.execute('PRAGMA journal_mode=WAL')
+            raw.execute('PRAGMA busy_timeout=10000')
+            raw.execute('PRAGMA foreign_keys=ON')
+            raw.row_factory = sqlite3.Row
+            conn = SafeConnection(raw, name=f'worker-{threading.current_thread().name}')
             self._thread_local.conn = conn
             with self._worker_conns_lock:
                 self._worker_conns.append(conn)
@@ -518,7 +526,7 @@ class PipelineOrchestrator(threading.Thread):
             update_image_metadata,
         )
 
-        folders = get_folders(self._db.conn)
+        folders = get_folders(self._db.safe_conn)
         if not folders:
             return False
 
@@ -550,10 +558,6 @@ class PipelineOrchestrator(threading.Thread):
         changed_count = 0
         error_count = 0
         num_threads = max(1, min(16, self._db.config.indexing_threads))
-
-        # Retry tracking for transient "database is locked" errors
-        retry_counts: dict[Path, int] = {}
-        max_retries = 5
 
         with ThreadPoolExecutor(max_workers=num_threads) as executor:
             pending_futures: dict[Future, Path] = {}
@@ -596,46 +600,17 @@ class PipelineOrchestrator(threading.Thread):
                             processed_count += 1
                             if was_changed:
                                 changed_count += 1
-                            retry_counts.pop(path, None)
                         except Exception as e:
-                            retries = retry_counts.get(path, 0)
-                            if 'database is locked' in str(e) and retries < max_retries:
-                                retry_counts[path] = retries + 1
-                                # Re-submit for retry
-                                found_paths.add(str(path))
-                                future2 = executor.submit(
-                                    self._process_file,
-                                    path,
-                                    extract_image_metadata,
-                                    create_image,
-                                    update_image_metadata,
-                                    get_image_by_path,
-                                    canonicalise_path,
-                                    _upsert_image_metadata,
-                                )
-                                pending_futures[future2] = path
-                                logger.debug(
-                                    f'Re-queued {path} after "database is locked" (attempt {retries + 1}/{max_retries})'
-                                )
-                            else:
-                                logger.error(f'Error processing {path}: {e}')
-                                retry_counts.pop(path, None)
-                                error_count += 1
+                            logger.error(f'Error processing {path}: {e}')
+                            error_count += 1
 
                         total_done = processed_count + error_count
                         self._update_done(total_done)
                         if total_done % 500 == 0 and total_done < len(all_paths):
                             logger.info(f'  Ingestion: {total_done}/{len(all_paths)} files')
-
-                # Exit when all work is done
-                if paths_exhausted and not pending_futures:
+                elif paths_exhausted:
+                    # All paths submitted and all futures completed — done
                     break
-
-                # Brief sleep to avoid busy-waiting
-                if not pending_futures:
-                    time.sleep(0.05)
-                else:
-                    time.sleep(0.01)
 
         # Close worker connections after ingestion
         self._close_worker_conns()
@@ -643,10 +618,10 @@ class PipelineOrchestrator(threading.Thread):
         # Mark missing files as deleted
         self._mark_deleted_files(folder_paths, found_paths)
 
+        logger.info(
+            f'Stage 1 complete: {processed_count} checked, {changed_count} new/changed, {error_count} errors'
+        )
         if changed_count > 0 or error_count > 0:
-            logger.info(
-                f'Stage 1 complete: {processed_count} checked, {changed_count} new/changed, {error_count} errors'
-            )
             # Notify frontend that images are indexed
             self._db.event_queue.emit('images_indexed', {})
 
@@ -664,8 +639,9 @@ class PipelineOrchestrator(threading.Thread):
     ) -> bool:
         """Process a single file (image or video) for ingestion.
 
-        Runs in a worker thread with its own DB connection. Handles
-        new files, changed files, and unchanged files (backfill checks).
+        Runs in a worker thread with its own SafeConnection. The heavy
+        I/O work (stat, read, hash, EXIF) runs without any lock; only
+        the brief DB calls acquire the per-connection RLock.
 
         Does NOT generate thumbnails (moved to Stage 2) or queue items
         for further processing (stages query DB directly).
@@ -714,7 +690,7 @@ class PipelineOrchestrator(threading.Thread):
 
     def _process_existing_file(
         self,
-        conn: sqlite3.Connection,
+        conn: SafeConnection,
         path: Path,
         existing: dict,
         current_size: int,
@@ -755,7 +731,14 @@ class PipelineOrchestrator(threading.Thread):
         # Size difference → definitely changed.  Mtime-only difference →
         # compute checksum to distinguish real modifications from benign
         # mtime drift (Dropbox sync, filesystem precision, backup tools).
-        file_unchanged = existing['size'] == current_size and existing_mtime == current_mtime
+        # Use a tolerance for mtime comparison: floating-point round-trip
+        # through SQLite can introduce sub-second drift, causing false
+        # "changed" detections and unnecessary DB writes on every reindex.
+        mtime_matches = (
+            existing_mtime is not None
+            and abs(existing_mtime - current_mtime) < 0.01
+        )
+        file_unchanged = existing['size'] == current_size and mtime_matches
 
         if not file_unchanged and existing['size'] == current_size and existing_checksum:
             # Same size, different mtime — check if content actually changed
@@ -877,7 +860,7 @@ class PipelineOrchestrator(threading.Thread):
 
     def _reingest_changed_video(
         self,
-        conn: sqlite3.Connection,
+        conn: SafeConnection,
         path: Path,
         existing: dict,
         current_size: int,
@@ -948,7 +931,7 @@ class PipelineOrchestrator(threading.Thread):
 
     def _reingest_changed_image(
         self,
-        conn: sqlite3.Connection,
+        conn: SafeConnection,
         path: Path,
         existing: dict,
         extract_image_metadata,
@@ -1011,7 +994,7 @@ class PipelineOrchestrator(threading.Thread):
 
     def _process_new_file(
         self,
-        conn: sqlite3.Connection,
+        conn: SafeConnection,
         path: Path,
         current_size: int,
         current_mtime: float,
@@ -1037,7 +1020,7 @@ class PipelineOrchestrator(threading.Thread):
 
     def _ingest_new_video(
         self,
-        conn: sqlite3.Connection,
+        conn: SafeConnection,
         path: Path,
         current_size: int,
         current_mtime: float,
@@ -1136,7 +1119,7 @@ class PipelineOrchestrator(threading.Thread):
 
     def _ingest_new_image(
         self,
-        conn: sqlite3.Connection,
+        conn: SafeConnection,
         path: Path,
         current_size: int,
         current_mtime: float,
@@ -1230,7 +1213,7 @@ class PipelineOrchestrator(threading.Thread):
         """Mark files in DB but not on disk as deleted."""
         from imagedb import get_all_images
 
-        all_images = get_all_images(self._db.conn, include_deleted=False)
+        all_images = get_all_images(self._db.safe_conn, include_deleted=False)
         known_paths = {img['path'] for img in all_images}
 
         # Only consider paths under registered folders
@@ -1241,13 +1224,13 @@ class PipelineOrchestrator(threading.Thread):
         if missing_paths:
             logger.info(f'Marking {len(missing_paths)} missing images as deleted')
             now = datetime.now().isoformat()
-            with self._db._db_lock:
+            with self._db.safe_conn:
                 for path in missing_paths:
-                    self._db.conn.execute(
+                    self._db.safe_conn.execute(
                         'UPDATE images SET deleted = 1, updated_at = ? WHERE path = ? AND deleted = 0',
                         (now, path),
                     )
-                self._db.conn.commit()
+                self._db.safe_conn.commit()
 
     @staticmethod
     def _compute_checksum(path: Path) -> str | None:
@@ -1295,8 +1278,8 @@ class PipelineOrchestrator(threading.Thread):
         Returns:
             Number of thumbnails generated.
         """
-        with self._db._db_lock:
-            cursor = self._db.conn.execute("""
+        with self._db.safe_conn:
+            cursor = self._db.safe_conn.execute("""
                 SELECT id, path, checksum FROM images
                 WHERE deleted = 0 AND checksum IS NOT NULL
                   AND media_type = 'image' AND thumbnails_pending = 1
@@ -1335,12 +1318,12 @@ class PipelineOrchestrator(threading.Thread):
                     logger.warning(f'Thumbnail generation failed: {e}')
                 # Clear the pending flag regardless of success — if it
                 # failed, the placeholder stays but we don't keep retrying.
-                with self._db._db_lock:
-                    self._db.conn.execute(
+                with self._db.safe_conn:
+                    self._db.safe_conn.execute(
                         'UPDATE images SET thumbnails_pending = 0 WHERE id = ?',
                         (image_id,),
                     )
-                    self._db.conn.commit()
+                    self._db.safe_conn.commit()
                 self._update_done(count)
 
         if count > 0:
@@ -1371,8 +1354,8 @@ class PipelineOrchestrator(threading.Thread):
         if not is_video_supported():
             return 0
 
-        with self._db._db_lock:
-            cursor = self._db.conn.execute("""
+        with self._db.safe_conn:
+            cursor = self._db.safe_conn.execute("""
                 SELECT i.id, i.path
                 FROM images i
                 WHERE i.deleted = 0
@@ -1429,15 +1412,15 @@ class PipelineOrchestrator(threading.Thread):
                 keyframe_time = (start + end) / 2
                 insert_params.append((scene_id, image_id, idx, start, end, keyframe_time, now, now))
 
-            with self._db._db_lock:
-                self._db.conn.executemany(
+            with self._db.safe_conn:
+                self._db.safe_conn.executemany(
                     """INSERT OR REPLACE INTO scenes
                         (id, image_id, scene_index, start_time, end_time,
                          keyframe_time, created_at, updated_at)
                     VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
                     insert_params,
                 )
-                self._db.conn.commit()
+                self._db.safe_conn.commit()
 
             # Extract keyframes and generate thumbnails in a single pass.
             # Each frame is decoded once, used for both thumbnail sizes,
@@ -1472,15 +1455,15 @@ class PipelineOrchestrator(threading.Thread):
             # first scene so the video has a visible thumbnail in the
             # Gallery/Videos screens immediately (Stage 3b will later
             # copy the scene's embedding to the image row).
-            with self._db._db_lock:
-                self._db.conn.execute(
+            with self._db.safe_conn:
+                self._db.safe_conn.execute(
                     """UPDATE images SET thumbnails_pending = 0,
                        preferred_scene_id = COALESCE(preferred_scene_id, ?),
                        updated_at = ?
                        WHERE id = ?""",
                     (scene_ids[0], datetime.now().isoformat(), image_id),
                 )
-                self._db.conn.commit()
+                self._db.safe_conn.commit()
 
             count += 1
             self._update_done(count)
@@ -1527,8 +1510,8 @@ class PipelineOrchestrator(threading.Thread):
         Returns:
             Number of images embedded.
         """
-        with self._db._db_lock:
-            cursor = self._db.conn.execute("""
+        with self._db.safe_conn:
+            cursor = self._db.safe_conn.execute("""
                 SELECT id, path FROM images
                 WHERE embedding IS NULL AND deleted = 0 AND media_type = 'image'
                 AND width > 0
@@ -1570,12 +1553,12 @@ class PipelineOrchestrator(threading.Thread):
                     count += 1
 
             if updates:
-                with self._db._db_lock:
-                    self._db.conn.executemany(
+                with self._db.safe_conn:
+                    self._db.safe_conn.executemany(
                         'UPDATE images SET embedding = ?, aesthetic_laion = ?, updated_at = ? WHERE id = ?',
                         updates,
                     )
-                    self._db.conn.commit()
+                    self._db.safe_conn.commit()
 
             done = batch_start + len(batch)
             self._update_done(done)
@@ -1595,13 +1578,13 @@ class PipelineOrchestrator(threading.Thread):
         Returns:
             Number of videos with scenes embedded.
         """
-        with self._db._db_lock:
+        with self._db.safe_conn:
             # Find videos needing scene embedding work:
             # - scenes with NULL embeddings (not yet processed), OR
             # - image-level embedding/preferred_scene_id still NULL
             #   AND at least one scene has a real embedding (length > 0,
             #   i.e. not an empty-blob marker for missing thumbnails).
-            cursor = self._db.conn.execute("""
+            cursor = self._db.safe_conn.execute("""
                 SELECT DISTINCT i.id, i.path
                 FROM images i
                 JOIN scenes s ON s.image_id = i.id
@@ -1636,8 +1619,8 @@ class PipelineOrchestrator(threading.Thread):
 
             image_id = row['id']
 
-            with self._db._db_lock:
-                scene_rows = self._db.conn.execute(
+            with self._db.safe_conn:
+                scene_rows = self._db.safe_conn.execute(
                     'SELECT id, scene_index FROM scenes WHERE image_id = ? AND embedding IS NULL ORDER BY scene_index',
                     (image_id,),
                 ).fetchall()
@@ -1694,9 +1677,9 @@ class PipelineOrchestrator(threading.Thread):
             # video with embedded scenes but no image-level embedding
             # (which would be invisible to the re-query on restart).
             did_work = False
-            with self._db._db_lock:
+            with self._db.safe_conn:
                 if embedding_updates:
-                    self._db.conn.executemany(
+                    self._db.safe_conn.executemany(
                         'UPDATE scenes SET embedding = ?, updated_at = ? WHERE id = ?',
                         embedding_updates,
                     )
@@ -1709,7 +1692,7 @@ class PipelineOrchestrator(threading.Thread):
                 # embedding (length 0 vs 2048 bytes).
                 if missing_thumb_ids:
                     now_ts = datetime.now().isoformat()
-                    self._db.conn.executemany(
+                    self._db.safe_conn.executemany(
                         'UPDATE scenes SET embedding = ?, updated_at = ? WHERE id = ?',
                         [(b'', now_ts, sid) for sid in missing_thumb_ids],
                     )
@@ -1719,7 +1702,7 @@ class PipelineOrchestrator(threading.Thread):
                     )
 
                 # Set preferred scene and image embedding — only if changed
-                all_scenes = self._db.conn.execute(
+                all_scenes = self._db.safe_conn.execute(
                     'SELECT id, scene_index FROM scenes WHERE image_id = ? ORDER BY scene_index',
                     (image_id,),
                 ).fetchall()
@@ -1734,7 +1717,7 @@ class PipelineOrchestrator(threading.Thread):
                     for sc in all_scenes:
                         emb = scene_embeddings.get(sc['scene_index'])
                         if emb is None:
-                            emb_row = self._db.conn.execute(
+                            emb_row = self._db.safe_conn.execute(
                                 'SELECT embedding FROM scenes WHERE id = ?', (sc['id'],)
                             ).fetchone()
                             if emb_row and emb_row['embedding']:
@@ -1747,7 +1730,7 @@ class PipelineOrchestrator(threading.Thread):
                     if preferred_emb is not None:
                         # Check current state to avoid no-op updates that
                         # bump updated_at and create perpetually dirty rows
-                        current = self._db.conn.execute(
+                        current = self._db.safe_conn.execute(
                             'SELECT embedding, preferred_scene_id FROM images WHERE id = ?',
                             (image_id,),
                         ).fetchone()
@@ -1758,13 +1741,13 @@ class PipelineOrchestrator(threading.Thread):
                         if needs_update:
                             rep_blob = preferred_emb.astype(np.float32).tobytes()
                             now_ts = datetime.now().isoformat()
-                            self._db.conn.execute(
+                            self._db.safe_conn.execute(
                                 'UPDATE images SET embedding = ?, preferred_scene_id = ?, updated_at = ? WHERE id = ?',
                                 (rep_blob, preferred_scene_id, now_ts, image_id),
                             )
                             did_work = True
 
-                self._db.conn.commit()
+                self._db.safe_conn.commit()
 
             if did_work:
                 count += 1
@@ -1781,8 +1764,8 @@ class PipelineOrchestrator(threading.Thread):
         Returns:
             True if the image row was actually updated, False if already correct.
         """
-        with self._db._db_lock:
-            all_scenes = self._db.conn.execute(
+        with self._db.safe_conn:
+            all_scenes = self._db.safe_conn.execute(
                 'SELECT id, scene_index FROM scenes WHERE image_id = ? ORDER BY scene_index',
                 (image_id,),
             ).fetchall()
@@ -1791,7 +1774,7 @@ class PipelineOrchestrator(threading.Thread):
                 return False
 
             # Check current state — skip update if already correct
-            current = self._db.conn.execute(
+            current = self._db.safe_conn.execute(
                 'SELECT embedding, preferred_scene_id FROM images WHERE id = ?',
                 (image_id,),
             ).fetchone()
@@ -1801,7 +1784,9 @@ class PipelineOrchestrator(threading.Thread):
             preferred_scene_id = None
             preferred_emb = None
             for sc in all_scenes:
-                emb_row = self._db.conn.execute('SELECT embedding FROM scenes WHERE id = ?', (sc['id'],)).fetchone()
+                emb_row = self._db.safe_conn.execute(
+                    'SELECT embedding FROM scenes WHERE id = ?', (sc['id'],)
+                ).fetchone()
                 if emb_row and emb_row['embedding']:
                     preferred_scene_id = sc['id']
                     preferred_emb = np.frombuffer(emb_row['embedding'], dtype=np.float32)
@@ -1814,7 +1799,7 @@ class PipelineOrchestrator(threading.Thread):
 
                 rep_blob = preferred_emb.astype(np.float32).tobytes()
                 now_ts = datetime.now().isoformat()
-                self._db.conn.execute(
+                self._db.safe_conn.execute(
                     'UPDATE images SET embedding = ?, preferred_scene_id = ?, updated_at = ? WHERE id = ?',
                     (rep_blob, preferred_scene_id, now_ts, image_id),
                 )
@@ -1827,12 +1812,12 @@ class PipelineOrchestrator(threading.Thread):
                     return False
 
                 now_ts = datetime.now().isoformat()
-                self._db.conn.execute(
+                self._db.safe_conn.execute(
                     'UPDATE images SET preferred_scene_id = ?, updated_at = ? WHERE id = ?',
                     (preferred_scene_id, now_ts, image_id),
                 )
 
-            self._db.conn.commit()
+            self._db.safe_conn.commit()
             return True
 
     def _load_laion_head(self, clip: OpenCLIPModel) -> tuple[np.ndarray | None, float | None]:
@@ -1913,8 +1898,8 @@ class PipelineOrchestrator(threading.Thread):
                 self._nima_warned = True
             return 0
 
-        with self._db._db_lock:
-            cursor = self._db.conn.execute("""
+        with self._db.safe_conn:
+            cursor = self._db.safe_conn.execute("""
                 SELECT id, checksum FROM images
                 WHERE aesthetic_nima IS NULL AND deleted = 0 AND checksum IS NOT NULL
             """)
@@ -1936,7 +1921,10 @@ class PipelineOrchestrator(threading.Thread):
             else:
                 device = 'cpu'
 
+            logger.info('Loading NIMA model...')
+            t0 = time.perf_counter()
             model = load_nima_model(str(checkpoint_path), device=device)
+            logger.info('NIMA model loaded (%.1fs)', time.perf_counter() - t0)
         except (MemoryError, RuntimeError) as e:
             if isinstance(e, MemoryError) or 'out of memory' in str(e).lower():
                 logger.error(f'OOM loading NIMA model: {e}')
@@ -2010,12 +1998,12 @@ class PipelineOrchestrator(threading.Thread):
             now = datetime.now().isoformat()
             updates = [(score, now, vid) for score, vid in zip(scores, valid_ids, strict=True)]
 
-            with self._db._db_lock:
-                self._db.conn.executemany(
+            with self._db.safe_conn:
+                self._db.safe_conn.executemany(
                     'UPDATE images SET aesthetic_nima = ?, updated_at = ? WHERE id = ?',
                     updates,
                 )
-                self._db.conn.commit()
+                self._db.safe_conn.commit()
 
             count += len(updates)
             done = batch_start + len(batch)
@@ -2044,8 +2032,8 @@ class PipelineOrchestrator(threading.Thread):
         Returns:
             Number of images scored.
         """
-        with self._db._db_lock:
-            cursor = self._db.conn.execute("""
+        with self._db.safe_conn:
+            cursor = self._db.safe_conn.execute("""
                 SELECT id, embedding FROM images
                 WHERE aesthetic_laion IS NULL AND embedding IS NOT NULL AND deleted = 0
             """)
@@ -2073,12 +2061,12 @@ class PipelineOrchestrator(threading.Thread):
             chunk_size = 1000
             for i in range(0, len(updates), chunk_size):
                 chunk = updates[i : i + chunk_size]
-                with self._db._db_lock:
-                    self._db.conn.executemany(
+                with self._db.safe_conn:
+                    self._db.safe_conn.executemany(
                         'UPDATE images SET aesthetic_laion = ?, updated_at = ? WHERE id = ?',
                         chunk,
                     )
-                    self._db.conn.commit()
+                    self._db.safe_conn.commit()
 
         count = len(updates)
         if count > 0:
@@ -2098,8 +2086,8 @@ class PipelineOrchestrator(threading.Thread):
         if not self._db.config.face_detection_enabled:
             return False
 
-        with self._db._db_lock:
-            cursor = self._db.conn.execute("""
+        with self._db.safe_conn:
+            cursor = self._db.safe_conn.execute("""
                 SELECT i.id, i.checksum, i.width, i.height
                 FROM images i
                 WHERE i.deleted = 0
@@ -2144,8 +2132,7 @@ class PipelineOrchestrator(threading.Thread):
                 thumb_path = get_thumbnail_cache_path(checksum, 400, thumbnail_dir=self._db.thumbnail_dir)
                 if not Path(thumb_path).exists():
                     # Try to use original path as fallback
-                    with self._db._db_lock:
-                        img_row = self._db.conn.execute('SELECT path FROM images WHERE id = ?', (image_id,)).fetchone()
+                    img_row = self._db.safe_conn.execute('SELECT path FROM images WHERE id = ?', (image_id,)).fetchone()
                     if img_row:
                         orig_path = Path(img_row['path'])
                         if orig_path.exists():
@@ -2158,8 +2145,7 @@ class PipelineOrchestrator(threading.Thread):
                 id_to_path[image_id] = thumb_p
                 path_to_id[thumb_p] = image_id
                 # Store original path for face thumbnail generation
-                with self._db._db_lock:
-                    img_row = self._db.conn.execute('SELECT path FROM images WHERE id = ?', (image_id,)).fetchone()
+                img_row = self._db.safe_conn.execute('SELECT path FROM images WHERE id = ?', (image_id,)).fetchone()
                 if img_row:
                     id_to_orig_path[image_id] = Path(img_row['path'])
 
@@ -2180,9 +2166,9 @@ class PipelineOrchestrator(threading.Thread):
             results = face_detector.detect_faces_from_preloaded(loaded_images, stop_event=self._stop_event)
 
             # Get known face embeddings for auto-recognition
-            with self._db._db_lock:
-                known_embeddings = get_all_known_face_embeddings(self._db.conn)
-                cursor2 = self._db.conn.execute('SELECT id, name, recognition_threshold FROM people')
+            with self._db.safe_conn:
+                known_embeddings = get_all_known_face_embeddings(self._db.safe_conn)
+                cursor2 = self._db.safe_conn.execute('SELECT id, name, recognition_threshold FROM people')
                 per_person_thresholds: dict[str, float | None] = {}
                 ignored_person_ids: set[str] = set()
                 for prow in cursor2.fetchall():
@@ -2205,8 +2191,8 @@ class PipelineOrchestrator(threading.Thread):
                     # Sentinel record — single insert, atomic by itself
                     dummy_embedding = np.zeros(512, dtype=np.float32).tobytes()
                     sentinel_id = str(uuid.uuid4())
-                    with self._db._db_lock:
-                        self._db.conn.execute(
+                    with self._db.safe_conn:
+                        self._db.safe_conn.execute(
                             """INSERT INTO faces
                                (id, image_id, box_x, box_y, box_w, box_h,
                                 confidence, embedding, person_id, suppressed,
@@ -2215,7 +2201,7 @@ class PipelineOrchestrator(threading.Thread):
                                        datetime('now'), datetime('now'))""",
                             (sentinel_id, image_id, dummy_embedding),
                         )
-                        self._db.conn.commit()
+                        self._db.safe_conn.commit()
                     processed_count += 1
                     continue
 
@@ -2277,8 +2263,8 @@ class PipelineOrchestrator(threading.Thread):
                     )
 
                 # Atomically insert all faces for this image in one transaction
-                with self._db._db_lock:
-                    self._db.conn.executemany(
+                with self._db.safe_conn:
+                    self._db.safe_conn.executemany(
                         """INSERT INTO faces
                            (id, image_id, box_x, box_y, box_w, box_h,
                             confidence, embedding, person_id, semantic_embedding,
@@ -2287,7 +2273,7 @@ class PipelineOrchestrator(threading.Thread):
                                    datetime('now'), datetime('now'))""",
                         face_rows,
                     )
-                    self._db.conn.commit()
+                    self._db.safe_conn.commit()
 
                 faces_detected_count += len(face_rows)
                 processed_count += 1
@@ -2335,15 +2321,15 @@ class PipelineOrchestrator(threading.Thread):
 
         # 6a: Sync directory groups (always)
         try:
-            self._db._duplicate_manager.sync_directory_groups(self._db.conn, self._db._db_lock)
+            self._db._duplicate_manager.sync_directory_groups(self._db.safe_conn)
         except Exception as e:
             logger.error(f'Failed to sync directory groups: {e}')
 
         # 6b: Face reassessment
         if self._db.config.face_detection_enabled and not self._stopped():
             try:
-                with self._db._db_lock:
-                    delete_people_without_faces(self._db.conn)
+                with self._db.safe_conn:
+                    delete_people_without_faces(self._db.safe_conn)
                 self._db._reassess_faces_with_status()
             except Exception as e:
                 logger.error(f'Failed during face reassessment: {e}')
@@ -2360,8 +2346,7 @@ class PipelineOrchestrator(threading.Thread):
         if self._db.config.face_detection_enabled and not self._stopped():
             try:
                 compute_unknown_face_groups(
-                    self._db.conn,
-                    self._db._db_lock,
+                    self._db.safe_conn,
                     threshold=self._db.config.face_recognition_threshold,
                 )
             except Exception as e:
@@ -2374,6 +2359,7 @@ class PipelineOrchestrator(threading.Thread):
                 logger.error(f'Failed to backfill face semantic embeddings: {e}')
 
         emit_processing_complete(self._db.event_queue)
+        logger.info('Stage 6 complete')
         return False
 
     # =================================================================
@@ -2392,8 +2378,8 @@ class PipelineOrchestrator(threading.Thread):
         if not self._db.config.stt_enabled:
             return False
 
-        with self._db._db_lock:
-            cursor = self._db.conn.execute("""
+        with self._db.safe_conn:
+            cursor = self._db.safe_conn.execute("""
                 SELECT DISTINCT i.id, i.path, i.basename, i.stt_language
                 FROM images i
                 JOIN scenes s ON s.image_id = i.id
@@ -2433,8 +2419,8 @@ class PipelineOrchestrator(threading.Thread):
             }
 
             # Load scene boundaries
-            with self._db._db_lock:
-                scene_rows = self._db.conn.execute(
+            with self._db.safe_conn:
+                scene_rows = self._db.safe_conn.execute(
                     'SELECT id, start_time, end_time FROM scenes WHERE image_id = ? ORDER BY scene_index',
                     (image_id,),
                 ).fetchall()
@@ -2476,12 +2462,12 @@ class PipelineOrchestrator(threading.Thread):
         perpetually re-select the video for transcription.
         """
         now = datetime.now().isoformat()
-        with self._db._db_lock:
-            self._db.conn.executemany(
+        with self._db.safe_conn:
+            self._db.safe_conn.executemany(
                 "UPDATE scenes SET transcription = '', updated_at = ? WHERE id = ?",
                 [(now, sid) for sid in scene_ids],
             )
-            self._db.conn.commit()
+            self._db.safe_conn.commit()
 
     def _transcribe_scenes(
         self,
@@ -2572,8 +2558,8 @@ class PipelineOrchestrator(threading.Thread):
 
             if transcription_updates:
                 now = datetime.now().isoformat()
-                with self._db._db_lock:
-                    self._db.conn.executemany(
+                with self._db.safe_conn:
+                    self._db.safe_conn.executemany(
                         """UPDATE scenes SET transcription = ?, transcription_embedding = ?,
                                updated_at = ?
                         WHERE id = ?""",
@@ -2582,19 +2568,19 @@ class PipelineOrchestrator(threading.Thread):
                     # Write detected language back to images.stt_language,
                     # but only when the user hasn't explicitly chosen a language
                     if detected_language:
-                        self._db.conn.execute(
+                        self._db.safe_conn.execute(
                             'UPDATE images SET stt_language = ?, updated_at = ? '
                             "WHERE id = ? AND (stt_language IS NULL OR stt_language = '')",
                             (detected_language, now, image_id),
                         )
-                    self._db.conn.commit()
+                    self._db.safe_conn.commit()
 
         except Exception as e:
             # Rollback any uncommitted transaction to prevent cascade failures.
             # Without this, a failed commit (e.g. "database is locked") leaves
             # the connection dirty, causing ALL subsequent operations to fail.
             try:
-                self._db.conn.rollback()
+                self._db.safe_conn.rollback()
             except Exception:
                 pass
             logger.error(f'STT failed for video {video_path}: {e}')

@@ -27,8 +27,9 @@ done
 # Kill anything on the port
 lsof -ti :"$PORT" 2>/dev/null | xargs -r kill 2>/dev/null || true
 
-# Wipe previous test data
+# Wipe previous test data and recreate directory
 rm -rf "$TEST_DIR"
+mkdir -p "$TEST_DIR"
 
 # Build folder args
 FOLDER_ARGS=""
@@ -39,7 +40,16 @@ done
 # Activate venv and start
 source "$REPO_ROOT/env/bin/activate"
 cd "$REPO_ROOT/app"
-exec python app.py --port "$PORT" --debug \
+
+LOG_FILE="/tmp/photonarium-test.log"
+echo "Logging to $LOG_FILE"
+
+python -u app.py --port "$PORT" --debug \
     --config "$TEST_DIR/photonarium.yml" \
     --data-dir "$TEST_DIR" \
-    $FOLDER_ARGS $SCAN
+    $FOLDER_ARGS $SCAN \
+    >"$LOG_FILE" 2>&1 &
+
+APP_PID=$!
+echo "Started (PID $APP_PID) on port $PORT"
+echo "$APP_PID" > "$TEST_DIR/pid"

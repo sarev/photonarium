@@ -33,6 +33,7 @@ import numpy as np
 
 from config import Config, get_default_config
 from dbutil import sql_placeholders
+from safeconn import SafeConnection
 
 logger = logging.getLogger(__name__)
 
@@ -274,20 +275,20 @@ class UnionFind:
 # =============================================================================
 
 
-def _get_metadata(conn: sqlite3.Connection, key: str) -> str | None:
+def _get_metadata(conn: SafeConnection, key: str) -> str | None:
     """Get a metadata value by key."""
     cursor = conn.execute('SELECT value FROM metadata WHERE key = ?', (key,))
     row = cursor.fetchone()
     return row['value'] if row else None
 
 
-def _set_metadata(conn: sqlite3.Connection, key: str, value: str) -> None:
+def _set_metadata(conn: SafeConnection, key: str, value: str) -> None:
     """Set a metadata value."""
     conn.execute('INSERT OR REPLACE INTO metadata (key, value) VALUES (?, ?)', (key, value))
     conn.commit()
 
 
-def _clear_duplicate_groups(conn: sqlite3.Connection, level: int | None = None) -> None:
+def _clear_duplicate_groups(conn: SafeConnection, level: int | None = None) -> None:
     """Clear duplicate groups from the database.
 
     Args:
@@ -303,7 +304,7 @@ def _clear_duplicate_groups(conn: sqlite3.Connection, level: int | None = None) 
 
 
 def _insert_duplicate_group(
-    conn: sqlite3.Connection,
+    conn: SafeConnection,
     level: int,
     group_hash: str,
     image_ids: list[str],
@@ -324,7 +325,7 @@ def _insert_duplicate_group(
         )
 
 
-def _get_dirty_image_ids(conn: sqlite3.Connection, epoch: str) -> list[str]:
+def _get_dirty_image_ids(conn: SafeConnection, epoch: str) -> list[str]:
     """Get IDs of images that need duplicate checking.
 
     An image is "dirty" if it was added or modified after the last
@@ -353,20 +354,20 @@ def _get_dirty_image_ids(conn: sqlite3.Connection, epoch: str) -> list[str]:
     return [row['id'] for row in cursor.fetchall()]
 
 
-def _get_group_count(conn: sqlite3.Connection, level: int) -> int:
+def _get_group_count(conn: SafeConnection, level: int) -> int:
     """Get the number of duplicate groups at a level."""
     cursor = conn.execute('SELECT COUNT(DISTINCT group_hash) as cnt FROM duplicate_groups WHERE level = ?', (level,))
     return cursor.fetchone()['cnt']
 
 
-def _get_image_to_group_mapping(conn: sqlite3.Connection, level: int) -> dict[str, str]:
+def _get_image_to_group_mapping(conn: SafeConnection, level: int) -> dict[str, str]:
     """Get mapping of image IDs to their group hashes."""
     cursor = conn.execute('SELECT image_id, group_hash FROM duplicate_groups WHERE level = ?', (level,))
     return {row['image_id']: row['group_hash'] for row in cursor.fetchall()}
 
 
 def _add_image_to_group(
-    conn: sqlite3.Connection,
+    conn: SafeConnection,
     level: int,
     group_hash: str,
     image_id: str,
@@ -380,7 +381,7 @@ def _add_image_to_group(
 
 
 def _merge_groups(
-    conn: sqlite3.Connection,
+    conn: SafeConnection,
     level: int,
     group_hash_keep: str,
     group_hash_merge: str,
@@ -405,7 +406,7 @@ def _merge_groups(
 # =============================================================================
 
 
-def _compute_duplicates_level0(conn: sqlite3.Connection) -> int:
+def _compute_duplicates_level0(conn: SafeConnection) -> int:
     """Compute level 0 duplicates (identical checksum).
 
     Groups images with the same SHA256 checksum.
@@ -438,7 +439,7 @@ def _compute_duplicates_level0(conn: sqlite3.Connection) -> int:
 
 
 def _compute_duplicates_level0_incremental(
-    conn: sqlite3.Connection,
+    conn: SafeConnection,
     dirty_ids: list[str],
 ) -> int:
     """Incrementally update level 0 duplicates for dirty images."""
@@ -734,7 +735,7 @@ def _compute_level1_lsh(
     return uf, comparisons, matches, metrics
 
 
-def _compute_duplicates_level1(conn: sqlite3.Connection, threshold: int = 4) -> int:
+def _compute_duplicates_level1(conn: SafeConnection, threshold: int = 4) -> int:
     """Compute level 1 duplicates (perceptual hash similarity).
 
     Groups images with perceptual hash Hamming distance <= threshold.
@@ -940,7 +941,7 @@ def _compute_embedding_duplicates_chunked(
 
 
 def _load_embeddings_normalised(
-    conn: sqlite3.Connection,
+    conn: SafeConnection,
 ) -> tuple[list[str], np.ndarray] | None:
     """Load all image embeddings and normalise them.
 
@@ -969,7 +970,7 @@ def _load_embeddings_normalised(
     return image_ids, embeddings
 
 
-def _compute_duplicates_level2(conn: sqlite3.Connection, threshold: float = 0.95) -> int:
+def _compute_duplicates_level2(conn: SafeConnection, threshold: float = 0.95) -> int:
     """Compute level 2 duplicates (similar embeddings).
 
     Groups images with high cosine similarity (>= threshold).
@@ -1017,7 +1018,7 @@ def _compute_duplicates_level2(conn: sqlite3.Connection, threshold: float = 0.95
     return group_count
 
 
-def _compute_duplicates_level3(conn: sqlite3.Connection, threshold: float = 0.85) -> int:
+def _compute_duplicates_level3(conn: SafeConnection, threshold: float = 0.85) -> int:
     """Compute level 3 duplicates (related embeddings).
 
     Groups images with moderate cosine similarity (>= threshold).
@@ -1066,7 +1067,7 @@ def _compute_duplicates_level3(conn: sqlite3.Connection, threshold: float = 0.85
 
 
 def _compute_duplicates_embedding_incremental(
-    conn: sqlite3.Connection,
+    conn: SafeConnection,
     dirty_ids: list[str],
     level: int,
     threshold: float,
@@ -1231,13 +1232,13 @@ def _compute_duplicates_embedding_incremental(
 # =============================================================================
 
 
-def _get_duplicate_epoch(conn: sqlite3.Connection) -> str:
+def _get_duplicate_epoch(conn: SafeConnection) -> str:
     """Get the current epoch timestamp for duplicate groups."""
     epoch = _get_metadata(conn, 'duplicate_epoch')
     return epoch if epoch else ''
 
 
-def _set_duplicate_epoch(conn: sqlite3.Connection, epoch: str) -> None:
+def _set_duplicate_epoch(conn: SafeConnection, epoch: str) -> None:
     """Set the duplicate computation epoch."""
     _set_metadata(conn, 'duplicate_epoch', epoch)
 
@@ -1248,7 +1249,7 @@ def _set_duplicate_epoch(conn: sqlite3.Connection, epoch: str) -> None:
 
 
 def _get_images_by_similarity(
-    conn: sqlite3.Connection,
+    conn: SafeConnection,
     reference_embedding: np.ndarray,
 ) -> list[dict[str, Any]]:
     """Get all images sorted by similarity to a reference embedding.
@@ -1350,16 +1351,18 @@ class DuplicateManager:
         self._image_to_group: dict[int, dict[str, str]] | None = None  # level -> image_id -> group_hash
         self._cache_loaded = False
 
-    def _get_db(self) -> sqlite3.Connection:
-        """Get a private database connection.
+    def _get_db(self) -> SafeConnection:
+        """Get a private database connection wrapped in SafeConnection.
 
-        Sets busy_timeout to match the shared connection so writes wait
-        gracefully when another thread holds SQLite's write lock.
+        Each call opens a fresh connection with its own RLock.  The
+        SafeConnection wrapper provides retry on transient "database is
+        locked" errors and auto-rollback on failure — matching the
+        safety guarantees of the shared ``safe_conn`` used elsewhere.
         """
-        conn = sqlite3.connect(self._db_path)
-        conn.execute('PRAGMA busy_timeout=5000')
-        conn.row_factory = sqlite3.Row
-        return conn
+        raw = sqlite3.connect(self._db_path)
+        raw.execute('PRAGMA busy_timeout=5000')
+        raw.row_factory = sqlite3.Row
+        return SafeConnection(raw, name='dup-manager')
 
     # =========================================================================
     # Group Cache
@@ -2063,8 +2066,7 @@ class DuplicateManager:
 
     def sync_directory_groups(
         self,
-        conn: sqlite3.Connection,
-        db_lock: threading.Lock,
+        conn: SafeConnection,
     ) -> None:
         """Synchronise directory groups with current image data.
 
@@ -2076,18 +2078,18 @@ class DuplicateManager:
         share the same basename (e.g. /Photos/Holiday/Beach and /Photos/Birthday/Beach),
         parent path components are prepended until names are unique.
 
-        Uses READ → COMPUTE → WRITE pattern to minimise db_lock hold time.
+        Uses READ → COMPUTE → WRITE pattern to minimise lock hold time.
+        The SafeConnection's context manager serialises DB access.
 
         Called at the end of processing (on_final_complete) and after folder removal.
 
         Args:
-            conn: Shared database connection (caller holds db_lock for the queries).
-            db_lock: The database lock for thread safety.
+            conn: Shared SafeConnection (provides its own locking).
         """
         now = datetime.now().isoformat()
 
         # ── READ phase (lock): gather current state from DB ──
-        with db_lock:
+        with conn:
             cursor = conn.execute('SELECT id, path FROM images WHERE deleted = 0')
             rows = cursor.fetchall()
 
@@ -2152,7 +2154,7 @@ class DuplicateManager:
                 removed += 1
 
         # ── WRITE phase (lock): execute all batched SQL in one transaction ──
-        with db_lock:
+        with conn:
             conn.executemany(
                 'DELETE FROM duplicate_groups WHERE level = ? AND group_hash = ?',
                 delete_membership_params,
@@ -2211,7 +2213,7 @@ class DuplicateManager:
 
     def compute_all(
         self,
-        conn: sqlite3.Connection | None = None,
+        conn: SafeConnection | None = None,
         force_full: bool = False,
     ) -> dict[int, int]:
         """Compute all duplicate groups, using incremental updates when possible.
@@ -2351,7 +2353,7 @@ class DuplicateManager:
     def get_images_by_similarity(
         self,
         reference_embedding: np.ndarray,
-        conn: sqlite3.Connection | None = None,
+        conn: SafeConnection | None = None,
     ) -> list[dict[str, Any]]:
         """Get all images sorted by similarity to a reference embedding."""
         should_close = conn is None

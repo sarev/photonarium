@@ -175,6 +175,7 @@ from rawimage import (
 from rawimage import (
     open_image_as_numpy as raw_open_image_as_numpy,
 )
+from safeconn import SafeConnection
 from thumbnails import (
     delete_thumbnails_for_checksum,
     generate_thumbnail,
@@ -477,7 +478,7 @@ def init_database(db_path: Path | str) -> sqlite3.Connection:
     return conn
 
 
-def has_migration_run(conn: sqlite3.Connection, migration_id: str) -> bool:
+def has_migration_run(conn: SafeConnection, migration_id: str) -> bool:
     """Check if a one-time migration has already been applied.
 
     Args:
@@ -491,7 +492,7 @@ def has_migration_run(conn: sqlite3.Connection, migration_id: str) -> bool:
     return cursor.fetchone() is not None
 
 
-def record_migration(conn: sqlite3.Connection, migration_id: str) -> None:
+def record_migration(conn: SafeConnection, migration_id: str) -> None:
     """Record that a one-time migration has been applied.
 
     Args:
@@ -574,7 +575,7 @@ def folder_path_upper_bound(folder_path: str) -> str:
     return folder_path + os.sep + '~'
 
 
-def get_folders(conn: sqlite3.Connection) -> list[dict[str, Any]]:
+def get_folders(conn: SafeConnection) -> list[dict[str, Any]]:
     """Get all registered folders with their image counts.
 
     Args:
@@ -607,7 +608,7 @@ def get_folders(conn: sqlite3.Connection) -> list[dict[str, Any]]:
 
 
 def add_folder(
-    conn: sqlite3.Connection,
+    conn: SafeConnection,
     path: Path | str,
 ) -> dict[str, Any] | None:
     """Register a new image source folder.
@@ -657,7 +658,7 @@ def add_folder(
     }
 
 
-def remove_folder(conn: sqlite3.Connection, path: Path | str) -> bool:
+def remove_folder(conn: SafeConnection, path: Path | str) -> bool:
     """Remove a folder and mark its orphaned images as deleted.
 
     Removes the folder registration and marks any images that are no longer
@@ -780,7 +781,7 @@ def find_images_in_folder(
                 yield root_path / filename
 
 
-def verify_folders_exist(conn: sqlite3.Connection) -> list[str]:
+def verify_folders_exist(conn: SafeConnection) -> list[str]:
     """Verify that all registered folders still exist on disk.
 
     Args:
@@ -807,7 +808,7 @@ def verify_folders_exist(conn: sqlite3.Connection) -> list[str]:
 
 
 def get_all_images(
-    conn: sqlite3.Connection,
+    conn: SafeConnection,
     include_deleted: bool = False,
 ) -> list[dict[str, Any]]:
     """Get all images from the database.
@@ -842,7 +843,7 @@ def get_all_images(
     return rows_to_dicts(cursor.fetchall())
 
 
-def get_all_images_lightweight(conn: sqlite3.Connection) -> list[dict[str, Any]]:
+def get_all_images_lightweight(conn: SafeConnection) -> list[dict[str, Any]]:
     """Get all images with minimal fields for gallery grid display.
 
     Returns only the fields needed for rendering the thumbnail grid and
@@ -871,7 +872,7 @@ def get_all_images_lightweight(conn: sqlite3.Connection) -> list[dict[str, Any]]
 
 
 def get_images_for_thumbnail_generation(
-    conn: sqlite3.Connection,
+    conn: SafeConnection,
 ) -> list[dict[str, Any]]:
     """Get images with fields needed for bulk thumbnail generation.
 
@@ -895,7 +896,7 @@ def get_images_for_thumbnail_generation(
 
 
 def get_images_delta(
-    conn: sqlite3.Connection,
+    conn: SafeConnection,
     since: str,
 ) -> dict[str, Any]:
     """Get image changes since a given timestamp for incremental updates.
@@ -953,7 +954,7 @@ def get_images_delta(
     }
 
 
-def get_current_epoch(conn: sqlite3.Connection) -> str | None:
+def get_current_epoch(conn: SafeConnection) -> str | None:
     """Get the current epoch (max updated_at timestamp).
 
     Args:
@@ -967,7 +968,7 @@ def get_current_epoch(conn: sqlite3.Connection) -> str | None:
     return row['epoch'] if row else None
 
 
-def get_image(conn: sqlite3.Connection, image_id: str) -> dict[str, Any] | None:
+def get_image(conn: SafeConnection, image_id: str) -> dict[str, Any] | None:
     """Get a single image by ID.
 
     Does NOT include exif_data — use get_image_exif() for that (lazy-loaded
@@ -1000,7 +1001,7 @@ def get_image(conn: sqlite3.Connection, image_id: str) -> dict[str, Any] | None:
     return row_to_dict(row)
 
 
-def get_image_exif(conn: sqlite3.Connection, image_id: str) -> dict[str, str] | None:
+def get_image_exif(conn: SafeConnection, image_id: str) -> dict[str, str] | None:
     """Get parsed EXIF metadata for a single image.
 
     Returns the exif_data JSON blob parsed into a dict, or None if no EXIF
@@ -1031,7 +1032,7 @@ def get_image_exif(conn: sqlite3.Connection, image_id: str) -> dict[str, str] | 
 
 
 def get_image_thumbnail_info(
-    conn: sqlite3.Connection,
+    conn: SafeConnection,
     image_id: str,
 ) -> tuple[str, str] | None:
     """Get checksum and path for an image (for thumbnail lookup).
@@ -1053,7 +1054,7 @@ def get_image_thumbnail_info(
     return (row[0], row[1])
 
 
-def get_image_by_path(conn: sqlite3.Connection, path: Path | str) -> dict[str, Any] | None:
+def get_image_by_path(conn: SafeConnection, path: Path | str) -> dict[str, Any] | None:
     """Get a single image by file path.
 
     Args:
@@ -1082,7 +1083,7 @@ def get_image_by_path(conn: sqlite3.Connection, path: Path | str) -> dict[str, A
 
 
 def create_image(
-    conn: sqlite3.Connection,
+    conn: SafeConnection,
     image_id: str,
     path: Path | str,
     size: int,
@@ -1228,7 +1229,7 @@ def create_image(
 
 
 def update_image(
-    conn: sqlite3.Connection,
+    conn: SafeConnection,
     image_id: str,
     data: dict[str, Any],
 ) -> dict[str, Any] | None:
@@ -1307,7 +1308,7 @@ def update_image(
 
 
 def update_image_metadata(
-    conn: sqlite3.Connection,
+    conn: SafeConnection,
     image_id: str,
     size: int,
     width: int,
@@ -1397,7 +1398,7 @@ def update_image_metadata(
 
 
 def _upsert_image_metadata(
-    conn: sqlite3.Connection,
+    conn: SafeConnection,
     image_id: str,
     exif_data: dict[str, str],
 ) -> None:
@@ -1421,7 +1422,7 @@ def _upsert_image_metadata(
 
 
 def search_image_metadata(
-    conn: sqlite3.Connection,
+    conn: SafeConnection,
     criteria: dict[str, str],
 ) -> list[str]:
     """Search for images matching EXIF metadata criteria.
@@ -1478,7 +1479,7 @@ def search_image_metadata(
     return list(intersection)
 
 
-def get_metadata_keys(conn: sqlite3.Connection) -> list[str]:
+def get_metadata_keys(conn: SafeConnection) -> list[str]:
     """Get all distinct metadata keys present in the database.
 
     Used to populate the writable metadata filter modal with available
@@ -1495,7 +1496,7 @@ def get_metadata_keys(conn: sqlite3.Connection) -> list[str]:
 
 
 def get_metadata_values(
-    conn: sqlite3.Connection,
+    conn: SafeConnection,
     key: str,
 ) -> list[str]:
     """Get all distinct values for a given metadata key.
@@ -1513,7 +1514,7 @@ def get_metadata_values(
     return [row[0] for row in cursor.fetchall()]
 
 
-def get_images_without_exif(conn: sqlite3.Connection) -> list[dict[str, Any]]:
+def get_images_without_exif(conn: SafeConnection) -> list[dict[str, Any]]:
     """Get all non-deleted images that don't have EXIF data extracted.
 
     NULL exif_data means never attempted; '{}' means attempted but no EXIF found.
@@ -1535,7 +1536,7 @@ def get_images_without_exif(conn: sqlite3.Connection) -> list[dict[str, Any]]:
 
 
 def delete_image(
-    conn: sqlite3.Connection,
+    conn: SafeConnection,
     image_id: str,
     from_disk: bool = False,
 ) -> bool:
@@ -1583,7 +1584,7 @@ def delete_image(
     return True
 
 
-def get_images_without_embedding(conn: sqlite3.Connection) -> list[dict[str, Any]]:
+def get_images_without_embedding(conn: SafeConnection) -> list[dict[str, Any]]:
     """Get all non-deleted images that don't have an embedding.
 
     Used to queue images for the embedding thread on startup.
@@ -2318,7 +2319,7 @@ def parse_semantic_query(query: str) -> tuple[list[str], list[str]]:
     return positive_parts, negative_parts
 
 
-def get_metadata(conn: sqlite3.Connection, key: str) -> str | None:
+def get_metadata(conn: SafeConnection, key: str) -> str | None:
     """Get a metadata value by key.
 
     Args:
@@ -2335,7 +2336,7 @@ def get_metadata(conn: sqlite3.Connection, key: str) -> str | None:
     return None
 
 
-def set_metadata(conn: sqlite3.Connection, key: str, value: str) -> None:
+def set_metadata(conn: SafeConnection, key: str, value: str) -> None:
     """Set a metadata value.
 
     Args:
@@ -2353,7 +2354,7 @@ def set_metadata(conn: sqlite3.Connection, key: str, value: str) -> None:
 
 
 def semantic_search(
-    conn: sqlite3.Connection,
+    conn: SafeConnection,
     query_embedding: np.ndarray,
     threshold: float = 0.2,
     limit: int = 100,
@@ -2485,7 +2486,7 @@ def semantic_search(
 
 
 def update_scene_transcription(
-    conn: sqlite3.Connection,
+    conn: SafeConnection,
     scene_id: str,
     transcription: str,
     transcription_embedding: bytes | None = None,
@@ -2526,7 +2527,7 @@ def update_scene_transcription(
 
 
 def video_search(
-    conn: sqlite3.Connection,
+    conn: SafeConnection,
     query_embedding: np.ndarray,
     threshold: float = 0.15,
     limit: int = 50,
@@ -2692,7 +2693,7 @@ def video_search(
 
 
 def get_images_by_similarity(
-    conn: sqlite3.Connection,
+    conn: SafeConnection,
     reference_embedding: np.ndarray,
 ) -> list[dict[str, Any]]:
     """Get all images sorted by similarity to a reference embedding.
@@ -3671,8 +3672,9 @@ class TranscodeWorker(threading.Thread):
         new_mtime = stat.st_mtime
 
         # -- Read the original record (separate connection for thread safety) --
-        ro_conn = sqlite3.connect(db.db_path, timeout=5.0)
-        ro_conn.row_factory = sqlite3.Row
+        ro_raw = sqlite3.connect(db.db_path, timeout=5.0)
+        ro_raw.row_factory = sqlite3.Row
+        ro_conn = SafeConnection(ro_raw, name='transcode-clone-ro')
         try:
             orig = get_image(ro_conn, job.image_id)
             if orig is None:
@@ -4016,6 +4018,12 @@ class ImageDatabase:
         # LOCK ORDERING: always acquire _db_lock before any subsidiary lock
         # (_image_locks_lock, _checksum_cache_lock, etc.) to prevent deadlocks.
         self._db_lock = threading.RLock()  # Reentrant lock for nested calls
+
+        # Thread-safe connection wrapper — all database access should go
+        # through safe_conn rather than the raw conn.  The RLock serialises
+        # cross-thread access and the wrapper retries transient "database
+        # is locked" errors with automatic rollback on failure.
+        self.safe_conn = SafeConnection(self.conn, lock=self._db_lock, name='shared')
         self._image_locks: dict[str, threading.Lock] = {}  # Per-image locks for rotation
         self._image_locks_lock = threading.Lock()  # Lock for the locks dict
         self._active_rotations = 0  # Count of in-flight rotation operations
@@ -4094,7 +4102,7 @@ class ImageDatabase:
         """
         # Step 3: Verify registered folders exist
         logger.info('[3/5] Verifying registered folders...')
-        missing_folders = verify_folders_exist(self.conn)
+        missing_folders = verify_folders_exist(self.safe_conn)
         for folder in missing_folders:
             logger.warning(f'        Folder missing: {folder}')
 
@@ -4150,7 +4158,7 @@ class ImageDatabase:
         before the description_embedding feature was implemented.
         """
         # Find images with descriptions but no description embedding
-        cursor = self.conn.execute("""
+        cursor = self.safe_conn.execute("""
             SELECT id, description
             FROM images
             WHERE deleted = 0
@@ -4176,20 +4184,18 @@ class ImageDatabase:
                 embedding = clip_model.encode_text(description)
                 embedding_bytes = embedding.astype(np.float32).tobytes()
 
-                with self._db_lock:
-                    self.conn.execute(
-                        'UPDATE images SET description_embedding = ? WHERE id = ?', (embedding_bytes, image_id)
-                    )
+                self.safe_conn.execute(
+                    'UPDATE images SET description_embedding = ? WHERE id = ?', (embedding_bytes, image_id)
+                )
                 count += 1
             except Exception as e:
                 try:
-                    self.conn.rollback()
+                    self.safe_conn.rollback()
                 except Exception:
                     pass
                 logger.warning(f'Failed to compute description embedding for {image_id}: {e}')
 
-        with self._db_lock:
-            self.conn.commit()
+        self.safe_conn.commit()
         logger.info(f'        Backfilled {count} description embeddings')
 
     def _backfill_aesthetic_laion(self) -> None:
@@ -4211,8 +4217,7 @@ class ImageDatabase:
         Returns:
             Number of faces updated.
         """
-        with self._db_lock:
-            face_ids = get_faces_without_semantic_embedding(self.conn)
+        face_ids = get_faces_without_semantic_embedding(self.safe_conn)
 
         if not face_ids:
             return 0
@@ -4247,8 +4252,7 @@ class ImageDatabase:
                 try:
                     embedding = clip_model.encode_image(thumb_path)
                     if embedding is not None:
-                        with self._db_lock:
-                            update_face_semantic_embedding(self.conn, face_id, embedding)
+                        update_face_semantic_embedding(self.safe_conn, face_id, embedding)
                         count += 1
                 except Exception as e:
                     logger.warning(f'Failed to compute CLIP embedding for face {face_id}: {e}')
@@ -4281,7 +4285,7 @@ class ImageDatabase:
         Returns:
             Number of thumbnails regenerated.
         """
-        faces = get_all_faces_for_thumbnail_regen(self.conn)
+        faces = get_all_faces_for_thumbnail_regen(self.safe_conn)
 
         if not faces:
             return 0
@@ -4351,11 +4355,11 @@ class ImageDatabase:
         """
         migration_id = 'recalculate_timestamps_v1'
 
-        if has_migration_run(self.conn, migration_id):
+        if has_migration_run(self.safe_conn, migration_id):
             return
 
         # Get all non-deleted images
-        cursor = self.conn.execute("""
+        cursor = self.safe_conn.execute("""
             SELECT id, path
             FROM images
             WHERE deleted = 0
@@ -4363,7 +4367,7 @@ class ImageDatabase:
         rows = cursor.fetchall()
 
         if not rows:
-            record_migration(self.conn, migration_id)
+            record_migration(self.safe_conn, migration_id)
             return
 
         logger.info(f'Recalculating timestamps for {len(rows)} images (one-time migration)...')
@@ -4376,19 +4380,19 @@ class ImageDatabase:
             try:
                 new_timestamp = derive_timestamp(path)
                 if new_timestamp:
-                    self.conn.execute(
+                    self.safe_conn.execute(
                         'UPDATE images SET timestamp = ? WHERE id = ?', (new_timestamp.isoformat(), image_id)
                     )
                     updated += 1
             except Exception as e:
                 try:
-                    self.conn.rollback()
+                    self.safe_conn.rollback()
                 except Exception:
                     pass
                 logger.warning(f'Failed to recalculate timestamp for {path}: {e}')
 
-        self.conn.commit()
-        record_migration(self.conn, migration_id)
+        self.safe_conn.commit()
+        record_migration(self.safe_conn, migration_id)
         logger.info(f'        Updated {updated} image timestamps')
 
     def _migrate_duplicate_epoch_to_metadata(self) -> None:
@@ -4400,27 +4404,27 @@ class ImageDatabase:
         """
         migration_id = 'duplicate_epoch_to_metadata_v1'
 
-        if has_migration_run(self.conn, migration_id):
+        if has_migration_run(self.safe_conn, migration_id):
             return
 
         # Check if we already have an epoch in metadata (shouldn't happen, but be safe)
-        existing_epoch = get_metadata(self.conn, 'duplicate_epoch')
+        existing_epoch = get_metadata(self.safe_conn, 'duplicate_epoch')
         if existing_epoch:
-            record_migration(self.conn, migration_id)
+            record_migration(self.safe_conn, migration_id)
             return
 
         # Get the old epoch from duplicate_groups (if any groups exist)
-        cursor = self.conn.execute('SELECT MAX(updated_at) as epoch FROM duplicate_groups')
+        cursor = self.safe_conn.execute('SELECT MAX(updated_at) as epoch FROM duplicate_groups')
         row = cursor.fetchone()
         old_epoch = row['epoch'] if row and row['epoch'] else None
 
         if old_epoch:
             logger.info(f'Migrating duplicate epoch to metadata table: {old_epoch}')
-            set_metadata(self.conn, 'duplicate_epoch', old_epoch)
+            set_metadata(self.safe_conn, 'duplicate_epoch', old_epoch)
         else:
             logger.debug('No existing duplicate epoch to migrate')
 
-        record_migration(self.conn, migration_id)
+        record_migration(self.safe_conn, migration_id)
 
     def _migrate_add_timestamp_confidence(self) -> None:
         """One-time migration to add timestamp_confidence to all images.
@@ -4432,11 +4436,11 @@ class ImageDatabase:
         """
         migration_id = 'add_timestamp_confidence_v1'
 
-        if has_migration_run(self.conn, migration_id):
+        if has_migration_run(self.safe_conn, migration_id):
             return
 
         # Get all non-deleted images
-        cursor = self.conn.execute("""
+        cursor = self.safe_conn.execute("""
             SELECT id, path
             FROM images
             WHERE deleted = 0
@@ -4444,7 +4448,7 @@ class ImageDatabase:
         rows = cursor.fetchall()
 
         if not rows:
-            record_migration(self.conn, migration_id)
+            record_migration(self.safe_conn, migration_id)
             return
 
         logger.info(f'Adding timestamp_confidence for {len(rows)} images (one-time migration)...')
@@ -4457,20 +4461,20 @@ class ImageDatabase:
             try:
                 new_timestamp, confidence = derive_timestamp_with_confidence(path)
                 timestamp_str = new_timestamp.isoformat() if new_timestamp else None
-                self.conn.execute(
+                self.safe_conn.execute(
                     'UPDATE images SET timestamp = ?, timestamp_confidence = ? WHERE id = ?',
                     (timestamp_str, confidence, image_id),
                 )
                 updated += 1
             except Exception as e:
                 try:
-                    self.conn.rollback()
+                    self.safe_conn.rollback()
                 except Exception:
                     pass
                 logger.warning(f'Failed to derive timestamp confidence for {path}: {e}')
 
-        self.conn.commit()
-        record_migration(self.conn, migration_id)
+        self.safe_conn.commit()
+        record_migration(self.safe_conn, migration_id)
         logger.info(f'        Updated {updated} images with timestamp_confidence')
 
     def _migrate_renumber_custom_groups_to_level5(self) -> None:
@@ -4483,20 +4487,20 @@ class ImageDatabase:
         """
         migration_id = 'renumber_custom_groups_to_level5'
 
-        if has_migration_run(self.conn, migration_id):
+        if has_migration_run(self.safe_conn, migration_id):
             return
 
-        cursor = self.conn.execute('SELECT COUNT(*) as cnt FROM duplicate_groups WHERE level = 4')
+        cursor = self.safe_conn.execute('SELECT COUNT(*) as cnt FROM duplicate_groups WHERE level = 4')
         count = cursor.fetchone()['cnt']
 
         if count > 0:
-            self.conn.execute('UPDATE duplicate_groups SET level = 5 WHERE level = 4')
-            self.conn.commit()
+            self.safe_conn.execute('UPDATE duplicate_groups SET level = 5 WHERE level = 4')
+            self.safe_conn.commit()
             logger.info(f'Migrated {count} custom group membership rows from level 4 to level 5')
         else:
             logger.debug('No custom group rows to migrate (level 4 → 5)')
 
-        record_migration(self.conn, migration_id)
+        record_migration(self.safe_conn, migration_id)
 
     def _migrate_initial_directory_groups(self) -> None:
         """One-time migration to create directory groups for existing images.
@@ -4511,20 +4515,20 @@ class ImageDatabase:
         """
         migration_id = 'initial_directory_groups'
 
-        if has_migration_run(self.conn, migration_id):
+        if has_migration_run(self.safe_conn, migration_id):
             return
 
         # Check if there are any images to group
-        cursor = self.conn.execute('SELECT COUNT(*) as cnt FROM images WHERE deleted = 0')
+        cursor = self.safe_conn.execute('SELECT COUNT(*) as cnt FROM images WHERE deleted = 0')
         count = cursor.fetchone()['cnt']
 
         if count > 0:
             logger.info(f'Creating initial directory groups for {count} images (one-time migration)...')
-            self._duplicate_manager.sync_directory_groups(self.conn, self._db_lock)
+            self._duplicate_manager.sync_directory_groups(self.safe_conn)
         else:
             logger.debug('No images to create directory groups for')
 
-        record_migration(self.conn, migration_id)
+        record_migration(self.safe_conn, migration_id)
 
     def _migrate_add_exif_metadata(self) -> None:
         """One-time migration to note the EXIF metadata schema addition.
@@ -4537,11 +4541,11 @@ class ImageDatabase:
         """
         migration_id = 'add_exif_metadata_v1'
 
-        if has_migration_run(self.conn, migration_id):
+        if has_migration_run(self.safe_conn, migration_id):
             return
 
         # Count images that need EXIF extraction
-        cursor = self.conn.execute('SELECT COUNT(*) as cnt FROM images WHERE deleted = 0 AND exif_data IS NULL')
+        cursor = self.safe_conn.execute('SELECT COUNT(*) as cnt FROM images WHERE deleted = 0 AND exif_data IS NULL')
         count = cursor.fetchone()['cnt']
 
         if count > 0:
@@ -4551,7 +4555,7 @@ class ImageDatabase:
         else:
             logger.info('Added EXIF metadata support (one-time migration)')
 
-        record_migration(self.conn, migration_id)
+        record_migration(self.safe_conn, migration_id)
 
     def _migrate_add_logs_table(self) -> None:
         """One-time migration to note the logs table addition.
@@ -4564,11 +4568,11 @@ class ImageDatabase:
         """
         migration_id = 'add_logs_table_v1'
 
-        if has_migration_run(self.conn, migration_id):
+        if has_migration_run(self.safe_conn, migration_id):
             return
 
         logger.info('Added database log storage — viewable from Management > View Logs (one-time migration)')
-        record_migration(self.conn, migration_id)
+        record_migration(self.safe_conn, migration_id)
 
     def _migrate_backfill_silent_scene_transcriptions(self) -> None:
         """One-time migration to mark silent scenes as transcribed.
@@ -4586,7 +4590,7 @@ class ImageDatabase:
         """
         migration_id = 'backfill_silent_scene_transcriptions_v1'
 
-        if has_migration_run(self.conn, migration_id):
+        if has_migration_run(self.safe_conn, migration_id):
             return
 
         # Find all NULL scenes on videos that have already been through
@@ -4596,7 +4600,7 @@ class ImageDatabase:
         # We identify "already processed" videos as those that have an
         # embedding and a preferred_scene_id (set during earlier pipeline
         # stages), matching the Stage 7 selection criteria.
-        cursor = self.conn.execute("""
+        cursor = self.safe_conn.execute("""
             SELECT s.id
             FROM scenes s
             JOIN images i ON i.id = s.image_id
@@ -4611,19 +4615,19 @@ class ImageDatabase:
         if scene_ids:
             try:
                 now = datetime.now().isoformat()
-                self.conn.executemany(
+                self.safe_conn.executemany(
                     "UPDATE scenes SET transcription = '', updated_at = ? WHERE id = ?",
                     [(now, sid) for sid in scene_ids],
                 )
-                self.conn.commit()
+                self.safe_conn.commit()
             except Exception:
-                self.conn.rollback()
+                self.safe_conn.rollback()
                 raise
             logger.info(f'Backfilled {len(scene_ids)} silent scenes with empty transcription (one-time migration)')
         else:
             logger.info('No silent scenes to backfill (one-time migration)')
 
-        record_migration(self.conn, migration_id)
+        record_migration(self.safe_conn, migration_id)
 
     def _migrate_backfill_video_codecs(self) -> None:
         """One-time migration to populate codec_video/codec_audio/codec_container.
@@ -4634,12 +4638,12 @@ class ImageDatabase:
         """
         migration_id = 'backfill_video_codecs_v1'
 
-        if has_migration_run(self.conn, migration_id):
+        if has_migration_run(self.safe_conn, migration_id):
             return
 
         from video import get_video_metadata
 
-        cursor = self.conn.execute("""
+        cursor = self.safe_conn.execute("""
             SELECT id, path FROM images
             WHERE media_type = 'video'
               AND codec_video IS NULL
@@ -4660,7 +4664,7 @@ class ImageDatabase:
                     vmeta = get_video_metadata(Path(row['path']))
                     if vmeta is None:
                         continue
-                    self.conn.execute(
+                    self.safe_conn.execute(
                         """UPDATE images
                            SET codec_video = ?, codec_audio = ?, codec_container = ?
                            WHERE id = ?""",
@@ -4671,17 +4675,17 @@ class ImageDatabase:
                     # minutes on large libraries (prevents "database is locked"
                     # errors from other threads like the log handler).
                     if updated % batch_size == 0:
-                        self.conn.commit()
+                        self.safe_conn.commit()
                         logger.info(f'  Codec backfill: {updated}/{len(rows)} videos...')
                 except Exception as e:
                     logger.debug(f'Failed to backfill codecs for {row["path"]}: {e}')
             if updated:
-                self.conn.commit()
+                self.safe_conn.commit()
             logger.info(f'Backfilled video codecs for {updated}/{len(rows)} videos (one-time migration)')
         else:
             logger.info('No videos need codec backfill (one-time migration)')
 
-        record_migration(self.conn, migration_id)
+        record_migration(self.safe_conn, migration_id)
 
     def _load_checksum_cache(self) -> None:
         """Load all image_id -> checksum mappings into RAM.
@@ -4712,8 +4716,8 @@ class ImageDatabase:
         cleared and images re-queued for scoring.
         """
         current_model = 'mobilenetv2-ava'  # Only one model currently; future-proofing
-        with self._db_lock:
-            stored_model = get_metadata(self.conn, 'nima_model')
+        with self.safe_conn:
+            stored_model = get_metadata(self.safe_conn, 'nima_model')
 
             if stored_model == current_model:
                 return  # No change
@@ -4724,10 +4728,10 @@ class ImageDatabase:
                     f'NIMA model changed ({stored_model} → {current_model}), '
                     f'clearing existing scores for re-computation'
                 )
-                self.conn.execute('UPDATE images SET aesthetic_nima = NULL')
-                self.conn.commit()
+                self.safe_conn.execute('UPDATE images SET aesthetic_nima = NULL')
+                self.safe_conn.commit()
 
-            set_metadata(self.conn, 'nima_model', current_model)
+            set_metadata(self.safe_conn, 'nima_model', current_model)
 
     def start_threads(self) -> None:
         """Start the pipeline orchestrator and independent worker threads."""
@@ -4906,7 +4910,7 @@ class ImageDatabase:
 
     def get_folders(self) -> list[dict[str, Any]]:
         """Get all registered folders with image counts."""
-        return get_folders(self.conn)
+        return get_folders(self.safe_conn)
 
     def add_folder(self, path: str) -> dict[str, Any] | None:
         """Register a new folder and trigger the pipeline to ingest it.
@@ -4914,8 +4918,7 @@ class ImageDatabase:
         Returns:
             Folder info dict, or None if already registered.
         """
-        with self._db_lock:
-            result = add_folder(self.conn, path)
+        result = add_folder(self.safe_conn, path)
         if result is not None:
             emit_folder_added(self.event_queue, result['path'])
             # Re-validate trash dir (new folder may conflict)
@@ -4935,8 +4938,7 @@ class ImageDatabase:
             # Get image IDs that will be orphaned (for duplicate cleanup)
             orphaned_ids = self._get_orphaned_image_ids(path)
 
-            with self._db_lock:
-                result = remove_folder(self.conn, path)
+            result = remove_folder(self.safe_conn, path)
 
             if result:
                 # Clean up duplicate groups for orphaned images
@@ -4948,7 +4950,7 @@ class ImageDatabase:
                             {'level': level, 'invalidate': True},
                         )
                 # Re-sync directory groups (removes groups for the deleted folder)
-                self._duplicate_manager.sync_directory_groups(self.conn, self._db_lock)
+                self._duplicate_manager.sync_directory_groups(self.safe_conn)
                 emit_folder_removed(self.event_queue, path)
                 # Re-validate trash dir (removed folder may resolve a conflict)
                 self._validate_trash_dir()
@@ -4967,7 +4969,7 @@ class ImageDatabase:
         folder_str = str(folder)
 
         # Get all remaining folders (excluding the one being removed)
-        cursor = self.conn.execute('SELECT path FROM folders WHERE path != ?', (folder_str,))
+        cursor = self.safe_conn.execute('SELECT path FROM folders WHERE path != ?', (folder_str,))
         remaining_folders = [row['path'] for row in cursor.fetchall()]
 
         # Find images in this folder that won't be covered by remaining folders
@@ -4981,12 +4983,12 @@ class ImageDatabase:
             params = [folder_str, folder_upper]
             for remaining in remaining_folders:
                 params.extend([remaining, folder_path_upper_bound(remaining)])
-            cursor = self.conn.execute(
+            cursor = self.safe_conn.execute(
                 f'SELECT id FROM images WHERE path >= ? AND path < ? AND deleted = 0 AND {not_conditions}', params
             )
         else:
             # No other folders, all images in this folder will be orphaned
-            cursor = self.conn.execute(
+            cursor = self.safe_conn.execute(
                 'SELECT id FROM images WHERE path >= ? AND path < ? AND deleted = 0', (folder_str, folder_upper)
             )
 
@@ -4998,67 +5000,57 @@ class ImageDatabase:
 
     def get_all_images(self, include_deleted: bool = False) -> list[dict[str, Any]]:
         """Get all images."""
-        with self._db_lock:
-            return get_all_images(self.conn, include_deleted)
+        return get_all_images(self.safe_conn, include_deleted)
 
     def get_all_images_lightweight(self) -> list[dict[str, Any]]:
         """Get all images with minimal fields for gallery grid."""
-        with self._db_lock:
-            return get_all_images_lightweight(self.conn)
+        return get_all_images_lightweight(self.safe_conn)
 
     def get_images_for_thumbnail_generation(self) -> list[dict[str, Any]]:
         """Get images with fields needed for bulk thumbnail generation."""
-        with self._db_lock:
-            return get_images_for_thumbnail_generation(self.conn)
+        return get_images_for_thumbnail_generation(self.safe_conn)
 
     def get_images_delta(self, since: str) -> dict[str, Any]:
         """Get image changes since a given timestamp."""
-        with self._db_lock:
-            return get_images_delta(self.conn, since)
+        return get_images_delta(self.safe_conn, since)
 
     def get_current_epoch(self) -> str | None:
         """Get the current epoch (max updated_at timestamp)."""
-        with self._db_lock:
-            return get_current_epoch(self.conn)
+        return get_current_epoch(self.safe_conn)
 
     def get_image(self, image_id: str) -> dict[str, Any] | None:
         """Get a single image by ID."""
-        with self._db_lock:
-            return get_image(self.conn, image_id)
+        return get_image(self.safe_conn, image_id)
 
     def get_image_exif(self, image_id: str) -> dict[str, str] | None:
         """Get parsed EXIF metadata for a single image (lazy-loaded)."""
-        with self._db_lock:
-            return get_image_exif(self.conn, image_id)
+        return get_image_exif(self.safe_conn, image_id)
 
     def search_image_metadata(self, criteria: dict[str, str]) -> list[str]:
         """Search for images matching EXIF metadata criteria."""
-        with self._db_lock:
-            return search_image_metadata(self.conn, criteria)
+        return search_image_metadata(self.safe_conn, criteria)
 
     def get_metadata_keys(self) -> list[str]:
         """Get all distinct metadata keys in the database."""
-        with self._db_lock:
-            return get_metadata_keys(self.conn)
+        return get_metadata_keys(self.safe_conn)
 
     def get_metadata_values(self, key: str) -> list[str]:
         """Get all distinct values for a given metadata key."""
-        return get_metadata_values(self.conn, key)
+        return get_metadata_values(self.safe_conn, key)
 
     def get_images_without_exif(self) -> list[dict[str, Any]]:
         """Get all non-deleted images missing EXIF data."""
-        return get_images_without_exif(self.conn)
+        return get_images_without_exif(self.safe_conn)
 
     def extract_exif_for_image(self, image_id: str) -> bool:
         """Extract and store EXIF data for a single image.
 
-        Thread-safe: acquires _db_lock for the database writes.
-        File I/O (EXIF reading) happens outside the lock.
+        Thread-safe: safe_conn serialises database access automatically.
+        File I/O (EXIF reading) happens outside the locked span.
         """
-        # Read path under lock (quick DB read)
-        with self._db_lock:
-            cursor = self.conn.execute('SELECT path FROM images WHERE id = ? AND deleted = 0', (image_id,))
-            row = cursor.fetchone()
+        # Read path (quick DB read)
+        cursor = self.safe_conn.execute('SELECT path FROM images WHERE id = ? AND deleted = 0', (image_id,))
+        row = cursor.fetchone()
         if not row:
             return False
 
@@ -5066,16 +5058,16 @@ class ImageDatabase:
         if not path.exists():
             return False
 
-        # Extract EXIF outside lock (file I/O)
+        # Extract EXIF outside locked span (file I/O)
         exif_data = extract_exif_data(path)
         exif_json = json.dumps(exif_data) if exif_data else '{}'
 
-        # Write results under lock
-        with self._db_lock:
-            self.conn.execute('UPDATE images SET exif_data = ? WHERE id = ?', (exif_json, image_id))
+        # Write results under a single atomic span
+        with self.safe_conn:
+            self.safe_conn.execute('UPDATE images SET exif_data = ? WHERE id = ?', (exif_json, image_id))
             if exif_data:
-                _upsert_image_metadata(self.conn, image_id, exif_data)
-            self.conn.commit()
+                _upsert_image_metadata(self.safe_conn, image_id, exif_data)
+            self.safe_conn.commit()
 
         return bool(exif_data)
 
@@ -5099,7 +5091,7 @@ class ImageDatabase:
         if checksum is None:
             return None
         # Still need path from DB (could cache this too, but it's less critical)
-        cursor = self.conn.execute('SELECT path FROM images WHERE id = ? AND deleted = 0', (image_id,))
+        cursor = self.safe_conn.execute('SELECT path FROM images WHERE id = ? AND deleted = 0', (image_id,))
         row = cursor.fetchone()
         if row is None:
             return None
@@ -5125,13 +5117,11 @@ class ImageDatabase:
                 # Clear description embedding if description is empty
                 data['description_embedding'] = None
 
-        with self._db_lock:
-            return update_image(self.conn, image_id, data)
+        return update_image(self.safe_conn, image_id, data)
 
     def delete_image(self, image_id: str, from_disk: bool = False) -> bool:
         """Delete an image (soft delete or from disk)."""
-        with self._db_lock:
-            result = delete_image(self.conn, image_id, from_disk)
+        result = delete_image(self.safe_conn, image_id, from_disk)
         # Remove from checksum cache
         with self._checksum_cache_lock:
             self._checksum_cache.pop(image_id, None)
@@ -5212,7 +5202,7 @@ class ImageDatabase:
         Safe to call any time — updates ``self._trash_enabled``.
         """
         try:
-            folders = [f['path'] for f in get_folders(self.conn)]
+            folders = [f['path'] for f in get_folders(self.safe_conn)]
             validate_trash_dir(self.trash_dir, folders)
             self._trash_enabled = True
             logger.info(f'        Trash directory: {self.trash_dir}')
@@ -5273,12 +5263,11 @@ class ImageDatabase:
             logger.info(f'        Catalogue directory (created): {self.catalogue_dir}')
 
         # Auto-register catalogue dir as a watched folder if not already
-        existing = {f['path'] for f in get_folders(self.conn)}
+        existing = {f['path'] for f in get_folders(self.safe_conn)}
         canon = str(canonicalise_path(self.catalogue_dir))
         if canon not in existing:
             logger.info('        Auto-registered catalogue as watched folder')
-            with self._db_lock:
-                add_folder(self.conn, canon)
+            add_folder(self.safe_conn, canon)
 
         # Crash recovery: re-enqueue items from previous shutdown
         self._recover_pending_import()
@@ -5471,8 +5460,9 @@ class ImageDatabase:
 
         # Use a separate read-only connection to avoid collisions with
         # concurrent queries on self.conn (e.g. status polling).
-        ro_conn = sqlite3.connect(self.db_path, timeout=5.0)
-        ro_conn.row_factory = sqlite3.Row
+        ro_raw = sqlite3.connect(self.db_path, timeout=5.0)
+        ro_raw.row_factory = sqlite3.Row
+        ro_conn = SafeConnection(ro_raw, name='transcode-queue-ro')
         try:
             for vid in image_ids:
                 row = get_image(ro_conn, vid)
@@ -5546,8 +5536,7 @@ class ImageDatabase:
             True if the path is inside any registered folder.
         """
         resolved = path.resolve()
-        with self._db_lock:
-            folders = get_folders(self.conn)
+        folders = get_folders(self.safe_conn)
         for folder in folders:
             folder_path = Path(folder['path']).resolve()
             try:
@@ -5621,11 +5610,10 @@ class ImageDatabase:
 
         # Look up file paths for all images (single batch query)
         paths: dict[str, str] = {}
-        with self._db_lock:
-            placeholders = sql_placeholders(image_ids)
-            cursor = self.conn.execute(f'SELECT id, path FROM images WHERE id IN ({placeholders})', image_ids)
-            for row in cursor.fetchall():
-                paths[row['id']] = row['path']
+        placeholders = sql_placeholders(image_ids)
+        cursor = self.safe_conn.execute(f'SELECT id, path FROM images WHERE id IN ({placeholders})', image_ids)
+        for row in cursor.fetchall():
+            paths[row['id']] = row['path']
 
         enqueued: list[str] = []
         errors: dict[str, str] = {}
@@ -5644,14 +5632,14 @@ class ImageDatabase:
         now = datetime.now().isoformat()
         removed_face_ids = []
         affected_person_ids = set()
-        with self._db_lock:
+        with self.safe_conn:
             placeholders = sql_placeholders(enqueued)
 
             # Collect faces belonging to these images BEFORE soft-delete,
             # so we can clean up person references and face thumbnails.
             # Also grab embeddings for preferred faces that are being removed,
             # so we can pick the most visually similar replacement.
-            cursor = self.conn.execute(
+            cursor = self.safe_conn.execute(
                 f'SELECT id, person_id, embedding FROM faces WHERE image_id IN ({placeholders})',
                 enqueued,
             )
@@ -5664,7 +5652,7 @@ class ImageDatabase:
                     removed_face_embeddings[row['id']] = row['embedding']
 
             # Soft-delete the images
-            self.conn.execute(
+            self.safe_conn.execute(
                 f'UPDATE images SET deleted = 1, updated_at = ? WHERE id IN ({placeholders})',
                 [now] + enqueued,
             )
@@ -5672,7 +5660,7 @@ class ImageDatabase:
             # Hard-delete orphaned face records (CASCADE won't fire on UPDATE)
             if removed_face_ids:
                 face_placeholders = sql_placeholders(removed_face_ids)
-                self.conn.execute(
+                self.safe_conn.execute(
                     f'DELETE FROM faces WHERE id IN ({face_placeholders})',
                     removed_face_ids,
                 )
@@ -5680,16 +5668,16 @@ class ImageDatabase:
             # Fix preferred_face_id for affected people and remove empty people
             removed_set = set(removed_face_ids)
             for person_id in affected_person_ids:
-                remaining = self.conn.execute(
+                remaining = self.safe_conn.execute(
                     'SELECT id, embedding FROM faces WHERE person_id = ? AND suppressed = 0',
                     (person_id,),
                 ).fetchall()
                 if not remaining:
                     # Person has no more faces - delete them
-                    self.conn.execute('DELETE FROM people WHERE id = ?', (person_id,))
+                    self.safe_conn.execute('DELETE FROM people WHERE id = ?', (person_id,))
                 else:
                     # Check if preferred face was among the removed
-                    preferred = self.conn.execute(
+                    preferred = self.safe_conn.execute(
                         'SELECT preferred_face_id FROM people WHERE id = ?',
                         (person_id,),
                     ).fetchone()
@@ -5700,22 +5688,22 @@ class ImageDatabase:
                             removed_face_embeddings,
                             remaining,
                         )
-                        self.conn.execute(
+                        self.safe_conn.execute(
                             "UPDATE people SET preferred_face_id = ?, updated_at = datetime('now') WHERE id = ?",
                             (new_preferred_id, person_id),
                         )
 
-            # Collect person event data while we still hold the lock
+            # Collect person event data while we still hold the safe_conn span
             deleted_person_ids = []
             updated_people = []
             for pid in affected_person_ids:
-                row = self.conn.execute('SELECT * FROM people WHERE id = ?', (pid,)).fetchone()
+                row = self.safe_conn.execute('SELECT * FROM people WHERE id = ?', (pid,)).fetchone()
                 if row:
                     updated_people.append(dict(row))
                 else:
                     deleted_person_ids.append(pid)
 
-            self.conn.commit()
+            self.safe_conn.commit()
 
         # Delete orphaned face thumbnail files (outside DB lock)
         for face_id in removed_face_ids:
@@ -5883,7 +5871,7 @@ class ImageDatabase:
 
         with image_lock:
             # Get current image info (inside lock to ensure consistent read)
-            image = get_image(self.conn, image_id)
+            image = get_image(self.safe_conn, image_id)
             if image is None:
                 logger.warning(f'rotate_image: Image not found: {image_id}')
                 return (False, None)
@@ -5919,10 +5907,10 @@ class ImageDatabase:
                 logger.error(f'rotate_image: Failed to compute new metadata: {e}')
                 return (False, None)
 
-            # Update database (with db lock for thread safety)
+            # Update database (safe_conn serialises access automatically)
             try:
-                with self._db_lock:
-                    self.conn.execute(
+                with self.safe_conn:
+                    self.safe_conn.execute(
                         """UPDATE images SET
                             checksum = ?,
                             size = ?,
@@ -5941,14 +5929,14 @@ class ImageDatabase:
                             image_id,
                         ),
                     )
-                    self.conn.commit()
+                    self.safe_conn.commit()
 
                 # Update checksum cache with new checksum
                 with self._checksum_cache_lock:
                     self._checksum_cache[image_id] = new_checksum
             except Exception as e:
                 try:
-                    self.conn.rollback()
+                    self.safe_conn.rollback()
                 except Exception:
                     pass
                 logger.error(f'rotate_image: Failed to update database: {e}')
@@ -5956,13 +5944,13 @@ class ImageDatabase:
 
             # Rotate face bounding boxes and regenerate face thumbnails
             try:
-                with self._db_lock:
+                with self.safe_conn:
                     # Get faces before rotating their coordinates
-                    faces = get_faces_for_image(self.conn, image_id, include_suppressed=True)
+                    faces = get_faces_for_image(self.safe_conn, image_id, include_suppressed=True)
                     logger.debug(f'rotate_image: Found {len(faces)} faces for {path.name}')
 
                     # Rotate the bounding box coordinates in the database
-                    rotated_count = rotate_faces_for_image(self.conn, image_id, degrees)
+                    rotated_count = rotate_faces_for_image(self.safe_conn, image_id, degrees)
                     logger.debug(f'rotate_image: Rotated {rotated_count} face bounding boxes')
 
                     if rotated_count > 0:
@@ -5981,7 +5969,7 @@ class ImageDatabase:
                             )
 
                             # Get updated face coordinates (after rotation)
-                            updated_face = get_face(self.conn, face_id)
+                            updated_face = get_face(self.safe_conn, face_id)
                             if updated_face:
                                 new_bbox = (
                                     updated_face['box_x'],
@@ -6016,7 +6004,7 @@ class ImageDatabase:
                                     )
             except Exception as e:
                 try:
-                    self.conn.rollback()
+                    self.safe_conn.rollback()
                 except Exception:
                     pass
                 logger.warning(f'rotate_image: Failed to rotate faces: {e}')
@@ -6049,7 +6037,7 @@ class ImageDatabase:
         query_embedding = self._get_clip_model().encode_semantic_query(query)
 
         # Perform semantic search
-        return semantic_search(self.conn, query_embedding, threshold, limit)
+        return semantic_search(self.safe_conn, query_embedding, threshold, limit)
 
     def search_videos(
         self,
@@ -6072,7 +6060,7 @@ class ImageDatabase:
             List of per-video result dicts with nested per-scene scores.
         """
         query_embedding = self._get_clip_model().encode_semantic_query(query)
-        return video_search(self.conn, query_embedding, threshold, limit)
+        return video_search(self.safe_conn, query_embedding, threshold, limit)
 
     def get_semantic_scores_for_images(
         self,
@@ -6100,7 +6088,7 @@ class ImageDatabase:
 
         # Get embeddings for the specified images
         placeholders = sql_placeholders(image_ids)
-        cursor = self.conn.execute(
+        cursor = self.safe_conn.execute(
             f'SELECT id, embedding FROM images WHERE id IN ({placeholders}) AND embedding IS NOT NULL', image_ids
         )
 
@@ -6127,7 +6115,7 @@ class ImageDatabase:
             no embedding.
         """
         # Get the reference image's embedding
-        cursor = self.conn.execute('SELECT id, embedding, deleted FROM images WHERE id = ?', (reference_image_id,))
+        cursor = self.safe_conn.execute('SELECT id, embedding, deleted FROM images WHERE id = ?', (reference_image_id,))
         row = cursor.fetchone()
 
         # Debug logging
@@ -6151,7 +6139,7 @@ class ImageDatabase:
         reference_embedding = np.frombuffer(row['embedding'], dtype=np.float32)
 
         # Get all images sorted by similarity
-        return get_images_by_similarity(self.conn, reference_embedding)
+        return get_images_by_similarity(self.safe_conn, reference_embedding)
 
     def _get_clip_model(self) -> OpenCLIPModel:
         """Get the shared OpenCLIP model for search operations."""
@@ -6251,7 +6239,7 @@ class ImageDatabase:
             filter_json: JSON string of filter criteria for smart groups.
             preview_image_id: Representative image for smart group thumbnails.
         """
-        with self._db_lock:
+        with self.safe_conn:
             self._duplicate_manager.create_custom_group(group_hash, name, image_ids, filter_json, preview_image_id)
 
     def update_custom_group_filter(
@@ -6264,7 +6252,7 @@ class ImageDatabase:
             filter_json: New JSON string of filter criteria.
             preview_image_id: New representative image ID (or None to clear).
         """
-        with self._db_lock:
+        with self.safe_conn:
             self._duplicate_manager.update_custom_group_filter(group_hash, filter_json, preview_image_id)
 
     def update_smart_group_preview(self, group_hash: str, preview_image_id: str | None) -> None:
@@ -6274,7 +6262,7 @@ class ImageDatabase:
             group_hash: The group identifier.
             preview_image_id: Image ID for the thumbnail, or None to clear.
         """
-        with self._db_lock:
+        with self.safe_conn:
             self._duplicate_manager.update_smart_group_preview(group_hash, preview_image_id)
 
     def rename_custom_group(self, group_hash: str, name: str) -> None:
@@ -6284,7 +6272,7 @@ class ImageDatabase:
             group_hash: The group identifier.
             name: New display name.
         """
-        with self._db_lock:
+        with self.safe_conn:
             self._duplicate_manager.rename_custom_group(group_hash, name)
 
     def delete_custom_group(self, group_hash: str) -> None:
@@ -6293,7 +6281,7 @@ class ImageDatabase:
         Args:
             group_hash: The group identifier.
         """
-        with self._db_lock:
+        with self.safe_conn:
             self._duplicate_manager.delete_custom_group(group_hash)
 
     def add_images_to_custom_group(self, group_hash: str, image_ids: list[str]) -> None:
@@ -6303,7 +6291,7 @@ class ImageDatabase:
             group_hash: The group identifier.
             image_ids: Image IDs to add.
         """
-        with self._db_lock:
+        with self.safe_conn:
             self._duplicate_manager.add_images_to_custom_group(group_hash, image_ids)
 
     def remove_images_from_custom_group(self, group_hash: str, image_ids: list[str]) -> None:
@@ -6313,7 +6301,7 @@ class ImageDatabase:
             group_hash: The group identifier.
             image_ids: Image IDs to remove.
         """
-        with self._db_lock:
+        with self.safe_conn:
             self._duplicate_manager.remove_images_from_custom_group(group_hash, image_ids)
 
     # =========================================================================
@@ -6322,30 +6310,30 @@ class ImageDatabase:
 
     def get_stats(self) -> dict[str, Any]:
         """Get database statistics."""
-        with self._db_lock:
-            cursor = self.conn.execute(
+        with self.safe_conn:
+            cursor = self.safe_conn.execute(
                 "SELECT COUNT(*) as count FROM images WHERE deleted = 0 AND media_type = 'image'"
             )
             total_images = cursor.fetchone()['count']
 
-            cursor = self.conn.execute(
+            cursor = self.safe_conn.execute(
                 "SELECT COUNT(*) as count FROM images WHERE deleted = 0 AND media_type = 'video'"
             )
             total_videos = cursor.fetchone()['count']
 
-            cursor = self.conn.execute('SELECT COUNT(*) as count FROM folders')
+            cursor = self.safe_conn.execute('SELECT COUNT(*) as count FROM folders')
             total_folders = cursor.fetchone()['count']
 
             # people/faces tables are created by FaceDB, which may not have
             # initialised yet when the frontend first polls /api/status.
             try:
-                cursor = self.conn.execute('SELECT COUNT(*) as count FROM people')
+                cursor = self.safe_conn.execute('SELECT COUNT(*) as count FROM people')
                 total_people = cursor.fetchone()['count']
             except Exception:
                 total_people = 0
 
             try:
-                cursor = self.conn.execute(
+                cursor = self.safe_conn.execute(
                     """SELECT COUNT(*) as count FROM faces f
                        JOIN images i ON f.image_id = i.id
                        WHERE f.suppressed = 0 AND i.deleted = 0"""
@@ -6453,17 +6441,16 @@ class ImageDatabase:
 
         # Get counts for live updates — cached with a 5-second TTL to avoid
         # running 4 COUNT queries on every poll (the main source of idle CPU).
-        # Protected by _db_lock because self.conn is shared with background
-        # threads that also acquire _db_lock for their DB access.
+        # safe_conn serialises access automatically via its internal RLock.
         now = time.monotonic()
         if self._status_counts is None or (now - self._status_counts_time) >= 5.0:
-            with self._db_lock:
-                cursor = self.conn.execute(
+            with self.safe_conn:
+                cursor = self.safe_conn.execute(
                     "SELECT COUNT(*) as count FROM images WHERE deleted = 0 AND media_type = 'image'"
                 )
                 total_images = cursor.fetchone()['count']
 
-                cursor = self.conn.execute(
+                cursor = self.safe_conn.execute(
                     "SELECT COUNT(*) as count FROM images WHERE deleted = 0 AND media_type = 'video'"
                 )
                 total_videos = cursor.fetchone()['count']
@@ -6471,13 +6458,13 @@ class ImageDatabase:
                 # people/faces tables are created by FaceDB, which may not have
                 # initialised yet when the frontend first polls /api/status.
                 try:
-                    cursor = self.conn.execute('SELECT COUNT(*) as count FROM people')
+                    cursor = self.safe_conn.execute('SELECT COUNT(*) as count FROM people')
                     total_people = cursor.fetchone()['count']
                 except Exception:
                     total_people = 0
 
                 try:
-                    cursor = self.conn.execute(
+                    cursor = self.safe_conn.execute(
                         """SELECT COUNT(*) as count FROM faces f
                            JOIN images i ON f.image_id = i.id
                            WHERE f.suppressed = 0 AND i.deleted = 0"""
@@ -6604,8 +6591,7 @@ class ImageDatabase:
         emit_processing_complete is called.
         """
         # Check if there are any known people with locked faces to match against
-        with self._db_lock:
-            known_embeddings = get_cached_known_embeddings(self.conn)
+        known_embeddings = get_cached_known_embeddings(self.safe_conn)
 
         if not known_embeddings:
             logger.info('Face reassessment: no known faces to match against')
@@ -6618,7 +6604,9 @@ class ImageDatabase:
             self._face_reassess_status = {'status': 'computing'}
 
         try:
-            matches = reassess_unknown_faces(self.conn, self._db_lock, threshold=self.config.face_recognition_threshold)
+            matches = reassess_unknown_faces(
+                self.safe_conn, self._db_lock, threshold=self.config.face_recognition_threshold
+            )
             if matches:
                 logger.info(f'Face reassessment: matched {len(matches)} faces to known people')
                 # Build per-face update list for the frontend (same format as
@@ -6626,14 +6614,13 @@ class ImageDatabase:
                 # frontend can update its cache without a round-trip.
                 person_names: dict[str, str] = {}
                 unique_pids = {pid for _, pid, _ in matches}
-                with self._db_lock:
-                    for pid in unique_pids:
-                        row = self.conn.execute(
-                            'SELECT name FROM people WHERE id = ?',
-                            (pid,),
-                        ).fetchone()
-                        if row:
-                            person_names[pid] = row['name']
+                for pid in unique_pids:
+                    row = self.safe_conn.execute(
+                        'SELECT name FROM people WHERE id = ?',
+                        (pid,),
+                    ).fetchone()
+                    if row:
+                        person_names[pid] = row['name']
                 updated_faces = [
                     {
                         'face_id': face_id,
@@ -6731,8 +6718,7 @@ class ImageDatabase:
         Returns:
             List of face dicts with person_name if identified.
         """
-        with self._db_lock:
-            return get_faces_for_image(self.conn, image_id, include_suppressed)
+        return get_faces_for_image(self.safe_conn, image_id, include_suppressed)
 
 
 # =============================================================================

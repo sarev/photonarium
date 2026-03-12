@@ -33,6 +33,8 @@ import sys
 import threading
 import time
 
+from safeconn import SafeConnection
+
 # ---------------------------------------------------------------------------
 # Table DDL — imported by imagedb._init_database() for schema creation
 # ---------------------------------------------------------------------------
@@ -104,13 +106,15 @@ class DatabaseLogHandler(logging.Handler):
         # explicit flush() calls from the pipeline or shutdown).
         self._flush_lock = threading.Lock()
 
-        # Open a dedicated connection for log writes.  The ``logs`` table is
+        # Open a dedicated connection for log writes, wrapped in SafeConnection
+        # for consistent retry/rollback behaviour.  The ``logs`` table is
         # created by imagedb.init_database() during startup — the handler must
         # be attached after that call so the table exists.
-        self._conn = sqlite3.connect(db_path, check_same_thread=False)
-        self._conn.execute('PRAGMA journal_mode=WAL')
-        self._conn.execute('PRAGMA busy_timeout=5000')
-        self._conn.commit()
+        raw = sqlite3.connect(db_path, check_same_thread=False)
+        raw.execute('PRAGMA journal_mode=WAL')
+        raw.execute('PRAGMA busy_timeout=5000')
+        raw.commit()
+        self._conn = SafeConnection(raw, name='log-writer')
 
         # Background daemon thread that periodically flushes buffered records.
         self._stop_event = threading.Event()
@@ -257,8 +261,9 @@ def get_logs(
         ``message``, ordered oldest-first (most recent at the end).
     """
     try:
-        conn = sqlite3.connect(db_path, check_same_thread=False)
-        conn.row_factory = sqlite3.Row
+        raw = sqlite3.connect(db_path, check_same_thread=False)
+        raw.row_factory = sqlite3.Row
+        conn = SafeConnection(raw, name='log-reader')
         try:
             # Check that the logs table exists — it won't if logging is
             # disabled (log_retention_lines == 0) and has never been created.

@@ -374,23 +374,42 @@ def get_db() -> ImageDatabase:
         db.startup()
         register_signal_handlers(db)
         logger.info('ImageDatabase initialised')
-        # Pre-populate images cache for fast first request
-        _prepopulate_images_cache(db)
+        # Pre-populate images cache in background so it doesn't delay
+        # server startup.  The /api/images endpoint handles cache misses
+        # gracefully, so the server is fully functional while this runs.
+        threading.Thread(
+            target=_prepopulate_images_cache,
+            args=(db,),
+            name='cache-warmup',
+            daemon=True,
+        ).start()
     return db
 
 
 def _prepopulate_images_cache(database: ImageDatabase):
-    """Pre-populate the images cache during startup."""
-    t0 = time.perf_counter()
-    images = database.get_all_images_lightweight()
-    epoch = database.get_current_epoch()
-    data = {'success': True, 'data': {'epoch': epoch, 'images': images}}
-    json_bytes = orjson.dumps(data)
-    _set_images_cache(epoch, json_bytes)
-    elapsed = time.perf_counter() - t0
-    logger.info(
-        f'Images cache pre-populated: {len(images)} images, {len(json_bytes) // 1024 // 1024}MB, {elapsed * 1000:.0f}ms'
-    )
+    """Pre-populate the images cache for fast first request.
+
+    Runs in a background daemon thread so server startup is not blocked.
+    The /api/images endpoint handles cache misses by querying the DB
+    directly, so the server is fully functional before this completes.
+    """
+    try:
+        if database.is_closed:
+            return
+        t0 = time.perf_counter()
+        images = database.get_all_images_lightweight()
+        epoch = database.get_current_epoch()
+        data = {'success': True, 'data': {'epoch': epoch, 'images': images}}
+        json_bytes = orjson.dumps(data)
+        _set_images_cache(epoch, json_bytes)
+        elapsed = time.perf_counter() - t0
+        mb = len(json_bytes) // 1024 // 1024
+        logger.info(
+            f'Images cache pre-populated: {len(images)} images, {mb}MB, {elapsed * 1000:.0f}ms'
+        )
+    except Exception:
+        # Silently ignore — cache miss fallback handles this gracefully.
+        pass
 
 
 def shutdown_db():
@@ -545,7 +564,7 @@ def get_images():
         # Apply people filter to delta if specified
         if person_ids:
             db = get_db()
-            matching_image_ids = set(get_images_with_people(db.conn, person_ids))
+            matching_image_ids = set(get_images_with_people(db.safe_conn, person_ids))
             if 'updated' in delta:
                 delta['updated'] = [img for img in delta['updated'] if img['id'] in matching_image_ids]
 
@@ -556,7 +575,7 @@ def get_images():
 
         if person_ids:
             # Filter by people - can't use cache
-            matching_image_ids = set(get_images_with_people(db.conn, person_ids))
+            matching_image_ids = set(get_images_with_people(db.safe_conn, person_ids))
             all_images = db.get_all_images_lightweight()
             images = [img for img in all_images if img['id'] in matching_image_ids]
             epoch = db.get_current_epoch()
@@ -995,11 +1014,11 @@ def get_image_scenes(image_id):
 
     query = request.args.get('query', '').strip()
 
-    with db._db_lock:
+    with db.safe_conn:
         cols = 'id, scene_index, start_time, end_time, keyframe_time, transcription'
         if query:
             cols += ', embedding, transcription_embedding'
-        cursor = db.conn.execute(
+        cursor = db.safe_conn.execute(
             f"""
             SELECT {cols}
             FROM scenes
@@ -1076,8 +1095,8 @@ def get_subtitles_vtt(image_id):
     if image.get('media_type') != 'video':
         return error_response('Not a video', 400)
 
-    with db._db_lock:
-        rows = db.conn.execute(
+    with db.safe_conn:
+        rows = db.safe_conn.execute(
             """
             SELECT start_time, end_time, transcription
             FROM scenes
@@ -1283,7 +1302,7 @@ def get_images_people_names():
         JSON object mapping image_id to names string (sorted alphabetically).
     """
     db = get_db()
-    names = get_people_names_bulk(db.conn)
+    names = get_people_names_bulk(db.safe_conn)
     return success_response(names)
 
 
@@ -1512,8 +1531,8 @@ def import_preflight():
 
     # Build two sets for fast lookup: one keyed by import_name (original
     # filename at time of import) and one by basename (on-disk filename).
-    with db._db_lock:
-        cursor = db.conn.execute(
+    with db.safe_conn:
+        cursor = db.safe_conn.execute(
             'SELECT basename, size, import_name FROM images WHERE deleted = 0',
         )
         basename_size = set()
@@ -1635,7 +1654,7 @@ def health():
     """
     try:
         db = get_db()
-        db.conn.execute('SELECT 1')
+        db.safe_conn.execute('SELECT 1')
         return success_response({'status': 'ok'})
     except Exception as e:
         return error_response(f'Database unavailable: {e}', 503)
@@ -1949,7 +1968,7 @@ def wizard_save_config():
     # Mark wizard as completed in the metadata table
     try:
         db = get_db()
-        set_metadata(db.conn, 'wizard_completed', 'true')
+        set_metadata(db.safe_conn, 'wizard_completed', 'true')
     except Exception:
         logger.exception('Wizard: failed to set wizard_completed metadata')
 
@@ -2721,8 +2740,8 @@ def get_scene_thumbnail(scene_id):
             abort(404)
 
     # On-demand fallback: look up scene, generate thumbnail
-    with db._db_lock:
-        cursor = db.conn.execute(
+    with db.safe_conn:
+        cursor = db.safe_conn.execute(
             'SELECT image_id, keyframe_time FROM scenes WHERE id = ?',
             (scene_id,),
         )
@@ -2790,8 +2809,8 @@ def update_preferred_scene(image_id):
         return error_response('Not a video', 400)
 
     # Get the scene's embedding
-    with db._db_lock:
-        cursor = db.conn.execute(
+    with db.safe_conn:
+        cursor = db.safe_conn.execute(
             'SELECT embedding FROM scenes WHERE id = ? AND image_id = ?',
             (scene_id, image_id),
         )
@@ -2802,12 +2821,12 @@ def update_preferred_scene(image_id):
 
     # Update images table
     now = datetime.now().isoformat()
-    with db._db_lock:
-        db.conn.execute(
+    with db.safe_conn:
+        db.safe_conn.execute(
             'UPDATE images SET preferred_scene_id = ?, embedding = ?, updated_at = ? WHERE id = ?',
             (scene_id, row['embedding'], now, image_id),
         )
-        db.conn.commit()
+        db.safe_conn.commit()
 
     # Emit event so other clients sync
     db.event_queue.emit('images_changed', {'updated_ids': [image_id]})
@@ -2842,17 +2861,17 @@ def update_stt_language(image_id):
         return error_response('language is required and must be a string')
 
     now = datetime.now().isoformat()
-    with db._db_lock:
-        db.conn.execute(
+    with db.safe_conn:
+        db.safe_conn.execute(
             'UPDATE images SET stt_language = ?, updated_at = ? WHERE id = ?',
             (language, now, image_id),
         )
         # Clear existing transcriptions so the pipeline re-transcribes
-        db.conn.execute(
+        db.safe_conn.execute(
             'UPDATE scenes SET transcription = NULL, transcription_embedding = NULL, updated_at = ? WHERE image_id = ?',
             (now, image_id),
         )
-        db.conn.commit()
+        db.safe_conn.commit()
 
     # Trigger pipeline rerun to pick up the retranscription work
     db.queue_rescan_all()
@@ -2897,9 +2916,9 @@ def update_scene_transcription_endpoint(scene_id):
             logger.warning('Failed to encode transcription embedding: %s', e)
             # Proceed without embedding — text still saved
 
-    with db._db_lock:
+    with db.safe_conn:
         image_id = update_scene_transcription(
-            db.conn,
+            db.safe_conn,
             scene_id,
             transcription,
             emb_blob,
@@ -3044,7 +3063,7 @@ def get_stats():
     stats = db.get_stats()
 
     # Include wizard completion status for first-run detection
-    wizard_done = get_metadata(db.conn, 'wizard_completed')
+    wizard_done = get_metadata(db.safe_conn, 'wizard_completed')
     stats['wizard_completed'] = wizard_done == 'true'
 
     return success_response(stats)
@@ -3157,9 +3176,9 @@ def get_people():
     db = get_db()
 
     if query:
-        people = search_people(db.conn, query)
+        people = search_people(db.safe_conn, query)
     else:
-        people = get_all_people(db.conn)
+        people = get_all_people(db.safe_conn)
 
     return success_response(people)
 
@@ -3196,27 +3215,27 @@ def create_person_endpoint():
 
     db = get_db()
 
-    with db._db_lock:
+    with db.safe_conn:
         # Check for ID collision (shouldn't happen with UUIDs)
-        existing = get_person(db.conn, person_id)
+        existing = get_person(db.safe_conn, person_id)
         if existing:
             return error_response(f'Person with ID "{person_id}" already exists', 409)
 
         # Check for name collision
         # DESIGN: Defensive validation - rejects invalid request with error (see design-audit.md 1.7)
-        existing_name = get_person_by_name(db.conn, name)
+        existing_name = get_person_by_name(db.safe_conn, name)
         if existing_name:
             return error_response(f'Person with name "{name}" already exists', 409)
 
         # Create person with provided ID
-        create_person(db.conn, name, person_id=person_id)
+        create_person(db.safe_conn, name, person_id=person_id)
 
         # Set preferred face if provided
         if preferred_face_id:
-            update_person(db.conn, person_id, preferred_face_id=preferred_face_id)
+            update_person(db.safe_conn, person_id, preferred_face_id=preferred_face_id)
 
         # Get the created person for the event payload
-        created_person = get_person(db.conn, person_id)
+        created_person = get_person(db.safe_conn, person_id)
 
     # Broadcast for other clients
     if created_person:
@@ -3241,7 +3260,7 @@ def get_person_endpoint(person_id):
         JSON object with person details.
     """
     db = get_db()
-    person = get_person(db.conn, person_id)
+    person = get_person(db.safe_conn, person_id)
 
     if person is None:
         return error_response('Person not found', 404)
@@ -3301,30 +3320,30 @@ def update_person_endpoint(person_id):
     faces_changed = False
     # All reads and writes under one lock to prevent TOCTOU races
     # (e.g. person deleted between existence check and update)
-    with db._db_lock:
-        person = get_person(db.conn, person_id)
+    with db.safe_conn:
+        person = get_person(db.safe_conn, person_id)
         if person is None:
             return error_response('Person not found', 404)
 
         # DESIGN: Defensive validation - rejects invalid request with error (see design-audit.md 1.7)
         if name is not None:
-            existing = get_person_by_name(db.conn, name)
+            existing = get_person_by_name(db.safe_conn, name)
             if existing and existing['id'] != person_id:
                 return error_response(f'Person with name "{name}" already exists', 409)
 
-        update_person(db.conn, person_id, **update_kwargs)
+        update_person(db.safe_conn, person_id, **update_kwargs)
 
         # If threshold was changed to a non-null value, revalidate and reassess
         if threshold_changed and threshold_value is not None:
             # Eject faces that no longer meet the threshold
-            ejected_face_ids = revalidate_person_faces(db.conn, person_id, threshold_value)
+            ejected_face_ids = revalidate_person_faces(db.safe_conn, person_id, threshold_value)
 
             # DESIGN: Atomic cascade - person with 0 faces is invalid state, so we clean up
             # atomically rather than requiring frontend roundtrip (see design-audit.md 1.1)
             if ejected_face_ids:
-                remaining = get_faces_for_person(db.conn, person_id)
+                remaining = get_faces_for_person(db.safe_conn, person_id)
                 if not remaining:
-                    delete_person(db.conn, person_id)
+                    delete_person(db.safe_conn, person_id)
                     # Broadcast for other clients — person deleted, faces ejected
                     db.event_queue.emit(EVENT_PEOPLE_CHANGED, {'removed': [person_id]})
                     _check_smart_group_damage([person_id])
@@ -3344,7 +3363,7 @@ def update_person_endpoint(person_id):
                     )
                 faces_changed = True
 
-        updated_person = get_person(db.conn, person_id)
+        updated_person = get_person(db.safe_conn, person_id)
 
     # DESIGN: Auto-trigger reassessment - the purpose of changing threshold is to re-evaluate
     # faces, so this avoids requiring a separate API call (see design-audit.md 1.8)
@@ -3399,16 +3418,16 @@ def delete_person_endpoint(person_id):
     """
     db = get_db()
 
-    with db._db_lock:
-        person = get_person(db.conn, person_id)
+    with db.safe_conn:
+        person = get_person(db.safe_conn, person_id)
         if person is None:
             return error_response('Person not found', 404)
 
         # Get affected face IDs before deletion (they'll become untagged)
-        affected_faces = get_faces_for_person(db.conn, person_id)
+        affected_faces = get_faces_for_person(db.safe_conn, person_id)
         affected_face_ids = [f['id'] for f in affected_faces] if affected_faces else []
 
-        delete_person(db.conn, person_id)
+        delete_person(db.safe_conn, person_id)
 
     # Broadcast for other clients
     db.event_queue.emit(EVENT_PEOPLE_CHANGED, {'removed': [person_id]})
@@ -3436,11 +3455,11 @@ def get_person_faces(person_id):
     """
     db = get_db()
 
-    person = get_person(db.conn, person_id)
+    person = get_person(db.safe_conn, person_id)
     if person is None:
         return error_response('Person not found', 404)
 
-    faces = get_faces_for_person(db.conn, person_id)
+    faces = get_faces_for_person(db.safe_conn, person_id)
 
     # Remove embeddings from response (they're large and not needed in API)
     for face in faces:
@@ -3465,7 +3484,7 @@ def get_person_thumbnail(person_id):
     """
     db = get_db()
 
-    person = get_person(db.conn, person_id)
+    person = get_person(db.safe_conn, person_id)
     if person is None:
         return error_response('Person not found', 404)
 
@@ -3478,7 +3497,7 @@ def get_person_thumbnail(person_id):
         # Verify the preferred face still exists AND its image isn't deleted.
         # Orphaned face records (image trashed before cleanup fix) pass
         # get_face() but can't produce a thumbnail.
-        preferred_face = get_face(db.conn, face_id)
+        preferred_face = get_face(db.safe_conn, face_id)
         if not preferred_face:
             face_id = None  # Face record gone, fall back below
         else:
@@ -3487,18 +3506,18 @@ def get_person_thumbnail(person_id):
                 face_id = None  # Image trashed, fall back below
 
     if not face_id:
-        faces = get_faces_for_person(db.conn, person_id)
+        faces = get_faces_for_person(db.safe_conn, person_id)
         if not faces:
             return error_response('Person has no faces', 404)
         face_id = faces[-1]['id']  # Most recent photo by timestamp
         fallback_used = True
         # Auto-repair: persist the new preferred so this doesn't repeat
-        with db._db_lock:
-            db.conn.execute(
+        with db.safe_conn:
+            db.safe_conn.execute(
                 "UPDATE people SET preferred_face_id = ?, updated_at = datetime('now') WHERE id = ?",
                 (face_id, person_id),
             )
-            db.conn.commit()
+            db.safe_conn.commit()
         logger.info(f'Auto-repaired preferred_face_id for person {person_id[:8]}... -> {face_id[:8]}...')
 
     # Get face thumbnail
@@ -3518,7 +3537,7 @@ def get_person_thumbnail(person_id):
         # Lazy regeneration: face thumbnail may be missing after data-dir
         # migration or interrupted processing. Regenerate from source image
         # using the same concurrency-safe pattern as get_face_thumbnail().
-        face = get_face(db.conn, face_id)
+        face = get_face(db.safe_conn, face_id)
         if face:
             should_regenerate = False
             with _face_thumb_regen_lock:
@@ -3579,7 +3598,7 @@ def get_image_faces(image_id):
     if image is None:
         return error_response('Image not found', 404)
 
-    faces = get_faces_for_image(db.conn, image_id, include_suppressed=False)
+    faces = get_faces_for_image(db.safe_conn, image_id, include_suppressed=False)
 
     # Remove embeddings from response
     for face in faces:
@@ -3616,7 +3635,7 @@ def get_faces_list():
     if image_ids_param:
         image_ids = [id.strip() for id in image_ids_param.split(',') if id.strip()]
         if image_ids:
-            faces = get_faces_for_images(db.conn, image_ids)
+            faces = get_faces_for_images(db.safe_conn, image_ids)
             return success_response(faces)
 
     # If search query provided, do semantic search on unknown faces
@@ -3625,13 +3644,13 @@ def get_faces_list():
             # Encode query with CLIP (supports negative terms like "beach -face")
             query_embedding = db._get_clip_model().encode_semantic_query(search_query)
             # Search unknown faces by semantic similarity
-            faces = search_unknown_faces_semantic(db.conn, query_embedding)
+            faces = search_unknown_faces_semantic(db.safe_conn, query_embedding)
             return success_response(faces)
         except Exception as e:
             logger.error(f'Failed to encode search query: {e}')
             return error_response('Failed to encode search query', 500)
 
-    faces = get_all_faces(db.conn, unknown_only=unknown_only)
+    faces = get_all_faces(db.safe_conn, unknown_only=unknown_only)
     return success_response(faces)
 
 
@@ -3646,7 +3665,7 @@ def get_single_face(face_id):
         JSON face object with person_name if identified.
     """
     db = get_db()
-    face = get_face(db.conn, face_id)
+    face = get_face(db.safe_conn, face_id)
     if not face:
         return error_response('Face not found', 404)
     return success_response(dict(face))
@@ -3673,7 +3692,7 @@ def get_face_matches_endpoint(face_id):
     limit = request.args.get('limit', 5, type=int)
     limit = max(1, min(limit, 10))  # Clamp to 1-10
 
-    matches = get_face_matches(db.conn, face_id, limit=limit)
+    matches = get_face_matches(db.safe_conn, face_id, limit=limit)
     return success_response(matches)
 
 
@@ -3716,26 +3735,24 @@ def assign_faces():
         return error_response('face_ids is required')
     if not isinstance(face_ids, list):
         return error_response('face_ids must be an array')
-    if not isinstance(face_ids, list):
-        return error_response('face_ids must be an array')
     if not person_id:
         return error_response('person_id is required')
 
     db = get_db()
 
-    with db._db_lock:
+    with db.safe_conn:
         # Verify person exists
-        person = get_person(db.conn, person_id)
+        person = get_person(db.safe_conn, person_id)
         if person is None:
             return error_response('Person not found', 404)
 
         # Assign each face (just update person_id, don't touch manually_tagged)
         assigned_count = 0
         for face_id in face_ids:
-            face = get_face(db.conn, face_id)
+            face = get_face(db.safe_conn, face_id)
             if face is None:
                 continue
-            update_face_person(db.conn, face_id, person_id)
+            update_face_person(db.safe_conn, face_id, person_id)
             assigned_count += 1
 
     # Trigger async reassessment to auto-match unknown faces against this person
@@ -3793,10 +3810,10 @@ def unassign_faces_simple():
 
     db = get_db()
 
-    with db._db_lock:
+    with db.safe_conn:
         # Filter to faces that actually exist before batch update
-        valid_ids = [fid for fid in face_ids if get_face(db.conn, fid) is not None]
-        unassigned_count = _unassign_faces_batch(db.conn, valid_ids)
+        valid_ids = [fid for fid in face_ids if get_face(db.safe_conn, fid) is not None]
+        unassigned_count = _unassign_faces_batch(db.safe_conn, valid_ids)
 
     # Broadcast for other clients
     if unassigned_count > 0:
@@ -3840,10 +3857,10 @@ def suppress_faces_batch():
 
     db = get_db()
 
-    with db._db_lock:
+    with db.safe_conn:
         # Filter to faces that actually exist before batch update
-        valid_ids = [fid for fid in face_ids if get_face(db.conn, fid) is not None]
-        suppressed_count = _suppress_faces_batch(db.conn, valid_ids)
+        valid_ids = [fid for fid in face_ids if get_face(db.safe_conn, fid) is not None]
+        suppressed_count = _suppress_faces_batch(db.safe_conn, valid_ids)
 
     # Broadcast for other clients
     if suppressed_count > 0:
@@ -3885,22 +3902,22 @@ def update_faces_batch():
 
     db = get_db()
 
-    with db._db_lock:
+    with db.safe_conn:
         updated_count = 0
         for face_id in face_ids:
-            face = get_face(db.conn, face_id)
+            face = get_face(db.safe_conn, face_id)
             if face is None:
                 continue
 
             if locked is not None:
                 # Update manually_tagged flag
-                db.conn.execute(
+                db.safe_conn.execute(
                     "UPDATE faces SET manually_tagged = ?, updated_at = datetime('now') WHERE id = ?",
                     (1 if locked else 0, face_id),
                 )
                 updated_count += 1
 
-        db.conn.commit()
+        db.safe_conn.commit()
 
     # Broadcast for other clients
     if updated_count > 0 and locked is not None:
@@ -3941,8 +3958,8 @@ def identify_face(face_id):
     db = get_db()
 
     # Use lock to avoid conflicts with background threads
-    with db._db_lock:
-        face = get_face(db.conn, face_id)
+    with db.safe_conn:
+        face = get_face(db.safe_conn, face_id)
         if face is None:
             return error_response('Face not found', 404)
 
@@ -3951,25 +3968,25 @@ def identify_face(face_id):
 
         if person_id:
             # Link to existing person by ID
-            person = get_person(db.conn, person_id)
+            person = get_person(db.safe_conn, person_id)
             if person is None:
                 return error_response('Person not found', 404)
         elif name:
             # Find or create person by name
-            person = get_person_by_name(db.conn, name)
+            person = get_person_by_name(db.safe_conn, name)
             if person is None:
-                person_id = create_person(db.conn, name)
-                person = get_person(db.conn, person_id)
+                person_id = create_person(db.safe_conn, name)
+                person = get_person(db.safe_conn, person_id)
             else:
                 person_id = person['id']
         else:
             return error_response('Either person_id or name is required')
 
         # Update face with person_id (manually tagged since user initiated)
-        update_face_person(db.conn, face_id, person_id, manually_tagged=True)
+        update_face_person(db.safe_conn, face_id, person_id, manually_tagged=True)
 
         # Get updated face
-        face = get_face(db.conn, face_id)
+        face = get_face(db.safe_conn, face_id)
         if 'embedding' in face:
             del face['embedding']
 
@@ -4035,15 +4052,15 @@ def identify_faces_batch():
     db = get_db()
 
     # Batch identify all faces (use lock to avoid conflicts with background threads)
-    with db._db_lock:
+    with db.safe_conn:
         # Track source persons before reassignment (for preferred face cleanup)
         source_person_ids = set()
         for face_id in face_ids:
-            face = get_face(db.conn, face_id)
+            face = get_face(db.safe_conn, face_id)
             if face and face.get('person_id'):
                 source_person_ids.add(face['person_id'])
 
-        result = batch_identify_faces(db.conn, face_ids, name, preferred_face_id)
+        result = batch_identify_faces(db.safe_conn, face_ids, name, preferred_face_id)
 
         if result['person'] is None:
             return error_response('Failed to identify faces')
@@ -4054,11 +4071,11 @@ def identify_faces_batch():
 
         # Fix preferred faces for source persons (faces were moved away)
         for source_id in source_person_ids:
-            person = get_person(db.conn, source_id)
+            person = get_person(db.safe_conn, source_id)
             if not person:
                 continue
 
-            remaining_faces = get_faces_for_person(db.conn, source_id)
+            remaining_faces = get_faces_for_person(db.safe_conn, source_id)
             if not remaining_faces:
                 continue  # Person will be deleted below
 
@@ -4069,14 +4086,14 @@ def identify_faces_batch():
             if current_preferred not in remaining_ids:
                 # Select newest face (last in list, sorted by timestamp ASC)
                 new_preferred = remaining_faces[-1]['id']
-                update_person(db.conn, source_id, preferred_face_id=new_preferred)
+                update_person(db.safe_conn, source_id, preferred_face_id=new_preferred)
                 # Lock the new preferred face (prevents auto-reassignment)
-                db.conn.execute(
+                db.safe_conn.execute(
                     "UPDATE faces SET manually_tagged = 1, updated_at = datetime('now') WHERE id = ?", (new_preferred,)
                 )
 
         # Delete source persons with no more faces
-        delete_people_without_faces(db.conn)
+        delete_people_without_faces(db.safe_conn)
 
     # Trigger async re-assessment of unknown faces
     # This will match other unknown faces against the newly identified person
@@ -4186,22 +4203,22 @@ def unidentify_face(face_id):
     db = get_db()
 
     # Use lock to avoid conflicts with background threads
-    with db._db_lock:
-        face = get_face(db.conn, face_id)
+    with db.safe_conn:
+        face = get_face(db.safe_conn, face_id)
         if face is None:
             return error_response('Face not found', 404)
 
         old_person_id = face.get('person_id')
 
         # Unlink face from person (clear manually_tagged so face is a candidate for reassessment)
-        update_face_person(db.conn, face_id, None, manually_tagged=False)
+        update_face_person(db.safe_conn, face_id, None, manually_tagged=False)
 
         # Delete person if they have no more faces
         person_deleted = False
         if old_person_id:
-            person_before = get_person(db.conn, old_person_id)
-            delete_people_without_faces(db.conn)
-            person_after = get_person(db.conn, old_person_id)
+            person_before = get_person(db.safe_conn, old_person_id)
+            delete_people_without_faces(db.safe_conn)
+            person_after = get_person(db.safe_conn, old_person_id)
             person_deleted = person_before is not None and person_after is None
 
     # Broadcast for other clients
@@ -4245,8 +4262,8 @@ def suppress_face_endpoint(face_id):
     new_preferred_selected = False
 
     # Use lock to avoid conflicts with background threads
-    with db._db_lock:
-        face = get_face(db.conn, face_id)
+    with db.safe_conn:
+        face = get_face(db.safe_conn, face_id)
         if face is None:
             return error_response('Face not found', 404)
 
@@ -4255,16 +4272,16 @@ def suppress_face_endpoint(face_id):
         # Check if this was the preferred face before suppressing
         was_preferred = False
         if old_person_id:
-            person = get_person(db.conn, old_person_id)
+            person = get_person(db.safe_conn, old_person_id)
             if person and person.get('preferred_face_id') == face_id:
                 was_preferred = True
 
-        suppress_face(db.conn, face_id)
+        suppress_face(db.safe_conn, face_id)
 
         # Handle person cleanup if face was associated with someone
         if old_person_id:
             # Check if person still has faces
-            remaining_faces = db.conn.execute(
+            remaining_faces = db.safe_conn.execute(
                 """SELECT id FROM faces
                    WHERE person_id = ? AND suppressed = 0
                    ORDER BY created_at DESC
@@ -4274,21 +4291,21 @@ def suppress_face_endpoint(face_id):
 
             if not remaining_faces:
                 # No faces left - delete the person
-                delete_people_without_faces(db.conn)
+                delete_people_without_faces(db.safe_conn)
                 person_deleted = True
             elif was_preferred:
                 # Person still has faces but lost their preferred - select new one
                 new_preferred_id = remaining_faces['id']
-                db.conn.execute(
+                db.safe_conn.execute(
                     "UPDATE people SET preferred_face_id = ?, updated_at = datetime('now') WHERE id = ?",
                     (new_preferred_id, old_person_id),
                 )
                 # Lock the new preferred face (prevents auto-reassignment)
-                db.conn.execute(
+                db.safe_conn.execute(
                     "UPDATE faces SET manually_tagged = 1, updated_at = datetime('now') WHERE id = ?",
                     (new_preferred_id,),
                 )
-                db.conn.commit()
+                db.safe_conn.commit()
                 new_preferred_selected = True
 
     # Broadcast for other clients
@@ -4303,7 +4320,7 @@ def suppress_face_endpoint(face_id):
         _check_smart_group_damage([old_person_id])
     elif old_person_id and not person_deleted:
         # Person still exists — face count changed, possibly preferred face too
-        updated_person = get_person(db.conn, old_person_id)
+        updated_person = get_person(db.safe_conn, old_person_id)
         if updated_person:
             db.event_queue.emit(
                 EVENT_PEOPLE_CHANGED,
@@ -4336,8 +4353,8 @@ def toggle_face_manual_tag_endpoint(face_id):
     """
     db = get_db()
 
-    with db._db_lock:
-        new_value = toggle_face_manual_tag(db.conn, face_id)
+    with db.safe_conn:
+        new_value = toggle_face_manual_tag(db.safe_conn, face_id)
 
         if new_value is None:
             return error_response('Face not found', 404)
@@ -4369,21 +4386,21 @@ def delete_face_endpoint(face_id):
     db = get_db()
 
     # Use lock to avoid conflicts with background threads
-    with db._db_lock:
-        face = get_face(db.conn, face_id)
+    with db.safe_conn:
+        face = get_face(db.safe_conn, face_id)
         if face is None:
             return error_response('Face not found', 404)
 
         old_person_id = face.get('person_id')
 
-        delete_face(db.conn, face_id)
+        delete_face(db.safe_conn, face_id)
 
         # Delete person if they have no more faces
         person_deleted = False
         if old_person_id:
-            person_before = get_person(db.conn, old_person_id)
-            delete_people_without_faces(db.conn)
-            person_after = get_person(db.conn, old_person_id)
+            person_before = get_person(db.safe_conn, old_person_id)
+            delete_people_without_faces(db.safe_conn)
+            person_after = get_person(db.safe_conn, old_person_id)
             person_deleted = person_before is not None and person_after is None
 
     # Broadcast for other clients
@@ -4411,7 +4428,7 @@ def get_face_thumbnail(face_id):
     """
     db = get_db()
 
-    face = get_face(db.conn, face_id)
+    face = get_face(db.safe_conn, face_id)
     if face is None:
         return error_response('Face not found', 404)
 
@@ -4482,8 +4499,8 @@ def unassign_face(face_id):
     db = get_db()
 
     # Use lock to avoid conflicts with background threads
-    with db._db_lock:
-        face = get_face(db.conn, face_id)
+    with db.safe_conn:
+        face = get_face(db.safe_conn, face_id)
         if face is None:
             return error_response('Face not found', 404)
 
@@ -4492,29 +4509,29 @@ def unassign_face(face_id):
             return error_response('Face is not assigned to any person', 400)
 
         # Get person details before unassigning
-        person = get_person(db.conn, old_person_id)
+        person = get_person(db.safe_conn, old_person_id)
 
         # Unlink face from person (clear manual flag since no longer assigned)
-        update_face_person(db.conn, face_id, None, manually_tagged=False)
+        update_face_person(db.safe_conn, face_id, None, manually_tagged=False)
 
         # DESIGN: Data integrity invariant - person must have valid preferred_face_id for
         # thumbnails, so auto-select if current preferred was removed (see design-audit.md 1.2)
         if person and person.get('preferred_face_id') == face_id:
-            remaining_faces = get_faces_for_person(db.conn, old_person_id)
+            remaining_faces = get_faces_for_person(db.safe_conn, old_person_id)
             if remaining_faces:
                 # Select newest face (last in list, sorted by timestamp ASC)
                 new_preferred = remaining_faces[-1]['id']
-                update_person(db.conn, old_person_id, preferred_face_id=new_preferred)
+                update_person(db.safe_conn, old_person_id, preferred_face_id=new_preferred)
                 # Lock the new preferred face (prevents auto-reassignment)
-                db.conn.execute(
+                db.safe_conn.execute(
                     "UPDATE faces SET manually_tagged = 1, updated_at = datetime('now') WHERE id = ?", (new_preferred,)
                 )
 
         # DESIGN: Global cleanup of empty people - prevents orphaned records (see design-audit.md 1.3)
-        delete_people_without_faces(db.conn)
+        delete_people_without_faces(db.safe_conn)
 
         # Get updated person (or None if deleted)
-        updated_person = get_person(db.conn, old_person_id)
+        updated_person = get_person(db.safe_conn, old_person_id)
 
     # Note: We don't trigger group recalculation here - it's too expensive
     # for interactive use. Groups are computed during initial processing
@@ -4581,11 +4598,11 @@ def unassign_faces_batch():
     affected_person_ids = set()
 
     # Use lock to avoid conflicts with background threads
-    with db._db_lock:
+    with db.safe_conn:
         # Phase 1: Identify valid faces and track affected persons
         faces_to_unassign = []
         for face_id in face_ids:
-            face = get_face(db.conn, face_id)
+            face = get_face(db.safe_conn, face_id)
             if face is None:
                 continue
             old_person_id = face.get('person_id')
@@ -4595,18 +4612,18 @@ def unassign_faces_batch():
             faces_to_unassign.append(face_id)
 
         # Batch unassign (single executemany + one commit)
-        unassigned_count = _unassign_faces_batch(db.conn, faces_to_unassign)
+        unassigned_count = _unassign_faces_batch(db.safe_conn, faces_to_unassign)
 
         # DESIGN: Data integrity invariant - person must have valid preferred_face_id for
         # thumbnails, so auto-select if current preferred was removed (see design-audit.md 1.2)
         # Phase 2: Fix preferred faces for affected persons
         # Select newest remaining face (by image timestamp) as preferred
         for person_id in affected_person_ids:
-            person = get_person(db.conn, person_id)
+            person = get_person(db.safe_conn, person_id)
             if not person:
                 continue
 
-            remaining_faces = get_faces_for_person(db.conn, person_id)
+            remaining_faces = get_faces_for_person(db.safe_conn, person_id)
             if not remaining_faces:
                 continue  # Person will be deleted below
 
@@ -4617,15 +4634,15 @@ def unassign_faces_batch():
             if current_preferred not in remaining_ids:
                 # Select newest face (last in list, sorted by timestamp ASC)
                 new_preferred = remaining_faces[-1]['id']
-                update_person(db.conn, person_id, preferred_face_id=new_preferred)
+                update_person(db.safe_conn, person_id, preferred_face_id=new_preferred)
                 # Lock the new preferred face (prevents auto-reassignment)
-                db.conn.execute(
+                db.safe_conn.execute(
                     "UPDATE faces SET manually_tagged = 1, updated_at = datetime('now') WHERE id = ?", (new_preferred,)
                 )
 
         # DESIGN: Global cleanup of empty people - prevents orphaned records (see design-audit.md 1.3)
         # Phase 3: Delete people with no more faces
-        delete_people_without_faces(db.conn)
+        delete_people_without_faces(db.safe_conn)
 
     # Note: We don't trigger group recalculation here - it's too expensive
     # for interactive use (~minutes for 30k faces). Groups are computed
@@ -4640,12 +4657,15 @@ def unassign_faces_batch():
             },
         )
         # People may have been deleted or had face counts change
-        removed_pids = [pid for pid in affected_person_ids if get_person(db.conn, pid) is None]
+        removed_pids = [pid for pid in affected_person_ids if get_person(db.safe_conn, pid) is None]
         db.event_queue.emit(
             EVENT_PEOPLE_CHANGED,
             {
                 'removed': removed_pids,
-                'upserted': [dict(p) for pid in affected_person_ids if (p := get_person(db.conn, pid)) is not None],
+                'upserted': [
+                    dict(p) for pid in affected_person_ids
+                    if (p := get_person(db.safe_conn, pid)) is not None
+                ],
             },
         )
         if removed_pids:
@@ -4696,28 +4716,31 @@ def set_preferred_face(person_id):
 
     db = get_db()
 
-    with db._db_lock:
+    with db.safe_conn:
         # Verify person exists
-        person = get_person(db.conn, person_id)
+        person = get_person(db.safe_conn, person_id)
         if person is None:
             return error_response('Person not found', 404)
 
         # Verify face exists and belongs to this person
-        face = get_face(db.conn, face_id)
+        face = get_face(db.safe_conn, face_id)
         if face is None:
             return error_response('Face not found', 404)
         if face.get('person_id') != person_id:
             return error_response('Face does not belong to this person', 400)
 
         # Update the preferred face
-        update_person(db.conn, person_id, preferred_face_id=face_id)
+        update_person(db.safe_conn, person_id, preferred_face_id=face_id)
 
         # Also mark the face as manually tagged (preferred implies manual selection)
-        db.conn.execute("UPDATE faces SET manually_tagged = 1, updated_at = datetime('now') WHERE id = ?", (face_id,))
-        db.conn.commit()
+        db.safe_conn.execute(
+            "UPDATE faces SET manually_tagged = 1, updated_at = datetime('now') WHERE id = ?",
+            (face_id,),
+        )
+        db.safe_conn.commit()
 
         # Get updated person
-        updated_person = get_person(db.conn, person_id)
+        updated_person = get_person(db.safe_conn, person_id)
 
     # Broadcast for other clients
     db.event_queue.emit(
@@ -4766,32 +4789,32 @@ def merge_person(person_id):
 
     db = get_db()
 
-    with db._db_lock:
+    with db.safe_conn:
         # Verify both persons exist
-        from_person = get_person(db.conn, person_id)
+        from_person = get_person(db.safe_conn, person_id)
         if from_person is None:
             return error_response('Source person not found', 404)
 
-        to_person = get_person(db.conn, target_id)
+        to_person = get_person(db.safe_conn, target_id)
         if to_person is None:
             return error_response('Target person not found', 404)
 
         # Move all faces from source to target
-        db.conn.execute(
+        db.safe_conn.execute(
             """UPDATE faces SET person_id = ?, updated_at = datetime('now') WHERE person_id = ?""",
             (target_id, person_id),
         )
 
         # Delete the source person (face_count is computed dynamically via JOIN)
-        delete_person(db.conn, person_id)
-        db.conn.commit()
+        delete_person(db.safe_conn, person_id)
+        db.safe_conn.commit()
 
         # Get faces that moved to the target (for the event payload)
-        merged_faces = get_faces_for_person(db.conn, target_id)
+        merged_faces = get_faces_for_person(db.safe_conn, target_id)
         merged_face_ids = [f['id'] for f in merged_faces] if merged_faces else []
 
         # Get updated target person
-        updated_person = get_person(db.conn, target_id)
+        updated_person = get_person(db.safe_conn, target_id)
 
     # Broadcast for other clients
     db.event_queue.emit(
@@ -4832,29 +4855,29 @@ def dissolve_person(person_id):
     """
     db = get_db()
 
-    with db._db_lock:
+    with db.safe_conn:
         # Verify person exists
-        person = get_person(db.conn, person_id)
+        person = get_person(db.safe_conn, person_id)
         if person is None:
             return error_response('Person not found', 404)
 
         # Get face IDs before dissolving (for event payload)
-        dissolved_faces = db.conn.execute(
+        dissolved_faces = db.safe_conn.execute(
             'SELECT id FROM faces WHERE person_id = ? AND suppressed = 0', (person_id,)
         ).fetchall()
         dissolved_face_ids = [f['id'] for f in dissolved_faces]
         face_count = len(dissolved_face_ids)
 
         # Unidentify all faces (set person_id to NULL)
-        db.conn.execute(
+        db.safe_conn.execute(
             """UPDATE faces SET person_id = NULL, manually_tagged = 0,
             updated_at = datetime('now') WHERE person_id = ?""",
             (person_id,),
         )
 
         # Delete the person
-        delete_person(db.conn, person_id)
-        db.conn.commit()
+        delete_person(db.safe_conn, person_id)
+        db.safe_conn.commit()
 
     # Broadcast for other clients
     db.event_queue.emit(EVENT_PEOPLE_CHANGED, {'removed': [person_id]})
@@ -4886,6 +4909,21 @@ def internal_error(error):
     """Handle 500 errors with JSON response."""
     logger.exception('Internal server error: %s', _format_request_context())
     return error_response('Internal server error', 500)
+
+
+@app.teardown_request
+def rollback_on_error(exception):
+    """Roll back any uncommitted transaction after a failed request.
+
+    Without this, a failed write (e.g. ``database is locked``) leaves
+    db.safe_conn with an open implicit transaction, blocking all subsequent
+    writes until the process is restarted.
+    """
+    if exception is not None and db is not None:
+        try:
+            db.safe_conn.rollback()
+        except Exception:
+            pass
 
 
 def _format_request_context(max_url_len: int = 200, max_body_len: int = 200) -> str:
@@ -5007,6 +5045,11 @@ if __name__ == '__main__':
         ]:
             logging.getLogger(module).setLevel(logging.DEBUG)
         logger.info('Debug logging enabled')
+
+        # Silence noisy third-party loggers (PIL plugin imports, stream
+        # chunks, etc.) that flood the console under --debug.
+        for noisy in ('PIL', 'PIL.Image', 'PIL.PngImagePlugin', 'PIL.TiffImagePlugin'):
+            logging.getLogger(noisy).setLevel(logging.WARNING)
 
     # -------------------------------------------------------------------------
     # Phase 1: Resolve config path and load config

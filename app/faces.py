@@ -56,6 +56,7 @@ from PIL import Image, ImageFilter
 from dbutil import sql_placeholders
 from duplicates import UnionFind
 from rawimage import open_image as raw_open_image
+from safeconn import SafeConnection
 
 if TYPE_CHECKING:
     from imagedb import ImageDatabase
@@ -151,7 +152,7 @@ _MIGRATIONS = [
 ]
 
 
-def init_face_tables(conn: sqlite3.Connection) -> None:
+def init_face_tables(conn: SafeConnection) -> None:
     """Initialise the face recognition database tables.
 
     Creates the people and faces tables if they don't exist, along with
@@ -177,7 +178,7 @@ def init_face_tables(conn: sqlite3.Connection) -> None:
     logger.info('Face recognition tables initialised')
 
 
-def _run_migrations(conn: sqlite3.Connection) -> None:
+def _run_migrations(conn: SafeConnection) -> None:
     """Run pending schema migrations.
 
     Args:
@@ -292,6 +293,7 @@ class FaceDetector:
             with self._lock:
                 if self._mtcnn is None and not self._mtcnn_failed:
                     logger.info('Loading MTCNN face detector...')
+                    t0 = time.perf_counter()
                     try:
                         self._mtcnn = MTCNN(
                             keep_all=True,
@@ -300,7 +302,7 @@ class FaceDetector:
                             thresholds=FACE_MTCNN_THRESHOLDS,
                             post_process=True,  # Apply standardization for ResNet input
                         )
-                        logger.info('MTCNN loaded')
+                        logger.info('MTCNN loaded (%.1fs)', time.perf_counter() - t0)
                     except (MemoryError, RuntimeError) as e:
                         if not isinstance(e, MemoryError) and 'out of memory' not in str(e).lower():
                             raise
@@ -317,12 +319,13 @@ class FaceDetector:
             with self._lock:
                 if self._resnet is None and not self._resnet_failed:
                     logger.info('Loading InceptionResnetV1 for face recognition embeddings...')
+                    t0 = time.perf_counter()
                     try:
                         self._resnet = InceptionResnetV1(
                             pretrained='vggface2',
                             device=self.device,
                         ).eval()
-                        logger.info('InceptionResnetV1 loaded')
+                        logger.info('InceptionResnetV1 loaded (%.1fs)', time.perf_counter() - t0)
                     except (MemoryError, RuntimeError) as e:
                         if not isinstance(e, MemoryError) and 'out of memory' not in str(e).lower():
                             raise
@@ -1040,7 +1043,7 @@ def delete_face_thumbnail(
 
 
 def create_person(
-    conn: sqlite3.Connection,
+    conn: SafeConnection,
     name: str,
     person_id: str | None = None,
 ) -> str:
@@ -1064,7 +1067,7 @@ def create_person(
 
 
 def get_person(
-    conn: sqlite3.Connection,
+    conn: SafeConnection,
     person_id: str,
 ) -> dict[str, Any] | None:
     """Get a person by ID with face count.
@@ -1091,7 +1094,7 @@ def get_person(
 
 
 def get_person_by_name(
-    conn: sqlite3.Connection,
+    conn: SafeConnection,
     name: str,
 ) -> dict[str, Any] | None:
     """Get a person by name (case-insensitive).
@@ -1108,7 +1111,7 @@ def get_person_by_name(
     return dict(row) if row else None
 
 
-def get_all_people(conn: sqlite3.Connection) -> list[dict[str, Any]]:
+def get_all_people(conn: SafeConnection) -> list[dict[str, Any]]:
     """Get all people with their face counts.
 
     Args:
@@ -1135,7 +1138,7 @@ _NOT_SET = object()
 
 
 def update_person(
-    conn: sqlite3.Connection,
+    conn: SafeConnection,
     person_id: str,
     name: str | None = None,
     preferred_face_id: str | None = None,
@@ -1180,7 +1183,7 @@ def update_person(
 
 
 def revalidate_person_faces(
-    conn: sqlite3.Connection,
+    conn: SafeConnection,
     person_id: str,
     threshold: float,
 ) -> list[str]:
@@ -1291,7 +1294,7 @@ def revalidate_person_faces(
 
 
 def delete_person(
-    conn: sqlite3.Connection,
+    conn: SafeConnection,
     person_id: str,
 ) -> bool:
     """Delete a person record.
@@ -1321,7 +1324,7 @@ def delete_person(
 
 
 def search_people(
-    conn: sqlite3.Connection,
+    conn: SafeConnection,
     query: str,
     limit: int = 20,
 ) -> list[dict[str, Any]]:
@@ -1350,7 +1353,7 @@ def search_people(
     return [dict(row) for row in cursor.fetchall()]
 
 
-def delete_people_without_faces(conn: sqlite3.Connection) -> int:
+def delete_people_without_faces(conn: SafeConnection) -> int:
     """Delete all people who have no associated faces.
 
     Args:
@@ -1380,7 +1383,7 @@ def delete_people_without_faces(conn: sqlite3.Connection) -> int:
 
 
 def create_face(
-    conn: sqlite3.Connection,
+    conn: SafeConnection,
     image_id: str,
     box_x: float,
     box_y: float,
@@ -1433,7 +1436,7 @@ def create_face(
 
 
 def update_face_semantic_embedding(
-    conn: sqlite3.Connection,
+    conn: SafeConnection,
     face_id: str,
     semantic_embedding: np.ndarray,
 ) -> bool:
@@ -1456,7 +1459,7 @@ def update_face_semantic_embedding(
 
 
 def get_all_faces_for_thumbnail_regen(
-    conn: sqlite3.Connection,
+    conn: SafeConnection,
 ) -> list[dict]:
     """Get all non-suppressed faces with info needed for thumbnail regeneration.
 
@@ -1487,7 +1490,7 @@ def get_all_faces_for_thumbnail_regen(
 
 
 def get_faces_without_semantic_embedding(
-    conn: sqlite3.Connection,
+    conn: SafeConnection,
 ) -> list[str]:
     """Get IDs of faces that don't have semantic embeddings.
 
@@ -1507,7 +1510,7 @@ def get_faces_without_semantic_embedding(
 
 
 def get_face(
-    conn: sqlite3.Connection,
+    conn: SafeConnection,
     face_id: str,
 ) -> dict[str, Any] | None:
     """Get a face by ID.
@@ -1538,7 +1541,7 @@ def get_face(
 
 
 def get_faces_for_image(
-    conn: sqlite3.Connection,
+    conn: SafeConnection,
     image_id: str,
     include_suppressed: bool = False,
 ) -> list[dict[str, Any]]:
@@ -1580,7 +1583,7 @@ def get_faces_for_image(
 
 
 def get_faces_for_images(
-    conn: sqlite3.Connection,
+    conn: SafeConnection,
     image_ids: list[str],
 ) -> list[dict[str, Any]]:
     """Get all non-suppressed faces for multiple images (batch operation).
@@ -1613,7 +1616,7 @@ def get_faces_for_images(
 
 
 def get_faces_for_person(
-    conn: sqlite3.Connection,
+    conn: SafeConnection,
     person_id: str,
 ) -> list[dict[str, Any]]:
     """Get all faces for a person.
@@ -1648,7 +1651,7 @@ def get_faces_for_person(
 
 
 def get_all_faces(
-    conn: sqlite3.Connection,
+    conn: SafeConnection,
     unknown_only: bool = False,
 ) -> list[dict]:
     """Get all non-suppressed faces with person info.
@@ -1717,7 +1720,7 @@ def get_all_faces(
 
 
 def get_all_known_face_embeddings(
-    conn: sqlite3.Connection,
+    conn: SafeConnection,
 ) -> list[tuple[str, str, np.ndarray]]:
     """Get all face embeddings for known people (manually tagged only).
 
@@ -1751,7 +1754,7 @@ def get_all_known_face_embeddings(
 
 
 def get_face_matches(
-    conn: sqlite3.Connection,
+    conn: SafeConnection,
     face_id: str,
     limit: int = 5,
 ) -> list[dict[str, Any]]:
@@ -1838,7 +1841,7 @@ def get_face_matches(
 
 
 def update_face_person(
-    conn: sqlite3.Connection,
+    conn: SafeConnection,
     face_id: str,
     person_id: str | None,
     manually_tagged: bool | None = None,
@@ -1869,7 +1872,7 @@ def update_face_person(
 
 
 def toggle_face_manual_tag(
-    conn: sqlite3.Connection,
+    conn: SafeConnection,
     face_id: str,
 ) -> bool | None:
     """Toggle the manually_tagged flag for a face.
@@ -1903,7 +1906,7 @@ def toggle_face_manual_tag(
 
 
 def suppress_face(
-    conn: sqlite3.Connection,
+    conn: SafeConnection,
     face_id: str,
 ) -> bool:
     """Mark a face as suppressed (false positive).
@@ -1923,7 +1926,7 @@ def suppress_face(
 
 
 def unassign_faces_batch(
-    conn: sqlite3.Connection,
+    conn: SafeConnection,
     face_ids: list[str],
 ) -> int:
     """Unassign multiple faces from their persons in a single transaction.
@@ -1949,7 +1952,7 @@ def unassign_faces_batch(
 
 
 def suppress_faces_batch(
-    conn: sqlite3.Connection,
+    conn: SafeConnection,
     face_ids: list[str],
 ) -> int:
     """Suppress multiple faces in a single transaction.
@@ -1975,7 +1978,7 @@ def suppress_faces_batch(
 
 
 def mark_no_faces_detected(
-    conn: sqlite3.Connection,
+    conn: SafeConnection,
     image_id: str,
 ) -> str:
     """Mark an image as having been processed with no faces found.
@@ -2009,7 +2012,7 @@ def mark_no_faces_detected(
 
 
 def delete_face(
-    conn: sqlite3.Connection,
+    conn: SafeConnection,
     face_id: str,
 ) -> bool:
     """Delete a face record entirely.
@@ -2027,7 +2030,7 @@ def delete_face(
 
 
 def rotate_faces_for_image(
-    conn: sqlite3.Connection,
+    conn: SafeConnection,
     image_id: str,
     degrees: float,
 ) -> int:
@@ -2118,7 +2121,7 @@ def rotate_faces_for_image(
 
 
 def has_faces_detected(
-    conn: sqlite3.Connection,
+    conn: SafeConnection,
     image_id: str,
 ) -> bool:
     """Check if an image has had face detection run.
@@ -2250,7 +2253,7 @@ def find_best_match(
 
 
 def get_images_with_people(
-    conn: sqlite3.Connection,
+    conn: SafeConnection,
     person_ids: list[str],
 ) -> list[str]:
     """Get image IDs containing ALL specified people.
@@ -2282,7 +2285,7 @@ def get_images_with_people(
 
 
 def get_people_names_bulk(
-    conn: sqlite3.Connection,
+    conn: SafeConnection,
 ) -> dict[str, str]:
     """Get people names for all images in a single query.
 
@@ -2333,7 +2336,7 @@ def invalidate_embedding_cache() -> None:
 
 
 def get_cached_known_embeddings(
-    conn: sqlite3.Connection,
+    conn: SafeConnection,
 ) -> list[tuple[str, str, np.ndarray]]:
     """Get known face embeddings with RAM caching.
 
@@ -2350,7 +2353,7 @@ def get_cached_known_embeddings(
 
 
 def batch_identify_faces(
-    conn: sqlite3.Connection,
+    conn: SafeConnection,
     face_ids: list[str],
     name: str,
     preferred_face_id: str | None = None,
@@ -2403,7 +2406,7 @@ def batch_identify_faces(
 
 
 def reassess_unknown_faces(
-    conn: sqlite3.Connection,
+    conn: SafeConnection,
     db_lock: threading.Lock,
     threshold: float = FACE_RECOGNITION_DEFAULT_THRESHOLD,
     person_id: str | None = None,
@@ -2667,8 +2670,7 @@ _grouping_status: dict | None = None  # {status: 'idle'|'computing'|'done', prog
 
 
 def compute_unknown_face_groups(
-    conn: sqlite3.Connection,
-    db_lock: threading.Lock,
+    conn: SafeConnection,
     threshold: float = FACE_RECOGNITION_DEFAULT_THRESHOLD,
 ) -> int:
     """Compute similarity groups for unknown faces using UnionFind clustering.
@@ -2676,9 +2678,9 @@ def compute_unknown_face_groups(
     Unknown faces that are similar to each other (above threshold) are grouped
     together. This helps users identify the same unknown person across images.
 
-    Uses READ → COMPUTE → WRITE pattern to minimise db_lock hold time:
-    the lock is only held during the initial DB read and the final write,
-    not during the O(n²) chunked similarity computation.
+    Uses READ → COMPUTE → WRITE pattern to minimise lock hold time:
+    the SafeConnection's context manager serialises DB access, while the
+    O(n²) chunked similarity computation runs without holding the lock.
 
     The algorithm:
     1. Load all unknown face embeddings (already L2-normalised)
@@ -2687,8 +2689,7 @@ def compute_unknown_face_groups(
     4. Assign group IDs and update the database
 
     Args:
-        conn: Database connection.
-        db_lock: The database lock for thread safety.
+        conn: SafeConnection for thread-safe DB access.
         threshold: Minimum cosine similarity to group faces together.
 
     Returns:
@@ -2701,7 +2702,7 @@ def compute_unknown_face_groups(
         _grouping_status = {'status': 'computing'}
 
     try:
-        return _compute_unknown_face_groups_impl(conn, db_lock, threshold)
+        return _compute_unknown_face_groups_impl(conn, threshold)
     finally:
         # Clear status when done
         with _grouping_lock:
@@ -2709,16 +2710,15 @@ def compute_unknown_face_groups(
 
 
 def _compute_unknown_face_groups_impl(
-    conn: sqlite3.Connection,
-    db_lock: threading.Lock,
+    conn: SafeConnection,
     threshold: float,
 ) -> int:
     """Internal implementation of face grouping.
 
-    Uses READ → COMPUTE → WRITE pattern with db_lock.
+    Uses READ → COMPUTE → WRITE pattern with SafeConnection locking.
     """
     # ── READ phase (lock): load unknown face embeddings ──
-    with db_lock:
+    with conn:
         cursor = conn.execute("""
             SELECT f.id, f.embedding
             FROM faces f
@@ -2787,7 +2787,7 @@ def _compute_unknown_face_groups_impl(
     logger.info(f'Found {len(groups)} distinct clusters, assigning group IDs...')
 
     # ── WRITE phase (lock): clear old groups and assign new ones ──
-    with db_lock:
+    with conn:
         # Clear all existing group IDs first (set updated_at per concurrency contract)
         conn.execute(
             "UPDATE faces SET unknown_group_id = NULL, updated_at = datetime('now') "
@@ -2830,7 +2830,7 @@ def get_group_computation_status() -> dict:
 
 
 def search_unknown_faces_semantic(
-    conn: sqlite3.Connection,
+    conn: SafeConnection,
     query_embedding: np.ndarray,
 ) -> list[dict]:
     """Search unknown faces by semantic similarity to a query embedding.
@@ -2963,13 +2963,13 @@ def reassess_unknown_faces_async(
 
                 # Load per-person thresholds
                 person_thresholds: dict[str, float | None] = {}
-                cursor = db.conn.execute('SELECT id, recognition_threshold FROM people')
+                cursor = db.safe_conn.execute('SELECT id, recognition_threshold FROM people')
                 for row in cursor.fetchall():
                     person_thresholds[row['id']] = row['recognition_threshold']
 
                 # Get known embeddings
                 if person_id:
-                    cursor = db.conn.execute(
+                    cursor = db.safe_conn.execute(
                         """SELECT f.id, f.person_id, f.embedding
                            FROM faces f
                            JOIN images i ON f.image_id = i.id
@@ -2982,7 +2982,7 @@ def reassess_unknown_faces_async(
                         embedding = np.frombuffer(row['embedding'], dtype=np.float32)
                         known_embeddings.append((row['id'], row['person_id'], embedding))
                 else:
-                    known_embeddings = get_cached_known_embeddings(db.conn)
+                    known_embeddings = get_cached_known_embeddings(db.safe_conn)
 
                 # Get candidate embeddings WITH updated_at for optimistic concurrency
                 # If updated_at changes between READ and WRITE, we skip that face
@@ -2993,7 +2993,7 @@ def reassess_unknown_faces_async(
                 # This allows threshold changes to pull faces from other people if they
                 # match better. Locked faces (manually_tagged = 1) are never candidates.
                 if person_id:
-                    cursor = db.conn.execute(
+                    cursor = db.safe_conn.execute(
                         """SELECT f.id, f.embedding, f.updated_at, f.person_id
                            FROM faces f
                            JOIN images i ON f.image_id = i.id
@@ -3006,7 +3006,7 @@ def reassess_unknown_faces_async(
                     # Full sweep reassessment: unknown faces AND unlocked faces
                     # This allows faces to be reassigned to better-matching people
                     # or ejected to unknown if they no longer meet any threshold
-                    cursor = db.conn.execute(
+                    cursor = db.safe_conn.execute(
                         """SELECT f.id, f.embedding, f.updated_at, f.person_id
                            FROM faces f
                            JOIN images i ON f.image_id = i.id
@@ -3141,7 +3141,7 @@ def reassess_unknown_faces_async(
                     # Conditional update: only if updated_at hasn't changed
                     # This handles all cases: suppressed, identified, deleted, etc.
                     if original_timestamp is not None:
-                        cursor = db.conn.execute(
+                        cursor = db.safe_conn.execute(
                             """UPDATE faces
                                SET person_id = ?, manually_tagged = 0, updated_at = datetime('now')
                                WHERE id = ? AND updated_at = ?""",
@@ -3149,7 +3149,7 @@ def reassess_unknown_faces_async(
                         )
                     else:
                         # No timestamp (legacy row) - fall back to checking not locked
-                        cursor = db.conn.execute(
+                        cursor = db.safe_conn.execute(
                             """UPDATE faces
                                SET person_id = ?, manually_tagged = 0, updated_at = datetime('now')
                                WHERE id = ? AND manually_tagged = 0 AND suppressed = 0""",
@@ -3170,14 +3170,14 @@ def reassess_unknown_faces_async(
                     original_timestamp = face_timestamps.get(face_id)
 
                     if original_timestamp is not None:
-                        cursor = db.conn.execute(
+                        cursor = db.safe_conn.execute(
                             """UPDATE faces
                                SET person_id = NULL, manually_tagged = 0, updated_at = datetime('now')
                                WHERE id = ? AND updated_at = ?""",
                             (face_id, original_timestamp),
                         )
                     else:
-                        cursor = db.conn.execute(
+                        cursor = db.safe_conn.execute(
                             """UPDATE faces
                                SET person_id = NULL, manually_tagged = 0, updated_at = datetime('now')
                                WHERE id = ? AND manually_tagged = 0 AND suppressed = 0""",
@@ -3190,7 +3190,7 @@ def reassess_unknown_faces_async(
                     else:
                         skipped_modified += 1
 
-                db.conn.commit()
+                db.safe_conn.commit()
 
                 if skipped_modified:
                     logger.debug(f'Async reassessment: skipped {skipped_modified} faces (modified since READ)')
@@ -3204,7 +3204,7 @@ def reassess_unknown_faces_async(
                 if actually_updated:
                     person_ids_list = list(set(m[1] for m in actually_updated))
                     placeholders = sql_placeholders(person_ids_list)
-                    cursor = db.conn.execute(
+                    cursor = db.safe_conn.execute(
                         f'SELECT id, name FROM people WHERE id IN ({placeholders})', person_ids_list
                     )
                     person_names = {row['id']: row['name'] for row in cursor.fetchall()}
