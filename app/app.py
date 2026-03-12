@@ -371,36 +371,38 @@ def get_db() -> ImageDatabase:
         # Must happen before startup() so thread/scan/model messages are captured.
         _attach_db_log_handler()
 
-        db.startup()
-        register_signal_handlers(db)
         # Eagerly initialise the thumbnail RAM cache and attach it to the
         # ImageDatabase so the pipeline thread can evict stale placeholder
         # entries without importing app.py (which would create a separate
         # module scope because app.py runs as __main__).
         db.thumbnail_ram_cache = get_thumbnail_cache()
+
+        # Pre-populate the images cache BEFORE starting the pipeline.
+        # This must happen synchronously so the /api/images endpoint can
+        # serve instantly from cache when the server starts.  If done in
+        # a background thread, Stage 1's worker threads starve it of GIL
+        # time and the cache takes 30-60s to populate instead of ~1s,
+        # leaving the frontend stuck on "Loading images..." the whole time.
+        _prepopulate_images_cache(db)
+
+        db.startup()
+        register_signal_handlers(db)
         logger.info('ImageDatabase initialised')
-        # Pre-populate images cache in background so it doesn't delay
-        # server startup.  The /api/images endpoint handles cache misses
-        # gracefully, so the server is fully functional while this runs.
-        threading.Thread(
-            target=_prepopulate_images_cache,
-            args=(db,),
-            name='cache-warmup',
-            daemon=True,
-        ).start()
     return db
 
 
 def _prepopulate_images_cache(database: ImageDatabase):
     """Pre-populate the images cache for fast first request.
 
-    Runs in a background daemon thread so server startup is not blocked.
-    The /api/images endpoint handles cache misses by querying the DB
-    directly, so the server is fully functional before this completes.
+    Called synchronously during startup, before the pipeline starts, so
+    there is no GIL contention from worker threads.  For a 44k-image
+    library this takes ~1-2 seconds; running it concurrently with Stage 1
+    workers stretched it to 30-60s due to GIL starvation.
+
+    The /api/images endpoint handles cache misses gracefully by querying
+    the DB directly, so a failure here is non-fatal.
     """
     try:
-        if database.is_closed:
-            return
         t0 = time.perf_counter()
         images = database.get_all_images_lightweight()
         epoch = database.get_current_epoch()
@@ -413,8 +415,8 @@ def _prepopulate_images_cache(database: ImageDatabase):
             f'Images cache pre-populated: {len(images)} images, {mb}MB, {elapsed * 1000:.0f}ms'
         )
     except Exception:
-        # Silently ignore — cache miss fallback handles this gracefully.
-        pass
+        # Non-fatal — cache miss fallback handles this gracefully.
+        logger.warning('Failed to pre-populate images cache', exc_info=True)
 
 
 def shutdown_db():

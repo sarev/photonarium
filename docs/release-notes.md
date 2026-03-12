@@ -41,7 +41,7 @@ All seven pipeline stages now log clear INFO-level messages at both start and co
 
 ### Server Startup Responsiveness
 
-The images cache pre-population step that previously blocked server startup has been moved to a background thread. The Waitress server now starts immediately and is fully functional while the cache warms up in the background — the `/api/images` endpoint handles cache misses gracefully by querying the database directly.
+The images cache and thumbnail RAM cache are now pre-populated synchronously before the pipeline starts, completing in ~1-2 seconds without GIL contention from worker threads. This ensures the `/api/images` endpoint responds immediately when the frontend loads, rather than being starved of CPU time by Stage 1 worker threads.
 
 ### Debug Logging Cleanup
 
