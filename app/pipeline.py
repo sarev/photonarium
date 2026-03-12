@@ -277,15 +277,40 @@ class PipelineOrchestrator(threading.Thread):
         self._worker_conns: list[SafeConnection] = []
         self._worker_conns_lock = threading.Lock()
 
+        # When set, Stage 1 only walks these folders instead of all
+        # registered folders.  Populated by request_rescan_folder(),
+        # cleared at the start of each ingestion run.
+        self._rescan_folders: set[str] = set()
+        self._rescan_folders_lock = threading.Lock()
+
     # -----------------------------------------------------------------
     # Public interface
     # -----------------------------------------------------------------
 
     def request_rerun(self) -> None:
-        """Called from rescan methods to trigger a new pipeline cycle."""
+        """Called from rescan methods to trigger a full pipeline cycle."""
         self._rerun_requested = True
         self._finalisation_requested = True
         self._ingestion_needed = True
+        # Full rescan — clear any per-folder filter
+        with self._rescan_folders_lock:
+            self._rescan_folders.clear()
+
+    def request_rescan_folder(self, folder_path: str) -> None:
+        """Queue a single folder for rescan on the next pipeline cycle.
+
+        Unlike ``request_rerun()``, this only walks the specified folder
+        in Stage 1, skipping unchanged files in other folders.  Multiple
+        calls accumulate — all queued folders are scanned together.
+
+        Args:
+            folder_path: Absolute path of the folder to rescan.
+        """
+        with self._rescan_folders_lock:
+            self._rescan_folders.add(folder_path)
+        self._ingestion_needed = True
+        self._rerun_requested = True
+        self._finalisation_requested = True
 
     def get_stage_progress(self) -> dict[str, Any]:
         """Get current stage progress for status reporting.
@@ -530,9 +555,23 @@ class PipelineOrchestrator(threading.Thread):
         if not folders:
             return False
 
-        folder_paths = [f['path'] for f in folders]
+        all_folder_paths = [f['path'] for f in folders]
 
-        # Collect all file paths from registered folders
+        # Check if this is a targeted single-folder rescan
+        with self._rescan_folders_lock:
+            targeted = set(self._rescan_folders)
+            self._rescan_folders.clear()
+
+        if targeted:
+            # Only walk the requested folders (must still be registered)
+            folder_paths = [p for p in all_folder_paths if p in targeted]
+            if not folder_paths:
+                return False
+            logger.info(f'Stage 1: Targeted rescan of {len(folder_paths)} folder(s)')
+        else:
+            folder_paths = all_folder_paths
+
+        # Collect all file paths from folders to scan
         all_paths: list[Path] = []
         for folder_path in folder_paths:
             folder = Path(folder_path)

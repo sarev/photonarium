@@ -6663,10 +6663,9 @@ class ImageDatabase:
             self._orchestrator.request_rerun()
 
     def queue_rescan_folder(self, folder_path: str) -> None:
-        """Trigger a rescan that includes the specified folder.
+        """Trigger a rescan of a single registered folder.
 
-        The pipeline's Stage 1 always walks all registered folders
-        (unchanged files skip fast), so this just triggers a new cycle.
+        Only the specified folder is walked in Stage 1, not all folders.
 
         Args:
             folder_path: Absolute path of the folder to rescan.
@@ -6674,7 +6673,7 @@ class ImageDatabase:
         logger.info(f'Queueing rescan of folder: {folder_path}')
 
         if self._orchestrator is not None:
-            self._orchestrator.request_rerun()
+            self._orchestrator.request_rescan_folder(folder_path)
 
     # =========================================================================
     # Public API - Events (SSE)
