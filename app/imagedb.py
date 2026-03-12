@@ -2686,6 +2686,7 @@ def video_search(
             vr['basename'] = meta.get('basename', '')
             vr['duration'] = meta.get('duration', 0.0)
             vr['preferred_scene_id'] = meta.get('preferred_scene_id')
+            vr['media_type'] = 'video'
 
     return video_results
 
