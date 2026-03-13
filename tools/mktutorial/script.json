@@ -384,7 +384,15 @@
         },
         "videos-clearing": {
             "title": "Clearing the filter",
-            "caption": "Clear the filter to return to browsing all your videos. The heatmap disappears and the timeline shows scenes with thumbnails and timecodes only."
+            "caption": "Clear the filter to return to browsing all your videos. The heatmap disappears and the timeline returns to showing scenes with thumbnails and timecodes only."
+        },
+        "videos-language": {
+            "title": "Transcription language",
+            "caption": "When a video has been transcribed, the toolbar shows a language dropdown. Open it to see the available languages \u2014 you can retranscribe the audio in a different language at any time."
+        },
+        "videos-edit-subtitles": {
+            "title": "Editing subtitles",
+            "caption": "Click the Edit subtitles button in the toolbar to enter editing mode. Each scene in the timeline gains a text field showing its transcription, which you can edit inline and save."
         },
         "mobile-landscape": {
             "title": "Mobile \u2014 landscape",

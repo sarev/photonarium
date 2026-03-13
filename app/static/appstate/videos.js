@@ -380,13 +380,37 @@ AppState.videos = (function() {
         },
 
         /**
-         * Clear all videos state.
+         * Exit search mode, preserving the selected video.
+         *
+         * Clears search results and query but keeps the selection so the
+         * timeline stays visible.  Invalidates cached scenes for the
+         * selected video so they are re-fetched without search scores
+         * (removing heatmap overlays).
+         */
+        clearSearch() {
+            _searchResults = null;
+            _query = null;
+            _allVideos = null;
+            // Invalidate cached scenes so heatmap-scored data is replaced
+            // by a clean fetch on the next render.
+            if (_selectedVideoId && _sceneCache[_selectedVideoId]) {
+                delete _sceneCache[_selectedVideoId];
+            }
+            broadcast({ type: 'changed', property: 'cleared' });
+        },
+
+        /**
+         * Clear all videos state including selection.
          */
         clear() {
             _searchResults = null;
             _query = null;
             _selectedVideoId = null;
             _allVideos = null;
+            // Clear all cached scenes
+            for (const key of Object.keys(_sceneCache)) {
+                delete _sceneCache[key];
+            }
             broadcast({ type: 'changed', property: 'cleared' });
         },
     };

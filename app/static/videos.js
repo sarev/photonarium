@@ -356,9 +356,13 @@ const Videos = {
                 // into a hidden (zero-size) container produces empty layout
                 if (AppState.nav.getScreen() === 'videos') {
                     this._refreshGrid();
-                    // 'cleared' resets selectedVideoId to null — re-render
-                    // the timeline so heatmap overlays are removed
+                    // 'cleared' exits search mode — re-fetch scenes
+                    // without search scores so heatmap overlays disappear
                     if (event.property === 'cleared') {
+                        const selId = AppState.videos.getSelectedVideoId();
+                        if (selId) {
+                            this._loadScenesIfNeeded(selId);
+                        }
                         this._renderTimeline();
                     }
                 } else {
@@ -409,9 +413,10 @@ const Videos = {
         }));
 
         // When the filter is cleared, exit search mode and return to browse
+        // but keep the selected video so the timeline stays visible.
         this._unsubs.push(AppState.filter.onChanged(() => {
             if (!AppState.filter.isActive() && AppState.videos.isSearchMode()) {
-                AppState.videos.clear();
+                AppState.videos.clearSearch();
                 if (AppState.nav.getScreen() === 'videos') {
                     AppState.videos.loadAll();
                 }

@@ -1680,7 +1680,7 @@ def step_videos_search_opening(page, ctx):
     search_input = page.locator('#filter-text')
     search_input.click()
     page.wait_for_timeout(200)
-    search_input.fill('Earth in space')
+    search_input.fill('planet Earth from space')
     page.wait_for_timeout(300)
     # Highlight the mode toggle
     highlight_element(page, '.search-mode-toggle')
@@ -1717,6 +1717,13 @@ def step_videos_search_results(page, ctx):
         }""")
         page.wait_for_selector('.timeline-scene', timeout=10000)
     page.wait_for_timeout(500)
+    # Scroll the timeline track to the right end to expose the scene
+    # with the strongest match to the search query.
+    page.evaluate("""() => {
+        const track = document.querySelector('.timeline-track');
+        if (track) track.scrollLeft = track.scrollWidth;
+    }""")
+    page.wait_for_timeout(500)
 
 
 @step('videos-clearing')
@@ -1726,8 +1733,57 @@ def step_videos_clearing(page, ctx):
     page.wait_for_selector('#screen-videos', state='visible', timeout=5000)
     click_toolbar(page, 'btn-clear-filter')
     page.wait_for_timeout(500)
-    # Verify we're still on Videos screen without score badges
+    # Verify we're still on Videos screen without score badges.
+    # The selected video stays selected and the timeline re-renders
+    # without heatmap overlays.
     page.wait_for_selector('.video-card', timeout=5000)
+    try:
+        page.wait_for_selector('.timeline-scene', timeout=10000)
+    except Exception:
+        pass
+    page.wait_for_timeout(500)
+
+
+@step('videos-language')
+def step_videos_language(page, ctx):
+    """Open the transcription language dropdown to show available languages."""
+    # Ensure a video with transcription is selected so the dropdown is visible
+    page.wait_for_selector('.vid-language-control:not([hidden])', timeout=5000)
+    # Open the <select> dropdown by focusing and sending a space/click
+    select = page.locator('#vid-stt-language')
+    select.focus()
+    page.wait_for_timeout(200)
+    # Use evaluate to open the dropdown natively — Playwright can't keep
+    # native <select> dropdowns visible for a screenshot, so instead we
+    # highlight the control to draw attention to it.
+    highlight_element(page, '.vid-language-control')
+    # Also open the select via showPicker() so the dropdown is visible.
+    # Falls back gracefully if the browser doesn't support it.
+    page.evaluate("""() => {
+        const sel = document.getElementById('vid-stt-language');
+        if (sel && sel.showPicker) {
+            try { sel.showPicker(); } catch(e) {}
+        }
+    }""")
+    page.wait_for_timeout(500)
+
+
+@step('videos-edit-subtitles')
+def step_videos_edit_subtitles(page, ctx):
+    """Click the Edit subtitles button to show the inline subtitle editor."""
+    # Close any open dropdown first
+    page.keyboard.press('Escape')
+    page.wait_for_timeout(300)
+    # Click the edit subtitles toolbar button
+    click_toolbar(page, 'btn-vid-edit-subs')
+    page.wait_for_timeout(500)
+    # Wait for the subtitle editor to appear
+    try:
+        page.wait_for_selector('#vid-subtitle-editor:not([hidden])', timeout=5000)
+    except Exception:
+        pass
+    page.wait_for_timeout(500)
+    highlight_element(page, '#btn-vid-edit-subs')
     page.wait_for_timeout(500)
 
 
@@ -2026,6 +2082,14 @@ def run_setup():
         check=True,
     )
     print(f'  Created {config_path}')
+    # Ensure STT is enabled so video transcription runs during setup.
+    # The default is True, but an existing config from a prior --setup
+    # run may have it disabled.
+    cfg_text = config_path.read_text(encoding='utf-8')
+    if 'stt_enabled: false' in cfg_text:
+        cfg_text = cfg_text.replace('stt_enabled: false', 'stt_enabled: true')
+        config_path.write_text(cfg_text, encoding='utf-8')
+        print('  Patched stt_enabled → true')
 
     # ------------------------------------------------------------------
     # Step 2 — Download models
