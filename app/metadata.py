@@ -1090,7 +1090,7 @@ def extract_exif_timestamp(path: Path | str) -> datetime | None:
                 if result:
                     return result
 
-    except (OSError, AttributeError, KeyError) as e:
+    except (OSError, AttributeError, KeyError):
         # logger.debug(f'Failed to extract EXIF from {path}: {e}')
         pass
 
@@ -2120,7 +2120,7 @@ def derive_timestamp_with_confidence(
 
     # Try parsing from filename/path (before filesystem, as files get copied around)
     # Scoring parser first — handles month words, seasons, DMY/MDY ambiguity
-    timestamp, score, _assumptions = _parse_timestamp_scoring(path, date_order)
+    timestamp, _score, _assumptions = _parse_timestamp_scoring(path, date_order)
     if timestamp:
         # logger.debug(f'Timestamp from scoring parser (score={score:.1f}): {timestamp} for {path}')
         return (timestamp, CONFIDENCE_FILENAME)

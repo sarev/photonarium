@@ -21,6 +21,7 @@
  * Setup wizard — standalone object (not a screen module).
  * @namespace
  */
+// eslint-disable-next-line no-unused-vars -- global registered via App.registerModule()
 const SetupWizard = {
 
     /** @type {HTMLDialogElement|null} @private */

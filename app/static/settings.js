@@ -32,6 +32,7 @@
  * Settings editor — standalone object (not a screen module).
  * @namespace
  */
+// eslint-disable-next-line no-unused-vars -- global registered via App.registerModule()
 const Settings = {
 
     /** @type {HTMLDialogElement|null} @private */

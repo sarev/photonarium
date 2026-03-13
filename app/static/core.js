@@ -2630,7 +2630,7 @@ const App = {
         }
 
         // Initialise On This Day overlay
-        if (typeof OnThisDay !== 'undefined') OnThisDay.init(); // eslint-disable-line no-undef
+        if (typeof OnThisDay !== 'undefined') OnThisDay.init();
 
         // Determine initial screen
         this._determineInitialScreen();

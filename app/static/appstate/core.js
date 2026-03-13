@@ -16,6 +16,7 @@
  * Global AppState object - domains are added by subsequent scripts.
  * @namespace AppState
  */
+// eslint-disable-next-line no-unused-vars -- global used by all appstate domains and GUI modules
 const AppState = (function() {
 
     /** Enable verbose logging for debugging */

@@ -22,6 +22,7 @@
 'use strict';
 
 AppState.duplicates = (function() {
+    // eslint-disable-next-line no-unused-vars -- queueTransaction reserved for future async mutations
     const { createSubscriberSystem, markDirty, transaction, queueTransaction } = AppState;
     const { subscribe, subscribeError, broadcast, notify, broadcastError } = createSubscriberSystem();
 

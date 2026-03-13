@@ -1035,7 +1035,7 @@ const Gallery = {
      * @private
      */
     _initInfoPanelCollapse() {
-        const { btnToggleInfo, infoPanel, galleryContainer } = this._els;
+        const { btnToggleInfo } = this._els;
         if (!btnToggleInfo) return;
 
         // Click handler — delegates to AppState.view (marks preference as user-set)

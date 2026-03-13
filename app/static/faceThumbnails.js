@@ -9,6 +9,7 @@
  *
  * @fileoverview Face thumbnail cache-busting utility.
  */
+// eslint-disable-next-line no-unused-vars -- global used by faces.js and fullscreen.js
 const FaceThumbnails = {
     /**
      * Cache-bust timestamps. Map of faceId -> timestamp.

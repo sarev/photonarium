@@ -276,7 +276,7 @@ const ThumbnailLoader = {
      * @private
      */
     _pruneInFlight() {
-        for (const [imageId, { controller, index }] of this._inFlight) {
+        for (const [_imageId, { controller, index }] of this._inFlight) {
             const row = this._getRow(index);
             if (!this._isInBuffer(row)) {
                 controller.abort();
@@ -390,7 +390,7 @@ const ThumbnailLoader = {
      */
     clear() {
         // Cancel all in-flight requests
-        for (const [imageId, { controller }] of this._inFlight) {
+        for (const [_imageId, { controller }] of this._inFlight) {
             controller.abort();
         }
 
@@ -704,8 +704,7 @@ const VirtualGrid = {
                     return false;
                 }
 
-                // Calculate available width (account for scrollbar)
-                const scrollbarWidth = container.offsetWidth - container.clientWidth;
+                // Calculate available width (clientWidth already excludes scrollbar)
                 const availableWidth = container.clientWidth - padding * 2;
 
                 // Calculate items per row
@@ -874,9 +873,6 @@ const VirtualGrid = {
 
                     // Mark as pending
                     state.pendingItems.add(id);
-
-                    // Capture index for closure
-                    const itemIndex = i;
 
                     // Request thumbnail with callback that creates DOM element
                     // Pass custom URL builder if configured
