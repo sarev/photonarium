@@ -681,7 +681,7 @@ FIELD_CONSTRAINTS: dict[str, dict[str, int | float | bool]] = {
     'server_port': {'min': 1024, 'max': 65535, 'step': 1},
     'thumbnail_quality': {'min': 1, 'max': 100, 'step': 1},
     'max_image_dimension': {'min': 1024, 'max': 65536, 'step': 1, 'special_zero': True},
-    'embedding_batch_size': {'min': 1, 'max': 64, 'step': 1},
+    'embedding_batch_size': {'min': 1, 'max': 256, 'step': 1},
     'perceptual_hash_threshold': {'min': 0, 'max': 64, 'step': 1},
     'similarity_threshold_level2': {'min': 0.0, 'max': 1.0, 'step': 0.01},
     'similarity_threshold_level3': {'min': 0.0, 'max': 1.0, 'step': 0.01},
@@ -697,11 +697,11 @@ FIELD_CONSTRAINTS: dict[str, dict[str, int | float | bool]] = {
     'face_detection_min_confidence': {'min': 0.0, 'max': 1.0, 'step': 0.01},
     'face_detection_min_size': {'min': 20, 'max': 200, 'step': 1},
     'face_recognition_threshold': {'min': 0.0, 'max': 1.0, 'step': 0.01},
-    'face_detection_batch_size': {'min': 1, 'max': 64, 'step': 1},
+    'face_detection_batch_size': {'min': 1, 'max': 256, 'step': 1},
     'caption_max_length': {'min': 10, 'max': 200, 'step': 1},
     'caption_min_length': {'min': 1, 'max': 50, 'step': 1},
     'caption_num_beams': {'min': 1, 'max': 10, 'step': 1},
-    'nima_batch_size': {'min': 1, 'max': 64, 'step': 1},
+    'nima_batch_size': {'min': 1, 'max': 256, 'step': 1},
     'quality_weight_aesthetic': {'min': 0.0, 'max': 1.0, 'step': 0.01},
     'quality_weight_sharpness': {'min': 0.0, 'max': 1.0, 'step': 0.01},
     'quality_weight_pixels': {'min': 0.0, 'max': 1.0, 'step': 0.01},
@@ -798,9 +798,9 @@ HARDWARE_PRESETS: list[tuple[str, str, dict[str, Any]]] = [
             'indexing_threads': 8,
             'trash_threads': 12,
             'import_threads': 8,
-            'embedding_batch_size': 32,
+            'embedding_batch_size': 64,
             'face_detection_batch_size': 32,
-            'nima_batch_size': 32,
+            'nima_batch_size': 16,
             'thumbnail_cache_size_mb': 200,
             'thumbnail_concurrent_requests': 8,
             'stt_model': 'small',
@@ -816,9 +816,9 @@ HARDWARE_PRESETS: list[tuple[str, str, dict[str, Any]]] = [
             'indexing_threads': 12,
             'trash_threads': 16,
             'import_threads': 8,
-            'embedding_batch_size': 64,
+            'embedding_batch_size': 128,
             'face_detection_batch_size': 64,
-            'nima_batch_size': 64,
+            'nima_batch_size': 32,
             'thumbnail_cache_size_mb': 400,
             'thumbnail_concurrent_requests': 10,
             'stt_model': 'medium',
@@ -895,7 +895,9 @@ class Config:
     openclip_model: str = 'ViT-B-32'
     # OpenCLIP pretrained weights name.
     openclip_pretrained: str = 'openai'
-    # Batch size for embedding computation.
+    # Batch size for embedding computation (1-256).  Higher values improve
+    # GPU utilisation but use more VRAM.  Run tools/benchmark_batch_sizes.py
+    # to find the optimal value for your hardware.
     embedding_batch_size: int = 16
     # Hamming distance threshold for level 1 (near-identical) duplicates.
     perceptual_hash_threshold: int = 4
@@ -931,7 +933,10 @@ class Config:
     face_detection_min_size: int = 40
     # Cosine similarity threshold for auto-matching faces to people (0.0-1.0).
     face_recognition_threshold: float = 0.70
-    # Batch size for face detection (1-64).
+    # Batch size for face detection (1-256).  MTCNN groups images by
+    # dimension, so larger batches may not help as much as for other
+    # stages.  Run tools/benchmark_batch_sizes.py to find the optimal
+    # value for your hardware.
     face_detection_batch_size: int = 24
     # BLIP/BLIP-2 model name for captioning.
     caption_model: str = 'Salesforce/blip-image-captioning-large'
@@ -945,7 +950,9 @@ class Config:
     caption_british_english: bool = False
     # Whether to run NIMA aesthetic scoring during indexing.
     nima_enabled: bool = True
-    # Batch size for NIMA scoring (1-64).
+    # Batch size for NIMA scoring (1-256).  Run
+    # tools/benchmark_batch_sizes.py to find the optimal value for
+    # your hardware.
     nima_batch_size: int = 16
     # Weight for aesthetic component in quality sort.
     quality_weight_aesthetic: float = 0.60

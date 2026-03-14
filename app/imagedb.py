@@ -4147,23 +4147,36 @@ class ImageDatabase:
             logger.info('Pre-loading OpenCLIP model...')
             _ = self._get_clip_model()
 
-        # Backfill description embeddings for images with descriptions but no embedding
-        self._backfill_description_embeddings()
-
-        # NIMA model invalidation — wipe stale scores if model identity changed
+        # Model invalidation — wipe stale data if model identity has changed.
+        # Backfills for the wiped data run in the pipeline background thread
+        # (Stage 3c for descriptions, Stage 7 for transcriptions) to avoid
+        # blocking startup.
+        self._invalidate_openclip_model()
         self._invalidate_nima_model()
 
         logger.info('-' * 60)
         logger.info('Database initialisation complete')
         logger.info('-' * 60)
 
-    def _backfill_description_embeddings(self) -> None:
+    def _backfill_description_embeddings(
+        self,
+        progress_fn: Callable[[int], None] | None = None,
+    ) -> int:
         """Compute description embeddings for images that have descriptions but no embedding.
 
-        This runs during startup to handle images that had descriptions added
-        before the description_embedding feature was implemented.
+        Handles images that had descriptions added before the feature was
+        implemented, and images whose embeddings were wiped by a model
+        change.  Respects ``_stop_event`` for graceful shutdown — any
+        work already committed is preserved and the remainder will be
+        picked up on the next pipeline cycle.
+
+        Args:
+            progress_fn: Optional callback invoked with the running count
+                after each item, so the caller can update UI progress.
+
+        Returns:
+            Number of embeddings computed.
         """
-        # Find images with descriptions but no description embedding
         cursor = self.safe_conn.execute("""
             SELECT id, description
             FROM images
@@ -4175,7 +4188,7 @@ class ImageDatabase:
         rows = cursor.fetchall()
 
         if not rows:
-            return
+            return 0
 
         logger.info(f'Backfilling {len(rows)} description embeddings...')
 
@@ -4183,6 +4196,10 @@ class ImageDatabase:
         count = 0
 
         for row in rows:
+            if self._stop_event.is_set():
+                logger.info('Description embedding backfill interrupted by shutdown')
+                break
+
             image_id = row['id']
             description = row['description']
 
@@ -4194,6 +4211,13 @@ class ImageDatabase:
                     'UPDATE images SET description_embedding = ? WHERE id = ?', (embedding_bytes, image_id)
                 )
                 count += 1
+
+                if progress_fn is not None:
+                    progress_fn(count)
+
+                # Commit in batches of 100 to avoid holding a long transaction
+                if count % 100 == 0:
+                    self.safe_conn.commit()
             except Exception as e:
                 try:
                     self.safe_conn.rollback()
@@ -4202,7 +4226,79 @@ class ImageDatabase:
                 logger.warning(f'Failed to compute description embedding for {image_id}: {e}')
 
         self.safe_conn.commit()
-        logger.info(f'        Backfilled {count} description embeddings')
+        if count > 0:
+            logger.info(f'        Backfilled {count} description embeddings')
+        return count
+
+    def _backfill_transcription_embeddings(
+        self,
+        progress_fn: Callable[[int], None] | None = None,
+    ) -> int:
+        """Compute transcription embeddings for scenes that have text but no embedding.
+
+        Covers two cases: scenes transcribed before the embedding column
+        existed, and scenes whose embeddings were wiped by a model change
+        (``_invalidate_openclip_model``).  Respects ``_stop_event`` for
+        graceful shutdown.
+
+        Args:
+            progress_fn: Optional callback invoked with the running count
+                after each item, so the caller can update UI progress.
+
+        Returns:
+            Number of embeddings computed.
+        """
+        cursor = self.safe_conn.execute("""
+            SELECT id, transcription
+            FROM scenes
+            WHERE transcription IS NOT NULL
+              AND transcription != ''
+              AND transcription_embedding IS NULL
+        """)
+        rows = cursor.fetchall()
+
+        if not rows:
+            return 0
+
+        logger.info(f'Backfilling {len(rows)} transcription embeddings...')
+
+        clip_model = self._get_clip_model()
+        count = 0
+
+        for row in rows:
+            if self._stop_event.is_set():
+                logger.info('Transcription embedding backfill interrupted by shutdown')
+                break
+
+            scene_id = row['id']
+            text = row['transcription']
+
+            try:
+                embedding = clip_model.encode_text(text)
+                embedding_bytes = embedding.astype(np.float32).tobytes()
+
+                self.safe_conn.execute(
+                    'UPDATE scenes SET transcription_embedding = ? WHERE id = ?',
+                    (embedding_bytes, scene_id),
+                )
+                count += 1
+
+                if progress_fn is not None:
+                    progress_fn(count)
+
+                if count % 100 == 0:
+                    self.safe_conn.commit()
+            except Exception as e:
+                try:
+                    self.safe_conn.rollback()
+                except Exception:
+                    pass
+                logger.warning(f'Failed to compute transcription embedding for scene {scene_id}: {e}')
+
+        self.safe_conn.commit()
+        if count > 0:
+            logger.info(f'        Backfilled {count} transcription embeddings')
+        return count
 
     def _backfill_aesthetic_laion(self) -> None:
         """Compute LAION aesthetic scores for images with embeddings but no score.
@@ -4713,6 +4809,66 @@ class ImageDatabase:
         missing = self.conn.execute('SELECT COUNT(*) FROM images WHERE checksum IS NULL AND deleted = 0').fetchone()[0]
         if missing:
             logger.warning(f'        {missing} image(s) have NULL checksums — run with --scan to repair')
+
+    def _invalidate_openclip_model(self) -> None:
+        """Check if the OpenCLIP model has changed and wipe stale embeddings.
+
+        Stores the current model identity (model + pretrained) in the
+        metadata table.  If the stored value differs from the config,
+        all OpenCLIP-derived data is cleared so the pipeline recomputes
+        it on the next cycle:
+
+        - ``images.embedding`` and ``images.aesthetic_laion`` (image embeddings
+          and the LAION aesthetic score derived from them)
+        - ``images.description_embedding`` (caption text embeddings)
+        - ``scenes.embedding`` and ``scenes.transcription_embedding``
+          (video scene visual and transcript embeddings)
+        - ``faces.semantic_embedding`` (face crop CLIP embeddings)
+
+        Level 2/3 duplicate groups (which use cosine similarity on
+        embeddings) will be recomputed automatically by the pipeline's
+        grouping stage once new embeddings are available.
+        """
+        current_id = f'{self.config.openclip_model}/{self.config.openclip_pretrained}'
+        with self.safe_conn:
+            stored_id = get_metadata(self.safe_conn, 'openclip_model')
+
+            if stored_id == current_id:
+                return  # No change
+
+            if stored_id is not None:
+                # Model has changed — wipe all OpenCLIP-derived data
+                logger.info(
+                    f'OpenCLIP model changed ({stored_id} → {current_id}), '
+                    f'clearing embeddings for re-computation'
+                )
+                self.safe_conn.execute(
+                    'UPDATE images SET embedding = NULL, aesthetic_laion = NULL, '
+                    'description_embedding = NULL'
+                )
+                self.safe_conn.execute(
+                    'UPDATE scenes SET embedding = NULL, transcription_embedding = NULL'
+                )
+                self.safe_conn.execute(
+                    'UPDATE faces SET semantic_embedding = NULL'
+                )
+                # Also clear the preferred_scene_id for videos so the
+                # pipeline re-selects the best scene after re-embedding.
+                self.safe_conn.execute(
+                    "UPDATE images SET embedding = NULL, preferred_scene_id = NULL "
+                    "WHERE media_type = 'video'"
+                )
+                self.safe_conn.commit()
+
+                n_images = self.safe_conn.execute(
+                    'SELECT COUNT(*) FROM images WHERE deleted = 0'
+                ).fetchone()[0]
+                logger.info(f'  Cleared embeddings for {n_images} images — '
+                            f'pipeline will recompute on next cycle')
+            else:
+                logger.info(f'Recording OpenCLIP model identity: {current_id}')
+
+            set_metadata(self.safe_conn, 'openclip_model', current_id)
 
     def _invalidate_nima_model(self) -> None:
         """Check if the NIMA model identity has changed and wipe stale scores.

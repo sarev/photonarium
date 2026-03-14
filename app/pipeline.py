@@ -64,7 +64,7 @@ Stages
    stops (shared with Stages 5 and 7).
 
    *Batching (3a)*: Images are processed in batches of
-   `config.embedding_batch_size` (default 32).  Each batch is loaded
+   `config.embedding_batch_size` (default 16).  Each batch is loaded
    from original files, encoded on GPU/CPU, and committed to the DB.
    LAION aesthetic scores (dot product with a ~2 KB linear head) are
    computed in the same loop if the head weights are available.
@@ -84,7 +84,7 @@ Stages
    (`<data_dir>/.nima-mobilenetv2-ava.pth`).  Loaded, used, then
    explicitly deleted + `empty_cache()` to free VRAM for Stage 5.
 
-   *Batching (4a)*: `config.nima_batch_size` (default 32) images per
+   *Batching (4a)*: `config.nima_batch_size` (default 16) images per
    GPU call.  Input is 400 px thumbnails loaded via Pillow.
 
    *OOM protection (4a)*: If a batch OOMs, falls back to single-image
@@ -104,7 +104,7 @@ Stages
    Config: `face_detection_min_confidence`, `face_detection_min_size`.
    Gated by `config.face_detection_enabled`.
 
-   *Batching*: `config.face_detection_batch_size` (default 32) images
+   *Batching*: `config.face_detection_batch_size` (default 24) images
    per iteration.  Within each batch, MTCNN's `preload_images_batch()`
    uses 4 I/O workers to load 400 px thumbnails.  Detection results are
    committed per-image (all faces for one image in a single transaction)
@@ -1558,6 +1558,25 @@ class PipelineOrchestrator(threading.Thread):
             if vid_count > 0:
                 did_work = True
 
+        # 3c: Backfill description embeddings (cheap text encoding for
+        # descriptions that predate the feature, or were wiped by a
+        # model change).  Re-uses the 'embeddings' stage so the
+        # frontend shows progress in the Embedding row.
+        if not self._stopped():
+            pending = self._db.safe_conn.execute("""
+                SELECT COUNT(*) FROM images
+                WHERE deleted = 0
+                  AND description IS NOT NULL AND description != ''
+                  AND description_embedding IS NULL
+            """).fetchone()[0]
+            if pending > 0:
+                self._set_stage('embeddings', pending, 0)
+                count = self._db._backfill_description_embeddings(
+                    progress_fn=self._update_done,
+                )
+                if count > 0:
+                    did_work = True
+
         return did_work
 
     def _embed_images(self) -> int:
@@ -2469,6 +2488,21 @@ class PipelineOrchestrator(threading.Thread):
         Returns:
             True if any videos were transcribed.
         """
+        # Backfill transcription embeddings regardless of whether STT is
+        # enabled — a model change may have wiped embeddings for
+        # transcriptions that were computed while STT was previously on.
+        if not self._stopped():
+            pending = self._db.safe_conn.execute("""
+                SELECT COUNT(*) FROM scenes
+                WHERE transcription IS NOT NULL AND transcription != ''
+                  AND transcription_embedding IS NULL
+            """).fetchone()[0]
+            if pending > 0:
+                self._set_stage('transcription', pending, 0)
+                self._db._backfill_transcription_embeddings(
+                    progress_fn=self._update_done,
+                )
+
         if not self._db.config.stt_enabled:
             return False
 
