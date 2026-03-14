@@ -1,5 +1,90 @@
 # Release Notes
 
+## v1.2.6-beta
+
+### OpenCLIP Model Change Detection
+
+Changing the OpenCLIP model or pretrained weights in the config no longer requires manual database surgery. On startup, the app compares the configured model against the identity stored in the `metadata` table. If they differ, all OpenCLIP-derived data is automatically invalidated and recomputed by the pipeline:
+
+- Image embeddings and LAION aesthetic scores
+- Description embeddings (image captions)
+- Video scene embeddings and transcription embeddings
+- Face semantic embeddings (CLIP encodings of face thumbnails)
+- Video preferred scene selection
+
+The invalidation runs before background threads start (no lock contention). Text embedding backfills (descriptions, transcriptions) run in the pipeline background thread with progress visible on the Database screen, rather than blocking startup. Both respect graceful shutdown and commit in batches of 100.
+
+The same pattern already existed for NIMA model changes — this extends it to cover the much larger OpenCLIP dependency graph.
+
+### Model Download Prompt on Settings Change
+
+Model-affecting config fields (`openclip_model`, `openclip_pretrained`, `caption_model`, `stt_model`) are now tagged with a `[M]` marker in the config schema. When the user changes any of these in the Settings editor, a confirmation dialog offers to open the setup wizard's Download tab so the new models can be fetched before restarting.
+
+This prevents the app from restarting into a broken state where models are missing. The wizard opens directly on the HF Token step (skipping Hardware/Language/Review) and only runs the download — no config values are overwritten. On successful download, the Finish button becomes "Restart Server".
+
+The restart logic (`App.restartServer()`) has been extracted from the Database screen into `core.js` so both the Database restart button and the wizard can share it.
+
+### Face Detection Scaling Fix
+
+Stage 5 (face detection) feeds 400px thumbnails to MTCNN, but the user's configured `face_detection_min_size` is specified in original-image pixels. Previously, MTCNN's internal pre-filter applied the pixel threshold at thumbnail resolution, silently rejecting faces that would have passed at original resolution.
+
+The pipeline now:
+- Scales `min_face_size` proportionally for MTCNN based on the largest original image in the batch (floor of 10px)
+- Tracks the thumbnail-to-original scale factor per image so the post-filter evaluates face sizes in original-image pixel space
+
+This may increase face detections (including false positives) for users with large source images. The default `face_detection_batch_size` has been lowered from 32 to 24.
+
+### Video Search Heatmap Fix
+
+The per-scene heatmap on the Videos screen is now normalised on visual similarity scores only. Previously, transcript similarity was folded into the normalised score, which penalised scenes without speech and produced washed-out heatmaps. Transcript similarity still contributes to the `combined_score` used for ranking videos in search results, but no longer distorts the heatmap colours.
+
+`TRANSCRIPT_BOOST` reduced from 0.15 to 0.05 to prevent transcript matches from dominating visual relevance.
+
+### Video Pipeline Fixes
+
+- **Stage naming**: Video scene processing now uses the stage name `video_scenes` instead of sharing `thumbnails` with image thumbnail generation. The Database screen no longer shows a spurious "Video" pipeline status during image-only processing.
+- **STT race condition**: `_rerun_requested` is now cleared before finalisation stages (grouping, STT). Previously, a rerun requested during stages 2–5 could cause finalisation to skip immediately, leaving transcription unprocessed.
+
+### Video Timeline Fix
+
+Clearing the search filter on the Videos screen no longer loses the selected video. `clearSearch()` now preserves the selection and re-fetches scenes without heatmap scores.
+
+### GPU Batch Size Benchmarking Tool
+
+New standalone tool (`tools/benchmark_batch_sizes.py`) that finds optimal batch sizes for the three CUDA pipeline stages: OpenCLIP embeddings, NIMA scoring, and face detection.
+
+- Loads the user's real config to pick the correct models
+- Binary-searches for the maximum viable batch size (no OOM)
+- Sweeps candidates with warmup + timed trials to find peak throughput
+- Reports recommendations with current vs optimal values
+- Timestamps each stage and the overall run
+
+```bash
+python tools/benchmark_batch_sizes.py                     # All stages, default config
+python tools/benchmark_batch_sizes.py --stage embeddings   # Single stage
+python tools/benchmark_batch_sizes.py --max 128            # Search higher
+python tools/benchmark_batch_sizes.py --images ~/photos    # Custom test images
+```
+
+### Batch Size Config Changes
+
+- Maximum batch size raised from 64 to 256 for all three settings (`embedding_batch_size`, `nima_batch_size`, `face_detection_batch_size`). Benchmark data shows mid-range GPUs (RTX 4060, 8 GB) handle 96+ without OOM.
+- Hardware wizard presets updated with per-stage values informed by benchmark data:
+  - High-end laptop: embeddings 64, NIMA 16, faces 32
+  - High-end desktop: embeddings 128, NIMA 32, faces 64
+- Field comments now reference `tools/benchmark_batch_sizes.py`.
+
+### OpenCLIP Model Load Error Handling
+
+A generic `Exception` catch has been added to the OpenCLIP model loader alongside the existing OOM handler. Previously, a download failure (e.g. missing model files with `HF_HUB_OFFLINE=1`) would throw an uncaught exception on every image instead of setting `_load_failed` and logging once.
+
+### Other Fixes
+
+- **LAION download 429 errors**: Switched from `github.com/…/blob/…?raw=true` URLs (which get rate-limited) to `raw.githubusercontent.com` for the LAION aesthetic predictor weight files.
+- **Pretrained tag typo**: Settings help text corrected from `laion2b_s34b_b79k` to `laion2b_s34b_b88k`.
+- **Test scripts**: `test-start.sh` now symlinks NIMA/LAION model files from the real data directory into the test instance, and supports a `--tutorial` flag for tutorial-matching face detection config.
+- **Lint cleanup**: All pre-existing ESLint and ruff warnings suppressed or fixed for zero-noise lint output.
+
 ## v1.2.5-beta
 
 ### SafeConnection Database Abstraction
