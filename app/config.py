@@ -186,7 +186,7 @@ CONFIG_SCHEMA: list[tuple[str, list[tuple[str, list[str]]]]] = [
                 [
                     'Pretrained weights. Common options:',
                     '  - openai           (original CLIP weights)',
-                    '  - laion2b_s34b_b79k (trained on LAION-2B, often better for photos)',
+                    '  - laion2b_s34b_b88k (trained on LAION-2B, often better for photos)',
                     '  - laion400m_e32    (trained on LAION-400M)',
                     '  - v1               (for nllb-clip multilingual models)',
                     'Check open_clip.list_pretrained() for valid model/weight combinations.',
@@ -195,7 +195,7 @@ CONFIG_SCHEMA: list[tuple[str, list[tuple[str, list[str]]]]] = [
             (
                 'embedding_batch_size',
                 [
-                    'Batch size for embedding computation (1-64)',
+                    'Batch size for embedding computation (1-256)',
                     'Higher values are faster but use more VRAM. Reduce if you get out-of-memory errors.',
                 ],
             ),

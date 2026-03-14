@@ -2010,6 +2010,16 @@ class OpenCLIPModel:
                     f'semantic search and image embeddings disabled'
                 )
                 return
+            except Exception as e:
+                self._load_failed = True
+                self._model = None
+                self._preprocess = None
+                logger.error(
+                    f'Failed to load OpenCLIP model '
+                    f'({self.model_name}/{self.pretrained}): {e} — '
+                    f'semantic search and image embeddings disabled'
+                )
+                return
 
             elapsed = time.time() - start_time
             logger.info('-' * 60)
