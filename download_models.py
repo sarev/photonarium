@@ -138,9 +138,9 @@ def download_laion_head(model: str, pretrained: str, data_dir: str = '.') -> boo
     # The LAION aesthetic predictor heads are nn.Linear(embed_dim, 1) classifiers.
     # See: https://github.com/LAION-AI/aesthetic-predictor
     _LAION_HEAD_URLS = {
-        'ViT-B-16': 'https://github.com/LAION-AI/aesthetic-predictor/blob/main/sa_0_4_vit_b_16_linear.pth?raw=true',
-        'ViT-B-32': 'https://github.com/LAION-AI/aesthetic-predictor/blob/main/sa_0_4_vit_b_32_linear.pth?raw=true',
-        'ViT-L-14': 'https://github.com/LAION-AI/aesthetic-predictor/blob/main/sa_0_4_vit_l_14_linear.pth?raw=true',
+        'ViT-B-16': 'https://raw.githubusercontent.com/LAION-AI/aesthetic-predictor/main/sa_0_4_vit_b_16_linear.pth',
+        'ViT-B-32': 'https://raw.githubusercontent.com/LAION-AI/aesthetic-predictor/main/sa_0_4_vit_b_32_linear.pth',
+        'ViT-L-14': 'https://raw.githubusercontent.com/LAION-AI/aesthetic-predictor/main/sa_0_4_vit_l_14_linear.pth',
     }
 
     print(f'\n{"=" * 60}')
