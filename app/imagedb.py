@@ -4205,38 +4205,48 @@ class ImageDatabase:
 
         clip_model = self._get_clip_model()
         count = 0
+        batch_size = 100
 
-        for row in rows:
+        # Process in batches: encode text (no DB lock needed), then write
+        # results in a quick burst.  This avoids holding the shared
+        # connection for the duration of slow encode_text() calls.
+        for batch_start in range(0, len(rows), batch_size):
             if self._stop_event.is_set():
                 logger.info('Description embedding backfill interrupted by shutdown')
                 break
 
-            image_id = row['id']
-            description = row['description']
+            batch = rows[batch_start : batch_start + batch_size]
 
-            try:
-                embedding = clip_model.encode_text(description)
-                embedding_bytes = embedding.astype(np.float32).tobytes()
-
-                self.safe_conn.execute(
-                    'UPDATE images SET description_embedding = ? WHERE id = ?', (embedding_bytes, image_id)
-                )
-                count += 1
-
-                if progress_fn is not None:
-                    progress_fn(count)
-
-                # Commit in batches of 100 to avoid holding a long transaction
-                if count % 100 == 0:
-                    self.safe_conn.commit()
-            except Exception as e:
+            # Phase 1: encode (CPU/GPU work, no DB lock)
+            updates: list[tuple[bytes, str]] = []
+            for row in batch:
+                if self._stop_event.is_set():
+                    break
                 try:
-                    self.safe_conn.rollback()
-                except Exception:
-                    pass
-                logger.warning(f'Failed to compute description embedding for {image_id}: {e}')
+                    embedding = clip_model.encode_text(row['description'])
+                    updates.append((embedding.astype(np.float32).tobytes(), row['id']))
+                except Exception as e:
+                    logger.warning(f'Failed to compute description embedding for {row["id"]}: {e}')
 
-        self.safe_conn.commit()
+            # Phase 2: write (brief DB lock)
+            if updates:
+                try:
+                    self.safe_conn.executemany(
+                        'UPDATE images SET description_embedding = ? WHERE id = ?',
+                        updates,
+                    )
+                    self.safe_conn.commit()
+                except Exception as e:
+                    try:
+                        self.safe_conn.rollback()
+                    except Exception:
+                        pass
+                    logger.warning(f'Failed to write description embedding batch: {e}')
+
+            count += len(updates)
+            if progress_fn is not None:
+                progress_fn(count)
+
         if count > 0:
             logger.info(f'        Backfilled {count} description embeddings')
         return count
@@ -4275,38 +4285,48 @@ class ImageDatabase:
 
         clip_model = self._get_clip_model()
         count = 0
+        batch_size = 100
 
-        for row in rows:
+        # Process in batches: encode text (no DB lock needed), then write
+        # results in a quick burst.  This avoids holding the shared
+        # connection for the duration of slow encode_text() calls.
+        for batch_start in range(0, len(rows), batch_size):
             if self._stop_event.is_set():
                 logger.info('Transcription embedding backfill interrupted by shutdown')
                 break
 
-            scene_id = row['id']
-            text = row['transcription']
+            batch = rows[batch_start : batch_start + batch_size]
 
-            try:
-                embedding = clip_model.encode_text(text)
-                embedding_bytes = embedding.astype(np.float32).tobytes()
-
-                self.safe_conn.execute(
-                    'UPDATE scenes SET transcription_embedding = ? WHERE id = ?',
-                    (embedding_bytes, scene_id),
-                )
-                count += 1
-
-                if progress_fn is not None:
-                    progress_fn(count)
-
-                if count % 100 == 0:
-                    self.safe_conn.commit()
-            except Exception as e:
+            # Phase 1: encode (CPU/GPU work, no DB lock)
+            updates: list[tuple[bytes, str]] = []
+            for row in batch:
+                if self._stop_event.is_set():
+                    break
                 try:
-                    self.safe_conn.rollback()
-                except Exception:
-                    pass
-                logger.warning(f'Failed to compute transcription embedding for scene {scene_id}: {e}')
+                    embedding = clip_model.encode_text(row['transcription'])
+                    updates.append((embedding.astype(np.float32).tobytes(), row['id']))
+                except Exception as e:
+                    logger.warning(f'Failed to compute transcription embedding for scene {row["id"]}: {e}')
 
-        self.safe_conn.commit()
+            # Phase 2: write (brief DB lock)
+            if updates:
+                try:
+                    self.safe_conn.executemany(
+                        'UPDATE scenes SET transcription_embedding = ? WHERE id = ?',
+                        updates,
+                    )
+                    self.safe_conn.commit()
+                except Exception as e:
+                    try:
+                        self.safe_conn.rollback()
+                    except Exception:
+                        pass
+                    logger.warning(f'Failed to write transcription embedding batch: {e}')
+
+            count += len(updates)
+            if progress_fn is not None:
+                progress_fn(count)
+
         if count > 0:
             logger.info(f'        Backfilled {count} transcription embeddings')
         return count
