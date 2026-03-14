@@ -58,6 +58,21 @@ if [ "$TUTORIAL" = true ] && [ -f "$TEST_DIR/photonarium.yml" ]; then
         "$TEST_DIR/photonarium.yml"
 fi
 
+# Symlink ML model files from the real data dir so NIMA/LAION scoring works.
+# Resolve the data_dir from the real (non-test) config; fall back to repo root.
+REAL_DATA_DIR=$(python -c "
+import sys, os; sys.path.insert(0, '$REPO_ROOT/app')
+from config import load_config, get_default_config_path
+c = load_config(get_default_config_path())
+print(os.path.expanduser(c.data_dir) if c.data_dir else '')
+" 2>/dev/null)
+REAL_DATA_DIR="${REAL_DATA_DIR:-$REPO_ROOT}"
+for model_file in .nima-mobilenetv2-ava.pth .laion-aesthetic-head.pth; do
+    if [ -f "$REAL_DATA_DIR/$model_file" ] && [ ! -e "$TEST_DIR/$model_file" ]; then
+        ln -s "$REAL_DATA_DIR/$model_file" "$TEST_DIR/$model_file"
+    fi
+done
+
 LOG_FILE="/tmp/photonarium-test.log"
 echo "Logging to $LOG_FILE"
 
