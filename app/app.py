@@ -1038,7 +1038,7 @@ def get_image_scenes(image_id):
 
     scenes = []
     if query:
-        TRANSCRIPT_BOOST = 0.15
+        TRANSCRIPT_BOOST = 0.05
         query_embedding = db._get_clip_model().encode_semantic_query(query)
 
         for row in rows:
@@ -1063,16 +1063,20 @@ def get_image_scenes(image_id):
 
             scene['visual_score'] = vis_score
             scene['transcript_score'] = trans_score
-            scene['combined_score'] = vis_score + TRANSCRIPT_BOOST * trans_score
             scenes.append(scene)
 
-        # Normalise across this video's scenes
+        # Heatmap (normalised_score) is based purely on visual similarity
+        # so scenes without transcription are not penalised.  Transcript
+        # similarity feeds into combined_score which is used for ranking
+        # videos in search results, but does not affect the per-scene
+        # heatmap colours.
         if scenes:
-            scores = [s['combined_score'] for s in scenes]
-            s_min, s_max = min(scores), max(scores)
-            s_range = s_max - s_min
+            vis_scores = [s['visual_score'] for s in scenes]
+            v_min, v_max = min(vis_scores), max(vis_scores)
+            v_range = v_max - v_min
             for s in scenes:
-                s['normalised_score'] = (s['combined_score'] - s_min) / s_range if s_range > 0 else 0.0
+                s['normalised_score'] = (s['visual_score'] - v_min) / v_range if v_range > 0 else 0.0
+                s['combined_score'] = s['visual_score'] + TRANSCRIPT_BOOST * s['transcript_score']
     else:
         scenes = [dict(row) for row in rows]
 
