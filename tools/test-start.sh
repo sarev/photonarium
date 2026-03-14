@@ -1,6 +1,6 @@
 #!/bin/bash
 # Start a clean test instance of Photonarium.
-# Usage: tools/test-start.sh [--port PORT] [--folders FOLDER1,FOLDER2,...] [--no-scan]
+# Usage: tools/test-start.sh [--port PORT] [--folders FOLDER1,FOLDER2,...] [--no-scan] [--tutorial]
 #
 # Defaults:
 #   port:    5151
@@ -14,12 +14,14 @@ TEST_DIR="/tmp/photonarium-test"
 PORT=5151
 SCAN="--scan"
 FOLDERS=()
+TUTORIAL=false
 
 while [[ $# -gt 0 ]]; do
     case $1 in
-        --port)    PORT="$2"; shift 2 ;;
-        --folders) IFS=',' read -ra FOLDERS <<< "$2"; shift 2 ;;
-        --no-scan) SCAN=""; shift ;;
+        --port)     PORT="$2"; shift 2 ;;
+        --folders)  IFS=',' read -ra FOLDERS <<< "$2"; shift 2 ;;
+        --no-scan)  SCAN=""; shift ;;
+        --tutorial) TUTORIAL=true; shift ;;
         *) echo "Unknown option: $1" >&2; exit 1 ;;
     esac
 done
@@ -40,6 +42,21 @@ done
 # Activate venv and start
 source "$REPO_ROOT/env/bin/activate"
 cd "$REPO_ROOT/app"
+
+# Generate config if it doesn't exist yet (first run after wipe)
+if [ ! -f "$TEST_DIR/photonarium.yml" ]; then
+    python -u app.py --init-config "$TEST_DIR" --config "$TEST_DIR/photonarium.yml" 2>/dev/null || true
+fi
+
+# --tutorial: patch config to match tutorial.py's face detection settings
+# (lower thresholds for the small stock-photo faces in mktutorial/examples)
+if [ "$TUTORIAL" = true ] && [ -f "$TEST_DIR/photonarium.yml" ]; then
+    sed -i \
+        -e 's/face_detection_min_confidence: 0.95/face_detection_min_confidence: 0.94/' \
+        -e 's/face_detection_min_size: 60/face_detection_min_size: 20/' \
+        -e 's/face_recognition_threshold: 0.7$/face_recognition_threshold: 0.90/' \
+        "$TEST_DIR/photonarium.yml"
+fi
 
 LOG_FILE="/tmp/photonarium-test.log"
 echo "Logging to $LOG_FILE"

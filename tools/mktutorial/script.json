@@ -46,6 +46,10 @@
         }
     ],
     "steps": {
+        "setup-wizard": {
+            "title": "Setup wizard",
+            "caption": "The first time you launch Photonarium, a setup wizard helps you choose a hardware profile and language settings. Pick the preset that matches your machine \u2014 you can always fine-tune individual settings later from the Database screen."
+        },
         "first-launch": {
             "title": "First launch",
             "caption": "When you first open Photonarium, you see the Database screen in the default light theme. There are no folders or photos yet. The Local Indexed Folders section is where you tell Photonarium where your photos live \u2014 it will watch those folders and keep your library up to date. If you\u2019ve configured a catalogue directory, you\u2019ll also see an Import Images section for copying photos from cameras, phones, or downloads into a managed catalogue organised by date. The Edit Settings button opens an in-app settings editor where you can tweak advanced settings like model selection, face detection thresholds, and thumbnail quality."

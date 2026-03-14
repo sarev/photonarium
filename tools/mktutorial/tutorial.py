@@ -4,25 +4,22 @@ Tutorial Generator for Photonarium
 =================================
 
 Automates screenshot capture and HTML tutorial generation using Playwright.
-Starts the real Photonarium backend against the tools/mktutorial/ data
-directory, drives the browser through each tutorial step, captures
-screenshots, and generates static HTML pages.
+Starts a fresh Photonarium backend, adds demo folders, waits for full
+processing (including STT transcription), then drives the browser through
+each tutorial step, captures screenshots, and generates a static HTML
+slideshow.
 
 Prerequisites:
     pip install playwright pillow
     playwright install chromium
 
 Usage (from the project root):
-    # One-time setup: generate DB, thumbnails, models, setup screenshots
-    python tools/mktutorial/tutorial.py --setup
-
-    # Generate tutorial screenshots and HTML slideshow
     python tools/mktutorial/tutorial.py
 
 Creates a 'generated' folder next to the project root with:
-    - Copy of the demo database, config, and thumbnails (for the server)
+    - A fresh database, config, and thumbnails (generated each run)
     - Screenshots captured by Playwright
-    - Static HTML tutorial pages with a table of contents
+    - A static HTML tutorial slideshow
 """
 
 import argparse
@@ -52,7 +49,6 @@ PROJECT_DIR = SCRIPT_DIR.parent.parent  # project root
 TUTORIALS_DIR = PROJECT_DIR / 'generated'
 SCREENSHOTS_DIR = TUTORIALS_DIR / 'screenshots'
 MANUAL_DIR = TUTORIALS_DIR / 'manual'
-SETUP_CACHE_DIR = SCRIPT_DIR / 'setup-cache'
 
 # ---------------------------------------------------------------------------
 # Server configuration
@@ -60,7 +56,7 @@ SETUP_CACHE_DIR = SCRIPT_DIR / 'setup-cache'
 
 SERVER_PORT = 5111  # non-standard port to avoid clashing
 SERVER_URL = f'http://localhost:{SERVER_PORT}'
-SERVER_STARTUP_TIMEOUT = 30  # seconds
+SERVER_STARTUP_TIMEOUT = 60  # seconds (cache warmup is slower with a full DB)
 
 # ---------------------------------------------------------------------------
 # Viewport and timing
@@ -154,13 +150,12 @@ def manual_step(key, filename):
 
 
 def setup_step(key):
-    """Register a step whose screenshot is captured by ``--setup``.
+    """Register a step with a pre-captured screenshot.
 
     Auto-numbered identically to :func:`step` and :func:`manual_step`, but
     the screenshot path points into ``screenshots/`` (same directory as
     automated steps).  The action is ``None`` so the main capture loop skips
-    it -- the image file is expected to already exist because
-    :func:`setup_tutorials_dir` copies it from the setup cache.
+    it — the image file is expected to already exist.
     """
     global _step_counter
     _step_counter += 1
@@ -414,9 +409,7 @@ def remove_highlights(page):
 # in this set is treated as a false positive (non-face).
 _FACE_IMAGES = frozenset(
     {
-        'photo_125.jpg',  # ignore
-        'photo_425.jpg',  # ignore
-        'photo_240.jpg',  # ignore
+        'photo_240.jpg',  # close-up portrait
         'photo_076.jpg',  # Nia (left), Alice (right)
         'photo_075.jpg',  # Alice (left), unknown (right)
         'photo_112.jpg',  # Geoff
@@ -518,11 +511,12 @@ def get_non_face_ids(page):
 # =========================================================================
 section('getting-started')
 
-setup_step('first-launch')  # 0-1.png -- light theme empty DB screen
-setup_step('dark-theme')  # 0-2.png -- dark theme empty DB screen
-setup_step('adding-images')  # 0-3.png -- composite: dark DB + OS picker overlay
-setup_step('indexing')  # 0-4.png -- folder added, scan starting
-setup_step('processing')  # 0-5.png -- importing in progress
+setup_step('setup-wizard')   # 0-1.png -- first-run wizard dialog
+setup_step('first-launch')  # 0-2.png -- light theme empty DB screen
+setup_step('dark-theme')    # 0-3.png -- dark theme empty DB screen
+setup_step('adding-images') # 0-4.png -- composite: dark DB + OS picker overlay
+setup_step('indexing')      # 0-5.png -- folder added, scan starting
+setup_step('processing')    # 0-6.png -- importing in progress
 
 
 # =========================================================================
@@ -705,7 +699,7 @@ def step_search_opening(page, ctx):
 @step('search-by-description')
 def step_search_by_description(page, ctx):
     text_input = page.locator('#filter-text')
-    text_input.fill('red car')
+    text_input.fill('blue car')
     wait_for_idle(page)
     # Don't press Enter — that triggers Apply. Just show the typed text.
     highlight_element(page, '#filter-text')
@@ -741,9 +735,12 @@ def step_search_negative_results(page, ctx):
 @step('date-ranges')
 def step_search_date_ranges(page, ctx):
     navigate_to(page, 'search')
-    page.fill('#filter-date-start', '2026-02-07')
+    # Fill the "from" date using the new year/month/day fields
+    page.fill('#date-from-year', '2026')
+    page.select_option('#date-from-month', '2')
+    page.select_option('#date-from-day', '7')
     wait_for_idle(page)
-    highlight_element(page, '#filter-date-start')
+    highlight_element(page, '#date-from-row')
 
 
 @step('combined-filters')
@@ -1024,6 +1021,29 @@ def step_faces_autocomplete(page, ctx):
     # Wait for Alice to be fully persisted in the people cache so
     # autocomplete can find her.
     page.wait_for_function("() => AppState.people.getAll().some(p => p.name === 'Alice')", timeout=5000)
+
+    # Force-load lazy person-card thumbnails BEFORE triggering autocomplete,
+    # so the evaluate calls don't steal focus and close the dropdown.
+    page.evaluate("""() => {
+        document.querySelectorAll(
+            '.faces-section.known .person-card img'
+        ).forEach(img => {
+            img.loading = 'eager';
+            const src = img.src;
+            img.src = '';
+            img.src = src;
+        });
+    }""")
+    page.wait_for_function(
+        """() => {
+        const imgs = document.querySelectorAll(
+            '.faces-section.known .person-card img');
+        return imgs.length > 0
+            && [...imgs].every(img => img.complete && img.naturalWidth > 0);
+    }""",
+        timeout=5000,
+    )
+
     # Type "Ali" into Alice's other face (photo_075, left bounding box)
     card = face_card_by_image(page, 'photo_075.jpg', 'left')
     card.scroll_into_view_if_needed()
@@ -1044,27 +1064,6 @@ def step_faces_autocomplete(page, ctx):
     # Don't click the item yet — the screenshot should show the dropdown.
     page.wait_for_selector('.face-card-autocomplete-item', state='visible', timeout=5000)
     page.wait_for_timeout(200)
-    # Force-load lazy person-card thumbnails (Alice's Known People card)
-    page.evaluate("""() => {
-        document.querySelectorAll(
-            '.faces-section.known .person-card img'
-        ).forEach(img => {
-            img.loading = 'eager';
-            const src = img.src;
-            img.src = '';
-            img.src = src;
-        });
-    }""")
-    page.wait_for_function(
-        """() => {
-        const imgs = document.querySelectorAll(
-            '.faces-section.known .person-card img');
-        return imgs.length > 0
-            && [...imgs].every(img => img.complete && img.naturalWidth > 0);
-    }""",
-        timeout=5000,
-    )
-    page.wait_for_timeout(200)
 
 
 @step('failed-face-detections')
@@ -1073,14 +1072,21 @@ def step_faces_failed_detections(page, ctx):
     # The dropdown may have closed between steps (focus lost during
     # screenshot capture), so re-open it if needed before clicking.
     card = face_card_by_image(page, 'photo_075.jpg', 'left')
-    input_el = card.locator('.face-card-input')
+    card_id = card.get_attribute('data-id')
     if page.locator('.face-card-autocomplete-item').count() > 0:
         page.locator('.face-card-autocomplete-item').first.click()
     else:
-        # Dropdown closed — re-trigger it by focusing and re-typing
-        input_el.click()
-        input_el.fill('')
-        input_el.fill('Ali')
+        # Dropdown closed — re-trigger via JS dispatchEvent (Playwright's
+        # fill() doesn't reliably fire the 'input' event that triggers
+        # autocomplete in headless Chromium).
+        page.evaluate(f'''() => {{
+            const input = document.querySelector(
+                '[data-id="{card_id}"] .face-card-input');
+            if (!input) return;
+            input.focus();
+            input.value = 'Ali';
+            input.dispatchEvent(new Event('input', {{ bubbles: true }}));
+        }}''')
         page.wait_for_selector('.face-card-autocomplete-item', state='visible', timeout=5000)
         page.locator('.face-card-autocomplete-item').first.click()
     # Verify the assignment landed as "Alice", not literal "Ali"
@@ -1148,18 +1154,14 @@ def step_faces_the_ignore_control(page, ctx):
     page.click('#dialog-confirm-ok')
     page.wait_for_timeout(1000)
     wait_for_idle(page)
-    # Select two of the three "ignore" faces (photo_125, photo_425).
-    # Re-query each card freshly to avoid stale element references after
+    # Select the unnamed real face (photo_112) to demonstrate ignoring.
+    # Re-query the card freshly to avoid stale element references after
     # the grid re-render.
-    card1_id = face_card_by_image(page, 'photo_125.jpg').get_attribute('data-id')
+    card1_id = face_card_by_image(page, 'photo_112.jpg').get_attribute('data-id')
     page.locator(f'.face-card[data-id="{card1_id}"]').scroll_into_view_if_needed()
     click_face_id(page, card1_id)
-    page.wait_for_timeout(100)
-    card2_id = face_card_by_image(page, 'photo_425.jpg').get_attribute('data-id')
-    page.locator(f'.face-card[data-id="{card2_id}"]').scroll_into_view_if_needed()
-    click_face_id(page, card2_id, button='right')
     wait_for_idle(page)
-    # Hover the first to reveal the ignore button and highlight it
+    # Hover to reveal the ignore button and highlight it
     page.locator(f'.face-card[data-id="{card1_id}"]').hover()
     page.wait_for_timeout(300)
     highlight_element(
@@ -1173,19 +1175,22 @@ def step_faces_the_ignore_control(page, ctx):
 
 @step('ignoring')
 def step_faces_ignoring(page, ctx):
-    # Click the ignore button — shows confirmation for multiple faces
-    card = face_card_by_image(page, 'photo_125.jpg')
+    # Click the ignore button on photo_112
+    card = face_card_by_image(page, 'photo_112.jpg')
     card.locator('.face-card-ignore').click()
-    page.wait_for_selector('#dialog-confirm[open]', timeout=5000)
+    # Single-face ignore may skip the confirmation dialog, so wait briefly
+    page.wait_for_timeout(800)
+    # If a confirmation dialog appeared, dismiss it
+    if page.locator('#dialog-confirm[open]').count() > 0:
+        page.click('#dialog-confirm-ok')
+        page.wait_for_timeout(500)
     wait_for_idle(page)
 
 
 @step('ignored-group')
 def step_faces_ignored_group(page, ctx):
-    # Dismiss the ignore confirmation dialog from the previous step.
-    # Wait for the grid to re-render after removing ignored faces.
-    page.click('#dialog-confirm-ok')
-    page.wait_for_timeout(1000)
+    # The ignore was already committed in the previous step.
+    # Wait for the grid to settle after removing ignored faces.
     wait_for_idle(page)
     # Spotlight the Known People section to show the '-' person
     spotlight_element(page, '.faces-section.known')
@@ -1415,6 +1420,15 @@ section('fullscreen-tagging')
 
 @step('tagging-opening')
 def step_tagging_opening(page, ctx):
+    # Reset sort to date — earlier sections may have left similarity sort
+    # active, which triggers a toast when the gallery loads with no selection.
+    # Also forcefully remove any lingering toasts from prior steps.
+    page.evaluate("""() => {
+        App.setSortBy('date');
+        document.querySelectorAll('.error-toast, .info-toast').forEach(
+            t => t.classList.remove('visible'));
+    }""")
+    page.wait_for_timeout(500)
     navigate_to(page, 'search')
 
 
@@ -1442,6 +1456,11 @@ def step_tagging_applying_people_filter(page, ctx):
     page.click('#btn-apply-filter')
     page.wait_for_selector('#screen-gallery', state='visible', timeout=5000)
     wait_for_idle(page)
+    # Dismiss any toasts that fired during navigation
+    page.evaluate("""() => {
+        document.querySelectorAll('.error-toast, .info-toast').forEach(
+            t => t.classList.remove('visible'));
+    }""")
     wait_for_thumbnails(page)
 
 
@@ -1471,25 +1490,19 @@ def step_tagging_naming(page, ctx):
         page.wait_for_timeout(600)
     red_box = page.locator('.face-box.unknown').first
     red_box.click()
+    page.wait_for_timeout(300)
+    # Type a name and submit so the next screenshot shows a green box
+    page.keyboard.type('Faye')
     wait_for_idle(page)
 
 
 @step('tagging-ignoring')
 def step_tagging_ignoring(page, ctx):
-    # Press Escape to cancel any active input from the previous step
-    page.keyboard.press('Escape')
-    page.wait_for_timeout(300)
-    # Navigate until we find a photo with an unknown face (previous step
-    # may have named the only unknown on the previous photo)
-    for _ in range(20):
-        if page.locator('.face-box.unknown').count() > 0:
-            break
-        page.keyboard.press('ArrowRight')
-        page.wait_for_timeout(600)
-    unknown = page.locator('.face-box.unknown').first
-    unknown.hover()
-    page.wait_for_timeout(500)
-    ctx['_keep_hover'] = True
+    # Submit the name typed in the previous step, then wait for the
+    # face box to turn green (known person).
+    page.keyboard.press('Enter')
+    page.wait_for_timeout(1000)
+    wait_for_idle(page)
 
 
 # =========================================================================
@@ -1596,8 +1609,14 @@ def step_videos_opening(page, ctx):
 
 @step('videos-selecting')
 def step_videos_selecting(page, ctx):
-    """Click the first video card to populate the timeline."""
-    page.locator('.video-card').first.click()
+    """Click the Apollo video card to populate the timeline."""
+    # Select Apollo explicitly — it has the most scenes and transcription
+    # for demoing the timeline, subtitle editor, and search heatmap.
+    apollo = page.locator('.video-card:has-text("apollo")')
+    if apollo.count() > 0:
+        apollo.first.click()
+    else:
+        page.locator('.video-card').first.click()
     page.wait_for_timeout(500)
 
     # Scene loading is async — _loadScenesIfNeeded() fetches from the
@@ -1782,9 +1801,19 @@ def step_videos_edit_subtitles(page, ctx):
         page.wait_for_selector('#vid-subtitle-editor:not([hidden])', timeout=5000)
     except Exception:
         pass
+    page.wait_for_timeout(300)
+    # Click a timeline scene that has transcription text so the editor
+    # shows populated content and the scene is selected in the timeline.
+    page.evaluate("""() => {
+        const scenes = AppState.videos.getScenes();
+        if (!scenes) return;
+        const idx = scenes.findIndex(s => s.transcription && s.transcription.trim());
+        if (idx < 0) return;
+        const sceneEls = document.querySelectorAll('.timeline-scene');
+        if (sceneEls[idx]) sceneEls[idx].click();
+    }""")
     page.wait_for_timeout(500)
     highlight_element(page, '#btn-vid-edit-subs')
-    page.wait_for_timeout(500)
 
 
 # =========================================================================
@@ -1869,10 +1898,9 @@ manual_step('mobile-portrait', 'mobile-portrait.png')
 def setup_tutorials_dir():
     """Clean and prepare the tutorials output directory.
 
-    Copies the generated demo data (DB, config, thumbnails, model files)
-    from SCRIPT_DIR into TUTORIALS_DIR, and copies setup screenshots from
-    SETUP_CACHE_DIR into the screenshots directory so that ``setup_step()``
-    paths resolve correctly.
+    Creates a fresh TUTORIALS_DIR with a new config and model weights.
+    No pre-baked database or thumbnails are copied — the server will
+    ingest everything from scratch when it starts with ``--scan``.
     """
     if TUTORIALS_DIR.exists():
         print(f'  Removing existing {TUTORIALS_DIR.name}/ ...')
@@ -1881,51 +1909,81 @@ def setup_tutorials_dir():
     TUTORIALS_DIR.mkdir()
     SCREENSHOTS_DIR.mkdir()
 
-    # Copy generated demo data for the server to use
-    for name in [
-        'photonarium.db',
-        'photonarium.db-wal',
-        'photonarium.db-shm',
-        'photonarium.yml',
-        '.laion-aesthetic-head.pth',
-        '.nima-mobilenetv2-ava.pth',
+    # Create a fresh config pointing at TUTORIALS_DIR as data_dir
+    config_path = TUTORIALS_DIR / 'photonarium.yml'
+    subprocess.run(
+        [
+            sys.executable,
+            str(PROJECT_DIR / 'app' / 'app.py'),
+            '--init-config',
+            str(TUTORIALS_DIR),
+            '--config',
+            str(config_path),
+        ],
+        cwd=str(PROJECT_DIR),
+        check=True,
+    )
+    # Patch config for tutorial-quality results:
+    #  - STT enabled so video transcription runs during ingestion
+    #  - Slightly lower face detection confidence (0.94 vs default 0.95) to
+    #    pick up a few false-positive detections for the suppression demo
+    #  - Lower face detection min_size (20px vs template 60px) so the small
+    #    faces in the example images are detected
+    #  - Raise face recognition threshold (0.90 vs template 0.70) so
+    #    auto-matching is strict — prevents the child in photo_075 from
+    #    being auto-assigned to Nia, keeping it unnamed for the demo
+    cfg_text = config_path.read_text(encoding='utf-8')
+    patched = False
+    for old, new in [
+        ('stt_enabled: false', 'stt_enabled: true'),
+        ('face_detection_min_confidence: 0.95', 'face_detection_min_confidence: 0.94'),
+        ('face_detection_min_size: 60', 'face_detection_min_size: 20'),
+        ('face_recognition_threshold: 0.7', 'face_recognition_threshold: 0.90'),
     ]:
-        src = SCRIPT_DIR / name
-        if src.exists():
-            shutil.copy2(src, TUTORIALS_DIR / name)
+        if old in cfg_text:
+            cfg_text = cfg_text.replace(old, new)
+            patched = True
+    if patched:
+        config_path.write_text(cfg_text, encoding='utf-8')
+        print('  Patched config for tutorial (STT, face thresholds)')
+    print(f'  Created {config_path}')
 
-    # Copy thumbnail cache
-    thumb_src = SCRIPT_DIR / '.thumbnails'
-    if thumb_src.exists():
-        shutil.copytree(thumb_src, TUTORIALS_DIR / '.thumbnails')
-
-    # Copy setup screenshots into the screenshots directory so that
-    # setup_step() paths (screenshots/0-1.png etc.) resolve correctly
-    if SETUP_CACHE_DIR.exists():
-        for png in SETUP_CACHE_DIR.glob('*.png'):
-            shutil.copy2(png, SCREENSHOTS_DIR / png.name)
+    # Download model weights (LAION aesthetic head, NIMA) into TUTORIALS_DIR
+    subprocess.run(
+        [
+            sys.executable,
+            str(PROJECT_DIR / 'download_models.py'),
+            '--data-dir',
+            str(TUTORIALS_DIR),
+            '--config',
+            str(config_path),
+        ],
+        cwd=str(PROJECT_DIR),
+        check=True,
+    )
+    print('  Downloaded model weights')
 
     # Copy manual screenshots (mobile-landscape.png, mobile-portrait.png)
     manual_src = SCRIPT_DIR / 'manual'
     if manual_src.exists():
         shutil.copytree(manual_src, MANUAL_DIR)
 
-    print(f'  Prepared {TUTORIALS_DIR.name}/ with demo data')
+    print(f'  Prepared {TUTORIALS_DIR.name}/')
 
 
-def start_server():
+def start_server(add_folders=None, scan=False):
     """Start the Photonarium backend against the tutorials data directory.
 
-    Uses --config to point at the demo config file inside TUTORIALS_DIR
-    (config no longer lives inside the data directory by default) and
-    --data-dir as a runtime override so the server reads demo data.
+    Args:
+        add_folders: Optional list of folder paths to register via --add-folder.
+        scan: If True, pass --scan to trigger full ingestion.
 
     Returns:
         Tuple of (process, log_file_handle).  The caller must close the
         file handle after stopping the server.
     """
     log_path = TUTORIALS_DIR / 'server.log'
-    log_fh = open(log_path, 'w', encoding='utf-8')  # noqa: SIM115
+    log_fh = open(log_path, 'a', encoding='utf-8')  # noqa: SIM115
     cmd = [
         sys.executable,
         str(PROJECT_DIR / 'app' / 'app.py'),
@@ -1933,10 +1991,16 @@ def start_server():
         str(TUTORIALS_DIR / 'photonarium.yml'),
         '--data-dir',
         str(TUTORIALS_DIR),
+    ]
+    for folder in (add_folders or []):
+        cmd.extend(['--add-folder', folder])
+    if scan:
+        cmd.append('--scan')
+    cmd.extend([
         '--port',
         str(SERVER_PORT),
         '--debug',
-    ]
+    ])
     proc = subprocess.Popen(
         cmd,
         cwd=str(PROJECT_DIR),
@@ -1961,18 +2025,45 @@ def wait_for_server():
     raise TimeoutError(f'Server did not start within {SERVER_STARTUP_TIMEOUT}s')
 
 
+def open_app(page, theme='dark'):
+    """Navigate to the app, dismiss the wizard if present, and set the theme.
+
+    Shared page-init sequence used by ``run_setup()`` (phase 2) and
+    ``main()``.  Phase 1 of ``run_setup()`` has its own flow because it
+    needs to capture the wizard before dismissing it.
+    """
+    page.goto(SERVER_URL)
+    page.wait_for_timeout(1000)
+
+    # Dismiss the setup wizard if it appeared (first-run, wizard not completed)
+    page.evaluate("""() => {
+        const dlg = document.getElementById('dialog-wizard');
+        if (dlg && dlg.open) dlg.close();
+    }""")
+
+    page.evaluate(f"""() => {{
+        document.getElementById('app').dataset.theme = '{theme}';
+        localStorage.setItem('photonarium-theme', '"{theme}"');
+    }}""")
+    page.wait_for_timeout(500)
+
+
 def stop_server(proc):
-    """Terminate the backend server."""
+    """Terminate the backend server and wait for the port to be released."""
     if proc and proc.poll() is None:
         proc.terminate()
         try:
             proc.wait(timeout=5)
         except subprocess.TimeoutExpired:
             proc.kill()
+            proc.wait(timeout=5)
+    # Give the OS a moment to release the port (especially on Windows
+    # where TIME_WAIT can linger after process termination).
+    time.sleep(2)
 
 
 # =========================================================================
-# Setup mode (--setup)
+# Processing wait
 # =========================================================================
 
 
@@ -2045,111 +2136,38 @@ def _wait_for_processing(timeout=600, stable_count=3):
 
 
 def run_setup():
-    """Initialise the tutorial data directory and capture setup screenshots.
+    """Capture the "Getting Started" screenshots (Section 0).
 
-    This is a one-time operation that:
-    1. Creates ``photonarium.yml`` with data_dir pointing at SCRIPT_DIR
-    2. Downloads ML model files into SCRIPT_DIR
-    3. Starts the server against an empty database
-    4. Captures the "Getting Started" screenshots via Playwright
-    5. Composites the folder-picker overlay screenshot
-    6. Adds a folder and waits for processing to complete
-    7. Stops the server
+    Uses two server lifecycles:
 
-    The captured screenshots are saved to ``SETUP_CACHE_DIR`` and later
-    copied into the tutorial output by :func:`setup_tutorials_dir`.
+    1. **Empty server** (no folders, no scan) — captures the first-run wizard
+       and the empty Database screen screenshots (0-1 through 0-4).
+    2. **Ingestion server** (--add-folder + --scan) — adds the example images
+       folder, waits for processing, and captures the "folders added" and
+       "importing" screenshots (0-5, 0-6).
+
+    Must be run before ``main()`` so the setup screenshots and fully-
+    processed database exist for the HTML slideshow.
     """
     from PIL import Image
+
+    examples_dir = str((SCRIPT_DIR / 'examples').resolve())
 
     print('Photonarium Tutorial Setup')
     print('=' * 40)
 
-    # ------------------------------------------------------------------
-    # Step 1 — Init config
-    # ------------------------------------------------------------------
-    print('\n[1/7] Initialising config...')
-    config_path = SCRIPT_DIR / 'photonarium.yml'
-    subprocess.run(
-        [
-            sys.executable,
-            str(PROJECT_DIR / 'app' / 'app.py'),
-            '--init-config',
-            str(SCRIPT_DIR),
-            '--config',
-            str(config_path),
-        ],
-        cwd=str(PROJECT_DIR),
-        check=True,
-    )
-    print(f'  Created {config_path}')
-    # Ensure STT is enabled so video transcription runs during setup.
-    # The default is True, but an existing config from a prior --setup
-    # run may have it disabled.
-    cfg_text = config_path.read_text(encoding='utf-8')
-    if 'stt_enabled: false' in cfg_text:
-        cfg_text = cfg_text.replace('stt_enabled: false', 'stt_enabled: true')
-        config_path.write_text(cfg_text, encoding='utf-8')
-        print('  Patched stt_enabled → true')
+    # ---- Phase 0: Prepare output directory --------------------------------
+    print('\n[1/7] Preparing tutorials directory...')
+    setup_tutorials_dir()
 
-    # ------------------------------------------------------------------
-    # Step 2 — Download models
-    # ------------------------------------------------------------------
-    print('\n[2/7] Downloading models...')
-    subprocess.run(
-        [
-            sys.executable,
-            str(PROJECT_DIR / 'download_models.py'),
-            '--data-dir',
-            str(SCRIPT_DIR),
-            '--config',
-            str(config_path),
-        ],
-        cwd=str(PROJECT_DIR),
-        check=True,
-    )
-
-    # ------------------------------------------------------------------
-    # Step 3 — Start server (empty DB, no --scan)
-    # ------------------------------------------------------------------
-    print('\n[3/7] Starting server (empty database)...')
-    # Remove any existing DB so we start fresh
-    for db_file in SCRIPT_DIR.glob('photonarium.db*'):
-        db_file.unlink()
-    server_log = SETUP_CACHE_DIR / 'server.log'
-    server_log_fh = open(server_log, 'w', encoding='utf-8')  # noqa: SIM115
-    cmd = [
-        sys.executable,
-        str(PROJECT_DIR / 'app' / 'app.py'),
-        '--config',
-        str(config_path),
-        '--data-dir',
-        str(SCRIPT_DIR),
-        '--port',
-        str(SERVER_PORT),
-        '--debug',
-    ]
-    server = subprocess.Popen(
-        cmd,
-        cwd=str(PROJECT_DIR),
-        stdout=server_log_fh,
-        stderr=subprocess.STDOUT,
-    )
-    print(f'  Server log: {server_log}')
-
+    # ---- Phase 1: Empty server — wizard + empty DB screenshots ------------
+    print('\n[2/7] Starting empty server...')
+    server, server_log_fh = start_server()
     try:
-        # ------------------------------------------------------------------
-        # Step 4 — Wait for server ready
-        # ------------------------------------------------------------------
-        print('\n[4/7] Waiting for server...')
         wait_for_server()
         print(f'  Server ready at {SERVER_URL}')
 
-        # ------------------------------------------------------------------
-        # Step 5 — Capture setup screenshots
-        # ------------------------------------------------------------------
-        print('\n[5/7] Capturing setup screenshots...')
-        SETUP_CACHE_DIR.mkdir(parents=True, exist_ok=True)
-
+        print('\n[3/7] Capturing first-run screenshots...')
         with sync_playwright() as pw:
             browser = pw.chromium.launch(headless=True)
             context = browser.new_context(viewport=VIEWPORT)
@@ -2157,35 +2175,54 @@ def run_setup():
             page.goto(SERVER_URL)
             page.wait_for_timeout(1000)
 
-            # (a) Set light theme
-            page.evaluate("""() => {
-                document.getElementById('app').dataset.theme = 'light';
-                localStorage.setItem('photonarium-theme', '"light"');
-            }""")
-            page.wait_for_timeout(500)
-
-            # (b) Capture 0-1.png — light theme, empty Database screen
-            page.screenshot(path=str(SETUP_CACHE_DIR / '0-1.png'))
-            print('  Captured 0-1.png (light theme)')
-
-            # (c) Set dark theme
+            # The app should land on the Database screen with the wizard open
+            # (totalImages === 0, wizard_completed === false).
+            # Set dark theme first so all screenshots are consistent.
             page.evaluate("""() => {
                 document.getElementById('app').dataset.theme = 'dark';
                 localStorage.setItem('photonarium-theme', '"dark"');
             }""")
             page.wait_for_timeout(500)
 
-            # (d) Capture 0-2.png — dark theme, empty Database screen
-            # Highlight the "Add Folder" button so the user knows what to click
-            highlight_element(page, '#btn-add-folder')
-            page.screenshot(path=str(SETUP_CACHE_DIR / '0-2.png'))
-            remove_highlights(page)
-            print('  Captured 0-2.png (dark theme)')
+            # (a) Capture 0-1.png — wizard dialog on first launch
+            page.wait_for_selector('#dialog-wizard[open]', timeout=5000)
+            page.screenshot(path=str(SCREENSHOTS_DIR / '0-1.png'))
+            print('  Captured 0-1.png (setup wizard)')
 
-            # (e) Capture background for composite, then build 0-3.png
-            bg_path = SETUP_CACHE_DIR / '_bg_dark_db.png'
+            # Dismiss the wizard so we can photograph the empty DB screen
+            page.evaluate("""() => {
+                const dlg = document.getElementById('dialog-wizard');
+                if (dlg && dlg.open) dlg.close();
+            }""")
+            page.wait_for_timeout(300)
+
+            # Ensure we're on the Database screen
+            page.evaluate("() => App.navigateTo('database')")
+            page.wait_for_timeout(500)
+
+            # (b) Capture 0-2.png — light theme, empty Database screen
+            page.evaluate("""() => {
+                document.getElementById('app').dataset.theme = 'light';
+                localStorage.setItem('photonarium-theme', '"light"');
+            }""")
+            page.wait_for_timeout(500)
+            page.screenshot(path=str(SCREENSHOTS_DIR / '0-2.png'))
+            print('  Captured 0-2.png (light theme)')
+
+            # (c) Capture 0-3.png — dark theme, highlight Add Folder button
+            page.evaluate("""() => {
+                document.getElementById('app').dataset.theme = 'dark';
+                localStorage.setItem('photonarium-theme', '"dark"');
+            }""")
+            page.wait_for_timeout(500)
+            highlight_element(page, '#btn-add-folder')
+            page.screenshot(path=str(SCREENSHOTS_DIR / '0-3.png'))
+            remove_highlights(page)
+            print('  Captured 0-3.png (dark theme)')
+
+            # (d) Composite 0-4.png — dark DB + OS picker overlay
+            bg_path = SCREENSHOTS_DIR / '_bg_dark_db.png'
             page.screenshot(path=str(bg_path))
-            # (f) Composite the OS picker crop onto the dark background
             overlay_path = SCRIPT_DIR / 'manual' / 'os-picker-crop.png'
             if overlay_path.exists():
                 bg = Image.open(bg_path)
@@ -2193,71 +2230,63 @@ def run_setup():
                 x = (bg.width - overlay.width) // 2
                 y = (bg.height - overlay.height) // 2
                 bg.paste(overlay, (x, y), overlay)
-                bg.save(SETUP_CACHE_DIR / '0-3.png')
-                print('  Composited 0-3.png (folder picker)')
+                bg.save(SCREENSHOTS_DIR / '0-4.png')
+                print('  Composited 0-4.png (folder picker)')
             else:
-                print(f'  WARNING: {overlay_path} not found, skipping 0-3.png composite')
+                print(f'  WARNING: {overlay_path} not found, skipping 0-4.png composite')
+            bg_path.unlink(missing_ok=True)
 
-            # (g) Add folder via API
-            examples_dir = str((SCRIPT_DIR / 'examples').resolve())
-            req = urllib.request.Request(
-                f'{SERVER_URL}/api/folders',
-                data=json.dumps({'path': examples_dir}).encode(),
-                headers={'Content-Type': 'application/json'},
-                method='POST',
-            )
-            try:
-                resp = urllib.request.urlopen(req, timeout=10)
-                body = json.loads(resp.read())
-                print(f'  Added folder: {examples_dir} -> {body}')
-            except urllib.error.HTTPError as e:
-                body = e.read().decode(errors='replace')
-                raise RuntimeError(f'Failed to add folder ({e.code}): {body}') from e
+            browser.close()
 
-            # Tell the frontend to refresh its folder list (don't reload
-            # the page — a full reload after images exist would land on
-            # Gallery instead of Database, and processing can finish in
-            # seconds on a fast GPU).
+    finally:
+        print('\n[4/7] Stopping empty server...')
+        stop_server(server)
+        server_log_fh.close()
+
+    # ---- Phase 2: Ingestion server — add folders, scan, capture -----------
+    print('\n[5/7] Restarting server with demo folders...')
+    server, server_log_fh = start_server(
+        add_folders=[examples_dir], scan=True,
+    )
+    try:
+        wait_for_server()
+        print(f'  Server ready at {SERVER_URL}')
+
+        with sync_playwright() as pw:
+            browser = pw.chromium.launch(headless=True)
+            context = browser.new_context(viewport=VIEWPORT)
+            page = context.new_page()
+            open_app(page)
+            page.evaluate("() => App.navigateTo('database')")
+            page.wait_for_timeout(500)
+
+            # (e) Refresh the frontend folder list to show added folders
             page.evaluate('() => AppState.folders.load()')
             page.wait_for_selector('.folder-item', timeout=10000)
             page.wait_for_timeout(500)
 
-            # (h) Capture 0-4.png — folder added, scan starting
-            page.screenshot(path=str(SETUP_CACHE_DIR / '0-4.png'))
-            print('  Captured 0-4.png (folder added)')
+            # (f) Capture 0-5.png — folders added, scan starting
+            page.screenshot(path=str(SCREENSHOTS_DIR / '0-5.png'))
+            print('  Captured 0-5.png (folders added)')
 
-            # (i) Wait for status bar to show processing, capture 0-5.png.
-            # On fast GPUs processing may finish before we get here — that's
-            # OK, we'll still have the Database screen with the folder.
-            page.wait_for_timeout(2000)
-            page.screenshot(path=str(SETUP_CACHE_DIR / '0-5.png'))
-            print('  Captured 0-5.png (importing)')
+            # (g) Wait for status bar to show processing, capture 0-6.png
+            page.wait_for_timeout(30000)
+            page.screenshot(path=str(SCREENSHOTS_DIR / '0-6.png'))
+            print('  Captured 0-6.png (importing)')
 
             browser.close()
 
-        # ------------------------------------------------------------------
-        # Step 6 — Wait for processing to complete
-        # ------------------------------------------------------------------
+        # Wait for processing to complete
         print('\n[6/7] Waiting for processing to complete...')
-        _wait_for_processing()
+        _wait_for_processing(timeout=900)
         print('  Processing complete')
 
     finally:
-        # ------------------------------------------------------------------
-        # Step 7 — Stop server
-        # ------------------------------------------------------------------
         print('\n[7/7] Stopping server...')
         stop_server(server)
         server_log_fh.close()
-        print(f'  Server log saved to: {server_log}')
 
-    # Clean up temporary background screenshot
-    bg_temp = SETUP_CACHE_DIR / '_bg_dark_db.png'
-    if bg_temp.exists():
-        bg_temp.unlink()
-
-    print(f'\nSetup complete! Generated data in: {SCRIPT_DIR}')
-    print(f'Setup screenshots in: {SETUP_CACHE_DIR}')
+    print(f'\nSetup complete! Data and screenshots in: {TUTORIALS_DIR}')
 
 
 # =========================================================================
@@ -2342,11 +2371,12 @@ def main():
     print('Photonarium Tutorial Generator')
     print('=' * 40)
 
-    # 1. Prepare output directory
-    print('\n[1/4] Preparing tutorials directory...')
-    setup_tutorials_dir()
+    # 1. Always start fresh — clean slate for reproducible output
+    print('\n[1/4] Running full setup...')
+    run_setup()
 
-    # 2. Start server
+    # 2. Start server (examples folder already registered and fully
+    #    processed by run_setup — just serve the existing DB)
     print('\n[2/4] Starting Photonarium server...')
     server, server_log_fh = start_server()
     try:
@@ -2360,15 +2390,7 @@ def main():
             browser = pw.chromium.launch(headless=True)
             context = browser.new_context(viewport=VIEWPORT)
             page = context.new_page()
-            page.goto(SERVER_URL)
-            page.wait_for_timeout(1000)
-
-            # Set dark theme (all screenshots use dark theme except 7.2)
-            page.evaluate("""() => {
-                document.getElementById('app').dataset.theme = 'dark';
-                localStorage.setItem('photonarium-theme', '"dark"');
-            }""")
-            page.wait_for_timeout(300)
+            open_app(page)
 
             ctx = {}  # shared context across steps
             current_section = None
@@ -2439,7 +2461,9 @@ if __name__ == '__main__':
     parser.add_argument(
         '--setup',
         action='store_true',
-        help='Initialise the tutorial data directory and capture setup screenshots',
+        help='Initialise the tutorial data directory, ingest demo data, '
+        'and capture setup screenshots (Section 0). Run this before the '
+        'main generation pass.',
     )
     parser.add_argument(
         '-f',
