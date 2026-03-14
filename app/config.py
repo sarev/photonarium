@@ -932,7 +932,7 @@ class Config:
     # Cosine similarity threshold for auto-matching faces to people (0.0-1.0).
     face_recognition_threshold: float = 0.70
     # Batch size for face detection (1-64).
-    face_detection_batch_size: int = 32
+    face_detection_batch_size: int = 24
     # BLIP/BLIP-2 model name for captioning.
     caption_model: str = 'Salesforce/blip-image-captioning-large'
     # Maximum caption length in tokens (10-200).

@@ -2161,9 +2161,23 @@ class PipelineOrchestrator(threading.Thread):
         self._set_stage('faces', len(rows), 0)
         logger.info(f'Stage 5: Detecting faces in {len(rows)} images...')
 
+        # Scale min_face_size for MTCNN: the user's config value is in
+        # original-image pixels, but we feed 400px thumbnails to MTCNN.
+        # MTCNN's min_face_size pre-filter operates on the input (thumbnail)
+        # resolution, so we must scale down proportionally.  Use the largest
+        # original image to compute the worst-case ratio — this ensures no
+        # face that would pass the post-filter is rejected early by MTCNN.
+        # The post-filter (which knows each image's exact scale) still
+        # enforces the user's configured threshold precisely.
+        configured_min = self._db.config.face_detection_min_size
+        max_dim = max((max(r['width'] or 0, r['height'] or 0) for r in rows), default=400)
+        if max_dim > 400:
+            mtcnn_min = max(10, int(configured_min * 400 / max_dim))
+        else:
+            mtcnn_min = configured_min
         face_detector = FaceDetector(
             min_confidence=self._db.config.face_detection_min_confidence,
-            min_face_size=self._db.config.face_detection_min_size,
+            min_face_size=mtcnn_min,
         )
 
         clip = self._get_clip_model()
@@ -2178,14 +2192,19 @@ class PipelineOrchestrator(threading.Thread):
 
             batch = rows[batch_start : batch_start + batch_size]
 
-            # Build path mappings — use 400px thumbnails
+            # Build path mappings — use 400px thumbnails for speed, but
+            # track the thumbnail-to-original scale so the min_face_size
+            # post-filter works in original-pixel space.
             id_to_path: dict[str, Path] = {}
             path_to_id: dict[Path, str] = {}
             id_to_orig_path: dict[str, Path] = {}  # For face thumbnail generation
+            id_to_thumb_scale: dict[str, float] = {}  # thumbnail / original ratio
 
             for row in batch:
                 image_id = row['id']
                 checksum = row['checksum']
+                orig_w = row['width'] or 0
+                orig_h = row['height'] or 0
 
                 thumb_path = get_thumbnail_cache_path(checksum, 400, thumbnail_dir=self._db.thumbnail_dir)
                 if not Path(thumb_path).exists():
@@ -2197,11 +2216,17 @@ class PipelineOrchestrator(threading.Thread):
                             id_to_path[image_id] = orig_path
                             path_to_id[orig_path] = image_id
                             id_to_orig_path[image_id] = orig_path
+                            id_to_thumb_scale[image_id] = 1.0
                     continue
 
                 thumb_p = Path(thumb_path)
                 id_to_path[image_id] = thumb_p
                 path_to_id[thumb_p] = image_id
+                # Compute the thumbnail-to-original scale factor so the
+                # post-filter can convert detected face sizes back to
+                # original-image pixels.
+                orig_max = max(orig_w, orig_h)
+                id_to_thumb_scale[image_id] = (400.0 / orig_max) if orig_max > 400 else 1.0
                 # Store original path for face thumbnail generation
                 img_row = self._db.safe_conn.execute('SELECT path FROM images WHERE id = ?', (image_id,)).fetchone()
                 if img_row:
@@ -2212,9 +2237,20 @@ class PipelineOrchestrator(threading.Thread):
                 self._update_done(processed_count)
                 continue
 
-            # Preload and detect faces
+            # Preload and detect faces.  Multiply the preloader's scale
+            # by the thumbnail-to-original ratio so the min_face_size
+            # post-filter works in original-image pixels.
             paths = list(id_to_path.values())
             loaded_images = face_detector.preload_images_batch(paths, num_workers=4)
+
+            # Patch scale factors: preload returns scale relative to the
+            # thumbnail; we need scale relative to the original image.
+            patched_images = []
+            for path, img, preload_scale in loaded_images:
+                image_id = path_to_id.get(path)
+                thumb_scale = id_to_thumb_scale.get(image_id, 1.0) if image_id else 1.0
+                patched_images.append((path, img, preload_scale * thumb_scale))
+            loaded_images = patched_images
 
             if not loaded_images:
                 processed_count += len(batch)
