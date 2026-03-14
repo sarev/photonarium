@@ -420,6 +420,11 @@ class PipelineOrchestrator(threading.Thread):
         self._finalisation_requested = False
 
         if run_finalisation and not self._stop_event.is_set():
+            # Clear _rerun_requested so finalisation stages (grouping, STT)
+            # are not skipped by their early-exit checks.  If a rerun was
+            # requested during stages 2-5, the outer loop in run() will
+            # start a new cycle after finalisation completes.
+            self._rerun_requested = False
             for stage_name, stage_fn in [
                 ('grouping', self._stage_grouping),
                 ('transcription', self._stage_stt),
@@ -1413,7 +1418,7 @@ class PipelineOrchestrator(threading.Thread):
         if not rows:
             return 0
 
-        self._set_stage('thumbnails', len(rows), 0)
+        self._set_stage('video_scenes', len(rows), 0)
         logger.info(f'Stage 2b: Processing scenes for {len(rows)} videos...')
         count = 0
 

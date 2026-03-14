@@ -6376,10 +6376,10 @@ class ImageDatabase:
         embedding_count = remaining if current == 'embeddings' else 0
         face_count = remaining if current == 'faces' else 0
         nima_count = remaining if current == 'scoring' else 0
-        video_count = remaining if current in ('thumbnails', 'transcription') else 0
+        video_count = remaining if current in ('video_scenes', 'transcription') else 0
         video_progress = (
             self._orchestrator.current_video
-            if self._orchestrator is not None and current in ('thumbnails', 'transcription')
+            if self._orchestrator is not None and current in ('video_scenes', 'transcription')
             else None
         )
 
