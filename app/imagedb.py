@@ -4149,6 +4149,14 @@ class ImageDatabase:
         self._migrate_backfill_silent_scene_transcriptions()
         self._migrate_backfill_video_codecs()
 
+        # Model invalidation — wipe stale data if model identity has changed.
+        # Must run BEFORE start_threads() to avoid contention with the
+        # pipeline's ingestion workers on the database lock.  The actual
+        # backfills run later in the pipeline background thread (Stage 3c
+        # for descriptions, Stage 7 for transcriptions).
+        self._invalidate_openclip_model()
+        self._invalidate_nima_model()
+
         # Steps 6-7: Start background threads
         self.start_threads()
 
@@ -4156,13 +4164,6 @@ class ImageDatabase:
         if self._preload_model:
             logger.info('Pre-loading OpenCLIP model...')
             _ = self._get_clip_model()
-
-        # Model invalidation — wipe stale data if model identity has changed.
-        # Backfills for the wiped data run in the pipeline background thread
-        # (Stage 3c for descriptions, Stage 7 for transcriptions) to avoid
-        # blocking startup.
-        self._invalidate_openclip_model()
-        self._invalidate_nima_model()
 
         logger.info('-' * 60)
         logger.info('Database initialisation complete')
