@@ -77,8 +77,9 @@ _LEGACY_CONFIG_NAME = '.photonarium.yml'
 # produce blank lines for visual spacing.
 
 CONFIG_SCHEMA: list[tuple[str, list[tuple[str, list[str]]]]] = [
+    # ── 1. Storage & Server ──────────────────────────────────────────
     (
-        'Data Directory',
+        'Storage & Server',
         [
             (
                 'data_dir',
@@ -91,11 +92,24 @@ CONFIG_SCHEMA: list[tuple[str, list[tuple[str, list[str]]]]] = [
                     'Leave empty to use the current working directory.',
                 ],
             ),
-        ],
-    ),
-    (
-        'Server',
-        [
+            (
+                'trash_dir',
+                [
+                    'When images are deleted (from Gallery, Fullscreen, or duplicate pruning),',
+                    'they are moved to this directory instead of being permanently removed.',
+                    'Files keep their original names (with a counter suffix on collision).',
+                    'Leave empty to use the default: <data-dir>/trash/',
+                ],
+            ),
+            (
+                'catalogue_dir',
+                [
+                    'Path to a managed catalogue directory for imported images.',
+                    'Images imported via the UI are copied here, organised by date.',
+                    'Leave empty to use the default (<data-dir>/catalogue/).',
+                    '[!] Changing this does not move previously imported files.',
+                ],
+            ),
             (
                 'server_host',
                 [
@@ -111,57 +125,94 @@ CONFIG_SCHEMA: list[tuple[str, list[tuple[str, list[str]]]]] = [
                     'Any open browser tabs or bookmarks will need updating to the new URL.',
                 ],
             ),
+            (
+                'headless',
+                [
+                    'Headless mode disables features that require a local desktop:',
+                    'the "Add Local Folder" button is hidden and file paths are not',
+                    'clickable (since there is no file manager to reveal files in).',
+                    'Enable this for Docker, NAS, or other server deployments.',
+                ],
+            ),
+            (
+                'scan_interval_minutes',
+                [
+                    'Interval in minutes for automatic folder rescans (0 = disabled).',
+                    'Useful for Docker/NAS deployments where photos sync continuously.',
+                    'Range: 0-1440 (0 = off, 1440 = daily)',
+                ],
+            ),
         ],
     ),
+    # ── 2. Performance ───────────────────────────────────────────────
     (
-        'Image Processing',
+        'Performance',
         [
             (
-                'image_extensions',
+                'embedding_batch_size',
                 [
-                    'File extensions recognised as images (lowercase, with leading dot)',
+                    'Batch size for embedding computation (1-256)',
+                    'Higher values are faster but use more VRAM. Reduce if you get out-of-memory errors.',
                 ],
             ),
             (
-                'thumbnail_quality',
+                'nima_batch_size',
                 [
-                    'JPEG quality for generated thumbnails (1-100, higher = better quality, larger files)',
+                    'Batch size for NIMA scoring (1-64).',
+                    'Higher values are faster but use more VRAM (~500MB base for VGG16).',
                 ],
             ),
             (
-                'max_image_dimension',
+                'face_detection_batch_size',
                 [
-                    'Maximum image dimension (width or height) to process.',
-                    'Images larger than this will be downsampled before embedding/hashing.',
-                    'This prevents memory issues with huge panoramas or scanned images.',
-                    'Set to 0 to disable (not recommended). Range: 0 or 1024-65536',
+                    'Batch size for face detection (number of images processed together).',
+                    'Higher values improve GPU utilization but use more VRAM.',
+                    'Reduce if you get out-of-memory errors. Range: 1-64, recommended: 16-32',
                 ],
             ),
             (
-                'filename_date_overrides',
+                'indexing_threads',
                 [
-                    'Filename patterns where the date embedded in the filename takes priority',
-                    'over EXIF metadata for timestamp derivation. Uses glob-style matching.',
-                    'Useful for apps like WhatsApp that rewrite EXIF dates to the download',
-                    'time while encoding the actual capture time in the filename.',
-                    'One pattern per line (e.g. "WhatsApp Image *").',
+                    'Number of threads for parallel image indexing (1-16)',
+                    'Higher values speed up initial scanning but use more CPU/disk I/O.',
+                    'Recommended: 4-8 for HDD, 8-16 for SSD',
                 ],
             ),
             (
-                'date_order',
+                'import_threads',
                 [
-                    'Preferred date order for ambiguous numeric dates in filenames.',
-                    'Only affects dates where day/month cannot be determined from context.',
-                    'For example, "07-03-2024" is 7 March with DMY, or 3 July with MDY.',
-                    'This is a preference, not absolute — if the preferred interpretation',
-                    'produces an invalid date (e.g. month 13), valid alternatives are used.',
-                    'Options: DMY (day-month-year), MDY (month-day-year), YMD (year-month-day)',
+                    'Number of parallel threads for copying files during import (1-16).',
+                ],
+            ),
+            (
+                'trash_threads',
+                [
+                    'Number of threads for parallel file moves when trashing images (1-32).',
+                    'File I/O benefits from high parallelism, especially on SSDs or NAS.',
+                    'Recommended: 4-8 for HDD, 8-16 for SSD, 16-32 for NAS',
+                ],
+            ),
+            (
+                'max_incremental_duplicates',
+                [
+                    'Maximum number of new/modified images to process incrementally for duplicates.',
+                    'If more images need checking, falls back to full recomputation which is faster',
+                    'for large batches. Range: 1-10000',
+                ],
+            ),
+            (
+                'incremental_threshold_percent',
+                [
+                    'Percentage of total images that triggers full recomputation instead of incremental.',
+                    'If dirty_count > (total_count * threshold), does full rebuild.',
+                    'Range: 5-50, recommended: 15-25',
                 ],
             ),
         ],
     ),
+    # ── 3. Models ────────────────────────────────────────────────────
     (
-        'OpenCLIP Embedding Model',
+        'Models',
         [
             (
                 'openclip_model',
@@ -193,16 +244,215 @@ CONFIG_SCHEMA: list[tuple[str, list[tuple[str, list[str]]]]] = [
                 ],
             ),
             (
-                'embedding_batch_size',
+                'caption_model',
                 [
-                    'Batch size for embedding computation (1-256)',
-                    'Higher values are faster but use more VRAM. Reduce if you get out-of-memory errors.',
+                    '[M] BLIP model to use for caption generation. Options:',
+                    '  - Salesforce/blip-image-captioning-base   (~1GB, fast)',
+                    '  - Salesforce/blip-image-captioning-large  (~2GB, better quality)',
+                    '  - Salesforce/blip2-opt-2.7b               (~5GB, BLIP-2, best quality)',
+                    '  - Salesforce/blip2-flan-t5-xl             (~8GB, BLIP-2, most descriptive)',
+                    'All BLIP/BLIP-2 models generate English-only captions.',
+                    'BLIP-2 models require significantly more VRAM.',
+                ],
+            ),
+            (
+                'stt_model',
+                [
+                    '[M] Whisper model size for transcription. Larger models are more accurate',
+                    'but slower and require more VRAM.',
+                    '  tiny   - fastest, English-focused (~75MB)',
+                    '  base   - good balance for English (~140MB)',
+                    '  small  - good multilingual accuracy (~460MB)',
+                    '  medium - high accuracy, strong multilingual (~1.5GB)',
+                    '  large-v3 - best accuracy, best for non-English (~3GB)',
+                    'For non-English audio, small or above is strongly recommended.',
                 ],
             ),
         ],
     ),
+    # ── 4. Image & Video Processing ──────────────────────────────────
     (
-        'Duplicate Detection Thresholds',
+        'Image & Video Processing',
+        [
+            (
+                'image_extensions',
+                [
+                    'File extensions recognised as images (lowercase, with leading dot)',
+                ],
+            ),
+            (
+                'video_extensions',
+                [
+                    'File extensions recognised as video files (lowercase, with leading dot)',
+                ],
+            ),
+            (
+                'max_image_dimension',
+                [
+                    'Maximum image dimension (width or height) to process.',
+                    'Images larger than this will be downsampled before embedding/hashing.',
+                    'This prevents memory issues with huge panoramas or scanned images.',
+                    'Set to 0 to disable (not recommended). Range: 0 or 1024-65536',
+                ],
+            ),
+            (
+                'thumbnail_quality',
+                [
+                    'JPEG quality for generated thumbnails (1-100, higher = better quality, larger files)',
+                ],
+            ),
+            (
+                'date_order',
+                [
+                    'Preferred date order for ambiguous numeric dates in filenames.',
+                    'Only affects dates where day/month cannot be determined from context.',
+                    'For example, "07-03-2024" is 7 March with DMY, or 3 July with MDY.',
+                    'This is a preference, not absolute — if the preferred interpretation',
+                    'produces an invalid date (e.g. month 13), valid alternatives are used.',
+                    'Options: DMY (day-month-year), MDY (month-day-year), YMD (year-month-day)',
+                ],
+            ),
+            (
+                'filename_date_overrides',
+                [
+                    'Filename patterns where the date embedded in the filename takes priority',
+                    'over EXIF metadata for timestamp derivation. Uses glob-style matching.',
+                    'Useful for apps like WhatsApp that rewrite EXIF dates to the download',
+                    'time while encoding the actual capture time in the filename.',
+                    'One pattern per line (e.g. "WhatsApp Image *").',
+                ],
+            ),
+        ],
+    ),
+    # ── 5. Face Detection & Recognition ──────────────────────────────
+    (
+        'Face Detection & Recognition',
+        [
+            (
+                'face_detection_enabled',
+                [
+                    'Enable face detection during image indexing.',
+                    'When disabled, face-related UI buttons are greyed out.',
+                ],
+            ),
+            (
+                'face_detection_min_confidence',
+                [
+                    'MTCNN confidence threshold for face detection.',
+                    'Higher values = fewer false positives, may miss some faces.',
+                    'Range: 0.0-1.0, recommended: 0.90-0.99',
+                ],
+            ),
+            (
+                'face_detection_min_size',
+                [
+                    'Minimum face size in pixels (width/height of bounding box).',
+                    'Faces smaller than this are ignored. Range: 20-200, recommended: 40-80',
+                ],
+            ),
+            (
+                'face_recognition_threshold',
+                [
+                    'Cosine similarity threshold for auto-matching faces to known people.',
+                    'Higher values = stricter matching (fewer false matches, more unknowns).',
+                    'Range: 0.0-1.0, recommended: 0.65-0.90',
+                ],
+            ),
+        ],
+    ),
+    # ── 6. Captioning ────────────────────────────────────────────────
+    (
+        'Captioning',
+        [
+            (
+                'caption_max_length',
+                [
+                    'Maximum length of generated captions in tokens.',
+                    'Higher values allow longer, more detailed descriptions.',
+                    'Range: 10-200, recommended: 30-75',
+                ],
+            ),
+            (
+                'caption_min_length',
+                [
+                    'Minimum length of generated captions in tokens.',
+                    'Higher values force more descriptive captions.',
+                    'Range: 1-50, recommended: 5-20',
+                ],
+            ),
+            (
+                'caption_num_beams',
+                [
+                    'Number of beams for beam search during generation.',
+                    'Higher values produce better quality but are slower.',
+                    'Set to 1 for greedy decoding (fastest, lower quality).',
+                    'Range: 1-10, recommended: 3-5',
+                ],
+            ),
+            (
+                'caption_british_english',
+                [
+                    'Convert American English spellings to British English in generated captions.',
+                    'Handles common differences like color\u2192colour, center\u2192centre, gray\u2192grey, etc.',
+                ],
+            ),
+        ],
+    ),
+    # ── 7. Video & Speech-to-Text ────────────────────────────────────
+    (
+        'Video & Speech-to-Text',
+        [
+            (
+                'video_scene_detection_threshold',
+                [
+                    'Scene change detection threshold (0-100). Higher = fewer scene boundaries.',
+                    'Lower values detect more subtle transitions. Range: 1.0-100.0, recommended: 20-35',
+                ],
+            ),
+            (
+                'video_max_scene_duration',
+                [
+                    'Maximum scene duration in seconds.',
+                    'Scenes longer than this are subdivided. Also the fallback when no cuts are detected.',
+                ],
+            ),
+            (
+                'stt_enabled',
+                [
+                    'Enable speech-to-text transcription of video audio using faster-whisper.',
+                    'Requires the faster-whisper package to be installed.',
+                    'When disabled, scene detection and frame embeddings still work.',
+                ],
+            ),
+            (
+                'stt_language',
+                [
+                    'Language code for transcription (e.g. "en", "fr", "de").',
+                    'Leave empty for automatic language detection.',
+                    'Auto-detection works well with small model and above;',
+                    'less reliable with tiny and base.',
+                ],
+            ),
+            (
+                'stt_languages',
+                [
+                    'List of language codes available in the per-video language dropdown.',
+                    'Only these languages appear as options in the UI; all Whisper-supported',
+                    'codes still work if set via the API.',
+                    'Whisper-supported codes: af, am, ar, as, az, ba, be, bg, bn, bo, br,',
+                    '  bs, ca, cs, cy, da, de, el, en, es, et, eu, fa, fi, fo, fr, gl, gu,',
+                    '  ha, haw, he, hi, hr, ht, hu, hy, id, is, it, ja, jw, ka, kk, km, kn,',
+                    '  ko, la, lb, ln, lo, lt, lv, mg, mi, mk, ml, mn, mr, ms, mt, my, ne,',
+                    '  nl, nn, no, oc, pa, pl, ps, pt, ro, ru, sa, sd, si, sk, sl, sn, so,',
+                    '  sq, sr, su, sv, sw, ta, te, tg, th, tk, tl, tr, tt, uk, ur, uz, vi,',
+                    '  yo, zh, yue',
+                ],
+            ),
+        ],
+    ),
+    # ── 8. Duplicate Detection ───────────────────────────────────────
+    (
+        'Duplicate Detection',
         [
             (
                 'perceptual_hash_threshold',
@@ -227,60 +477,72 @@ CONFIG_SCHEMA: list[tuple[str, list[tuple[str, list[str]]]]] = [
             ),
         ],
     ),
+    # ── 9. Quality Scoring ───────────────────────────────────────────
     (
-        'Performance',
+        'Quality Scoring',
         [
             (
-                'indexing_threads',
+                'nima_enabled',
                 [
-                    'Number of threads for parallel image indexing (1-16)',
-                    'Higher values speed up initial scanning but use more CPU/disk I/O.',
-                    'Recommended: 4-8 for HDD, 8-16 for SSD',
+                    'NIMA (Neural IMage Assessment) provides a second aesthetic quality signal',
+                    'alongside the LAION aesthetic predictor. The two scores are blended for',
+                    'the Quality sort in Gallery and best-image ranking in duplicate groups.',
+                    '',
+                    'Enable NIMA aesthetic scoring during image indexing.',
+                    'When disabled, the NIMA thread sits idle and quality ranking falls back to',
+                    'LAION-only. Existing NIMA scores are preserved.',
                 ],
             ),
             (
-                'max_incremental_duplicates',
+                'quality_weight_aesthetic',
                 [
-                    'Maximum number of new/modified images to process incrementally for duplicates.',
-                    'If more images need checking, falls back to full recomputation which is faster',
-                    'for large batches. Range: 1-10000',
+                    'These weights control how the composite quality score is computed in the',
+                    'frontend. They are applied at sort time and do not affect stored data.',
+                    '',
+                    'Component weights (should sum to ~1.0):',
+                    '  aesthetic - blended NIMA+LAION score (absolute, normalised to 0-1)',
+                    '  sharpness - log Laplacian variance (percentile rank)',
+                    '  pixels    - total pixel count (percentile rank)',
+                    '  bpp       - bits per pixel (percentile rank)',
                 ],
             ),
+            ('quality_weight_sharpness', []),
+            ('quality_weight_pixels', []),
+            ('quality_weight_bpp', []),
             (
-                'incremental_threshold_percent',
+                'quality_alpha',
                 [
-                    'Percentage of total images that triggers full recomputation instead of incremental.',
-                    'If dirty_count > (total_count * threshold), does full rebuild.',
-                    'Range: 5-50, recommended: 15-25',
-                ],
-            ),
-            (
-                'trash_threads',
-                [
-                    'Number of threads for parallel file moves when trashing images (1-32).',
-                    'File I/O benefits from high parallelism, especially on SSDs or NAS.',
-                    'Recommended: 4-8 for HDD, 8-16 for SSD, 16-32 for NAS',
-                ],
-            ),
-            (
-                'scan_interval_minutes',
-                [
-                    'Interval in minutes for automatic folder rescans (0 = disabled).',
-                    'Useful for Docker/NAS deployments where photos sync continuously.',
-                    'Range: 0-1440 (0 = off, 1440 = daily)',
-                ],
-            ),
-            (
-                'headless',
-                [
-                    'Headless mode disables features that require a local desktop:',
-                    'the "Add Local Folder" button is hidden and file paths are not',
-                    'clickable (since there is no file manager to reveal files in).',
-                    'Enable this for Docker, NAS, or other server deployments.',
+                    'Blend ratio for NIMA vs LAION aesthetic scores.',
+                    'A = alpha * (NIMA / 10) + (1 - alpha) * (LAION / 10)',
+                    'Set to 0.0 to use LAION only, 1.0 for NIMA only.',
+                    'Range: 0.0-1.0',
                 ],
             ),
         ],
     ),
+    # ── 10. Features ─────────────────────────────────────────────────
+    (
+        'Features',
+        [
+            (
+                'on_this_day_enabled',
+                [
+                    'Show a nostalgic "On this day..." photo album when returning to the app',
+                    'after a long period of inactivity (8+ hours), if there are photos from',
+                    "today's date across multiple years.",
+                ],
+            ),
+            (
+                'slideshow_interval',
+                [
+                    'Seconds each image is displayed during a slideshow in the',
+                    'fullscreen viewer (e.g. 3.5 for three and a half seconds).',
+                    'Range: 1.0-60.0',
+                ],
+            ),
+        ],
+    ),
+    # ── 11. Thumbnail Loading ────────────────────────────────────────
     (
         'Thumbnail Loading (Frontend)',
         [
@@ -327,253 +589,7 @@ CONFIG_SCHEMA: list[tuple[str, list[tuple[str, list[str]]]]] = [
             ),
         ],
     ),
-    (
-        'Face Recognition',
-        [
-            (
-                'face_detection_enabled',
-                [
-                    'Enable face detection during image indexing.',
-                    'When disabled, face-related UI buttons are greyed out.',
-                ],
-            ),
-            (
-                'face_detection_min_confidence',
-                [
-                    'MTCNN confidence threshold for face detection.',
-                    'Higher values = fewer false positives, may miss some faces.',
-                    'Range: 0.0-1.0, recommended: 0.90-0.99',
-                ],
-            ),
-            (
-                'face_detection_min_size',
-                [
-                    'Minimum face size in pixels (width/height of bounding box).',
-                    'Faces smaller than this are ignored. Range: 20-200, recommended: 40-80',
-                ],
-            ),
-            (
-                'face_recognition_threshold',
-                [
-                    'Cosine similarity threshold for auto-matching faces to known people.',
-                    'Higher values = stricter matching (fewer false matches, more unknowns).',
-                    'Range: 0.0-1.0, recommended: 0.65-0.90',
-                ],
-            ),
-            (
-                'face_detection_batch_size',
-                [
-                    'Batch size for face detection (number of images processed together).',
-                    'Higher values improve GPU utilization but use more VRAM.',
-                    'Reduce if you get out-of-memory errors. Range: 1-64, recommended: 16-32',
-                ],
-            ),
-        ],
-    ),
-    (
-        'Image Captioning (BLIP/BLIP-2)',
-        [
-            (
-                'caption_model',
-                [
-                    '[M] BLIP model to use for caption generation. Options:',
-                    '  - Salesforce/blip-image-captioning-base   (~1GB, fast)',
-                    '  - Salesforce/blip-image-captioning-large  (~2GB, better quality)',
-                    '  - Salesforce/blip2-opt-2.7b               (~5GB, BLIP-2, best quality)',
-                    '  - Salesforce/blip2-flan-t5-xl             (~8GB, BLIP-2, most descriptive)',
-                    'All BLIP/BLIP-2 models generate English-only captions.',
-                    'BLIP-2 models require significantly more VRAM.',
-                ],
-            ),
-            (
-                'caption_max_length',
-                [
-                    'Maximum length of generated captions in tokens.',
-                    'Higher values allow longer, more detailed descriptions.',
-                    'Range: 10-200, recommended: 30-75',
-                ],
-            ),
-            (
-                'caption_min_length',
-                [
-                    'Minimum length of generated captions in tokens.',
-                    'Higher values force more descriptive captions.',
-                    'Range: 1-50, recommended: 5-20',
-                ],
-            ),
-            (
-                'caption_num_beams',
-                [
-                    'Number of beams for beam search during generation.',
-                    'Higher values produce better quality but are slower.',
-                    'Set to 1 for greedy decoding (fastest, lower quality).',
-                    'Range: 1-10, recommended: 3-5',
-                ],
-            ),
-            (
-                'caption_british_english',
-                [
-                    'Convert American English spellings to British English in generated captions.',
-                    'Handles common differences like color\u2192colour, center\u2192centre, gray\u2192grey, etc.',
-                ],
-            ),
-        ],
-    ),
-    (
-        'NIMA Aesthetic Scoring',
-        [
-            (
-                'nima_enabled',
-                [
-                    'NIMA (Neural IMage Assessment) provides a second aesthetic quality signal',
-                    'alongside the LAION aesthetic predictor. The two scores are blended for',
-                    'the Quality sort in Gallery and best-image ranking in duplicate groups.',
-                    '',
-                    'Enable NIMA aesthetic scoring during image indexing.',
-                    'When disabled, the NIMA thread sits idle and quality ranking falls back to',
-                    'LAION-only. Existing NIMA scores are preserved.',
-                ],
-            ),
-            (
-                'nima_batch_size',
-                [
-                    'Batch size for NIMA scoring (1-64).',
-                    'Higher values are faster but use more VRAM (~500MB base for VGG16).',
-                ],
-            ),
-        ],
-    ),
-    (
-        'Quality Scoring Weights',
-        [
-            (
-                'quality_weight_aesthetic',
-                [
-                    'These weights control how the composite quality score is computed in the',
-                    'frontend. They are applied at sort time and do not affect stored data.',
-                    '',
-                    'Component weights (should sum to ~1.0):',
-                    '  aesthetic - blended NIMA+LAION score (absolute, normalised to 0-1)',
-                    '  sharpness - log Laplacian variance (percentile rank)',
-                    '  pixels    - total pixel count (percentile rank)',
-                    '  bpp       - bits per pixel (percentile rank)',
-                ],
-            ),
-            ('quality_weight_sharpness', []),
-            ('quality_weight_pixels', []),
-            ('quality_weight_bpp', []),
-            (
-                'quality_alpha',
-                [
-                    'Blend ratio for NIMA vs LAION aesthetic scores.',
-                    'A = alpha * (NIMA / 10) + (1 - alpha) * (LAION / 10)',
-                    'Set to 0.0 to use LAION only, 1.0 for NIMA only.',
-                    'Range: 0.0-1.0',
-                ],
-            ),
-        ],
-    ),
-    (
-        'On This Day',
-        [
-            (
-                'on_this_day_enabled',
-                [
-                    'Show a nostalgic "On this day..." photo album when returning to the app',
-                    'after a long period of inactivity (8+ hours), if there are photos from',
-                    "today's date across multiple years.",
-                ],
-            ),
-        ],
-    ),
-    (
-        'Video Processing',
-        [
-            (
-                'video_extensions',
-                [
-                    'File extensions recognised as video files (lowercase, with leading dot)',
-                ],
-            ),
-            (
-                'video_scene_detection_threshold',
-                [
-                    'Scene change detection threshold (0-100). Higher = fewer scene boundaries.',
-                    'Lower values detect more subtle transitions. Range: 1.0-100.0, recommended: 20-35',
-                ],
-            ),
-            (
-                'video_max_scene_duration',
-                [
-                    'Maximum scene duration in seconds.',
-                    'Scenes longer than this are subdivided. Also the fallback when no cuts are detected.',
-                ],
-            ),
-        ],
-    ),
-    (
-        'Speech-to-Text (STT)',
-        [
-            (
-                'stt_enabled',
-                [
-                    'Enable speech-to-text transcription of video audio using faster-whisper.',
-                    'Requires the faster-whisper package to be installed.',
-                    'When disabled, scene detection and frame embeddings still work.',
-                ],
-            ),
-            (
-                'stt_model',
-                [
-                    '[M] Whisper model size for transcription. Larger models are more accurate',
-                    'but slower and require more VRAM.',
-                    '  tiny   - fastest, English-focused (~75MB)',
-                    '  base   - good balance for English (~140MB)',
-                    '  small  - good multilingual accuracy (~460MB)',
-                    '  medium - high accuracy, strong multilingual (~1.5GB)',
-                    '  large-v3 - best accuracy, best for non-English (~3GB)',
-                    'For non-English audio, small or above is strongly recommended.',
-                ],
-            ),
-            (
-                'stt_language',
-                [
-                    'Language code for transcription (e.g. "en", "fr", "de").',
-                    'Leave empty for automatic language detection.',
-                    'Auto-detection works well with small model and above;',
-                    'less reliable with tiny and base.',
-                ],
-            ),
-            (
-                'stt_languages',
-                [
-                    'List of language codes available in the per-video language dropdown.',
-                    'Only these languages appear as options in the UI; all Whisper-supported',
-                    'codes still work if set via the API.',
-                    'Whisper-supported codes: af, am, ar, as, az, ba, be, bg, bn, bo, br,',
-                    '  bs, ca, cs, cy, da, de, el, en, es, et, eu, fa, fi, fo, fr, gl, gu,',
-                    '  ha, haw, he, hi, hr, ht, hu, hy, id, is, it, ja, jw, ka, kk, km, kn,',
-                    '  ko, la, lb, ln, lo, lt, lv, mg, mi, mk, ml, mn, mr, ms, mt, my, ne,',
-                    '  nl, nn, no, oc, pa, pl, ps, pt, ro, ru, sa, sd, si, sk, sl, sn, so,',
-                    '  sq, sr, su, sv, sw, ta, te, tg, th, tk, tl, tr, tt, uk, ur, uz, vi,',
-                    '  yo, zh, yue',
-                ],
-            ),
-        ],
-    ),
-    (
-        'Slideshow',
-        [
-            (
-                'slideshow_interval',
-                [
-                    'Seconds each image is displayed during a slideshow in the',
-                    'fullscreen viewer (e.g. 3.5 for three and a half seconds).',
-                    'Range: 1.0-60.0',
-                ],
-            ),
-        ],
-    ),
+    # ── 12. Logging ──────────────────────────────────────────────────
     (
         'Logging',
         [
@@ -583,40 +599,6 @@ CONFIG_SCHEMA: list[tuple[str, list[tuple[str, list[str]]]]] = [
                     'Maximum number of log lines to retain in the database (100-100000).',
                     'These are viewable from the Management screen.',
                     'Set to 0 to disable database logging.',
-                ],
-            ),
-        ],
-    ),
-    (
-        'Trash Directory',
-        [
-            (
-                'trash_dir',
-                [
-                    'When images are deleted (from Gallery, Fullscreen, or duplicate pruning),',
-                    'they are moved to this directory instead of being permanently removed.',
-                    'Files keep their original names (with a counter suffix on collision).',
-                    'Leave empty to use the default: <data-dir>/trash/',
-                ],
-            ),
-        ],
-    ),
-    (
-        'Import',
-        [
-            (
-                'catalogue_dir',
-                [
-                    'Path to a managed catalogue directory for imported images.',
-                    'Images imported via the UI are copied here, organised by date.',
-                    'Leave empty to use the default (<data-dir>/catalogue/).',
-                    '[!] Changing this does not move previously imported files.',
-                ],
-            ),
-            (
-                'import_threads',
-                [
-                    'Number of parallel threads for copying files during import (1-16).',
                 ],
             ),
         ],
