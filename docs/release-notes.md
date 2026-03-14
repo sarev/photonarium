@@ -78,6 +78,14 @@ python tools/benchmark_batch_sizes.py --images ~/photos    # Custom test images
 
 A generic `Exception` catch has been added to the OpenCLIP model loader alongside the existing OOM handler. Previously, a download failure (e.g. missing model files with `HF_HUB_OFFLINE=1`) would throw an uncaught exception on every image instead of setting `_load_failed` and logging once.
 
+### Config Schema Reorganisation
+
+The 55 configuration fields have been reorganised from 18 organically-grown sections into 12 logically-grouped sections: Storage & Server, Performance, Models, Image & Video Processing, Face Detection & Recognition, Captioning, Video & Speech-to-Text, Duplicate Detection, Quality Scoring, Features, Thumbnail Loading, and Logging. All field descriptions have been rewritten to be friendlier for non-technical users.
+
+### Text Embedding Backfill Lock Contention Fix
+
+The description and transcription embedding backfills (which run after a model change) were holding the shared database connection for the entire duration of `encode_text()` calls — up to an hour for large libraries. This starved other writers (log handler, API requests) and caused "database is locked" failures. Both backfills now use a two-phase batch pattern: encode a batch of 100 texts without the DB lock, then write results in a brief burst.
+
 ### Other Fixes
 
 - **LAION download 429 errors**: Switched from `github.com/…/blob/…?raw=true` URLs (which get rate-limited) to `raw.githubusercontent.com` for the LAION aesthetic predictor weight files.
