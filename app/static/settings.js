@@ -360,17 +360,61 @@ const Settings = {
 
         const values = this._collectValues();
 
+        // Detect whether any model-affecting fields have changed
+        const modelFieldsChanged = this._hasModelFieldChanges(values);
+
         try {
             const response = await App.apiPost('/config/save', { values });
             this._close();
-            App.showInfo(
-                response.message || 'Settings saved. Restart Photonarium for changes to take effect.',
-            );
+
+            if (modelFieldsChanged) {
+                // Model settings changed — offer to download new models
+                const proceed = await App.confirm(
+                    'Model Download Required',
+                    'You changed model settings that require downloading new files '
+                    + 'before the server can restart.\n\n'
+                    + 'Would you like to download the new models now?',
+                    { okText: 'Download' },
+                );
+                if (proceed) {
+                    SetupWizard.showDownloadOnly();
+                } else {
+                    App.showInfo(
+                        'Settings saved. Run download_models.py manually '
+                        + 'before restarting, or the new models will fail to load.',
+                    );
+                }
+            } else {
+                App.showInfo(
+                    response.message || 'Settings saved. Restart Photonarium for changes to take effect.',
+                );
+            }
         } catch (err) {
             // Backend validation error — show the message
             const msg = err?.data?.error || err?.message || 'Failed to save settings.';
             App.showError(msg);
         }
+    },
+
+    /**
+     * Check whether any model-affecting fields (marked with [M] in config)
+     * have been changed from their original values.
+     * @param {Object} values - Collected form values.
+     * @returns {boolean}
+     * @private
+     */
+    _hasModelFieldChanges(values) {
+        if (!this._schema) return false;
+        for (const section of this._schema.sections) {
+            for (const field of section.fields) {
+                if (!field.model) continue;
+                const newVal = values[field.key];
+                if (newVal !== undefined && String(newVal) !== String(field.value)) {
+                    return true;
+                }
+            }
+        }
+        return false;
     },
 
     /**

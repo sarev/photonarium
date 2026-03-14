@@ -60,6 +60,9 @@ const SetupWizard = {
     /** @type {string} HuggingFace token for authenticated downloads (session only). @private */
     _hfToken: '',
 
+    /** @type {boolean} True when opened from Settings for download-only (no config save). @private */
+    _downloadOnlyMode: false,
+
     /**
      * Opens the wizard dialog.  Fetches the config schema to get presets
      * and language recommendations, then renders step 1.
@@ -68,6 +71,7 @@ const SetupWizard = {
         this._dialog = App.$('dialog-wizard');
         if (!this._dialog) return;
 
+        this._downloadOnlyMode = false;
         this._currentStep = 0;
         this._selections = {};
         this._selectedPreset = null;
@@ -88,6 +92,29 @@ const SetupWizard = {
             console.error('Failed to load wizard schema:', error);
             App.showError('Could not load setup wizard.');
         }
+    },
+
+    /**
+     * Opens the wizard directly on the HF Token step for downloading
+     * models after a config change.  Skips the Hardware/Language/Review
+     * steps entirely — config has already been saved by Settings._save().
+     * No config values are written; only the download subprocess runs.
+     */
+    async showDownloadOnly() {
+        this._dialog = App.$('dialog-wizard');
+        if (!this._dialog) return;
+
+        this._downloadOnlyMode = true;
+        this._currentStep = 3;  // HF Token step
+        this._selections = {};
+        this._selectedPreset = null;
+        this._selectedLang = null;
+        this._downloadStarted = false;
+        this._linesSeen = 0;
+        this._hfToken = '';
+
+        this._renderStep();
+        this._dialog.showModal();
     },
 
     /**
@@ -151,13 +178,16 @@ const SetupWizard = {
         if (!indicator) return;
         indicator.innerHTML = '';
 
-        const labels = ['Hardware', 'Language', 'Review', 'Token', 'Download'];
-        for (let i = 0; i < this._steps.length; i++) {
+        const allLabels = ['Hardware', 'Language', 'Review', 'Token', 'Download'];
+
+        // In download-only mode, show only the Token and Download steps
+        const startIdx = this._downloadOnlyMode ? 3 : 0;
+        for (let i = startIdx; i < this._steps.length; i++) {
             const pill = document.createElement('span');
             pill.className = 'wizard-step-pill';
             if (i === this._currentStep) pill.classList.add('wizard-step-active');
             if (i < this._currentStep) pill.classList.add('wizard-step-done');
-            pill.textContent = labels[i];
+            pill.textContent = allLabels[i];
             indicator.appendChild(pill);
         }
     },
@@ -188,8 +218,9 @@ const SetupWizard = {
         spacer.style.flex = '1';
         footer.appendChild(spacer);
 
-        // Back button (not on step 1)
-        if (this._currentStep > 0 && step !== 'download') {
+        // Back button (not on first reachable step, not on download step)
+        const firstStep = this._downloadOnlyMode ? 3 : 0;
+        if (this._currentStep > firstStep && step !== 'download') {
             const back = document.createElement('button');
             back.className = 'action-btn';
             back.textContent = 'Back';
@@ -687,7 +718,7 @@ const SetupWizard = {
             const skip = document.createElement('a');
             skip.href = '#';
             skip.className = 'wizard-skip-link';
-            skip.textContent = 'Skip download';
+            skip.textContent = this._downloadOnlyMode ? 'Close' : 'Skip download';
             skip.title = 'You can download models later by running download_models.py';
             skip.addEventListener('click', (e) => {
                 e.preventDefault();
@@ -857,8 +888,16 @@ const SetupWizard = {
 
         const finishBtn = document.createElement('button');
         finishBtn.className = 'action-btn primary wizard-finish-btn';
-        finishBtn.textContent = success ? 'Finish' : 'Finish anyway';
-        finishBtn.addEventListener('click', () => this._close());
+        if (this._downloadOnlyMode && success) {
+            finishBtn.textContent = 'Restart Server';
+            finishBtn.addEventListener('click', () => {
+                this._close();
+                App.restartServer();
+            });
+        } else {
+            finishBtn.textContent = success ? 'Finish' : 'Finish anyway';
+            finishBtn.addEventListener('click', () => this._close());
+        }
         footer.appendChild(finishBtn);
     },
 

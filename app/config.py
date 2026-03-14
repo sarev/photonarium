@@ -166,7 +166,7 @@ CONFIG_SCHEMA: list[tuple[str, list[tuple[str, list[str]]]]] = [
             (
                 'openclip_model',
                 [
-                    'The model used for semantic image search and similarity detection.',
+                    '[M] The model used for semantic image search and similarity detection.',
                     'Changing these settings will require re-embedding all images.',
                     '',
                     'Model architecture. Common options:',
@@ -184,7 +184,7 @@ CONFIG_SCHEMA: list[tuple[str, list[tuple[str, list[str]]]]] = [
             (
                 'openclip_pretrained',
                 [
-                    'Pretrained weights. Common options:',
+                    '[M] Pretrained weights. Common options:',
                     '  - openai           (original CLIP weights)',
                     '  - laion2b_s34b_b88k (trained on LAION-2B, often better for photos)',
                     '  - laion400m_e32    (trained on LAION-400M)',
@@ -376,7 +376,7 @@ CONFIG_SCHEMA: list[tuple[str, list[tuple[str, list[str]]]]] = [
             (
                 'caption_model',
                 [
-                    'BLIP model to use for caption generation. Options:',
+                    '[M] BLIP model to use for caption generation. Options:',
                     '  - Salesforce/blip-image-captioning-base   (~1GB, fast)',
                     '  - Salesforce/blip-image-captioning-large  (~2GB, better quality)',
                     '  - Salesforce/blip2-opt-2.7b               (~5GB, BLIP-2, best quality)',
@@ -525,7 +525,7 @@ CONFIG_SCHEMA: list[tuple[str, list[tuple[str, list[str]]]]] = [
             (
                 'stt_model',
                 [
-                    'Whisper model size for transcription. Larger models are more accurate',
+                    '[M] Whisper model size for transcription. Larger models are more accurate',
                     'but slower and require more VRAM.',
                     '  tiny   - fastest, English-focused (~75MB)',
                     '  base   - good balance for English (~140MB)',
@@ -1212,13 +1212,17 @@ def save_config(config: Config, config_path: Path | str) -> None:
             # Blank line before each field (visual spacing)
             lines.append('')
 
-            # Comment lines — strip the [!] warning prefix used by the schema
-            # API; it's metadata for the frontend, not for the YAML file
+            # Comment lines — strip [!] and [M] prefixes used by the schema
+            # API; they are metadata for the frontend, not for the YAML file
             for comment in comment_lines:
                 if comment == '':
                     lines.append('#')
                 else:
-                    clean = comment[4:] if comment.startswith('[!] ') else comment
+                    clean = comment
+                    for prefix in ('[!] ', '[M] '):
+                        if clean.startswith(prefix):
+                            clean = clean[4:]
+                            break
                     lines.append(f'# {clean}')
 
             # Value
@@ -1269,12 +1273,16 @@ def get_config_schema(config: Config) -> dict[str, Any]:
         field_defs: list[dict[str, Any]] = []
 
         for field_name, comment_lines in section_fields:
-            # Detect and strip the [!] warning prefix
+            # Detect and strip the [!] warning and [M] model-affecting prefixes
             warning = False
+            model_field = False
             cleaned_comments: list[str] = []
             for line in comment_lines:
                 if line.startswith('[!] '):
                     warning = True
+                    cleaned_comments.append(line[4:])
+                elif line.startswith('[M] '):
+                    model_field = True
                     cleaned_comments.append(line[4:])
                 else:
                     cleaned_comments.append(line)
@@ -1309,6 +1317,8 @@ def get_config_schema(config: Config) -> dict[str, Any]:
 
             if warning:
                 entry['warning'] = True
+            if model_field:
+                entry['model'] = True
 
             field_defs.append(entry)
 
