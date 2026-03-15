@@ -251,8 +251,8 @@ class PipelineOrchestrator(threading.Thread):
         # Re-entrancy: request_rerun() sets this to restart from Stage 1
         self._rerun_requested = False
 
-        # Lazy-loaded models (one at a time — no concurrent GPU contention)
-        self._clip_model: OpenCLIPModel | None = None
+        # Lazy-loaded models (one at a time — no concurrent GPU contention).
+        # OpenCLIP is shared with ImageDatabase via _get_clip_model().
         self._stt_backend = None
         self._stt_loaded = False
 
@@ -346,6 +346,7 @@ class PipelineOrchestrator(threading.Thread):
             if not had_work and not self._rerun_requested:
                 self._set_stage(None, 0, 0)
                 self._flush_logs()
+                self._release_gpu_models()
                 self._stop_event.wait(timeout=2.0)
             # If _rerun_requested was set during pipeline, loop immediately
 
@@ -478,16 +479,22 @@ class PipelineOrchestrator(threading.Thread):
         return self._stop_event.is_set()
 
     def _get_clip_model(self) -> OpenCLIPModel:
-        """Get or create the shared OpenCLIP model."""
-        if self._clip_model is None:
-            from imagedb import OpenCLIPModel
+        """Get the shared OpenCLIP model from ImageDatabase.
 
-            self._clip_model = OpenCLIPModel(
-                model_name=self._db.config.openclip_model,
-                pretrained=self._db.config.openclip_pretrained,
-                max_dimension=self._db.config.max_image_dimension,
-            )
-        return self._clip_model
+        A single instance is shared between the pipeline and search
+        queries — no need for two copies on the GPU.
+        """
+        return self._db._get_clip_model()
+
+    def _release_gpu_models(self) -> None:
+        """Release GPU models when the pipeline goes idle.
+
+        Frees VRAM so the GPU can drop to true idle power.  The shared
+        model is lazily reloaded (~2s) on the next pipeline cycle or
+        search query.
+        """
+        if self._db._shared_clip_model is not None:
+            self._db._shared_clip_model.unload()
 
     def _get_worker_conn(self) -> SafeConnection:
         """Get or create a thread-local database connection for worker threads.

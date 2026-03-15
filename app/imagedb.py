@@ -104,6 +104,7 @@ import os
 
 os.environ['HF_HUB_OFFLINE'] = '1'
 
+import gc
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
@@ -1926,6 +1927,26 @@ class OpenCLIPModel:
         self._tokenizer = None
         self._load_failed = False
         self._load_lock = threading.Lock()
+
+    def unload(self) -> None:
+        """Release the model and free GPU memory.
+
+        The model will be lazily reloaded on the next call that needs it
+        (e.g. a search query or pipeline cycle).  This is safe to call
+        from any thread — the load lock ensures no concurrent load/unload
+        races.
+        """
+        with self._load_lock:
+            if self._model is None:
+                return
+            logger.info(f'Unloading OpenCLIP model ({self.model_name}/{self.pretrained})')
+            self._model = None
+            self._preprocess = None
+            # Clear tokenizer last (it's the sentinel for the fast-path check)
+            self._tokenizer = None
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
+            gc.collect()
 
     def _load_image_safe(self, path: Path | str) -> Image.Image | None:
         """Load an image, downsampling if it exceeds max_dimension.
@@ -3904,9 +3925,8 @@ class ScanTimerThread(threading.Thread):
         elapsed = 0.0
 
         while not self._stop_event.is_set():
-            # Sleep in 1-second increments to stay responsive to shutdown
-            time.sleep(1.0)
-            if self._stop_event.is_set():
+            # Wait in 1-second increments to stay responsive to shutdown
+            if self._stop_event.wait(timeout=1.0):
                 break
 
             elapsed += 1.0
@@ -5070,6 +5090,11 @@ class ImageDatabase:
                 pass
             logging.getLogger().removeHandler(self._log_handler)
             self._log_handler = None
+
+        # Release GPU models before closing the DB connection
+        if self._shared_clip_model is not None:
+            self._shared_clip_model.unload()
+            self._shared_clip_model = None
 
         with self._db_lock:
             if self.conn:
