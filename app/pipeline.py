@@ -346,7 +346,6 @@ class PipelineOrchestrator(threading.Thread):
             if not had_work and not self._rerun_requested:
                 self._set_stage(None, 0, 0)
                 self._flush_logs()
-                self._release_gpu_models()
                 self._stop_event.wait(timeout=2.0)
             # If _rerun_requested was set during pipeline, loop immediately
 
@@ -485,16 +484,6 @@ class PipelineOrchestrator(threading.Thread):
         queries — no need for two copies on the GPU.
         """
         return self._db._get_clip_model()
-
-    def _release_gpu_models(self) -> None:
-        """Release GPU models when the pipeline goes idle.
-
-        Frees VRAM so the GPU can drop to true idle power.  The shared
-        model is lazily reloaded (~2s) on the next pipeline cycle or
-        search query.
-        """
-        if self._db._shared_clip_model is not None:
-            self._db._shared_clip_model.unload()
 
     def _get_worker_conn(self) -> SafeConnection:
         """Get or create a thread-local database connection for worker threads.
