@@ -2283,21 +2283,18 @@ class PipelineOrchestrator(threading.Thread):
         faces_detected_count = 0
         last_log = time.perf_counter()
 
-        for batch_start in range(0, len(rows), batch_size):
-            if self._stopped():
-                break
+        def _prepare_batch(batch_rows, detector=face_detector):
+            """Build path mappings and preload images for a face detection batch.
 
-            batch = rows[batch_start : batch_start + batch_size]
-
-            # Build path mappings — use 400px thumbnails for speed, but
-            # track the thumbnail-to-original scale so the min_face_size
-            # post-filter works in original-pixel space.
+            Returns (id_to_path, path_to_id, id_to_orig_path, id_to_thumb_scale,
+            loaded_images) or None if the batch has no loadable images.
+            """
             id_to_path: dict[str, Path] = {}
             path_to_id: dict[Path, str] = {}
-            id_to_orig_path: dict[str, Path] = {}  # For face thumbnail generation
-            id_to_thumb_scale: dict[str, float] = {}  # thumbnail / original ratio
+            id_to_orig_path: dict[str, Path] = {}
+            id_to_thumb_scale: dict[str, float] = {}
 
-            for row in batch:
+            for row in batch_rows:
                 image_id = row['id']
                 checksum = row['checksum']
                 orig_w = row['width'] or 0
@@ -2305,7 +2302,6 @@ class PipelineOrchestrator(threading.Thread):
 
                 thumb_path = get_thumbnail_cache_path(checksum, 400, thumbnail_dir=self._db.thumbnail_dir)
                 if not Path(thumb_path).exists():
-                    # Try to use original path as fallback
                     img_row = self._db.safe_conn.execute('SELECT path FROM images WHERE id = ?', (image_id,)).fetchone()
                     if img_row:
                         orig_path = Path(img_row['path'])
@@ -2319,40 +2315,63 @@ class PipelineOrchestrator(threading.Thread):
                 thumb_p = Path(thumb_path)
                 id_to_path[image_id] = thumb_p
                 path_to_id[thumb_p] = image_id
-                # Compute the thumbnail-to-original scale factor so the
-                # post-filter can convert detected face sizes back to
-                # original-image pixels.
                 orig_max = max(orig_w, orig_h)
                 id_to_thumb_scale[image_id] = (400.0 / orig_max) if orig_max > 400 else 1.0
-                # Store original path for face thumbnail generation
                 img_row = self._db.safe_conn.execute('SELECT path FROM images WHERE id = ?', (image_id,)).fetchone()
                 if img_row:
                     id_to_orig_path[image_id] = Path(img_row['path'])
 
             if not id_to_path:
-                processed_count += len(batch)
-                self._update_done(processed_count)
-                continue
+                return None
 
-            # Preload and detect faces.  Multiply the preloader's scale
-            # by the thumbnail-to-original ratio so the min_face_size
-            # post-filter works in original-image pixels.
             paths = list(id_to_path.values())
-            loaded_images = face_detector.preload_images_batch(paths, num_workers=4)
+            loaded = detector.preload_images_batch(paths, num_workers=4)
 
             # Patch scale factors: preload returns scale relative to the
             # thumbnail; we need scale relative to the original image.
-            patched_images = []
-            for path, img, preload_scale in loaded_images:
-                image_id = path_to_id.get(path)
-                thumb_scale = id_to_thumb_scale.get(image_id, 1.0) if image_id else 1.0
-                patched_images.append((path, img, preload_scale * thumb_scale))
-            loaded_images = patched_images
+            patched = []
+            for path, img, preload_scale in loaded:
+                mid = path_to_id.get(path)
+                ts = id_to_thumb_scale.get(mid, 1.0) if mid else 1.0
+                patched.append((path, img, preload_scale * ts))
 
-            if not loaded_images:
+            if not patched:
+                return None
+
+            return (id_to_path, path_to_id, id_to_orig_path, id_to_thumb_scale, patched)
+
+        # Double-buffered prefetch: prepare the next batch (path mapping +
+        # threaded image loading) while the GPU detects faces in the current
+        # batch and results are written to the DB.
+        prefetch_executor = ThreadPoolExecutor(max_workers=1)
+        pending_prefetch: Future | None = None
+
+        for batch_start in range(0, len(rows), batch_size):
+            if self._stopped():
+                break
+
+            batch = rows[batch_start : batch_start + batch_size]
+
+            # Collect current batch's prepared data
+            if pending_prefetch is not None:
+                prep = pending_prefetch.result()
+            else:
+                prep = _prepare_batch(batch)
+
+            # Start prefetching the NEXT batch while we process this one
+            next_start = batch_start + batch_size
+            if next_start < len(rows) and not self._stopped():
+                next_batch = rows[next_start : next_start + batch_size]
+                pending_prefetch = prefetch_executor.submit(_prepare_batch, next_batch)
+            else:
+                pending_prefetch = None
+
+            if prep is None:
                 processed_count += len(batch)
                 self._update_done(processed_count)
                 continue
+
+            _id_to_path, path_to_id, id_to_orig_path, _id_to_thumb_scale, loaded_images = prep
 
             results = face_detector.detect_faces_from_preloaded(loaded_images, stop_event=self._stop_event)
 
@@ -2483,6 +2502,8 @@ class PipelineOrchestrator(threading.Thread):
                 )
 
             time.sleep(0.01)
+
+        prefetch_executor.shutdown(wait=False, cancel_futures=True)
 
         # Unload face detector to free GPU memory
         del face_detector
