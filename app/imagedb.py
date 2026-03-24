@@ -4168,6 +4168,7 @@ class ImageDatabase:
         self._migrate_add_logs_table()
         self._migrate_backfill_silent_scene_transcriptions()
         self._migrate_backfill_video_codecs()
+        self._migrate_rescore_nima_from_originals()
 
         # Model invalidation — wipe stale data if model identity has changed.
         # Must run BEFORE start_threads() to avoid contention with the
@@ -4837,6 +4838,34 @@ class ImageDatabase:
             logger.info(f'Backfilled video codecs for {updated}/{len(rows)} videos (one-time migration)')
         else:
             logger.info('No videos need codec backfill (one-time migration)')
+
+        record_migration(self.safe_conn, migration_id)
+
+    def _migrate_rescore_nima_from_originals(self) -> None:
+        """One-time migration to clear NIMA scores so they are recomputed from originals.
+
+        NIMA was previously scored from 400px thumbnails, which crushed the
+        model's dynamic range (3.0–6.3 instead of 1–10).  Scoring from
+        original images produces meaningful aesthetic rankings.  NULLing
+        the existing scores causes the pipeline to rescore all images.
+        """
+        migration_id = 'rescore_nima_from_originals_v1'
+
+        if has_migration_run(self.safe_conn, migration_id):
+            return
+
+        cursor = self.safe_conn.execute(
+            'SELECT COUNT(*) as cnt FROM images WHERE aesthetic_nima IS NOT NULL AND deleted = 0'
+        )
+        count = cursor.fetchone()['cnt']
+
+        if count > 0:
+            self.safe_conn.execute('UPDATE images SET aesthetic_nima = NULL WHERE aesthetic_nima IS NOT NULL')
+            self.safe_conn.commit()
+            logger.info(
+                f'Cleared {count} NIMA scores for rescore from original images '
+                f'(one-time migration — scores will be recomputed during next pipeline cycle)'
+            )
 
         record_migration(self.safe_conn, migration_id)
 

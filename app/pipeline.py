@@ -175,6 +175,7 @@ from faces import (
     get_face_thumbnail_path,
 )
 from metadata import derive_timestamp_with_confidence, extract_exif_data
+from rawimage import open_image as raw_open_image
 from safeconn import SafeConnection
 from thumbnails import generate_thumbnail, get_thumbnail_cache_path
 from video import (
@@ -1957,6 +1958,11 @@ class PipelineOrchestrator(threading.Thread):
     def _score_nima(self) -> int:
         """Score images missing NIMA aesthetic scores.
 
+        Loads original images (not thumbnails) for accurate scoring.
+        Uses threaded prefetching to overlap disk I/O with GPU inference:
+        a ThreadPoolExecutor loads the next batch's images while the GPU
+        scores the current batch.
+
         Returns:
             Number of images scored.
         """
@@ -1973,8 +1979,8 @@ class PipelineOrchestrator(threading.Thread):
 
         with self._db.safe_conn:
             cursor = self._db.safe_conn.execute("""
-                SELECT id, checksum FROM images
-                WHERE aesthetic_nima IS NULL AND deleted = 0 AND checksum IS NOT NULL
+                SELECT id, path FROM images
+                WHERE aesthetic_nima IS NULL AND deleted = 0
             """)
             rows = cursor.fetchall()
 
@@ -2013,79 +2019,109 @@ class PipelineOrchestrator(threading.Thread):
         count = 0
         last_log = time.perf_counter()
 
-        for batch_start in range(0, len(rows), batch_size):
-            if self._stopped():
-                break
-
-            batch = rows[batch_start : batch_start + batch_size]
-
-            # Load 400px thumbnails
-            valid_ids = []
-            pil_images = []
-            for row in batch:
-                checksum = row['checksum']
-                thumb_path = get_thumbnail_cache_path(checksum, 400, thumbnail_dir=self._db.thumbnail_dir)
-                if not Path(thumb_path).exists():
-                    continue
-                try:
-                    img = Image.open(thumb_path).convert('RGB')
-                    valid_ids.append(row['id'])
-                    pil_images.append(img)
-                except Exception as e:
-                    logger.warning(f'Failed to load thumbnail for NIMA: {row["id"]}: {e}')
-
-            if not pil_images:
-                self._update_done(batch_start + len(batch))
-                continue
-
-            # Score batch — with OOM fallback
+        def _load_image(row) -> tuple[str, Image.Image | None]:
+            """Load an original image for NIMA scoring (runs in worker thread)."""
             try:
-                scores = score_images_batch(model, pil_images, device=device)
-            except (MemoryError, RuntimeError) as e:
-                if not isinstance(e, MemoryError) and 'out of memory' not in str(e).lower():
-                    raise
-                logger.warning(f'OOM scoring NIMA batch of {len(pil_images)}, falling back to single')
-                if torch.cuda.is_available():
-                    torch.cuda.empty_cache()
+                img = raw_open_image(row['path'])
+                return (row['id'], img)
+            except Exception as e:
+                logger.debug(f'Failed to load image for NIMA: {row["id"]}: {e}')
+                return (row['id'], None)
 
-                scores = []
-                for i, img in enumerate(pil_images):
-                    try:
-                        single = score_images_batch(model, [img], device=device)
-                        scores.append(single[0])
-                    except (MemoryError, RuntimeError):
-                        logger.error(f'OOM scoring single image {valid_ids[i]}, skipping')
-                        if torch.cuda.is_available():
-                            torch.cuda.empty_cache()
-                        scores.append(None)
+        # Double-buffered prefetch: load next batch on worker threads while
+        # GPU scores current batch.  Each worker reads the original image
+        # from disk; score_images_batch handles the Resize/Crop/Normalize.
+        num_workers = min(4, batch_size)
+        prefetch_executor = ThreadPoolExecutor(max_workers=num_workers)
+        pending_futures: list[Future] | None = None
 
-                paired = [(s, vid) for s, vid in zip(scores, valid_ids, strict=True) if s is not None]
-                if not paired:
+        try:
+            for batch_start in range(0, len(rows), batch_size):
+                if self._stopped():
+                    break
+
+                batch = rows[batch_start : batch_start + batch_size]
+
+                # Kick off prefetch for this batch (or collect already-running prefetch)
+                if pending_futures is None:
+                    # First batch — submit and wait
+                    pending_futures = [prefetch_executor.submit(_load_image, row) for row in batch]
+
+                # Collect prefetched images
+                valid_ids = []
+                pil_images = []
+                for future in pending_futures:
+                    image_id, img = future.result()
+                    if img is not None:
+                        valid_ids.append(image_id)
+                        pil_images.append(img)
+
+                # Start prefetching the NEXT batch while we score this one
+                next_start = batch_start + batch_size
+                if next_start < len(rows) and not self._stopped():
+                    next_batch = rows[next_start : next_start + batch_size]
+                    pending_futures = [prefetch_executor.submit(_load_image, row) for row in next_batch]
+                else:
+                    pending_futures = None
+
+                if not pil_images:
                     self._update_done(batch_start + len(batch))
                     continue
-                scores, valid_ids = zip(*paired, strict=True)
-                scores = list(scores)
-                valid_ids = list(valid_ids)
 
-            # Batch commit
-            now = datetime.now().isoformat()
-            updates = [(score, now, vid) for score, vid in zip(scores, valid_ids, strict=True)]
+                # Score batch — with OOM fallback
+                try:
+                    scores = score_images_batch(model, pil_images, device=device)
+                except (MemoryError, RuntimeError) as e:
+                    if not isinstance(e, MemoryError) and 'out of memory' not in str(e).lower():
+                        raise
+                    logger.warning(f'OOM scoring NIMA batch of {len(pil_images)}, falling back to single')
+                    if torch.cuda.is_available():
+                        torch.cuda.empty_cache()
 
-            with self._db.safe_conn:
-                self._db.safe_conn.executemany(
-                    'UPDATE images SET aesthetic_nima = ?, updated_at = ? WHERE id = ?',
-                    updates,
-                )
-                self._db.safe_conn.commit()
+                    scores = []
+                    for i, img in enumerate(pil_images):
+                        try:
+                            single = score_images_batch(model, [img], device=device)
+                            scores.append(single[0])
+                        except (MemoryError, RuntimeError):
+                            logger.error(f'OOM scoring single image {valid_ids[i]}, skipping')
+                            if torch.cuda.is_available():
+                                torch.cuda.empty_cache()
+                            scores.append(None)
 
-            count += len(updates)
-            done = batch_start + len(batch)
-            self._update_done(done)
-            now = time.perf_counter()
-            if done < len(rows) and now - last_log >= 10.0:
-                logger.info(f'  NIMA scoring: {done}/{len(rows)}')
-                last_log = now
-            time.sleep(0.01)
+                    paired = [(s, vid) for s, vid in zip(scores, valid_ids, strict=True) if s is not None]
+                    if not paired:
+                        self._update_done(batch_start + len(batch))
+                        continue
+                    scores, valid_ids = zip(*paired, strict=True)
+                    scores = list(scores)
+                    valid_ids = list(valid_ids)
+
+                # Close PIL images to release file handles
+                for img in pil_images:
+                    img.close()
+
+                # Batch commit
+                ts = datetime.now().isoformat()
+                updates = [(score, ts, vid) for score, vid in zip(scores, valid_ids, strict=True)]
+
+                with self._db.safe_conn:
+                    self._db.safe_conn.executemany(
+                        'UPDATE images SET aesthetic_nima = ?, updated_at = ? WHERE id = ?',
+                        updates,
+                    )
+                    self._db.safe_conn.commit()
+
+                count += len(updates)
+                done = batch_start + len(batch)
+                self._update_done(done)
+                elapsed = time.perf_counter()
+                if done < len(rows) and elapsed - last_log >= 10.0:
+                    logger.info(f'  NIMA scoring: {done}/{len(rows)}')
+                    last_log = elapsed
+                time.sleep(0.01)
+        finally:
+            prefetch_executor.shutdown(wait=False, cancel_futures=True)
 
         # Unload NIMA model to free GPU memory for subsequent stages
         del model
