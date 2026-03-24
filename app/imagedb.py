@@ -6659,37 +6659,39 @@ class ImageDatabase:
 
         # Get counts for live updates — cached with a 5-second TTL to avoid
         # running 4 COUNT queries on every poll (the main source of idle CPU).
-        # safe_conn serialises access automatically via its internal RLock.
+        # Each execute() auto-locks briefly via SafeConnection's RLock —
+        # no need for a broader `with safe_conn:` scope, since these counts
+        # don't need cross-query atomicity and the broad lock was blocking
+        # the pipeline thread during Stage 6.
         now = time.monotonic()
         if self._status_counts is None or (now - self._status_counts_time) >= 5.0:
-            with self.safe_conn:
+            cursor = self.safe_conn.execute(
+                "SELECT COUNT(*) as count FROM images WHERE deleted = 0 AND media_type = 'image'"
+            )
+            total_images = cursor.fetchone()['count']
+
+            cursor = self.safe_conn.execute(
+                "SELECT COUNT(*) as count FROM images WHERE deleted = 0 AND media_type = 'video'"
+            )
+            total_videos = cursor.fetchone()['count']
+
+            # people/faces tables are created by FaceDB, which may not have
+            # initialised yet when the frontend first polls /api/status.
+            try:
+                cursor = self.safe_conn.execute('SELECT COUNT(*) as count FROM people')
+                total_people = cursor.fetchone()['count']
+            except Exception:
+                total_people = 0
+
+            try:
                 cursor = self.safe_conn.execute(
-                    "SELECT COUNT(*) as count FROM images WHERE deleted = 0 AND media_type = 'image'"
+                    """SELECT COUNT(*) as count FROM faces f
+                       JOIN images i ON f.image_id = i.id
+                       WHERE f.suppressed = 0 AND i.deleted = 0"""
                 )
-                total_images = cursor.fetchone()['count']
-
-                cursor = self.safe_conn.execute(
-                    "SELECT COUNT(*) as count FROM images WHERE deleted = 0 AND media_type = 'video'"
-                )
-                total_videos = cursor.fetchone()['count']
-
-                # people/faces tables are created by FaceDB, which may not have
-                # initialised yet when the frontend first polls /api/status.
-                try:
-                    cursor = self.safe_conn.execute('SELECT COUNT(*) as count FROM people')
-                    total_people = cursor.fetchone()['count']
-                except Exception:
-                    total_people = 0
-
-                try:
-                    cursor = self.safe_conn.execute(
-                        """SELECT COUNT(*) as count FROM faces f
-                           JOIN images i ON f.image_id = i.id
-                           WHERE f.suppressed = 0 AND i.deleted = 0"""
-                    )
-                    total_faces = cursor.fetchone()['count']
-                except Exception:
-                    total_faces = 0
+                total_faces = cursor.fetchone()['count']
+            except Exception:
+                total_faces = 0
 
             self._status_counts = {
                 'total_images': total_images,
@@ -6793,10 +6795,12 @@ class ImageDatabase:
         - Status tracking per level
         - Epoch management
 
-        Uses a private connection (via DuplicateManager._get_db()) rather
-        than the shared self.conn to avoid concurrent cursor conflicts.
+        Uses the shared safe_conn rather than a private connection.
+        Stage 6 is sequential (no other pipeline stage runs concurrently)
+        and SafeConnection's RLock serialises access with Flask threads.
+        This avoids WAL write-lock contention between two connections.
         """
-        self._duplicate_manager.compute_all()
+        self._duplicate_manager.compute_all(conn=self.safe_conn)
 
     def _reassess_faces_with_status(self) -> None:
         """Match unknown faces against known people (locked faces).
