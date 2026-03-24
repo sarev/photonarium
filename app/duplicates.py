@@ -829,6 +829,99 @@ def _compute_duplicates_level1(conn: SafeConnection, threshold: int = 4) -> int:
     return group_count
 
 
+def _compute_duplicates_level1_incremental(
+    conn: SafeConnection,
+    dirty_ids: list[str],
+    threshold: int = 4,
+) -> int:
+    """Incrementally update level 1 duplicates for dirty images.
+
+    For each dirty image, computes Hamming distance against all known
+    perceptual hashes and adds to / merges existing groups as needed.
+    All hashes fit comfortably in memory (~44k × 8 bytes = ~350KB).
+
+    Args:
+        conn: Database connection.
+        dirty_ids: List of image IDs that need checking.
+        threshold: Maximum Hamming distance for near-identical matches.
+
+    Returns:
+        Number of new groups created.
+    """
+    if not dirty_ids:
+        return 0
+
+    logger.info(f'Incremental level 1: checking {len(dirty_ids)} images')
+
+    image_to_group = _get_image_to_group_mapping(conn, level=1)
+
+    # Load all perceptual hashes (small — ~350KB for 44k images)
+    cursor = conn.execute(
+        'SELECT id, perceptual_hash FROM images WHERE deleted = 0 AND perceptual_hash IS NOT NULL'
+    )
+    all_hashes: dict[str, int] = {}
+    for row in cursor.fetchall():
+        try:
+            all_hashes[row['id']] = int(row['perceptual_hash'], 16)
+        except ValueError:
+            continue
+
+    # Get hashes for dirty images specifically
+    dirty_hashes: dict[str, int] = {}
+    for did in dirty_ids:
+        if did in all_hashes:
+            dirty_hashes[did] = all_hashes[did]
+
+    if not dirty_hashes:
+        logger.info('Incremental level 1: no valid dirty hashes found')
+        return 0
+
+    new_groups = 0
+
+    for dirty_id, dirty_hash in dirty_hashes.items():
+        # Find all matching images (Hamming distance <= threshold)
+        matches = []
+        for img_id, img_hash in all_hashes.items():
+            if img_id != dirty_id and _hamming_distance_fast(dirty_hash, img_hash) <= threshold:
+                matches.append(img_id)
+
+        if not matches:
+            continue
+
+        # Check if any match is already in a group
+        existing_groups = set()
+        for match_id in matches:
+            if match_id in image_to_group:
+                existing_groups.add(image_to_group[match_id])
+
+        if existing_groups:
+            # Add dirty image to existing group
+            target_group = next(iter(existing_groups))
+            if dirty_id not in image_to_group:
+                _add_image_to_group(conn, level=1, group_hash=target_group, image_id=dirty_id)
+                image_to_group[dirty_id] = target_group
+
+            # Merge any other groups
+            for other_group in existing_groups:
+                if other_group != target_group:
+                    _merge_groups(conn, level=1, group_hash_keep=target_group, group_hash_merge=other_group)
+                    for img_id, grp in list(image_to_group.items()):
+                        if grp == other_group:
+                            image_to_group[img_id] = target_group
+        else:
+            # Create new group
+            group_hash = f'phash_{dirty_id}'
+            all_members = [dirty_id] + matches
+            _insert_duplicate_group(conn, level=1, group_hash=group_hash, image_ids=all_members)
+            for member in all_members:
+                image_to_group[member] = group_hash
+            new_groups += 1
+
+    conn.commit()
+    logger.info(f'Incremental level 1: created {new_groups} new groups')
+    return new_groups
+
+
 # =============================================================================
 # LEVELS 2 & 3: EMBEDDING-BASED DUPLICATES
 # =============================================================================
@@ -2364,10 +2457,18 @@ class DuplicateManager:
                 try:
                     group_count = _get_group_count(conn, level)
 
-                    # Level 1 always uses full computation (LSH is more efficient)
+                    # Level 1: use incremental when few dirty images, full LSH otherwise
                     if level == 1:
-                        logger.info(f'Level {level}: full computation (LSH)')
-                        results[level] = _compute_duplicates_level1(conn, self._config.perceptual_hash_threshold)
+                        if use_incremental and group_count > 0:
+                            logger.info(f'Level 1: {group_count} groups, incremental update')
+                            results[level] = _compute_duplicates_level1_incremental(
+                                conn, dirty_ids, self._config.perceptual_hash_threshold
+                            )
+                        else:
+                            logger.info('Level 1: full computation (LSH)')
+                            results[level] = _compute_duplicates_level1(
+                                conn, self._config.perceptual_hash_threshold
+                            )
                     elif group_count == 0:
                         # No existing groups - must do full computation
                         logger.info(f'Level {level}: no existing groups, full computation')
