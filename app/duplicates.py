@@ -2098,10 +2098,27 @@ class DuplicateManager:
             cursor = conn.execute('SELECT id, path FROM images WHERE deleted = 0')
             rows = cursor.fetchall()
 
-            cursor = conn.execute('SELECT group_hash, source_path FROM custom_groups WHERE source_path IS NOT NULL')
-            existing = {row['source_path']: row['group_hash'] for row in cursor.fetchall()}
+            cursor = conn.execute(
+                'SELECT group_hash, source_path, name FROM custom_groups WHERE source_path IS NOT NULL'
+            )
+            existing_groups = {
+                row['source_path']: (row['group_hash'], row['name'])
+                for row in cursor.fetchall()
+            }
 
-        # ── COMPUTE phase (no lock): prepare all SQL parameters ──
+            # Existing memberships: group_hash → set of image_ids
+            cursor = conn.execute(
+                'SELECT group_hash, image_id FROM duplicate_groups WHERE level = ?',
+                (LEVEL_DIRECTORY,),
+            )
+            existing_members: dict[str, set[str]] = {}
+            for row in cursor.fetchall():
+                gh = row['group_hash']
+                if gh not in existing_members:
+                    existing_members[gh] = set()
+                existing_members[gh].add(row['image_id'])
+
+        # ── COMPUTE phase (no lock): diff existing vs desired ──
 
         # Map directory → set of image IDs
         dir_to_images: dict[str, set[str]] = {}
@@ -2115,9 +2132,9 @@ class DuplicateManager:
         display_names = _compute_unique_dir_names(all_dirs)
         needed_paths = set(all_dirs)
 
-        # Prepare batched SQL parameters
-        delete_membership_params: list[tuple] = []  # (level, group_hash)
-        insert_membership_params: list[tuple] = []  # (level, group_hash, image_id, now)
+        # Prepare batched SQL parameters (diff only)
+        add_member_params: list[tuple] = []  # (level, group_hash, image_id, now)
+        remove_member_params: list[tuple] = []  # (level, group_hash, image_id)
         update_name_params: list[tuple] = []  # (name, now, group_hash)
         create_group_params: list[tuple] = []  # (group_hash, name, source_path, now, now)
         remove_dup_params: list[tuple] = []  # (level, group_hash)
@@ -2127,82 +2144,132 @@ class DuplicateManager:
         new_groups: dict[str, str] = {}  # dir_path → group_hash
 
         created = 0
-        updated = 0
+        members_added = 0
+        members_removed = 0
+        names_updated = 0
         removed = 0
 
         for dir_path in all_dirs:
-            image_ids = dir_to_images[dir_path]
+            desired_ids = dir_to_images[dir_path]
             display_name = display_names[dir_path]
 
-            if dir_path in existing:
-                # Group exists — sync membership and name
-                group_hash = existing[dir_path]
-                delete_membership_params.append((LEVEL_DIRECTORY, group_hash))
-                for image_id in image_ids:
-                    insert_membership_params.append((LEVEL_DIRECTORY, group_hash, image_id, now))
-                update_name_params.append((display_name, now, group_hash))
-                updated += 1
+            if dir_path in existing_groups:
+                # Group exists — diff membership and check name
+                group_hash, current_name = existing_groups[dir_path]
+                current_ids = existing_members.get(group_hash, set())
+
+                to_add = desired_ids - current_ids
+                to_remove = current_ids - desired_ids
+
+                for image_id in to_add:
+                    add_member_params.append((LEVEL_DIRECTORY, group_hash, image_id, now))
+                members_added += len(to_add)
+
+                for image_id in to_remove:
+                    remove_member_params.append((LEVEL_DIRECTORY, group_hash, image_id))
+                members_removed += len(to_remove)
+
+                if display_name != current_name:
+                    update_name_params.append((display_name, now, group_hash))
+                    names_updated += 1
             else:
                 # New directory — create group
                 group_hash = str(uuid.uuid4())
                 new_groups[dir_path] = group_hash
                 create_group_params.append((group_hash, display_name, dir_path, now, now))
-                for image_id in image_ids:
-                    insert_membership_params.append((LEVEL_DIRECTORY, group_hash, image_id, now))
+                for image_id in desired_ids:
+                    add_member_params.append((LEVEL_DIRECTORY, group_hash, image_id, now))
+                members_added += len(desired_ids)
                 created += 1
 
         # Stale groups whose source_path no longer has images
-        for source_path, group_hash in existing.items():
+        for source_path, (group_hash, _name) in existing_groups.items():
             if source_path not in needed_paths:
                 remove_dup_params.append((LEVEL_DIRECTORY, group_hash))
                 remove_group_hashes.append((group_hash,))
                 removed += 1
 
-        # ── WRITE phase (lock): execute all batched SQL in one transaction ──
+        has_changes = (
+            add_member_params
+            or remove_member_params
+            or update_name_params
+            or create_group_params
+            or remove_dup_params
+        )
+
+        if not has_changes:
+            logger.debug(f'Directory groups: no changes ({len(all_dirs)} directories)')
+            return
+
+        # ── WRITE phase (lock): execute only the diff ──
         with conn:
-            conn.executemany(
-                'DELETE FROM duplicate_groups WHERE level = ? AND group_hash = ?',
-                delete_membership_params,
-            )
-            conn.executemany(
-                'INSERT INTO custom_groups (group_hash, name, source_path, created_at, updated_at) '
-                'VALUES (?, ?, ?, ?, ?)',
-                create_group_params,
-            )
-            conn.executemany(
-                'INSERT INTO duplicate_groups (level, group_hash, image_id, updated_at) VALUES (?, ?, ?, ?)',
-                insert_membership_params,
-            )
-            conn.executemany(
-                'UPDATE custom_groups SET name = ?, updated_at = ? WHERE group_hash = ?',
-                update_name_params,
-            )
-            conn.executemany(
-                'DELETE FROM duplicate_groups WHERE level = ? AND group_hash = ?',
-                remove_dup_params,
-            )
-            conn.executemany(
-                'DELETE FROM custom_groups WHERE group_hash = ?',
-                remove_group_hashes,
-            )
+            if create_group_params:
+                conn.executemany(
+                    'INSERT INTO custom_groups (group_hash, name, source_path, created_at, updated_at) '
+                    'VALUES (?, ?, ?, ?, ?)',
+                    create_group_params,
+                )
+            if add_member_params:
+                conn.executemany(
+                    'INSERT INTO duplicate_groups (level, group_hash, image_id, updated_at) VALUES (?, ?, ?, ?)',
+                    add_member_params,
+                )
+            if remove_member_params:
+                conn.executemany(
+                    'DELETE FROM duplicate_groups WHERE level = ? AND group_hash = ? AND image_id = ?',
+                    remove_member_params,
+                )
+            if update_name_params:
+                conn.executemany(
+                    'UPDATE custom_groups SET name = ?, updated_at = ? WHERE group_hash = ?',
+                    update_name_params,
+                )
+            if remove_dup_params:
+                conn.executemany(
+                    'DELETE FROM duplicate_groups WHERE level = ? AND group_hash = ?',
+                    remove_dup_params,
+                )
+            if remove_group_hashes:
+                conn.executemany(
+                    'DELETE FROM custom_groups WHERE group_hash = ?',
+                    remove_group_hashes,
+                )
             conn.commit()
 
-        # Rebuild level-4 cache from the data we just wrote (no DB query needed)
+        # Update level-4 cache to reflect the diff
         with self._cache_lock:
             if self._cache_loaded and self._group_cache is not None:
-                self._group_cache[LEVEL_DIRECTORY] = {}
+                cache = self._group_cache.get(LEVEL_DIRECTORY)
+                if cache is None:
+                    cache = {}
+                    self._group_cache[LEVEL_DIRECTORY] = cache
 
-                for dir_path in all_dirs:
-                    image_ids = dir_to_images[dir_path]
-                    group_hash = existing.get(dir_path) or new_groups.get(dir_path)
-                    if group_hash:
-                        self._group_cache[LEVEL_DIRECTORY][group_hash] = set(image_ids)
+                # Apply membership changes to cache
+                for _level, group_hash, image_id, _ts in add_member_params:
+                    if group_hash not in cache:
+                        cache[group_hash] = set()
+                    cache[group_hash].add(image_id)
 
-        if created or updated or removed:
-            logger.info(
-                f'Directory groups synced: {created} created, {updated} updated, {removed} removed '
-                f'({len(all_dirs)} directories total)'
-            )
+                for _level, group_hash, image_id in remove_member_params:
+                    if group_hash in cache:
+                        cache[group_hash].discard(image_id)
+
+                # Remove stale groups from cache
+                for _level, group_hash in remove_dup_params:
+                    cache.pop(group_hash, None)
+
+        parts = []
+        if created:
+            parts.append(f'{created} created')
+        if removed:
+            parts.append(f'{removed} removed')
+        if members_added:
+            parts.append(f'{members_added} members added')
+        if members_removed:
+            parts.append(f'{members_removed} members removed')
+        if names_updated:
+            parts.append(f'{names_updated} renamed')
+        logger.info(f'Directory groups synced: {", ".join(parts)} ({len(all_dirs)} directories)')
 
     def get_epoch(self) -> str:
         """Get the current epoch timestamp for duplicate groups."""
