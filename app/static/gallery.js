@@ -744,20 +744,21 @@ const Gallery = {
 
         const isDupFilter = filter && filter.type === 'duplicates' && filter.groupHash;
 
-        if (isSemanticFilter) {
-            App.setSortBy('content');
-            App.setSortDirection('desc');
-        } else if (isDupFilter) {
-            // Save current sort so we can restore when leaving the group
+        if (isSemanticFilter || isDupFilter) {
+            // Save current sort so we can restore when leaving the filter/group
             if (!this.state.prevSort) {
                 this.state.prevSort = { ...App.getSort() };
             }
-            App.setSortBy('quality');
+            if (isSemanticFilter) {
+                App.setSortBy('content');
+            } else {
+                App.setSortBy('quality');
+            }
             App.setSortDirection('desc');
         } else if (this.state.prevSort) {
-            // Leaving group view — restore the sort that was active before we
-            // auto-switched to quality.  Only fires if prevSort was set by the
-            // isDupFilter branch above (not when the user chose quality manually).
+            // Leaving semantic/group view — restore the sort that was active
+            // before we auto-switched.  Only fires if prevSort was set above
+            // (not when the user chose the sort manually).
             App.setSortBy(this.state.prevSort.by || 'date');
             App.setSortDirection(this.state.prevSort.direction || 'desc');
             this.state.prevSort = null;
