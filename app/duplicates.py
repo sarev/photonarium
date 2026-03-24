@@ -1196,13 +1196,6 @@ def _compute_duplicates_embedding_incremental(
 
     image_to_group = _get_image_to_group_mapping(conn, level=level)
 
-    # Get total count for chunking
-    cursor = conn.execute('SELECT COUNT(*) as cnt FROM images WHERE deleted = 0 AND embedding IS NOT NULL')
-    total_count = cursor.fetchone()['cnt']
-
-    if total_count < 2:
-        return 0
-
     # Load dirty image embeddings first (these we need to keep in memory)
     dirty_embeddings: dict[str, np.ndarray] = {}
 
@@ -1233,18 +1226,18 @@ def _compute_duplicates_embedding_incremental(
     # matches_by_dirty[dirty_id] = set of matching image IDs
     matches_by_dirty: dict[str, set[str]] = {did: set() for did in dirty_id_list}
 
-    # Process database in chunks to find matches
+    # Cursor-based pagination: WHERE id > last_id ORDER BY id LIMIT ?
+    # O(chunk_size) per chunk vs O(offset) for LIMIT/OFFSET.
     chunks_processed = 0
-    offset = 0
+    last_id = ''
 
-    while offset < total_count:
-        # Load a chunk of embeddings from database
+    while True:
         cursor = conn.execute(
             """SELECT id, embedding FROM images
-               WHERE deleted = 0 AND embedding IS NOT NULL
+               WHERE deleted = 0 AND embedding IS NOT NULL AND id > ?
                ORDER BY id
-               LIMIT ? OFFSET ?""",
-            (chunk_size, offset),
+               LIMIT ?""",
+            (last_id, chunk_size),
         )
         chunk_rows = cursor.fetchall()
 
@@ -1262,6 +1255,7 @@ def _compute_duplicates_embedding_incremental(
                 emb = emb / norm
             chunk_embeddings.append(emb)
 
+        last_id = chunk_ids[-1]
         chunk_matrix = np.array(chunk_embeddings)
 
         # Compute similarities: dirty_matrix @ chunk_matrix.T
@@ -1282,9 +1276,8 @@ def _compute_duplicates_embedding_incremental(
         # Free chunk memory
         del chunk_matrix, chunk_embeddings, chunk_rows
         chunks_processed += 1
-        offset += chunk_size
 
-    logger.info(f'Incremental level {level}: processed {chunks_processed} chunks')
+    logger.info(f'Incremental level {level}: scanned {chunks_processed} chunks')
 
     # Now process matches and update groups
     new_groups = 0
@@ -1323,6 +1316,176 @@ def _compute_duplicates_embedding_incremental(
     conn.commit()
     logger.info(f'Incremental level {level}: created {new_groups} new groups')
     return new_groups
+
+
+def _compute_duplicates_embedding_incremental_multi(
+    conn: SafeConnection,
+    dirty_ids: list[str],
+    levels_and_thresholds: list[tuple[int, float]],
+    chunk_size: int = 5000,
+) -> dict[int, int]:
+    """Incrementally update embedding-based duplicates for multiple levels in one pass.
+
+    Scans all embeddings once and checks against multiple similarity
+    thresholds simultaneously, avoiding redundant DB reads and
+    deserialisation when levels 2 and 3 both need incremental updates.
+
+    Uses cursor-based pagination (WHERE id > ?) instead of LIMIT/OFFSET
+    for O(chunk_size) per chunk rather than O(offset).
+
+    Args:
+        conn: Database connection.
+        dirty_ids: List of image IDs that need checking.
+        levels_and_thresholds: List of (level, threshold) pairs to process.
+        chunk_size: Number of embeddings to load per chunk (default 5000).
+
+    Returns:
+        Dict mapping level to number of new groups created.
+    """
+    if not dirty_ids or not levels_and_thresholds:
+        return {level: 0 for level, _ in levels_and_thresholds}
+
+    level_labels = ', '.join(str(lv) for lv, _ in levels_and_thresholds)
+    logger.info(
+        f'Incremental levels [{level_labels}]: checking {len(dirty_ids)} images '
+        f'(combined scan, {len(levels_and_thresholds)} thresholds)'
+    )
+
+    # Load image-to-group mapping for each level
+    image_to_groups: dict[int, dict[str, str]] = {}
+    for level, _threshold in levels_and_thresholds:
+        image_to_groups[level] = _get_image_to_group_mapping(conn, level=level)
+
+    # Load dirty image embeddings
+    dirty_embeddings: dict[str, np.ndarray] = {}
+    placeholders = sql_placeholders(dirty_ids)
+    cursor = conn.execute(
+        f'SELECT id, embedding FROM images WHERE id IN ({placeholders}) AND deleted = 0 AND embedding IS NOT NULL',
+        dirty_ids,
+    )
+    for row in cursor:
+        emb = embedding_to_numpy(row['embedding'])
+        norm = np.linalg.norm(emb)
+        if norm > 0:
+            emb = emb / norm
+        dirty_embeddings[row['id']] = emb
+
+    if not dirty_embeddings:
+        logger.info(f'Incremental levels [{level_labels}]: no valid dirty embeddings found')
+        return {level: 0 for level, _ in levels_and_thresholds}
+
+    dirty_id_list = list(dirty_embeddings.keys())
+    dirty_matrix = np.array([dirty_embeddings[id_] for id_ in dirty_id_list])
+
+    # Collect matches per level per dirty image
+    # matches[(level, dirty_id)] = set of matching image IDs
+    matches: dict[tuple[int, str], set[str]] = {}
+    for level, _threshold in levels_and_thresholds:
+        for did in dirty_id_list:
+            matches[(level, did)] = set()
+
+    # Find the lowest threshold — we only need to check similarities >= min
+    min_threshold = min(t for _, t in levels_and_thresholds)
+
+    # Cursor-based pagination: WHERE id > last_id ORDER BY id LIMIT ?
+    chunks_processed = 0
+    last_id = ''
+
+    while True:
+        cursor = conn.execute(
+            """SELECT id, embedding FROM images
+               WHERE deleted = 0 AND embedding IS NOT NULL AND id > ?
+               ORDER BY id
+               LIMIT ?""",
+            (last_id, chunk_size),
+        )
+        chunk_rows = cursor.fetchall()
+
+        if not chunk_rows:
+            break
+
+        # Build chunk data
+        chunk_ids = []
+        chunk_embeddings = []
+        for row in chunk_rows:
+            chunk_ids.append(row['id'])
+            emb = embedding_to_numpy(row['embedding'])
+            norm = np.linalg.norm(emb)
+            if norm > 0:
+                emb = emb / norm
+            chunk_embeddings.append(emb)
+
+        last_id = chunk_ids[-1]
+        chunk_matrix = np.array(chunk_embeddings)
+
+        # Compute similarities: dirty_matrix @ chunk_matrix.T
+        similarities = dirty_matrix @ chunk_matrix.T
+
+        # Check against each level's threshold (cheapest part — just comparisons)
+        for dirty_idx, dirty_id in enumerate(dirty_id_list):
+            row_sims = similarities[dirty_idx]
+
+            # Pre-filter: only look at indices above the minimum threshold
+            candidate_indices = np.where(row_sims >= min_threshold)[0]
+
+            for match_idx in candidate_indices:
+                match_id = chunk_ids[match_idx]
+                if match_id == dirty_id:
+                    continue
+                sim = row_sims[match_idx]
+                for level, threshold in levels_and_thresholds:
+                    if sim >= threshold:
+                        matches[(level, dirty_id)].add(match_id)
+
+        del chunk_matrix, chunk_embeddings, chunk_rows
+        chunks_processed += 1
+
+    logger.info(f'Incremental levels [{level_labels}]: scanned {chunks_processed} chunks')
+
+    # Process matches and update groups for each level
+    results: dict[int, int] = {}
+    for level, _threshold in levels_and_thresholds:
+        image_to_group = image_to_groups[level]
+        new_groups = 0
+
+        for dirty_id in dirty_id_list:
+            level_matches = list(matches[(level, dirty_id)])
+
+            if not level_matches:
+                continue
+
+            existing_groups = set()
+            for match_id in level_matches:
+                if match_id in image_to_group:
+                    existing_groups.add(image_to_group[match_id])
+
+            if existing_groups:
+                target_group = next(iter(existing_groups))
+                if dirty_id not in image_to_group:
+                    _add_image_to_group(conn, level=level, group_hash=target_group, image_id=dirty_id)
+                    image_to_group[dirty_id] = target_group
+
+                for other_group in existing_groups:
+                    if other_group != target_group:
+                        _merge_groups(
+                            conn, level=level, group_hash_keep=target_group, group_hash_merge=other_group
+                        )
+                        for img_id, grp in list(image_to_group.items()):
+                            if grp == other_group:
+                                image_to_group[img_id] = target_group
+            else:
+                group_hash = f'emb{level}_{dirty_id}'
+                all_members = [dirty_id] + level_matches
+                _insert_duplicate_group(conn, level=level, group_hash=group_hash, image_ids=all_members)
+                for member in all_members:
+                    image_to_group[member] = group_hash
+                new_groups += 1
+
+        conn.commit()
+        results[level] = new_groups
+        logger.info(f'Incremental level {level}: created {new_groups} new groups')
+
+    return results
 
 
 # =============================================================================
@@ -2451,7 +2614,42 @@ class DuplicateManager:
                 )
 
             results = {}
+
+            # Pre-check which embedding levels (2, 3) can use combined incremental.
+            # When both need incremental, we scan all embeddings once instead of twice.
+            embedding_incremental_levels: list[tuple[int, float]] = []
+            if use_incremental:
+                for lv, thresh in [
+                    (2, self._config.similarity_threshold_level2),
+                    (3, self._config.similarity_threshold_level3),
+                ]:
+                    gc = _get_group_count(conn, lv)
+                    if gc > 0:
+                        embedding_incremental_levels.append((lv, thresh))
+
+            combined_done: set[int] = set()
+            if len(embedding_incremental_levels) >= 2:
+                # Combined scan for levels 2+3
+                for lv, _ in embedding_incremental_levels:
+                    self._set_status(lv, 'computing')
+                try:
+                    multi_results = _compute_duplicates_embedding_incremental_multi(
+                        conn, dirty_ids, embedding_incremental_levels
+                    )
+                    results.update(multi_results)
+                    combined_done = set(multi_results.keys())
+                except Exception as e:
+                    logger.error(f'Error computing combined embedding duplicates: {e}')
+                    for lv, _ in embedding_incremental_levels:
+                        results[lv] = 0
+                        combined_done.add(lv)
+                for lv in combined_done:
+                    self._set_status(lv, 'done')
+
             for level in range(4):
+                if level in combined_done:
+                    continue
+
                 self._set_status(level, 'computing')
 
                 try:
