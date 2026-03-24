@@ -319,11 +319,10 @@ def _insert_duplicate_group(
         image_ids: List of image IDs in the group.
     """
     now = datetime.now().isoformat()
-    for image_id in image_ids:
-        conn.execute(
-            'INSERT INTO duplicate_groups (level, group_hash, image_id, updated_at) VALUES (?, ?, ?, ?)',
-            (level, group_hash, image_id, now),
-        )
+    conn.executemany(
+        'INSERT INTO duplicate_groups (level, group_hash, image_id, updated_at) VALUES (?, ?, ?, ?)',
+        [(level, group_hash, image_id, now) for image_id in image_ids],
+    )
 
 
 def _get_dirty_image_ids(conn: SafeConnection, epoch: str) -> list[str]:
