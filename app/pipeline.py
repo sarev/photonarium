@@ -1606,41 +1606,87 @@ class PipelineOrchestrator(threading.Thread):
 
         count = 0
         last_log = time.perf_counter()
-        for batch_start in range(0, len(rows), batch_size):
-            if self._stopped():
-                break
 
-            batch = rows[batch_start : batch_start + batch_size]
-            batch_ids = [r['id'] for r in batch]
-            batch_paths = [Path(r['path']) for r in batch]
+        def _load_and_preprocess(row) -> tuple[str, torch.Tensor | None]:
+            """Load and preprocess an image for CLIP (runs in worker thread)."""
+            try:
+                img = clip._load_image_safe(Path(row['path']))
+                if img is None:
+                    return (row['id'], None)
+                return (row['id'], clip.preprocess(img))
+            except Exception as e:
+                logger.debug(f'Failed to preprocess image {row["path"]}: {e}')
+                return (row['id'], None)
 
-            results = clip.encode_images_batch(batch_paths)
+        # Double-buffered prefetch: load/preprocess next batch on worker
+        # threads while the GPU encodes the current batch.
+        num_workers = min(4, batch_size)
+        prefetch_executor = ThreadPoolExecutor(max_workers=num_workers)
+        pending_futures: list[Future] | None = None
 
-            updates = []
-            for (_idx, embedding), image_id in zip(results, batch_ids, strict=True):
-                if embedding is not None:
-                    embedding_bytes = embedding.astype(np.float32).tobytes()
-                    aesthetic = None
-                    if laion_weight is not None:
-                        aesthetic = float(embedding @ laion_weight + laion_bias)
-                    updates.append((embedding_bytes, aesthetic, datetime.now().isoformat(), image_id))
-                    count += 1
+        try:
+            for batch_start in range(0, len(rows), batch_size):
+                if self._stopped():
+                    break
 
-            if updates:
-                with self._db.safe_conn:
-                    self._db.safe_conn.executemany(
-                        'UPDATE images SET embedding = ?, aesthetic_laion = ?, updated_at = ? WHERE id = ?',
-                        updates,
-                    )
-                    self._db.safe_conn.commit()
+                batch = rows[batch_start : batch_start + batch_size]
 
-            done = batch_start + len(batch)
-            self._update_done(done)
-            now = time.perf_counter()
-            if done < len(rows) and now - last_log >= 10.0:
-                logger.info(f'  Embeddings: {done}/{len(rows)}')
-                last_log = now
-            time.sleep(0.01)  # Yield GIL
+                # Kick off prefetch for this batch (or collect already-running prefetch)
+                if pending_futures is None:
+                    pending_futures = [prefetch_executor.submit(_load_and_preprocess, row) for row in batch]
+
+                # Collect prefetched tensors
+                valid_ids = []
+                tensors = []
+                for future in pending_futures:
+                    image_id, tensor = future.result()
+                    if tensor is not None:
+                        valid_ids.append(image_id)
+                        tensors.append(tensor)
+
+                # Start prefetching the NEXT batch while we encode this one
+                next_start = batch_start + batch_size
+                if next_start < len(rows) and not self._stopped():
+                    next_batch = rows[next_start : next_start + batch_size]
+                    pending_futures = [prefetch_executor.submit(_load_and_preprocess, row) for row in next_batch]
+                else:
+                    pending_futures = None
+
+                if not tensors:
+                    done = batch_start + len(batch)
+                    self._update_done(done)
+                    continue
+
+                # Encode on GPU
+                embeddings = clip.encode_tensors_batch(tensors)
+
+                updates = []
+                for embedding, image_id in zip(embeddings, valid_ids, strict=True):
+                    if embedding is not None:
+                        embedding_bytes = embedding.astype(np.float32).tobytes()
+                        aesthetic = None
+                        if laion_weight is not None:
+                            aesthetic = float(embedding @ laion_weight + laion_bias)
+                        updates.append((embedding_bytes, aesthetic, datetime.now().isoformat(), image_id))
+                        count += 1
+
+                if updates:
+                    with self._db.safe_conn:
+                        self._db.safe_conn.executemany(
+                            'UPDATE images SET embedding = ?, aesthetic_laion = ?, updated_at = ? WHERE id = ?',
+                            updates,
+                        )
+                        self._db.safe_conn.commit()
+
+                done = batch_start + len(batch)
+                self._update_done(done)
+                elapsed = time.perf_counter()
+                if done < len(rows) and elapsed - last_log >= 10.0:
+                    logger.info(f'  Embeddings: {done}/{len(rows)}')
+                    last_log = elapsed
+                time.sleep(0.01)  # Yield GIL
+        finally:
+            prefetch_executor.shutdown(wait=False, cancel_futures=True)
 
         if count > 0:
             logger.info(f'Stage 3a complete: embedded {count} images')

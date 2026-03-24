@@ -2186,6 +2186,70 @@ class OpenCLIPModel:
         results.sort(key=lambda x: x[0])
         return results
 
+    def encode_tensors_batch(
+        self,
+        tensors: list[torch.Tensor],
+    ) -> list[np.ndarray | None]:
+        """Encode a batch of pre-preprocessed image tensors to embeddings.
+
+        Accepts tensors already through ``self.preprocess()`` — skips the
+        image loading and preprocessing step.  Used by the pipeline's
+        prefetch loop where workers load and preprocess images in parallel.
+
+        Args:
+            tensors: List of preprocessed image tensors (from ``self.preprocess``).
+
+        Returns:
+            List of normalised embeddings (or None for OOM failures),
+            in the same order as the input tensors.
+        """
+        if not tensors:
+            return []
+
+        results: list[np.ndarray | None] = []
+
+        try:
+            batch = torch.stack(tensors).to(self.device)
+
+            with torch.inference_mode():
+                if self.device == 'cuda':
+                    with torch.amp.autocast('cuda'):
+                        embeddings = self.model.encode_image(batch)
+                else:
+                    embeddings = self.model.encode_image(batch)
+
+                embeddings = embeddings / embeddings.norm(dim=-1, keepdim=True)
+                embeddings = embeddings.cpu().numpy()
+
+            for i in range(len(tensors)):
+                results.append(embeddings[i].flatten())
+
+        except (MemoryError, RuntimeError) as e:
+            if not isinstance(e, MemoryError) and 'out of memory' not in str(e).lower():
+                raise
+            logger.warning(f'OOM encoding batch of {len(tensors)} images, falling back to single-image processing')
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
+
+            for tensor in tensors:
+                try:
+                    single = tensor.unsqueeze(0).to(self.device)
+                    with torch.inference_mode():
+                        if self.device == 'cuda':
+                            with torch.amp.autocast('cuda'):
+                                emb = self.model.encode_image(single)
+                        else:
+                            emb = self.model.encode_image(single)
+                        emb = emb / emb.norm(dim=-1, keepdim=True)
+                    results.append(emb.cpu().numpy().flatten())
+                except (MemoryError, RuntimeError):
+                    logger.error('OOM encoding single image, skipping')
+                    if torch.cuda.is_available():
+                        torch.cuda.empty_cache()
+                    results.append(None)
+
+        return results
+
     def encode_pil_image(self, pil_image: Image.Image) -> np.ndarray | None:
         """Encode a PIL Image directly to an embedding vector.
 
