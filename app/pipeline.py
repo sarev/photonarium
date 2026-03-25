@@ -2246,6 +2246,7 @@ class PipelineOrchestrator(threading.Thread):
             cursor = self._db.safe_conn.execute("""
                 SELECT id, embedding FROM images
                 WHERE aesthetic_laion IS NULL AND embedding IS NOT NULL AND deleted = 0
+                  AND media_type = 'image'
             """)
             rows = cursor.fetchall()
 
@@ -2271,12 +2272,19 @@ class PipelineOrchestrator(threading.Thread):
             chunk_size = 1000
             for i in range(0, len(updates), chunk_size):
                 chunk = updates[i : i + chunk_size]
-                with self._db.safe_conn:
-                    self._db.safe_conn.executemany(
-                        'UPDATE images SET aesthetic_laion = ?, updated_at = ? WHERE id = ?',
-                        chunk,
-                    )
-                    self._db.safe_conn.commit()
+                try:
+                    with self._db.safe_conn:
+                        self._db.safe_conn.executemany(
+                            'UPDATE images SET aesthetic_laion = ?, updated_at = ? WHERE id = ?',
+                            chunk,
+                        )
+                        self._db.safe_conn.commit()
+                except Exception as e:
+                    logger.warning(f'Failed to commit LAION batch ({len(chunk)} scores): {e}')
+                    try:
+                        self._db.safe_conn.rollback()
+                    except Exception:
+                        pass
 
         count = len(updates)
         if count > 0:
