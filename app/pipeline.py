@@ -1331,13 +1331,12 @@ class PipelineOrchestrator(threading.Thread):
         Returns:
             Number of thumbnails generated.
         """
-        with self._db.safe_conn:
-            cursor = self._db.safe_conn.execute("""
-                SELECT id, path, checksum FROM images
-                WHERE deleted = 0 AND checksum IS NOT NULL
-                  AND media_type = 'image' AND thumbnails_pending = 1
-            """)
-            rows = cursor.fetchall()
+        cursor = self._db.safe_conn.execute("""
+            SELECT id, path, checksum FROM images
+            WHERE deleted = 0 AND checksum IS NOT NULL
+              AND media_type = 'image' AND thumbnails_pending = 1
+        """)
+        rows = cursor.fetchall()
 
         if not rows:
             return 0
@@ -1412,15 +1411,14 @@ class PipelineOrchestrator(threading.Thread):
         if not is_video_supported():
             return 0
 
-        with self._db.safe_conn:
-            cursor = self._db.safe_conn.execute("""
-                SELECT i.id, i.path
-                FROM images i
-                WHERE i.deleted = 0
-                  AND i.media_type = 'video'
-                  AND NOT EXISTS (SELECT 1 FROM scenes s WHERE s.image_id = i.id)
-            """)
-            rows = cursor.fetchall()
+        cursor = self._db.safe_conn.execute("""
+            SELECT i.id, i.path
+            FROM images i
+            WHERE i.deleted = 0
+              AND i.media_type = 'video'
+              AND NOT EXISTS (SELECT 1 FROM scenes s WHERE s.image_id = i.id)
+        """)
+        rows = cursor.fetchall()
 
         if not rows:
             return 0
@@ -1594,13 +1592,12 @@ class PipelineOrchestrator(threading.Thread):
         Returns:
             Number of images embedded.
         """
-        with self._db.safe_conn:
-            cursor = self._db.safe_conn.execute("""
-                SELECT id, path FROM images
-                WHERE embedding IS NULL AND deleted = 0 AND media_type = 'image'
-                AND width > 0
-            """)
-            rows = cursor.fetchall()
+        cursor = self._db.safe_conn.execute("""
+            SELECT id, path FROM images
+            WHERE embedding IS NULL AND deleted = 0 AND media_type = 'image'
+            AND width > 0
+        """)
+        rows = cursor.fetchall()
 
         if not rows:
             return 0
@@ -1708,32 +1705,31 @@ class PipelineOrchestrator(threading.Thread):
         Returns:
             Number of videos with scenes embedded.
         """
-        with self._db.safe_conn:
-            # Find videos needing scene embedding work:
-            # - scenes with NULL embeddings (not yet processed), OR
-            # - image-level embedding/preferred_scene_id still NULL
-            #   AND at least one scene has a real embedding (length > 0,
-            #   i.e. not an empty-blob marker for missing thumbnails).
-            cursor = self._db.safe_conn.execute("""
-                SELECT DISTINCT i.id, i.path
-                FROM images i
-                JOIN scenes s ON s.image_id = i.id
-                WHERE i.deleted = 0
-                  AND i.media_type = 'video'
-                  AND (
-                      s.embedding IS NULL
-                      OR (
-                          (i.embedding IS NULL OR i.preferred_scene_id IS NULL)
-                          AND EXISTS (
-                              SELECT 1 FROM scenes s2
-                              WHERE s2.image_id = i.id
-                                AND s2.embedding IS NOT NULL
-                                AND length(s2.embedding) > 0
-                          )
+        # Find videos needing scene embedding work:
+        # - scenes with NULL embeddings (not yet processed), OR
+        # - image-level embedding/preferred_scene_id still NULL
+        #   AND at least one scene has a real embedding (length > 0,
+        #   i.e. not an empty-blob marker for missing thumbnails).
+        cursor = self._db.safe_conn.execute("""
+            SELECT DISTINCT i.id, i.path
+            FROM images i
+            JOIN scenes s ON s.image_id = i.id
+            WHERE i.deleted = 0
+              AND i.media_type = 'video'
+              AND (
+                  s.embedding IS NULL
+                  OR (
+                      (i.embedding IS NULL OR i.preferred_scene_id IS NULL)
+                      AND EXISTS (
+                          SELECT 1 FROM scenes s2
+                          WHERE s2.image_id = i.id
+                            AND s2.embedding IS NOT NULL
+                            AND length(s2.embedding) > 0
                       )
                   )
-            """)
-            rows = cursor.fetchall()
+              )
+        """)
+        rows = cursor.fetchall()
 
         if not rows:
             return 0
@@ -2060,13 +2056,12 @@ class PipelineOrchestrator(threading.Thread):
                 self._nima_warned = True
             return 0
 
-        with self._db.safe_conn:
-            cursor = self._db.safe_conn.execute("""
-                SELECT id, path FROM images
-                WHERE aesthetic_nima IS NULL AND deleted = 0
-                  AND media_type = 'image'
-            """)
-            rows = cursor.fetchall()
+        cursor = self._db.safe_conn.execute("""
+            SELECT id, path FROM images
+            WHERE aesthetic_nima IS NULL AND deleted = 0
+              AND media_type = 'image'
+        """)
+        rows = cursor.fetchall()
 
         if not rows:
             return 0
@@ -2260,13 +2255,12 @@ class PipelineOrchestrator(threading.Thread):
         if laion_weight is None:
             return 0
 
-        with self._db.safe_conn:
-            cursor = self._db.safe_conn.execute("""
-                SELECT id, embedding FROM images
-                WHERE aesthetic_laion IS NULL AND embedding IS NOT NULL AND deleted = 0
-                  AND media_type = 'image'
-            """)
-            rows = cursor.fetchall()
+        cursor = self._db.safe_conn.execute("""
+            SELECT id, embedding FROM images
+            WHERE aesthetic_laion IS NULL AND embedding IS NOT NULL AND deleted = 0
+              AND media_type = 'image'
+        """)
+        rows = cursor.fetchall()
 
         if not rows:
             return 0
@@ -2316,16 +2310,15 @@ class PipelineOrchestrator(threading.Thread):
         if not self._db.config.face_detection_enabled:
             return False
 
-        with self._db.safe_conn:
-            cursor = self._db.safe_conn.execute("""
-                SELECT i.id, i.checksum, i.width, i.height
-                FROM images i
-                WHERE i.deleted = 0
-                  AND i.media_type = 'image'
-                  AND i.checksum IS NOT NULL
-                  AND NOT EXISTS (SELECT 1 FROM faces f WHERE f.image_id = i.id)
-            """)
-            rows = cursor.fetchall()
+        cursor = self._db.safe_conn.execute("""
+            SELECT i.id, i.checksum, i.width, i.height
+            FROM images i
+            WHERE i.deleted = 0
+              AND i.media_type = 'image'
+              AND i.checksum IS NOT NULL
+              AND NOT EXISTS (SELECT 1 FROM faces f WHERE f.image_id = i.id)
+        """)
+        rows = cursor.fetchall()
 
         if not rows:
             return False
@@ -2680,18 +2673,17 @@ class PipelineOrchestrator(threading.Thread):
         if not self._db.config.stt_enabled:
             return False
 
-        with self._db.safe_conn:
-            cursor = self._db.safe_conn.execute("""
-                SELECT DISTINCT i.id, i.path, i.basename, i.stt_language
-                FROM images i
-                JOIN scenes s ON s.image_id = i.id
-                WHERE i.deleted = 0
-                  AND i.media_type = 'video'
-                  AND s.transcription IS NULL
-                  AND i.preferred_scene_id IS NOT NULL
-                  AND i.embedding IS NOT NULL
-            """)
-            rows = cursor.fetchall()
+        cursor = self._db.safe_conn.execute("""
+            SELECT DISTINCT i.id, i.path, i.basename, i.stt_language
+            FROM images i
+            JOIN scenes s ON s.image_id = i.id
+            WHERE i.deleted = 0
+              AND i.media_type = 'video'
+              AND s.transcription IS NULL
+              AND i.preferred_scene_id IS NOT NULL
+              AND i.embedding IS NOT NULL
+        """)
+        rows = cursor.fetchall()
 
         if not rows:
             return False
