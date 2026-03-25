@@ -2054,6 +2054,7 @@ class PipelineOrchestrator(threading.Thread):
             cursor = self._db.safe_conn.execute("""
                 SELECT id, path FROM images
                 WHERE aesthetic_nima IS NULL AND deleted = 0
+                  AND media_type = 'image'
             """)
             rows = cursor.fetchall()
 
