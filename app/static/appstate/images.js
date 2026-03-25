@@ -161,17 +161,18 @@ AppState.images = (function() {
         const wB = qc.weightBpp;
         const alpha = qc.alpha;
 
-        // Aesthetic: absolute scores normalised to [0..1] by dividing by 10.
-        // Both LAION and NIMA output on a 0-10 scale, so /10 gives a
-        // meaningful absolute value (not a relative percentile).  When both
-        // are available, blend with alpha (NIMA weight) and (1-alpha) (LAION).
+        // Aesthetic: blend NIMA and LAION raw scores, then percentile-rank.
+        // Both models produce scores in narrow bands (NIMA: ~3.5-6.5,
+        // LAION: ~0-7) so dividing by 10 wastes most of the [0,1] range.
+        // Percentile ranking uses the full range and adapts to the actual
+        // score distribution in the current image set.
         const hasNima = images.some(i => i.aesthetic_nima != null);
-        const aestheticRaw = images.map(i => {
-            const laion = (i.aesthetic_laion ?? 0) / 10;
+        const A = _percentileRanks(images.map(i => {
+            const laion = i.aesthetic_laion ?? 0;
             if (!hasNima || i.aesthetic_nima == null) return laion;
-            const nima = i.aesthetic_nima / 10;
+            const nima = i.aesthetic_nima;
             return alpha * nima + (1 - alpha) * laion;
-        });
+        }));
 
         // Other components — percentile-ranked
         const S = _percentileRanks(images.map(i => Math.log1p(i.laplacian_var || 0)));
@@ -182,11 +183,11 @@ AppState.images = (function() {
         const scores = new Map();
         _qualityBreakdown = new Map();
         for (let i = 0; i < n; i++) {
-            const total = wA * aestheticRaw[i] + wS * S[i] + wP * P[i] + wB * B[i];
+            const total = wA * A[i] + wS * S[i] + wP * P[i] + wB * B[i];
             scores.set(images[i].id, total);
             _qualityBreakdown.set(images[i].id, {
                 total,
-                aesthetic: aestheticRaw[i],
+                aesthetic: A[i],
                 sharpness: S[i],
                 pixels: P[i],
                 bpp: B[i],

@@ -263,11 +263,10 @@ def compute_quality_scores(
     """Compute composite quality scores for a set of images.
 
     This is a Python port of the frontend ``_computeQualityScores()``
-    function in ``static/appstate/images.js``. The aesthetic component uses
-    absolute scores (LAION and NIMA normalised to 0-1 by dividing by 10),
-    while sharpness, resolution, and BPP use percentile ranking:
+    function in ``static/appstate/images.js``.  All four components use
+    percentile ranking within the current image set:
 
-    - **Aesthetic**: ``alpha * (nima / 10) + (1 - alpha) * (laion / 10)``
+    - **Aesthetic**: blended ``alpha * nima + (1-alpha) * laion``, percentile-ranked
     - **Sharpness**: ``log1p(laplacian_var)`` percentile rank
     - **Pixels**: ``width * height`` percentile rank
     - **BPP**: ``8 * size / pixels`` percentile rank
@@ -294,18 +293,20 @@ def compute_quality_scores(
 
     alpha = config.quality_alpha
 
-    # Aesthetic: absolute scores normalised to [0..1] by dividing by 10.
-    # Both LAION and NIMA output on a 0-10 scale.  When both are available,
-    # blend with alpha (NIMA weight) and (1-alpha) (LAION weight).
+    # Aesthetic: blend NIMA and LAION raw scores, then percentile-rank.
+    # Both models produce scores in narrow bands (NIMA: ~3.5-6.5,
+    # LAION: ~0-7) so dividing by 10 wasted most of the [0,1] range.
+    # Percentile ranking uses the full range and adapts to the actual
+    # score distribution in the current image set.
     has_nima = any(img.get('aesthetic_nima') is not None for img in images)
-    aesthetic_raw = []
+    blended = []
     for img in images:
-        laion = (img.get('aesthetic_laion') or 0) / 10
+        laion = img.get('aesthetic_laion') or 0
         if not has_nima or img.get('aesthetic_nima') is None:
-            aesthetic_raw.append(laion)
+            blended.append(laion)
         else:
-            nima = img['aesthetic_nima'] / 10
-            aesthetic_raw.append(alpha * nima + (1 - alpha) * laion)
+            blended.append(alpha * img['aesthetic_nima'] + (1 - alpha) * laion)
+    aesthetic = _percentile_ranks(blended)
 
     # Other components — percentile-ranked
     sharpness = _percentile_ranks([math.log1p(img.get('laplacian_var') or 0) for img in images])
@@ -315,7 +316,7 @@ def compute_quality_scores(
     # Combine with configurable weights
     scores = {}
     for i, img in enumerate(images):
-        total = w_a * aesthetic_raw[i] + w_s * sharpness[i] + w_p * pixels[i] + w_b * bpp[i]
+        total = w_a * aesthetic[i] + w_s * sharpness[i] + w_p * pixels[i] + w_b * bpp[i]
         scores[img['id']] = total
 
     return scores
