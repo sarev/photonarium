@@ -2174,18 +2174,27 @@ class PipelineOrchestrator(threading.Thread):
                 for img in pil_images:
                     img.close()
 
-                # Batch commit
+                # Batch commit — if the DB is locked (e.g. by the log handler
+                # or a concurrent Flask request), skip this batch rather than
+                # crashing the entire stage.  The unscored images will be
+                # picked up on the next pipeline cycle.
                 ts = datetime.now().isoformat()
                 updates = [(score, ts, vid) for score, vid in zip(scores, valid_ids, strict=True)]
 
-                with self._db.safe_conn:
-                    self._db.safe_conn.executemany(
-                        'UPDATE images SET aesthetic_nima = ?, updated_at = ? WHERE id = ?',
-                        updates,
-                    )
-                    self._db.safe_conn.commit()
-
-                count += len(updates)
+                try:
+                    with self._db.safe_conn:
+                        self._db.safe_conn.executemany(
+                            'UPDATE images SET aesthetic_nima = ?, updated_at = ? WHERE id = ?',
+                            updates,
+                        )
+                        self._db.safe_conn.commit()
+                    count += len(updates)
+                except Exception as e:
+                    logger.warning(f'Failed to commit NIMA batch ({len(updates)} scores): {e}')
+                    try:
+                        self._db.safe_conn.rollback()
+                    except Exception:
+                        pass
                 done = batch_start + len(batch)
                 self._update_done(done)
                 elapsed = time.perf_counter()
