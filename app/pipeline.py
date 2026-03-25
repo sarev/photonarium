@@ -2229,8 +2229,8 @@ class PipelineOrchestrator(threading.Thread):
         if torch.cuda.is_available():
             torch.cuda.empty_cache()
 
+        logger.info(f'Stage 4a complete: scored {count} images')
         if count > 0:
-            logger.info(f'Stage 4a complete: scored {count} images')
             self._db.event_queue.emit('nima_complete', {'scored_count': count})
         return count
 
@@ -2242,6 +2242,14 @@ class PipelineOrchestrator(threading.Thread):
         Returns:
             Number of images scored.
         """
+        # Check LAION head compatibility before querying the DB — the query
+        # fetches all embedding BLOBs (~86MB for 44k images) which is wasted
+        # if the head is incompatible with the current pretrained weights.
+        clip = self._get_clip_model()
+        laion_weight, laion_bias = self._load_laion_head(clip)
+        if laion_weight is None:
+            return 0
+
         with self._db.safe_conn:
             cursor = self._db.safe_conn.execute("""
                 SELECT id, embedding FROM images
@@ -2251,11 +2259,6 @@ class PipelineOrchestrator(threading.Thread):
             rows = cursor.fetchall()
 
         if not rows:
-            return 0
-
-        clip = self._get_clip_model()
-        laion_weight, laion_bias = self._load_laion_head(clip)
-        if laion_weight is None:
             return 0
 
         logger.info(f'Stage 4b: Computing LAION scores for {len(rows)} images...')
@@ -2287,8 +2290,7 @@ class PipelineOrchestrator(threading.Thread):
                         pass
 
         count = len(updates)
-        if count > 0:
-            logger.info(f'Stage 4b complete: scored {count} images')
+        logger.info(f'Stage 4b complete: scored {count} images')
         return count
 
     # =================================================================
