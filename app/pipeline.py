@@ -354,9 +354,10 @@ class PipelineOrchestrator(threading.Thread):
             if not had_work and not self._rerun_requested:
                 self._set_stage(None, 0, 0)
                 self._flush_logs()
-                # Sleep until woken by request_rerun() or stop_threads().
-                # Both set _wake_event for immediate wakeup.
-                self._wake_event.wait(timeout=2.0)
+                # Block until woken by request_rerun() or stop_threads().
+                # No timeout — all triggers set _wake_event, so the pipeline
+                # does zero work and holds zero locks while idle.
+                self._wake_event.wait()
                 self._wake_event.clear()
             # If _rerun_requested was set during pipeline, loop immediately
 
@@ -370,7 +371,11 @@ class PipelineOrchestrator(threading.Thread):
         new/changed files.  This is expensive for large libraries, so
         it only runs when explicitly requested (startup, rescan, folder
         change) or when a previous cycle found work (cascading changes).
-        Stages 2-5 are cheap DB queries and always run.
+
+        Stages 2-5 query the DB for unprocessed images.  They only run
+        when Stage 1 found work, when explicitly triggered (rescan,
+        folder add, import), or when a previous cycle's stage found
+        cascading work.  When idle, nothing runs — zero DB queries.
 
         Stage 6 (grouping) and Stage 7 (STT) only run when a preceding
         stage did work, avoiding repeated no-op grouping every poll
@@ -398,7 +403,11 @@ class PipelineOrchestrator(threading.Thread):
                     pass
             self._flush_logs()
 
-        # Stages 2-5 are DB-query-driven and lightweight — always run
+        # Stages 2-5 check for unprocessed images.  Skip entirely when
+        # idle — the wake event ensures we run when there's actual work.
+        if not (had_work or self._rerun_requested):
+            return had_work
+
         for stage_name, stage_fn in [
             ('thumbnails', self._stage_thumbnails),
             ('embeddings', self._stage_embeddings),
