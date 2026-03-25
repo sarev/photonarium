@@ -2124,11 +2124,14 @@ class PipelineOrchestrator(threading.Thread):
                 # Collect prefetched images
                 valid_ids = []
                 pil_images = []
+                failed_ids = []
                 for future in pending_futures:
                     image_id, img = future.result()
                     if img is not None:
                         valid_ids.append(image_id)
                         pil_images.append(img)
+                    else:
+                        failed_ids.append(image_id)
 
                 # Start prefetching the NEXT batch while we score this one
                 next_start = batch_start + batch_size
@@ -2137,6 +2140,21 @@ class PipelineOrchestrator(threading.Thread):
                     pending_futures = [prefetch_executor.submit(_load_image, row) for row in next_batch]
                 else:
                     pending_futures = None
+
+                # Write sentinel score (0.0) for images that couldn't be loaded
+                # so they aren't retried every pipeline cycle.
+                if failed_ids:
+                    ts = datetime.now().isoformat()
+                    sentinel_updates = [(0.0, ts, fid) for fid in failed_ids]
+                    try:
+                        with self._db.safe_conn:
+                            self._db.safe_conn.executemany(
+                                'UPDATE images SET aesthetic_nima = ?, updated_at = ? WHERE id = ?',
+                                sentinel_updates,
+                            )
+                            self._db.safe_conn.commit()
+                    except Exception:
+                        pass  # Best-effort — will retry next cycle
 
                 if not pil_images:
                     self._update_done(batch_start + len(batch))
