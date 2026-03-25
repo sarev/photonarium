@@ -1940,12 +1940,39 @@ class PipelineOrchestrator(threading.Thread):
             self._db.safe_conn.commit()
             return True
 
+    # LAION aesthetic predictor heads (sa_0_4_*) were trained on embeddings
+    # from specific pretrained weights.  Using them with a different pretrained
+    # variant produces garbage scores because the embedding geometry differs
+    # even when the dimension matches.
+    _LAION_HEAD_COMPATIBLE_PRETRAINED: ClassVar[dict[str, set[str]]] = {
+        'ViT-B-16': {'openai'},
+        'ViT-B-32': {'openai'},
+        'ViT-L-14': {'openai'},
+    }
+
     def _load_laion_head(self, clip: OpenCLIPModel) -> tuple[np.ndarray | None, float | None]:
         """Load the LAION aesthetic predictor head weights.
+
+        Returns (None, None) if the head is missing, incompatible with the
+        current model architecture, or incompatible with the current
+        pretrained weights (the heads were trained on ``openai`` embeddings).
 
         Returns:
             Tuple of (weight, bias) or (None, None) if unavailable.
         """
+        # Check pretrained compatibility before loading the file
+        compatible = self._LAION_HEAD_COMPATIBLE_PRETRAINED.get(clip.model_name, set())
+        if clip.pretrained not in compatible:
+            if not getattr(self, '_laion_warned', False):
+                logger.info(
+                    f'LAION aesthetic head not compatible with '
+                    f'{clip.model_name}/{clip.pretrained} '
+                    f'(trained for: {", ".join(sorted(compatible)) or "no known variants"}) '
+                    f'— LAION scoring disabled, using NIMA only'
+                )
+                self._laion_warned = True
+            return None, None
+
         head_path = self._db.db_path.parent / '.laion-aesthetic-head.pth'
         if not head_path.exists():
             if not getattr(self, '_laion_warned', False):

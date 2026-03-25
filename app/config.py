@@ -243,6 +243,9 @@ CONFIG_SCHEMA: list[tuple[str, list[tuple[str, list[str]]]]] = [
                     '  - laion2b_s34b_b88k (often better for everyday photos)',
                     '  - laion400m_e32     (smaller training set, lighter)',
                     '  - v1                (for nllb-clip multilingual models)',
+                    '',
+                    'Note: the LAION quality scorer only works with "openai" pretrained',
+                    'weights. Other variants use NIMA only for quality ranking.',
                 ],
             ),
             (

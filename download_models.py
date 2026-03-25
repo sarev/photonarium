@@ -134,8 +134,11 @@ def download_laion_head(model: str, pretrained: str, data_dir: str = '.') -> boo
     Returns:
         True if downloaded successfully, False otherwise.
     """
-    # Map of model architecture -> checkpoint URL (pretrained weights don't affect head)
-    # The LAION aesthetic predictor heads are nn.Linear(embed_dim, 1) classifiers.
+    # Map of model architecture -> checkpoint URL.
+    # IMPORTANT: these heads were trained on 'openai' pretrained embeddings.
+    # Using them with other pretrained weights (e.g. laion2b_s34b_b88k)
+    # produces garbage scores — the embedding geometry differs even when
+    # the dimension matches.  _load_laion_head() in pipeline.py enforces this.
     # See: https://github.com/LAION-AI/aesthetic-predictor
     _LAION_HEAD_URLS = {
         'ViT-B-16': 'https://raw.githubusercontent.com/LAION-AI/aesthetic-predictor/main/sa_0_4_vit_b_16_linear.pth',
