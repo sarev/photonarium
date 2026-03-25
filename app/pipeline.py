@@ -252,6 +252,11 @@ class PipelineOrchestrator(threading.Thread):
         # Re-entrancy: request_rerun() sets this to restart from Stage 1
         self._rerun_requested = False
 
+        # Wake event: set by request_rerun(), request_rescan_folder(), and
+        # stop_threads() to interrupt the idle sleep immediately.  Without
+        # this, the pipeline polls every 2s running DB queries for nothing.
+        self._wake_event = threading.Event()
+
         # Lazy-loaded models (one at a time — no concurrent GPU contention).
         # OpenCLIP is shared with ImageDatabase via _get_clip_model().
         self._stt_backend = None
@@ -296,6 +301,7 @@ class PipelineOrchestrator(threading.Thread):
         # Full rescan — clear any per-folder filter
         with self._rescan_folders_lock:
             self._rescan_folders.clear()
+        self._wake_event.set()
 
     def request_rescan_folder(self, folder_path: str) -> None:
         """Queue a single folder for rescan on the next pipeline cycle.
@@ -312,6 +318,7 @@ class PipelineOrchestrator(threading.Thread):
         self._ingestion_needed = True
         self._rerun_requested = True
         self._finalisation_requested = True
+        self._wake_event.set()
 
     def get_stage_progress(self) -> dict[str, Any]:
         """Get current stage progress for status reporting.
@@ -347,7 +354,10 @@ class PipelineOrchestrator(threading.Thread):
             if not had_work and not self._rerun_requested:
                 self._set_stage(None, 0, 0)
                 self._flush_logs()
-                self._stop_event.wait(timeout=2.0)
+                # Sleep until woken by request_rerun() or stop_threads().
+                # Both set _wake_event for immediate wakeup.
+                self._wake_event.wait(timeout=2.0)
+                self._wake_event.clear()
             # If _rerun_requested was set during pipeline, loop immediately
 
         self._close_worker_conns()

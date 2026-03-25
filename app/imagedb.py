@@ -5125,7 +5125,9 @@ class ImageDatabase:
         logger.info('Stopping background threads')
         self._stop_event.set()
 
+        # Wake the pipeline if it's sleeping so it sees _stop_event immediately
         if self._orchestrator is not None:
+            self._orchestrator._wake_event.set()
             self._orchestrator.join(timeout=timeout)
             if self._orchestrator.is_alive():
                 logger.warning('Pipeline orchestrator did not stop in time')
