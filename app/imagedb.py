@@ -2305,25 +2305,41 @@ class OpenCLIPModel:
     def encode_text(self, query: str) -> np.ndarray:
         """Encode a text query to an embedding vector.
 
+        On CUDA errors (e.g. after hibernation/wake), unloads the model
+        so the next call triggers a fresh reload that may recover the
+        CUDA context.
+
         Args:
             query: Text query string.
 
         Returns:
             Normalised embedding as numpy array.
+
+        Raises:
+            RuntimeError: If a CUDA error occurs (after unloading the model
+                for recovery on the next call).
         """
-        tokens = self.tokenizer([query]).to(self.device)
+        try:
+            tokens = self.tokenizer([query]).to(self.device)
 
-        with torch.inference_mode():
-            if self.device == 'cuda':
-                with torch.amp.autocast('cuda'):
+            with torch.inference_mode():
+                if self.device == 'cuda':
+                    with torch.amp.autocast('cuda'):
+                        v = self.model.encode_text(tokens)
+                else:
                     v = self.model.encode_text(tokens)
-            else:
-                v = self.model.encode_text(tokens)
 
-            # Normalise
-            v = v / v.norm(dim=-1, keepdim=True)
+                # Normalise
+                v = v / v.norm(dim=-1, keepdim=True)
 
-        return v.cpu().numpy().flatten()
+            return v.cpu().numpy().flatten()
+        except RuntimeError as e:
+            if is_cuda_error(e):
+                logger.warning(f'CUDA error during text encoding: {e} — unloading model for retry')
+                self.unload()
+                if torch.cuda.is_available():
+                    torch.cuda.empty_cache()
+            raise
 
     def encode_semantic_query(self, query: str, negative_weight: float = 0.5) -> np.ndarray:
         """Encode a semantic query with support for negative terms.
@@ -2347,8 +2363,12 @@ class OpenCLIPModel:
         positive_parts, negative_parts = parse_semantic_query(query)
 
         if not positive_parts and not negative_parts:
-            # Empty query - return zero vector
-            return np.zeros(self.model.visual.output_dim, dtype=np.float32)
+            # Empty query — return zero vector.  Access model property to
+            # trigger lazy load (needed for output_dim).
+            model = self.model
+            if model is None:
+                raise RuntimeError('OpenCLIP model not available')
+            return np.zeros(model.visual.output_dim, dtype=np.float32)
 
         # Encode positive parts
         if positive_parts:
