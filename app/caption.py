@@ -38,6 +38,7 @@ os.environ['HF_HUB_OFFLINE'] = '1'
 
 import torch
 
+from gputil import is_cuda_error
 from rawimage import open_image as raw_open_image
 
 
@@ -246,7 +247,7 @@ class CaptionGenerator:
 
                 self._model = model
             except (MemoryError, RuntimeError) as e:
-                if not isinstance(e, MemoryError) and 'out of memory' not in str(e).lower():
+                if not is_cuda_error(e):
                     raise  # Re-raise non-OOM RuntimeErrors
                 self._load_failed = True
                 self._model = None

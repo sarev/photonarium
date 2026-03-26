@@ -32,6 +32,8 @@ import torch
 import torch.nn as nn
 from torchvision import models, transforms
 
+from gputil import is_cuda_error
+
 if TYPE_CHECKING:
     from PIL import Image
 
@@ -245,7 +247,7 @@ def score_images_batch(
 
         return scores.cpu().tolist()
     except (MemoryError, RuntimeError) as e:
-        if not isinstance(e, MemoryError) and 'out of memory' not in str(e).lower():
+        if not is_cuda_error(e):
             raise
         logger.warning(f'OOM scoring batch of {len(tensors)} images, falling back to single-item')
         if torch.cuda.is_available():

@@ -183,6 +183,7 @@ from faces import (
     get_all_known_face_embeddings,
     get_face_thumbnail_path,
 )
+from gputil import is_cuda_error
 from metadata import derive_timestamp_with_confidence, extract_exif_data
 from rawimage import open_image as raw_open_image
 from safeconn import SafeConnection
@@ -1807,7 +1808,7 @@ class PipelineOrchestrator(threading.Thread):
                         now_ts = datetime.now().isoformat()
                         embedding_updates.append((emb_blob, now_ts, scene_id))
                 except (MemoryError, RuntimeError) as e:
-                    if isinstance(e, MemoryError) or 'out of memory' in str(e).lower():
+                    if is_cuda_error(e):
                         logger.warning(f'OOM embedding video scene: {e}')
                         if torch.cuda.is_available():
                             torch.cuda.empty_cache()
@@ -2102,7 +2103,7 @@ class PipelineOrchestrator(threading.Thread):
             model = load_nima_model(str(checkpoint_path), device=device)
             logger.info('NIMA model loaded (%.1fs)', time.perf_counter() - t0)
         except (MemoryError, RuntimeError) as e:
-            if isinstance(e, MemoryError) or 'out of memory' in str(e).lower():
+            if is_cuda_error(e):
                 logger.error(f'OOM loading NIMA model: {e}')
                 if torch.cuda.is_available():
                     torch.cuda.empty_cache()
@@ -2187,7 +2188,7 @@ class PipelineOrchestrator(threading.Thread):
                 try:
                     scores = score_images_batch(model, pil_images, device=device)
                 except (MemoryError, RuntimeError) as e:
-                    if not isinstance(e, MemoryError) and 'out of memory' not in str(e).lower():
+                    if not is_cuda_error(e):
                         raise
                     logger.warning(f'OOM scoring NIMA batch of {len(pil_images)}, falling back to single')
                     if torch.cuda.is_available():
