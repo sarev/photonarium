@@ -1,5 +1,59 @@
 # Release Notes
 
+## v1.2.7-beta
+
+### Quality Scoring Overhaul
+
+The "Sort by quality" feature has been substantially reworked. Previously, NIMA scores were computed from 400px thumbnails — the model saw a 224px centre crop of a heavily downscaled, sharpened, JPEG-recompressed image. This crushed the model's dynamic range to 3.0–6.3 (on a 1–10 scale), making the quality sort near-useless.
+
+NIMA now scores from the original image. A threaded prefetch pipeline (4 workers) overlaps disk I/O with GPU inference so the throughput impact is modest. A one-time migration clears existing scores for automatic recomputation.
+
+The LAION aesthetic head is now validated against the pretrained weights. The `sa_0_4` heads were trained on `openai` embeddings — using them with other pretrained variants (e.g. `laion2b_s34b_b88k`) produced near-random scores because the embedding geometry differs even when the dimension matches. The pipeline now detects incompatible weights and disables LAION scoring with a clear log message. This affected the `high_laptop` and `high_desktop` config presets.
+
+The frontend quality formula has switched from absolute normalisation (`score / 10`) to percentile ranking for the aesthetic component, matching what was already done for sharpness, resolution, and BPP. This gives the aesthetic weight its full [0, 1] range regardless of the model's output distribution. The backend mirror in `trash.py` has been updated to match.
+
+### Event-Driven Pipeline
+
+The pipeline orchestrator no longer polls. Previously it woke every 2 seconds and ran 8+ DB queries (Stages 2–5) even when idle, contending with Flask threads for the shared database lock and causing multi-second waits during normal browsing.
+
+The pipeline now blocks on a `threading.Event` and only runs when explicitly triggered — by rescan, folder add, import, scan timer, or cascading work from a previous stage. When idle: zero DB queries, zero lock contention, zero CPU usage. Shutdown and rescan triggers wake the pipeline immediately.
+
+Broad `with safe_conn:` scopes around single-SELECT work-check queries have been removed (8 sites). Each `safe_conn.execute()` call already auto-locks per call — the broad scope was holding the RLock for the entire query duration unnecessarily.
+
+### Duplicate Detection Performance
+
+Stage 6 (grouping) has been reworked for large libraries:
+
+- **Diff-based directory group sync**: Previously deleted and reinserted all level-4 memberships every cycle (~45,000 writes for a 44k library). Now computes a diff and only writes changes — typically ~1 INSERT for one new image. Eliminates the "database is locked" errors caused by the long write phase.
+- **Incremental level 1**: Perceptual hash duplicates now support incremental updates (previously always did a full clear + rebuild via LSH). For 1 dirty image, avoids rebuilding ~1,881 groups.
+- **Combined embedding scan**: Levels 2 and 3 incremental now scan all embeddings once instead of twice, halving the time for small updates.
+- **Cursor-based pagination**: Replaced `LIMIT/OFFSET` with `WHERE id > ?` for chunked embedding queries. SQLite's OFFSET is O(offset) — the 9th chunk at offset 40,000 was scanning 40k rows to skip them.
+- **Batched INSERTs**: `_insert_duplicate_group` now uses `executemany` instead of per-row `execute` calls, reducing lock acquisitions from N to 1 per group.
+- **Shared connection**: Duplicate computation now uses the shared `safe_conn` instead of creating throwaway private connections that competed for the WAL write lock.
+- **Status polling fix**: Removed the broad `with safe_conn:` from `get_processing_status()` COUNT queries — they don't need cross-query atomicity.
+
+### Threaded Image Prefetch (Stages 3, 4, 5)
+
+All three GPU pipeline stages now use double-buffered prefetching: a `ThreadPoolExecutor` (4 workers) loads and preprocesses the next batch's images while the GPU processes the current batch. Previously, image loading was sequential — the GPU sat idle during disk I/O.
+
+- **Stage 3** (embeddings): Workers run `raw_open_image` + `clip.preprocess` in parallel. New `encode_tensors_batch` method on `OpenCLIPModel` accepts pre-processed tensors.
+- **Stage 4** (NIMA): Workers load originals via `raw_open_image`; `score_images_batch` handles the transform.
+- **Stage 5** (faces): Batch-level prefetch overlaps `preload_images_batch` for the next batch with the current batch's GPU detection and DB writes.
+
+### GPU Model Lifecycle
+
+Reverted the idle GPU model unloading introduced in v1.2.6-beta. The `unload()` call between pipeline cycles raced with Flask search threads — the pipeline could set `_model = None` between `_load_model()` returning and the `model` property reading `self._model`, causing `AttributeError: 'NoneType' has no attribute 'encode_text'`. Models now stay loaded for the app lifetime; `unload()` is only called during graceful shutdown.
+
+### Bug Fixes
+
+- **Sort order stuck on similarity**: Clearing a semantic search filter left the sort order on "content" (by similarity) instead of restoring the previous sort. The duplicate-group filter already had save/restore logic — this extends it to semantic filters.
+- **NIMA video death loop**: The NIMA scoring query was missing `AND media_type = 'image'`, causing videos to be included. Since `raw_open_image` can't open `.mp4` files, they failed silently every cycle, creating an infinite loop of model load → fail → retry.
+- **NIMA corrupt image death loop**: Images that fail to load (corrupt, zero-byte) now get a sentinel score of 0.0 so they aren't retried every pipeline cycle.
+- **NIMA/LAION DB lock crash**: A "database is locked" error during the batch commit killed the entire pipeline stage. Now caught per-batch with a warning, allowing the stage to continue.
+- **LAION query ordering**: The LAION backfill checked head compatibility after fetching all embedding BLOBs (~86MB for 44k images). Moved the check before the query.
+- **Stage 4 silent completion**: Stages 4a/4b only logged "complete" when `count > 0`. When all images failed to load, the stage completed with no log output at all.
+- **LAION video scoring**: The LAION backfill query was also missing the `media_type = 'image'` filter.
+
 ## v1.2.6-beta
 
 ### OpenCLIP Model Change Detection

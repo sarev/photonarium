@@ -2,23 +2,26 @@
 
 Replaces the five concurrent processing threads (IngestionThread,
 EmbeddingThread, FaceDetectionThread, NimaThread, VideoProcessingThread)
-with a single daemon thread that runs seven stages sequentially in a
-loop.  The orchestrator polls every 2 seconds when idle and re-runs
-immediately when `request_rerun()` is called (from `--scan`, GUI
-Rescan, folder add/remove, imports, or timed rescans).
+with a single daemon thread that runs seven stages sequentially.
+The orchestrator is event-driven: it blocks on a ``threading.Event``
+when idle and wakes immediately when ``request_rerun()`` is called
+(from ``--scan``, GUI Rescan, folder add/remove, imports, or timed
+rescans).  When idle: zero DB queries, zero lock contention.
 
 Benefits
 --------
-- **No GPU contention** — only one model is loaded at a time.  Each
-  stage explicitly unloads its model (`del model` + `empty_cache()`)
-  before the next stage begins.
+- **No GPU contention** — only one model is loaded at a time.
+  Short-lived models (NIMA, MTCNN) are explicitly deleted +
+  ``empty_cache()`` after use.  The shared OpenCLIP model stays loaded
+  for the app lifetime (used by search as well as the pipeline).
 - **No DB lock contention** — stages run sequentially, so the shared
   lock inside ``safe_conn`` is only briefly held for reads/writes, never
   contested between stages.
 - **Self-healing** — each stage discovers its own work by querying the
-  DB for incomplete rows (e.g. `embedding IS NULL`, `thumbnails_pending
-  = 1`).  If the process is killed mid-pipeline, restarting picks up
-  exactly where it left off with no manual intervention.
+  DB for incomplete rows (e.g. ``embedding IS NULL``,
+  ``thumbnails_pending = 1``).  If the process is killed mid-pipeline,
+  restarting picks up exactly where it left off with no manual
+  intervention.
 - **Simpler control flow** — no callback chains, no inter-thread
   signalling between stages.
 
@@ -64,10 +67,12 @@ Stages
    stops (shared with Stages 5 and 7).
 
    *Batching (3a)*: Images are processed in batches of
-   `config.embedding_batch_size` (default 16).  Each batch is loaded
-   from original files, encoded on GPU/CPU, and committed to the DB.
-   LAION aesthetic scores (dot product with a ~2 KB linear head) are
-   computed in the same loop if the head weights are available.
+   `config.embedding_batch_size` (default 16).  A double-buffered
+   prefetch pipeline (4 worker threads) loads and preprocesses the next
+   batch while the GPU encodes the current batch.  LAION aesthetic
+   scores (dot product with a ~2 KB linear head) are computed in the
+   same loop if the head weights are compatible with the pretrained
+   variant (``openai`` only).
 
    *Sequential (3b)*: Video scenes are embedded one scene at a time
    from 400 px scene thumbnails.  All scene embeddings for a single
@@ -85,7 +90,10 @@ Stages
    explicitly deleted + `empty_cache()` to free VRAM for Stage 5.
 
    *Batching (4a)*: `config.nima_batch_size` (default 16) images per
-   GPU call.  Input is 400 px thumbnails loaded via Pillow.
+   GPU call.  Input is original images loaded via ``raw_open_image``,
+   with a double-buffered prefetch pipeline (4 worker threads).
+   Images that fail to load get a sentinel score of 0.0 to prevent
+   retrying every cycle.
 
    *OOM protection (4a)*: If a batch OOMs, falls back to single-image
    scoring.  If a single image also OOMs, it is skipped and the cache
@@ -110,8 +118,9 @@ Stages
    committed per-image (all faces for one image in a single transaction)
    to guarantee atomicity on crash.
 
-   *No threadpool* — detection is GPU-bound; parallelism comes from
-   batched tensor operations inside MTCNN.
+   *Batch-level prefetch* — the next batch's images are loaded (via
+   ``preload_images_batch``) in a background thread while the current
+   batch is being detected and written to DB.
 
 6. **Grouping** — Post-processing housekeeping (always runs after data
    stages when work was done or on startup for self-healing).

@@ -250,8 +250,9 @@ configurable intervals.
 automatic retry on transient "database is locked" errors, and rollback on
 failure to prevent connection poisoning. The shared connection
 (`ImageDatabase.safe_conn`) uses the same `RLock` as the legacy `_db_lock`;
-pipeline worker threads and `DuplicateManager` create private connections with
-their own `RLock`s. See `CLAUDE.md` for the full contract.
+pipeline worker threads create private connections with their own `RLock`s.
+`DuplicateManager.compute_all()` uses the shared connection when called from
+the pipeline. See `CLAUDE.md` for the full contract.
 
 ### `app/faces.py` - Face Detection and Recognition
 
