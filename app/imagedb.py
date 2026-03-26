@@ -2333,7 +2333,7 @@ class OpenCLIPModel:
                 v = v / v.norm(dim=-1, keepdim=True)
 
             return v.cpu().numpy().flatten()
-        except RuntimeError as e:
+        except (MemoryError, RuntimeError) as e:
             if is_cuda_error(e):
                 logger.warning(f'CUDA error during text encoding: {e} — unloading model for retry')
                 self.unload()

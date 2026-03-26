@@ -339,6 +339,10 @@ class CaptionGenerator:
         Returns:
             Generated caption string, or None if generation fails.
         """
+        self._load_model()
+        if self._model is None or self._processor is None:
+            return None
+
         try:
             # Load and preprocess image (handles both standard and RAW formats)
             image = raw_open_image(image_path).convert('RGB')

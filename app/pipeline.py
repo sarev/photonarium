@@ -2547,7 +2547,10 @@ class PipelineOrchestrator(threading.Thread):
                     # Generate semantic embedding from face thumbnail
                     semantic_embedding = None
                     if thumb_path.exists():
-                        semantic_embedding = clip.encode_image(thumb_path)
+                        try:
+                            semantic_embedding = clip.encode_image(thumb_path)
+                        except Exception as e:
+                            logger.debug(f'Failed to compute semantic embedding for face {face_id}: {e}')
 
                     embedding_bytes = face.embedding.astype(np.float32).tobytes()
                     semantic_bytes = None

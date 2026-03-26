@@ -199,7 +199,13 @@ def load_nima_model(checkpoint_path: str, device: str = 'cpu') -> NIMA:
     # strict=False tolerates missing num_batches_tracked counters (absent in
     # old checkpoints, default to 0 in BatchNorm — harmless for inference)
     model.load_state_dict(state_dict, strict=False)
-    model = model.to(device)
+    try:
+        model = model.to(device)
+    except (MemoryError, RuntimeError) as e:
+        if not is_cuda_error(e):
+            raise
+        logger.error(f'GPU error moving NIMA model to {device}: {e}')
+        raise
     model.eval()
     logger.info(f'NIMA model loaded from {checkpoint_path} on {device}')
     return model
