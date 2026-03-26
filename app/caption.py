@@ -172,6 +172,7 @@ class CaptionGenerator:
         self._processor = None
         self._is_blip2 = None  # Set during model loading
         self._load_failed = False
+        self._load_fail_time: float = 0.0
         self._lock = threading.Lock()
 
     @property
@@ -193,7 +194,9 @@ class CaptionGenerator:
         if self._model is not None:
             return
         if self._load_failed:
-            return
+            if time.monotonic() - self._load_fail_time < 60.0:
+                return
+            self._load_failed = False
 
         with self._lock:
             if self._model is not None:
@@ -250,12 +253,13 @@ class CaptionGenerator:
                 if not is_cuda_error(e):
                     raise  # Re-raise non-OOM RuntimeErrors
                 self._load_failed = True
+                self._load_fail_time = time.monotonic()
                 self._model = None
                 self._processor = None
                 if torch.cuda.is_available():
                     torch.cuda.empty_cache()
                 logger.error(
-                    f'Out of memory loading {model_type} model ({self.model_name}): {e} — image captioning disabled'
+                    f'GPU error loading {model_type} model ({self.model_name}): {e} — will retry in 60s'
                 )
                 return
 

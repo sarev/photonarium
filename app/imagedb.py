@@ -1927,6 +1927,7 @@ class OpenCLIPModel:
         self._preprocess = None
         self._tokenizer = None
         self._load_failed = False
+        self._load_fail_time: float = 0.0
         self._load_lock = threading.Lock()
 
     def unload(self) -> None:
@@ -1938,13 +1939,14 @@ class OpenCLIPModel:
         races.
         """
         with self._load_lock:
-            if self._model is None:
+            if self._model is None and not self._load_failed:
                 return
             logger.info(f'Unloading OpenCLIP model ({self.model_name}/{self.pretrained})')
             self._model = None
             self._preprocess = None
             # Clear tokenizer last (it's the sentinel for the fast-path check)
             self._tokenizer = None
+            self._load_failed = False
             if torch.cuda.is_available():
                 torch.cuda.empty_cache()
             gc.collect()
@@ -1991,7 +1993,11 @@ class OpenCLIPModel:
         if self._tokenizer is not None:
             return
         if self._load_failed:
-            return
+            # Retry after cooldown — transient CUDA errors (e.g. after
+            # hibernation) may clear when PyTorch reinitialises the context.
+            if time.monotonic() - self._load_fail_time < 60.0:
+                return
+            self._load_failed = False
 
         with self._load_lock:
             # Re-check under lock in case another thread loaded while we waited.
@@ -2020,26 +2026,28 @@ class OpenCLIPModel:
                 self._tokenizer = open_clip.get_tokenizer(self.model_name)
             except (MemoryError, RuntimeError) as e:
                 if not is_cuda_error(e):
-                    raise  # Re-raise non-OOM RuntimeErrors
+                    raise
                 self._load_failed = True
+                self._load_fail_time = time.monotonic()
                 self._model = None
                 self._preprocess = None
                 if torch.cuda.is_available():
                     torch.cuda.empty_cache()
                 logger.error(
-                    f'Out of memory loading OpenCLIP model '
+                    f'GPU error loading OpenCLIP model '
                     f'({self.model_name}/{self.pretrained}): {e} — '
-                    f'semantic search and image embeddings disabled'
+                    f'will retry in 60s'
                 )
                 return
             except Exception as e:
                 self._load_failed = True
+                self._load_fail_time = time.monotonic()
                 self._model = None
                 self._preprocess = None
                 logger.error(
                     f'Failed to load OpenCLIP model '
                     f'({self.model_name}/{self.pretrained}): {e} — '
-                    f'semantic search and image embeddings disabled'
+                    f'will retry in 60s'
                 )
                 return
 

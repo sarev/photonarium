@@ -269,7 +269,9 @@ class FaceDetector:
         self._mtcnn = None
         self._resnet = None
         self._mtcnn_failed = False
+        self._mtcnn_fail_time: float = 0.0
         self._resnet_failed = False
+        self._resnet_fail_time: float = 0.0
         self._device = device
         self._lock = threading.Lock()
 
@@ -308,9 +310,12 @@ class FaceDetector:
                         if not is_cuda_error(e):
                             raise
                         self._mtcnn_failed = True
+                        self._mtcnn_fail_time = time.perf_counter()
                         if torch.cuda.is_available():
                             torch.cuda.empty_cache()
-                        logger.error(f'Out of memory loading MTCNN: {e} — face detection disabled')
+                        logger.error(f'GPU error loading MTCNN: {e} — will retry in 60s')
+        elif self._mtcnn_failed and time.perf_counter() - self._mtcnn_fail_time >= 60.0:
+            self._mtcnn_failed = False
         return self._mtcnn
 
     @property
@@ -331,9 +336,12 @@ class FaceDetector:
                         if not is_cuda_error(e):
                             raise
                         self._resnet_failed = True
+                        self._resnet_fail_time = time.perf_counter()
                         if torch.cuda.is_available():
                             torch.cuda.empty_cache()
-                        logger.error(f'Out of memory loading InceptionResnetV1: {e} — face embeddings disabled')
+                        logger.error(f'GPU error loading InceptionResnetV1: {e} — will retry in 60s')
+        elif self._resnet_failed and time.perf_counter() - self._resnet_fail_time >= 60.0:
+            self._resnet_failed = False
         return self._resnet
 
     def detect_faces(

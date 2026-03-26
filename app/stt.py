@@ -83,6 +83,7 @@ class FasterWhisperBackend(STTBackend):
         self._model = None
         self._model_lock = threading.Lock()
         self._load_failed = False
+        self._load_fail_time: float = 0.0
 
     def is_available(self) -> bool:
         """Check if faster-whisper is importable."""
@@ -103,7 +104,9 @@ class FasterWhisperBackend(STTBackend):
             True if the model is ready, False otherwise.
         """
         if self._load_failed:
-            return False
+            if time.monotonic() - self._load_fail_time < 60.0:
+                return False
+            self._load_failed = False
         if self._model is not None:
             return True
 
@@ -134,8 +137,9 @@ class FasterWhisperBackend(STTBackend):
                 return True
 
             except (MemoryError, RuntimeError) as e:
-                logger.error(f'Failed to load faster-whisper model (OOM): {e}')
+                logger.error(f'GPU error loading faster-whisper model: {e} — will retry in 60s')
                 self._load_failed = True
+                self._load_fail_time = time.monotonic()
                 try:
                     import torch
 
@@ -145,8 +149,9 @@ class FasterWhisperBackend(STTBackend):
                     pass
                 return False
             except Exception as e:
-                logger.error(f'Failed to load faster-whisper model: {e}')
+                logger.error(f'Failed to load faster-whisper model: {e} — will retry in 60s')
                 self._load_failed = True
+                self._load_fail_time = time.monotonic()
                 return False
 
     def transcribe(self, audio_path: Path, language: str = '') -> STTResult:
@@ -195,8 +200,9 @@ class FasterWhisperBackend(STTBackend):
             return STTResult(segments=result, language=detected_language)
 
         except (MemoryError, RuntimeError) as e:
-            logger.error(f'OOM during transcription of {audio_path}: {e}')
+            logger.error(f'GPU error during transcription of {audio_path}: {e} — will retry in 60s')
             self._load_failed = True
+            self._load_fail_time = time.monotonic()
             try:
                 import torch
 
