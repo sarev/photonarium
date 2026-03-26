@@ -1808,12 +1808,16 @@ class PipelineOrchestrator(threading.Thread):
                         now_ts = datetime.now().isoformat()
                         embedding_updates.append((emb_blob, now_ts, scene_id))
                 except (MemoryError, RuntimeError) as e:
-                    if is_cuda_error(e):
-                        logger.warning(f'OOM embedding video scene: {e}')
-                        if torch.cuda.is_available():
-                            torch.cuda.empty_cache()
-                    else:
+                    if not is_cuda_error(e):
                         raise
+                    if torch.cuda.is_available():
+                        torch.cuda.empty_cache()
+                    if 'out of memory' in str(e).lower():
+                        logger.warning(f'OOM embedding video scene: {e}')
+                    else:
+                        # CUDA context error — stop processing this video
+                        logger.warning(f'CUDA error embedding video scene: {e} — aborting video')
+                        break
                 except Exception as e:
                     logger.error(f'Error embedding scene {scene_id}: {e}')
 
@@ -2104,7 +2108,7 @@ class PipelineOrchestrator(threading.Thread):
             logger.info('NIMA model loaded (%.1fs)', time.perf_counter() - t0)
         except (MemoryError, RuntimeError) as e:
             if is_cuda_error(e):
-                logger.error(f'OOM loading NIMA model: {e}')
+                logger.error(f'GPU error loading NIMA model: {e}')
                 if torch.cuda.is_available():
                     torch.cuda.empty_cache()
                 return 0
@@ -2184,16 +2188,22 @@ class PipelineOrchestrator(threading.Thread):
                     self._update_done(batch_start + len(batch))
                     continue
 
-                # Score batch — with OOM fallback
+                # Score batch — with OOM fallback (single-item) or CUDA error (abort)
                 try:
                     scores = score_images_batch(model, pil_images, device=device)
                 except (MemoryError, RuntimeError) as e:
                     if not is_cuda_error(e):
                         raise
-                    logger.warning(f'OOM scoring NIMA batch of {len(pil_images)}, falling back to single')
                     if torch.cuda.is_available():
                         torch.cuda.empty_cache()
 
+                    if 'out of memory' not in str(e).lower():
+                        # CUDA context error — single-item fallback will also fail
+                        logger.warning(f'CUDA error scoring NIMA batch: {e} — aborting stage')
+                        break
+
+                    # OOM — try single-item fallback
+                    logger.warning(f'OOM scoring NIMA batch of {len(pil_images)}, falling back to single')
                     scores = []
                     for i, img in enumerate(pil_images):
                         try:
