@@ -40,9 +40,25 @@ All three GPU pipeline stages now use double-buffered prefetching: a `ThreadPool
 - **Stage 4** (NIMA): Workers load originals via `raw_open_image`; `score_images_batch` handles the transform.
 - **Stage 5** (faces): Batch-level prefetch overlaps `preload_images_batch` for the next batch with the current batch's GPU detection and DB writes.
 
-### GPU Model Lifecycle
+### GPU Resilience and Automatic CPU Fallback
 
-Reverted the idle GPU model unloading introduced in v1.2.6-beta. The `unload()` call between pipeline cycles raced with Flask search threads — the pipeline could set `_model = None` between `_load_model()` returning and the `model` property reading `self._model`, causing `AttributeError: 'NoneType' has no attribute 'encode_text'`. Models now stay loaded for the app lifetime; `unload()` is only called during graceful shutdown.
+Previously, a GPU error (context corruption, driver reset, or resource exhaustion) permanently disabled GPU features until the app was restarted. The codebase only caught OOM errors — any other `RuntimeError` from the GPU crashed through unhandled.
+
+New centralised `GpuHealth` state machine (`app/gputil.py`) tracks GPU availability across all models (OpenCLIP, NIMA, MTCNN/ResNet, BLIP, Whisper). On a non-OOM GPU failure:
+
+1. First failure: model is unloaded, CUDA cache cleared, one retry on the same device
+2. Second failure: automatic fallback to CPU (slower but functional)
+3. CPU failure: feature disabled permanently
+
+A **modal dialog** warns the user on both the GPU→CPU transition and the disabled transition. The dialog also appears on page load if the backend is already in a degraded state (e.g. if the user reloads the browser after a GPU failure). The `/api/status` endpoint includes a `gpu_health` field so the frontend can check on connect.
+
+OOM errors are handled separately — they're transient (the GPU works, it's just full) and use the existing single-item fallback with no user notification.
+
+Error detection covers all supported GPU backends: CUDA (NVIDIA), MPS (Apple Silicon), and XPU/IPEX (Intel). The `is_gpu_error()` helper in `gputil.py` matches by `torch.OutOfMemoryError` class where available, and by keyword in the error message as a fallback (covering `'cuda'`, `'mps'`, `'xpu'`, `'ipex'`, `'native api failed'`, `'dpcpp'`).
+
+The pipeline skips remaining GPU stages after a context error rather than letting each stage independently discover the same broken GPU. Stages that have fallen back to CPU still run.
+
+Also reverted the idle GPU model unloading from v1.2.6-beta — the `unload()` call between pipeline cycles raced with Flask search threads, causing `AttributeError` on the `model` property. Models now stay loaded for the app lifetime.
 
 ### Bug Fixes
 
@@ -53,6 +69,10 @@ Reverted the idle GPU model unloading introduced in v1.2.6-beta. The `unload()` 
 - **LAION query ordering**: The LAION backfill checked head compatibility after fetching all embedding BLOBs (~86MB for 44k images). Moved the check before the query.
 - **Stage 4 silent completion**: Stages 4a/4b only logged "complete" when `count > 0`. When all images failed to load, the stage completed with no log output at all.
 - **LAION video scoring**: The LAION backfill query was also missing the `media_type = 'image'` filter.
+- **Unhandled GPU errors in `encode_text()`**: Text encoding (used by search) had no error handling at all — a GPU context error crashed through as a 500. Now catches GPU errors, unloads the model for reload on the next request, and returns a proper error.
+- **LAION head incompatible with non-openai pretrained**: The LAION aesthetic head was trained on `openai` embeddings but was silently applied to other pretrained variants (e.g. `laion2b_s34b_b88k`), producing near-random scores. Now detects the mismatch and disables LAION scoring with a clear log message. Affected the `high_laptop` and `high_desktop` config presets.
+- **Face semantic embedding unprotected**: `clip.encode_image()` for face semantic embeddings in Stage 5 had no error handling — GPU errors crashed the face processing stage.
+- **Caption model None check**: `CaptionGenerator.generate()` accessed `self.processor` and `self.model` without checking for None after a failed load.
 
 ## v1.2.6-beta
 
