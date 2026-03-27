@@ -2175,28 +2175,36 @@ class OpenCLIPModel:
 
         except (MemoryError, RuntimeError) as e:
             if not is_gpu_error(e):
-                raise  # Re-raise non-OOM RuntimeErrors
-            logger.warning(f'OOM encoding batch of {len(tensors)} images, falling back to single-image processing')
+                raise
             if torch.cuda.is_available():
                 torch.cuda.empty_cache()
 
-            # Process one at a time
-            for batch_idx, tensor in enumerate(tensors):
-                original_idx = valid_indices[batch_idx]
-                try:
-                    single = tensor.unsqueeze(0).to(self.device)
-                    with torch.inference_mode():
-                        if self.device == 'cuda':
-                            with torch.amp.autocast('cuda'):
+            if not is_oom_error(e):
+                # Context/driver error — single-item fallback will also fail
+                logger.warning(f'GPU error encoding batch of {len(tensors)} images: {e}')
+                if self._gpu_health:
+                    self._gpu_health.report_failure('embeddings')
+                for original_idx in valid_indices:
+                    results.append((original_idx, None))
+            else:
+                # OOM — process one at a time
+                logger.warning(f'OOM encoding batch of {len(tensors)} images, falling back to single-image processing')
+                for batch_idx, tensor in enumerate(tensors):
+                    original_idx = valid_indices[batch_idx]
+                    try:
+                        single = tensor.unsqueeze(0).to(self.device)
+                        with torch.inference_mode():
+                            if self.device == 'cuda':
+                                with torch.amp.autocast('cuda'):
+                                    emb = self.model.encode_image(single)
+                            else:
                                 emb = self.model.encode_image(single)
-                        else:
-                            emb = self.model.encode_image(single)
-                        emb = emb / emb.norm(dim=-1, keepdim=True)
-                    results.append((original_idx, emb.cpu().numpy().flatten()))
-                except (MemoryError, RuntimeError):
-                    logger.error(f'OOM encoding single image (index {original_idx}), skipping')
-                    if torch.cuda.is_available():
-                        torch.cuda.empty_cache()
+                            emb = emb / emb.norm(dim=-1, keepdim=True)
+                        results.append((original_idx, emb.cpu().numpy().flatten()))
+                    except (MemoryError, RuntimeError):
+                        logger.error(f'OOM encoding single image (index {original_idx}), skipping')
+                        if torch.cuda.is_available():
+                            torch.cuda.empty_cache()
                     results.append((original_idx, None))
 
         except Exception as e:
@@ -2250,10 +2258,19 @@ class OpenCLIPModel:
         except (MemoryError, RuntimeError) as e:
             if not is_gpu_error(e):
                 raise
-            logger.warning(f'OOM encoding batch of {len(tensors)} images, falling back to single-image processing')
             if torch.cuda.is_available():
                 torch.cuda.empty_cache()
 
+            if not is_oom_error(e):
+                # Context/driver error — single-item fallback will also fail.
+                # Report to GpuHealth and return all-None results.
+                logger.warning(f'GPU error encoding batch of {len(tensors)} images: {e}')
+                if self._gpu_health:
+                    self._gpu_health.report_failure('embeddings')
+                return [None] * len(tensors)
+
+            # OOM — try single-item fallback
+            logger.warning(f'OOM encoding batch of {len(tensors)} images, falling back to single-image processing')
             for tensor in tensors:
                 try:
                     single = tensor.unsqueeze(0).to(self.device)

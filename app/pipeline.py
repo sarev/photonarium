@@ -1659,7 +1659,7 @@ class PipelineOrchestrator(threading.Thread):
 
         try:
             for batch_start in range(0, len(rows), batch_size):
-                if self._stopped():
+                if self._stopped() or self._db.gpu_health.state == STATE_DISABLED:
                     break
 
                 batch = rows[batch_start : batch_start + batch_size]
@@ -2144,7 +2144,7 @@ class PipelineOrchestrator(threading.Thread):
 
         try:
             for batch_start in range(0, len(rows), batch_size):
-                if self._stopped():
+                if self._stopped() or self._db.gpu_health.state == STATE_DISABLED:
                     break
 
                 batch = rows[batch_start : batch_start + batch_size]

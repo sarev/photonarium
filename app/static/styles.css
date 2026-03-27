@@ -4844,6 +4844,11 @@ dialog::backdrop {
     margin-bottom: 1.5rem;
 }
 
+.dialog-content ul {
+    margin: 0 0 1rem 1.25rem;
+    padding: 0;
+}
+
 .dialog-hint {
     font-size: 0.85rem;
     color: var(--color-text-tertiary);

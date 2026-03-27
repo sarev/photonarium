@@ -225,7 +225,7 @@ class GpuHealth:
                 self._affected_features.add(feature)
                 logger.error(
                     f'CPU fallback also failed for {feature} — '
-                    f'feature disabled (restart app to retry)'
+                    f'feature disabled (restart server to retry)'
                 )
                 self._emit('gpu_state_changed', {
                     'state': STATE_DISABLED,

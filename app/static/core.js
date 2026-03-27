@@ -2025,11 +2025,11 @@ const App = {
         if (state === 'cpu_fallback') {
             titleEl.textContent = 'GPU Unavailable';
             msgEl.textContent = 'The GPU encountered an error. The following features are running on CPU (slower):';
-            hintEl.textContent = 'Restart the app to attempt GPU recovery.';
+            hintEl.textContent = 'Restart the backend server to attempt GPU recovery.';
         } else {
             titleEl.textContent = 'Features Unavailable';
             msgEl.textContent = 'The following features have been disabled due to GPU and CPU failures:';
-            hintEl.textContent = 'Restart the app to retry.';
+            hintEl.textContent = 'Restart the backend server to retry.';
         }
 
         // Populate feature list
