@@ -73,6 +73,7 @@ Also reverted the idle GPU model unloading from v1.2.6-beta — the `unload()` c
 - **LAION head incompatible with non-openai pretrained**: The LAION aesthetic head was trained on `openai` embeddings but was silently applied to other pretrained variants (e.g. `laion2b_s34b_b88k`), producing near-random scores. Now detects the mismatch and disables LAION scoring with a clear log message. Affected the `high_laptop` and `high_desktop` config presets.
 - **Face semantic embedding unprotected**: `clip.encode_image()` for face semantic embeddings in Stage 5 had no error handling — GPU errors crashed the face processing stage.
 - **Caption model None check**: `CaptionGenerator.generate()` accessed `self.processor` and `self.model` without checking for None after a failed load.
+- **Server restart broken on Windows**: The `/api/restart` endpoint used `os.execv` which on Windows spawns a child process without killing the parent, leaving two instances running against the same database and GPU. Now uses `subprocess.Popen` + `os._exit` on Windows to cleanly replace the process.
 
 ## v1.2.6-beta
 

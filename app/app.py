@@ -1674,20 +1674,35 @@ def health():
 
 @app.route('/api/restart', methods=['POST'])
 def restart_server():
-    """Restart the server process in-place using os.execv().
+    """Restart the server process.
 
     Returns a success response immediately, then spawns a daemon thread
     that waits briefly (so waitress can flush the HTTP response) before
-    shutting down the database and replacing the process image.
+    shutting down the database and restarting.
 
-    Works in bare-metal and Docker (PID preserved) deployments.
+    On Unix: ``os.execv()`` replaces the process in-place (PID preserved).
+    On Windows: ``subprocess.Popen`` starts a new process, then
+    ``sys.exit()`` terminates the current one.  ``os.execv`` on Windows
+    spawns a child without killing the parent, leaving two instances.
     """
 
     def _do_restart():
         time.sleep(1)  # let waitress flush the response
-        logger.info('Performing server restart via os.execv()...')
+        logger.info('Performing server restart...')
         shutdown_db()
-        os.execv(sys.executable, [sys.executable] + sys.argv)  # noqa: S606
+
+        if sys.platform == 'win32':
+            # Windows: os.execv spawns a child without killing the parent.
+            # Start a new process explicitly, then exit the current one.
+            import subprocess
+            subprocess.Popen(
+                [sys.executable] + sys.argv,
+                close_fds=True,
+            )
+            logger.info('New process started, exiting current process')
+            os._exit(0)  # Hard exit to avoid waitress cleanup hang
+        else:
+            os.execv(sys.executable, [sys.executable] + sys.argv)  # noqa: S606
 
     logger.warning('Restart requested via /api/restart')
     t = threading.Thread(target=_do_restart, daemon=True)
