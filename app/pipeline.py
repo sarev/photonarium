@@ -183,7 +183,7 @@ from faces import (
     get_all_known_face_embeddings,
     get_face_thumbnail_path,
 )
-from gputil import is_gpu_error
+from gputil import STATE_DISABLED, is_gpu_error, is_oom_error
 from metadata import derive_timestamp_with_confidence, extract_exif_data
 from rawimage import open_image as raw_open_image
 from safeconn import SafeConnection
@@ -418,6 +418,9 @@ class PipelineOrchestrator(threading.Thread):
         if not (had_work or self._rerun_requested):
             return had_work
 
+        # Stages that use the GPU — skipped if GPU is permanently disabled.
+        _GPU_STAGES = {'embeddings', 'scoring', 'faces'}
+
         for stage_name, stage_fn in [
             ('thumbnails', self._stage_thumbnails),
             ('embeddings', self._stage_embeddings),
@@ -426,6 +429,8 @@ class PipelineOrchestrator(threading.Thread):
         ]:
             if self._stop_event.is_set():
                 break
+            if stage_name in _GPU_STAGES and self._db.gpu_health.state == STATE_DISABLED:
+                continue
             try:
                 stage_did_work = stage_fn()
                 if stage_did_work:
@@ -1814,11 +1819,12 @@ class PipelineOrchestrator(threading.Thread):
                         raise
                     if torch.cuda.is_available():
                         torch.cuda.empty_cache()
-                    if 'out of memory' in str(e).lower():
+                    if is_oom_error(e):
                         logger.warning(f'OOM embedding video scene: {e}')
                     else:
-                        # CUDA context error — stop processing this video
-                        logger.warning(f'CUDA error embedding video scene: {e} — aborting video')
+                        # Context/driver error — stop processing this video
+                        logger.warning(f'GPU error embedding video scene: {e} — aborting video')
+                        self._db.gpu_health.report_failure('embeddings')
                         break
                 except Exception as e:
                     logger.error(f'Error embedding scene {scene_id}: {e}')
@@ -2097,12 +2103,7 @@ class PipelineOrchestrator(threading.Thread):
         try:
             from nima import load_nima_model, score_images_batch
 
-            if torch.cuda.is_available():
-                device = 'cuda'
-            elif hasattr(torch.backends, 'mps') and torch.backends.mps.is_available():
-                device = 'mps'
-            else:
-                device = 'cpu'
+            device = self._db.gpu_health.device
 
             logger.info('Loading NIMA model...')
             t0 = time.perf_counter()
@@ -2113,6 +2114,8 @@ class PipelineOrchestrator(threading.Thread):
                 logger.error(f'GPU error loading NIMA model: {e}')
                 if torch.cuda.is_available():
                     torch.cuda.empty_cache()
+                if not is_oom_error(e):
+                    self._db.gpu_health.report_failure('scoring')
                 return 0
             raise
         except Exception as e:
@@ -2199,9 +2202,10 @@ class PipelineOrchestrator(threading.Thread):
                     if torch.cuda.is_available():
                         torch.cuda.empty_cache()
 
-                    if 'out of memory' not in str(e).lower():
-                        # CUDA context error — single-item fallback will also fail
-                        logger.warning(f'CUDA error scoring NIMA batch: {e} — aborting stage')
+                    if not is_oom_error(e):
+                        # Context/driver error — single-item fallback will also fail
+                        logger.warning(f'GPU error scoring NIMA batch: {e} — aborting stage')
+                        self._db.gpu_health.report_failure('scoring')
                         break
 
                     # OOM — try single-item fallback
