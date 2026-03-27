@@ -34,6 +34,8 @@ AppState.status = (function() {
      * @property {Object} [face_reassessment] - Reassessment status if running
      */
     let _status = null;
+    /** @type {boolean} Whether we've checked GPU health on initial load */
+    let _gpuHealthChecked = false;
 
     /** @type {Object|null} Previous status for change detection */
     let _prevStatus = null;
@@ -100,6 +102,15 @@ AppState.status = (function() {
                             AppState.faces.load(true);
                         }
                     }, 0);
+                }
+
+                // Check GPU health on first successful load (page-load scenario)
+                if (!_gpuHealthChecked && _status.gpu_health) {
+                    _gpuHealthChecked = true;
+                    const gh = _status.gpu_health;
+                    if (gh.state !== 'gpu' && gh.affected_features?.length > 0) {
+                        App.showGpuWarning(gh.state, gh.affected_features);
+                    }
                 }
 
                 // Adapt polling speed: fast when processing, slow when idle

@@ -129,6 +129,13 @@ AppState.events = (function() {
                 AppState.images.load();
                 break;
 
+            case 'gpu_state_changed':
+                // GPU health degraded — show modal warning
+                // data: { state: 'cpu_fallback'|'disabled', features: [...] }
+                console.warn('[AppState.events] GPU state changed:', data);
+                App.showGpuWarning(data.state, data.features || []);
+                break;
+
             case 'images_indexed':
                 // New images have been ingested and embedded — ready for display.
                 // This fires well before processing_complete (which waits for

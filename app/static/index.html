@@ -871,6 +871,19 @@
             </div>
         </dialog>
 
+        <!-- GPU warning dialog (non-dismissible until acknowledged) -->
+        <dialog id="dialog-gpu-warning">
+            <div class="dialog-content">
+                <h3 id="dialog-gpu-warning-title">GPU Unavailable</h3>
+                <p id="dialog-gpu-warning-message"></p>
+                <ul id="dialog-gpu-warning-features"></ul>
+                <p id="dialog-gpu-warning-hint" class="dialog-hint"></p>
+                <div class="dialog-actions">
+                    <button id="dialog-gpu-warning-ok" class="action-btn primary">OK</button>
+                </div>
+            </div>
+        </dialog>
+
         <!-- Confirmation dialog (e.g., delete confirmation) -->
         <dialog id="dialog-confirm">
             <div class="dialog-content">

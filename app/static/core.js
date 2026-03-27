@@ -2004,6 +2004,62 @@ const App = {
     },
 
     /**
+     * Shows a modal dialog warning about GPU health degradation.
+     *
+     * Displayed when the backend transitions to cpu_fallback or disabled,
+     * and on page load if the backend is already in a degraded state.
+     *
+     * @param {string} state - 'cpu_fallback' or 'disabled'
+     * @param {string[]} features - List of affected feature names
+     */
+    showGpuWarning(state, features) {
+        const dialog = document.getElementById('dialog-gpu-warning');
+        const titleEl = document.getElementById('dialog-gpu-warning-title');
+        const msgEl = document.getElementById('dialog-gpu-warning-message');
+        const listEl = document.getElementById('dialog-gpu-warning-features');
+        const hintEl = document.getElementById('dialog-gpu-warning-hint');
+        const okBtn = document.getElementById('dialog-gpu-warning-ok');
+
+        if (!dialog || !titleEl) return;
+
+        if (state === 'cpu_fallback') {
+            titleEl.textContent = 'GPU Unavailable';
+            msgEl.textContent = 'The GPU encountered an error. The following features are running on CPU (slower):';
+            hintEl.textContent = 'Restart the app to attempt GPU recovery.';
+        } else {
+            titleEl.textContent = 'Features Unavailable';
+            msgEl.textContent = 'The following features have been disabled due to GPU and CPU failures:';
+            hintEl.textContent = 'Restart the app to retry.';
+        }
+
+        // Populate feature list
+        listEl.innerHTML = '';
+        const featureLabels = {
+            search: 'Search',
+            embeddings: 'Image embeddings',
+            scoring: 'Quality scoring',
+            faces: 'Face detection',
+            captions: 'Image captions',
+            transcription: 'Video transcription',
+        };
+        for (const f of features) {
+            const li = document.createElement('li');
+            li.textContent = featureLabels[f] || f;
+            listEl.appendChild(li);
+        }
+
+        const close = () => {
+            okBtn.removeEventListener('click', close);
+            dialog.removeEventListener('cancel', close);
+            dialog.close();
+        };
+        okBtn.addEventListener('click', close);
+        dialog.addEventListener('cancel', close);
+        dialog.showModal();
+        okBtn.focus();
+    },
+
+    /**
      * Restarts the server, showing a loading overlay and polling until
      * the server comes back.  Shared by the Database restart button and
      * the wizard's download-only flow.

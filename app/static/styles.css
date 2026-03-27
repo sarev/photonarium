@@ -4844,6 +4844,12 @@ dialog::backdrop {
     margin-bottom: 1.5rem;
 }
 
+.dialog-hint {
+    font-size: 0.85rem;
+    color: var(--color-text-tertiary);
+    margin-bottom: 1rem;
+}
+
 .dialog-actions {
     display: flex;
     justify-content: flex-end;
