@@ -158,7 +158,7 @@ from faces import (
     rotate_faces_for_image,
     update_face_semantic_embedding,
 )
-from gputil import is_gpu_error
+from gputil import GpuHealth, is_gpu_error, is_oom_error
 from logdb import SQL_CREATE_LOGS, SQL_CREATE_LOGS_INDEX
 from metadata import (
     CONFIDENCE_UNKNOWN,
@@ -1904,6 +1904,7 @@ class OpenCLIPModel:
         model_name: str = 'ViT-B-32',
         pretrained: str = 'openai',
         max_dimension: int = 16384,
+        gpu_health: GpuHealth | None = None,
     ):
         """Initialise the model wrapper.
 
@@ -1911,24 +1912,34 @@ class OpenCLIPModel:
             model_name: OpenCLIP model architecture (e.g., 'ViT-B-32').
             pretrained: Pretrained weights (e.g., 'openai', 'laion2b_s34b_b79k').
             max_dimension: Max image dimension before downsampling (0 to disable).
+            gpu_health: Centralised GPU health tracker for device selection
+                and failure reporting.  If None, falls back to inline detection.
         """
         self.model_name = model_name
         self.pretrained = pretrained
         self.max_dimension = max_dimension
-        # Priority: CUDA (NVIDIA GPU) > MPS (Apple Silicon) > CPU
-        if torch.cuda.is_available():
-            self.device = 'cuda'
-        elif hasattr(torch.backends, 'mps') and torch.backends.mps.is_available():
-            self.device = 'mps'
-        else:
-            self.device = 'cpu'
+        self._gpu_health = gpu_health
+        self.device = gpu_health.device if gpu_health else self._detect_device()
 
         self._model = None
         self._preprocess = None
         self._tokenizer = None
         self._load_failed = False
-        self._load_fail_time: float = 0.0
         self._load_lock = threading.Lock()
+
+    @staticmethod
+    def _detect_device() -> str:
+        """Detect the best available device (fallback when no GpuHealth)."""
+        if torch.cuda.is_available():
+            return 'cuda'
+        if hasattr(torch.backends, 'mps') and torch.backends.mps.is_available():
+            return 'mps'
+        try:
+            if hasattr(torch, 'xpu') and torch.xpu.is_available():
+                return 'xpu'
+        except Exception:
+            pass
+        return 'cpu'
 
     def unload(self) -> None:
         """Release the model and free GPU memory.
@@ -1993,11 +2004,7 @@ class OpenCLIPModel:
         if self._tokenizer is not None:
             return
         if self._load_failed:
-            # Retry after cooldown — transient CUDA errors (e.g. after
-            # hibernation) may clear when PyTorch reinitialises the context.
-            if time.monotonic() - self._load_fail_time < 60.0:
-                return
-            self._load_failed = False
+            return
 
         with self._load_lock:
             # Re-check under lock in case another thread loaded while we waited.
@@ -2027,27 +2034,34 @@ class OpenCLIPModel:
             except (MemoryError, RuntimeError) as e:
                 if not is_gpu_error(e):
                     raise
-                self._load_failed = True
-                self._load_fail_time = time.monotonic()
                 self._model = None
                 self._preprocess = None
                 if torch.cuda.is_available():
                     torch.cuda.empty_cache()
-                logger.error(
-                    f'GPU error loading OpenCLIP model '
-                    f'({self.model_name}/{self.pretrained}): {e} — '
-                    f'will retry in 60s'
-                )
+                if is_oom_error(e):
+                    self._load_failed = True
+                    logger.error(
+                        f'OOM loading OpenCLIP model '
+                        f'({self.model_name}/{self.pretrained}): {e}'
+                    )
+                elif self._gpu_health:
+                    retry_device = self._gpu_health.report_failure('search')
+                    self.device = retry_device
+                    # Don't set _load_failed — let the next call retry with the new device
+                else:
+                    self._load_failed = True
+                    logger.error(
+                        f'GPU error loading OpenCLIP model '
+                        f'({self.model_name}/{self.pretrained}): {e}'
+                    )
                 return
             except Exception as e:
                 self._load_failed = True
-                self._load_fail_time = time.monotonic()
                 self._model = None
                 self._preprocess = None
                 logger.error(
                     f'Failed to load OpenCLIP model '
-                    f'({self.model_name}/{self.pretrained}): {e} — '
-                    f'will retry in 60s'
+                    f'({self.model_name}/{self.pretrained}): {e}'
                 )
                 return
 
@@ -2335,8 +2349,11 @@ class OpenCLIPModel:
             return v.cpu().numpy().flatten()
         except (MemoryError, RuntimeError) as e:
             if is_gpu_error(e):
-                logger.warning(f'CUDA error during text encoding: {e} — unloading model for retry')
+                logger.warning(f'GPU error during text encoding: {e} — unloading model for retry')
                 self.unload()
+                if not is_oom_error(e) and self._gpu_health:
+                    retry_device = self._gpu_health.report_failure('search')
+                    self.device = retry_device
                 if torch.cuda.is_available():
                     torch.cuda.empty_cache()
             raise
@@ -4172,6 +4189,12 @@ class ImageDatabase:
         self._trash_queue: queue.Queue[tuple[str, str]] = queue.Queue()  # (image_id, file_path)
         self._import_queue: queue.Queue[str] = queue.Queue()  # source file paths
         self._transcode_queue: queue.Queue[TranscodeWorker.Job] = queue.Queue()
+
+        # Centralised GPU health tracker — shared by all model loaders.
+        # Event callback wired to the event queue for frontend notification.
+        self.gpu_health = GpuHealth(
+            event_callback=lambda etype, data: self.event_queue.emit(etype, data),
+        )
 
         # Shared OpenCLIP model instance (used by pipeline and search)
         self._shared_clip_model: OpenCLIPModel | None = None
@@ -6492,6 +6515,7 @@ class ImageDatabase:
             model_name=self.config.openclip_model,
             pretrained=self.config.openclip_pretrained,
             max_dimension=self.config.max_image_dimension,
+            gpu_health=self.gpu_health,
         )
         return self._shared_clip_model
 

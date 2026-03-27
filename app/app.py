@@ -320,6 +320,7 @@ def get_caption_generator() -> CaptionGenerator:
                 num_beams=config.caption_num_beams,
                 british_english=config.caption_british_english,
             )
+            _caption_generator.set_gpu_health(get_db().gpu_health)
     return _caption_generator
 
 

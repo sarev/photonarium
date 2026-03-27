@@ -556,6 +556,8 @@ class PipelineOrchestrator(threading.Thread):
             from stt import get_stt_backend
 
             self._stt_backend = get_stt_backend(self._db.config)
+            if self._stt_backend is not None:
+                self._stt_backend.set_gpu_health(self._db.gpu_health)
         return self._stt_backend
 
     # =================================================================

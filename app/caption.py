@@ -38,7 +38,7 @@ os.environ['HF_HUB_OFFLINE'] = '1'
 
 import torch
 
-from gputil import is_gpu_error
+from gputil import is_gpu_error, is_oom_error
 from rawimage import open_image as raw_open_image
 
 
@@ -168,19 +168,24 @@ class CaptionGenerator:
         self.num_beams = num_beams
         self.british_english = british_english
         self._device = device
+        self._gpu_health = None  # Set via set_gpu_health() after construction
         self._model = None
         self._processor = None
         self._is_blip2 = None  # Set during model loading
         self._load_failed = False
-        self._load_fail_time: float = 0.0
         self._lock = threading.Lock()
+
+    def set_gpu_health(self, gpu_health: object) -> None:
+        """Set the centralised GPU health tracker (avoids circular imports)."""
+        self._gpu_health = gpu_health
 
     @property
     def device(self) -> str:
-        """Get the PyTorch device, auto-detecting if not set."""
+        """Get the PyTorch device via GpuHealth or auto-detection."""
         if self._device is None:
-            # Priority: CUDA (NVIDIA GPU) > MPS (Apple Silicon) > CPU
-            if torch.cuda.is_available():
+            if self._gpu_health:
+                self._device = self._gpu_health.device
+            elif torch.cuda.is_available():
                 self._device = 'cuda'
             elif hasattr(torch.backends, 'mps') and torch.backends.mps.is_available():
                 self._device = 'mps'
@@ -194,9 +199,7 @@ class CaptionGenerator:
         if self._model is not None:
             return
         if self._load_failed:
-            if time.monotonic() - self._load_fail_time < 60.0:
-                return
-            self._load_failed = False
+            return
 
         with self._lock:
             if self._model is not None:
@@ -251,16 +254,20 @@ class CaptionGenerator:
                 self._model = model
             except (MemoryError, RuntimeError) as e:
                 if not is_gpu_error(e):
-                    raise  # Re-raise non-OOM RuntimeErrors
-                self._load_failed = True
-                self._load_fail_time = time.monotonic()
+                    raise
                 self._model = None
                 self._processor = None
                 if torch.cuda.is_available():
                     torch.cuda.empty_cache()
-                logger.error(
-                    f'GPU error loading {model_type} model ({self.model_name}): {e} — will retry in 60s'
-                )
+                if is_oom_error(e):
+                    self._load_failed = True
+                    logger.error(f'OOM loading {model_type} model ({self.model_name}): {e}')
+                elif self._gpu_health:
+                    retry_device = self._gpu_health.report_failure('captions')
+                    self._device = retry_device
+                else:
+                    self._load_failed = True
+                    logger.error(f'GPU error loading {model_type} model ({self.model_name}): {e}')
                 return
 
             elapsed = time.time() - start_time

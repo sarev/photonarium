@@ -83,7 +83,11 @@ class FasterWhisperBackend(STTBackend):
         self._model = None
         self._model_lock = threading.Lock()
         self._load_failed = False
-        self._load_fail_time: float = 0.0
+        self._gpu_health = None  # Set via set_gpu_health()
+
+    def set_gpu_health(self, gpu_health: object) -> None:
+        """Set the centralised GPU health tracker (avoids circular imports)."""
+        self._gpu_health = gpu_health
 
     def is_available(self) -> bool:
         """Check if faster-whisper is importable."""
@@ -104,9 +108,7 @@ class FasterWhisperBackend(STTBackend):
             True if the model is ready, False otherwise.
         """
         if self._load_failed:
-            if time.monotonic() - self._load_fail_time < 60.0:
-                return False
-            self._load_failed = False
+            return False
         if self._model is not None:
             return True
 
@@ -119,9 +121,14 @@ class FasterWhisperBackend(STTBackend):
             try:
                 from faster_whisper import WhisperModel
 
-                # Use GPU if available, fall back to CPU
-                device = 'auto'
-                compute_type = 'auto'
+                # Use GPU health tracker if available, otherwise auto-detect
+                if self._gpu_health:
+                    gh_device = self._gpu_health.device
+                    device = gh_device if gh_device != 'xpu' else 'cpu'  # faster-whisper doesn't support xpu
+                    compute_type = 'auto'
+                else:
+                    device = 'auto'
+                    compute_type = 'auto'
 
                 logger.info(f'Loading faster-whisper model: {self._model_size}')
                 t0 = time.perf_counter()
@@ -137,21 +144,26 @@ class FasterWhisperBackend(STTBackend):
                 return True
 
             except (MemoryError, RuntimeError) as e:
-                logger.error(f'GPU error loading faster-whisper model: {e} — will retry in 60s')
-                self._load_failed = True
-                self._load_fail_time = time.monotonic()
                 try:
                     import torch
-
                     if torch.cuda.is_available():
                         torch.cuda.empty_cache()
                 except ImportError:
                     pass
+                from gputil import is_oom_error
+                if is_oom_error(e):
+                    self._load_failed = True
+                    logger.error(f'OOM loading faster-whisper model: {e}')
+                elif self._gpu_health:
+                    self._gpu_health.report_failure('transcription')
+                    # Don't set _load_failed — let next call retry with new device
+                else:
+                    self._load_failed = True
+                    logger.error(f'GPU error loading faster-whisper model: {e}')
                 return False
             except Exception as e:
-                logger.error(f'Failed to load faster-whisper model: {e} — will retry in 60s')
                 self._load_failed = True
-                self._load_fail_time = time.monotonic()
+                logger.error(f'Failed to load faster-whisper model: {e}')
                 return False
 
     def transcribe(self, audio_path: Path, language: str = '') -> STTResult:
@@ -200,16 +212,21 @@ class FasterWhisperBackend(STTBackend):
             return STTResult(segments=result, language=detected_language)
 
         except (MemoryError, RuntimeError) as e:
-            logger.error(f'GPU error during transcription of {audio_path}: {e} — will retry in 60s')
-            self._load_failed = True
-            self._load_fail_time = time.monotonic()
             try:
                 import torch
-
                 if torch.cuda.is_available():
                     torch.cuda.empty_cache()
             except ImportError:
                 pass
+            from gputil import is_oom_error
+            if is_oom_error(e):
+                self._load_failed = True
+                logger.error(f'OOM during transcription of {audio_path}: {e}')
+            elif self._gpu_health:
+                self._gpu_health.report_failure('transcription')
+            else:
+                self._load_failed = True
+                logger.error(f'GPU error during transcription of {audio_path}: {e}')
             return STTResult(segments=[], language='')
         except Exception as e:
             logger.error(f'Transcription failed for {audio_path}: {e}')
