@@ -2924,6 +2924,7 @@ EVENT_GROUPS_CHANGED = 'groups_changed'
 EVENT_IMPORT_COMPLETE = 'import_complete'
 EVENT_VIDEO_PROCESSED = 'video_processed'
 EVENT_TRANSCODE_COMPLETE = 'transcode_complete'
+EVENT_GPU_STATE_CHANGED = 'gpu_state_changed'
 
 
 @dataclass

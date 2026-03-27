@@ -1750,6 +1750,9 @@ def get_status():
     if transcode_progress:
         status['transcode_progress'] = transcode_progress
 
+    # GPU health (for frontend degraded-mode warnings)
+    status['gpu_health'] = db.gpu_health.get_status()
+
     return success_response(status)
 
 
