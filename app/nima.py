@@ -32,7 +32,7 @@ import torch
 import torch.nn as nn
 from torchvision import models, transforms
 
-from gputil import is_cuda_error
+from gputil import is_gpu_error
 
 if TYPE_CHECKING:
     from PIL import Image
@@ -202,7 +202,7 @@ def load_nima_model(checkpoint_path: str, device: str = 'cpu') -> NIMA:
     try:
         model = model.to(device)
     except (MemoryError, RuntimeError) as e:
-        if not is_cuda_error(e):
+        if not is_gpu_error(e):
             raise
         logger.error(f'GPU error moving NIMA model to {device}: {e}')
         raise
@@ -253,7 +253,7 @@ def score_images_batch(
 
         return scores.cpu().tolist()
     except (MemoryError, RuntimeError) as e:
-        if not is_cuda_error(e):
+        if not is_gpu_error(e):
             raise
         logger.warning(f'OOM scoring batch of {len(tensors)} images, falling back to single-item')
         if torch.cuda.is_available():

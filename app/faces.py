@@ -55,7 +55,7 @@ from PIL import Image, ImageFilter
 
 from dbutil import sql_placeholders
 from duplicates import UnionFind
-from gputil import is_cuda_error
+from gputil import is_gpu_error
 from rawimage import open_image as raw_open_image
 from safeconn import SafeConnection
 
@@ -307,7 +307,7 @@ class FaceDetector:
                         )
                         logger.info('MTCNN loaded (%.1fs)', time.perf_counter() - t0)
                     except (MemoryError, RuntimeError) as e:
-                        if not is_cuda_error(e):
+                        if not is_gpu_error(e):
                             raise
                         self._mtcnn_failed = True
                         self._mtcnn_fail_time = time.perf_counter()
@@ -333,7 +333,7 @@ class FaceDetector:
                         ).eval()
                         logger.info('InceptionResnetV1 loaded (%.1fs)', time.perf_counter() - t0)
                     except (MemoryError, RuntimeError) as e:
-                        if not is_cuda_error(e):
+                        if not is_gpu_error(e):
                             raise
                         self._resnet_failed = True
                         self._resnet_fail_time = time.perf_counter()
@@ -738,7 +738,7 @@ class FaceDetector:
                 torch.cuda.empty_cache()
 
         except (MemoryError, RuntimeError) as e:
-            if not is_cuda_error(e):
+            if not is_gpu_error(e):
                 raise
             logger.warning(
                 f'OOM computing face embeddings for batch of {len(all_faces_data)} faces, '

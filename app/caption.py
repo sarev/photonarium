@@ -38,7 +38,7 @@ os.environ['HF_HUB_OFFLINE'] = '1'
 
 import torch
 
-from gputil import is_cuda_error
+from gputil import is_gpu_error
 from rawimage import open_image as raw_open_image
 
 
@@ -250,7 +250,7 @@ class CaptionGenerator:
 
                 self._model = model
             except (MemoryError, RuntimeError) as e:
-                if not is_cuda_error(e):
+                if not is_gpu_error(e):
                     raise  # Re-raise non-OOM RuntimeErrors
                 self._load_failed = True
                 self._load_fail_time = time.monotonic()

@@ -183,7 +183,7 @@ from faces import (
     get_all_known_face_embeddings,
     get_face_thumbnail_path,
 )
-from gputil import is_cuda_error
+from gputil import is_gpu_error
 from metadata import derive_timestamp_with_confidence, extract_exif_data
 from rawimage import open_image as raw_open_image
 from safeconn import SafeConnection
@@ -1808,7 +1808,7 @@ class PipelineOrchestrator(threading.Thread):
                         now_ts = datetime.now().isoformat()
                         embedding_updates.append((emb_blob, now_ts, scene_id))
                 except (MemoryError, RuntimeError) as e:
-                    if not is_cuda_error(e):
+                    if not is_gpu_error(e):
                         raise
                     if torch.cuda.is_available():
                         torch.cuda.empty_cache()
@@ -2107,7 +2107,7 @@ class PipelineOrchestrator(threading.Thread):
             model = load_nima_model(str(checkpoint_path), device=device)
             logger.info('NIMA model loaded (%.1fs)', time.perf_counter() - t0)
         except (MemoryError, RuntimeError) as e:
-            if is_cuda_error(e):
+            if is_gpu_error(e):
                 logger.error(f'GPU error loading NIMA model: {e}')
                 if torch.cuda.is_available():
                     torch.cuda.empty_cache()
@@ -2192,7 +2192,7 @@ class PipelineOrchestrator(threading.Thread):
                 try:
                     scores = score_images_batch(model, pil_images, device=device)
                 except (MemoryError, RuntimeError) as e:
-                    if not is_cuda_error(e):
+                    if not is_gpu_error(e):
                         raise
                     if torch.cuda.is_available():
                         torch.cuda.empty_cache()

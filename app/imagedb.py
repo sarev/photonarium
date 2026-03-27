@@ -158,7 +158,7 @@ from faces import (
     rotate_faces_for_image,
     update_face_semantic_embedding,
 )
-from gputil import is_cuda_error
+from gputil import is_gpu_error
 from logdb import SQL_CREATE_LOGS, SQL_CREATE_LOGS_INDEX
 from metadata import (
     CONFIDENCE_UNKNOWN,
@@ -2025,7 +2025,7 @@ class OpenCLIPModel:
                 # Tokenizer MUST be set last — it's the sentinel for the fast-path check.
                 self._tokenizer = open_clip.get_tokenizer(self.model_name)
             except (MemoryError, RuntimeError) as e:
-                if not is_cuda_error(e):
+                if not is_gpu_error(e):
                     raise
                 self._load_failed = True
                 self._load_fail_time = time.monotonic()
@@ -2160,7 +2160,7 @@ class OpenCLIPModel:
                 results.append((original_idx, embeddings[batch_idx].flatten()))
 
         except (MemoryError, RuntimeError) as e:
-            if not is_cuda_error(e):
+            if not is_gpu_error(e):
                 raise  # Re-raise non-OOM RuntimeErrors
             logger.warning(f'OOM encoding batch of {len(tensors)} images, falling back to single-image processing')
             if torch.cuda.is_available():
@@ -2234,7 +2234,7 @@ class OpenCLIPModel:
                 results.append(embeddings[i].flatten())
 
         except (MemoryError, RuntimeError) as e:
-            if not is_cuda_error(e):
+            if not is_gpu_error(e):
                 raise
             logger.warning(f'OOM encoding batch of {len(tensors)} images, falling back to single-image processing')
             if torch.cuda.is_available():
@@ -2292,7 +2292,7 @@ class OpenCLIPModel:
             return emb.cpu().numpy().flatten()
 
         except (MemoryError, RuntimeError) as e:
-            if is_cuda_error(e):
+            if is_gpu_error(e):
                 logger.warning(f'OOM encoding PIL image: {e}')
                 if torch.cuda.is_available():
                     torch.cuda.empty_cache()
@@ -2334,7 +2334,7 @@ class OpenCLIPModel:
 
             return v.cpu().numpy().flatten()
         except (MemoryError, RuntimeError) as e:
-            if is_cuda_error(e):
+            if is_gpu_error(e):
                 logger.warning(f'CUDA error during text encoding: {e} — unloading model for retry')
                 self.unload()
                 if torch.cuda.is_available():
