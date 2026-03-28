@@ -1,5 +1,29 @@
 # Release Notes
 
+## v1.2.8-beta
+
+### Single-Writer Database Architecture
+
+The database access layer has been redesigned to eliminate `database is locked` errors permanently. Previously, four independent SQLite connections competed for the WAL write lock — the shared connection (Flask + pipeline), up to 16 Stage 1 worker connections, DuplicateManager transient connections, and the log handler's dedicated connection. `SQLITE_BUSY_SNAPSHOT` could bypass SQLite's busy handler entirely, causing instant failures that retry logic couldn't recover from.
+
+`SafeConnection` (`app/safeconn.py`) now uses a **single-writer queue architecture**: one dedicated writer thread owns the only writable connection, and all writes from every thread are submitted via a `queue.Queue`. Reads go to a separate read-only connection under WAL mode, allowing concurrent readers without blocking the writer. This eliminates cross-connection write contention by construction — no more retries, no more backoff, no more `SQLITE_BUSY`.
+
+Key changes:
+
+- **Automatic read/write routing**: `execute()` inspects the SQL prefix and routes SELECTs to the read connection, writes to the writer queue. Callers don't need to change.
+- **`_WriteCursor` proxy**: write operations return a lightweight cursor proxy instead of a raw `sqlite3.Cursor`, preventing cross-thread cursor finalisation from corrupting internal C-level state.
+- **Context manager**: `with safe_conn:` routes all enclosed operations to the writer thread atomically via a per-scope sub-queue. Re-entrant for nested blocks.
+- **`write_fn` / `write_fn_async`**: submit arbitrary callables to the writer thread. The async variant is fire-and-forget (used by the log handler).
+- **Pipeline Stage 1**: workers no longer create per-thread connections. Parallel I/O (stat, hash, EXIF extraction) continues across 16 threads; only the DB writes serialise through the queue.
+- **DuplicateManager**: no longer creates transient per-call connections. Uses the shared `SafeConnection` throughout.
+- **Removed**: `_db_lock` (RLock), retry logic, backoff timers, per-worker connection tracking, `busy_timeout` reliance.
+
+### Bug Fixes
+
+- **Face assign contention**: the "ignore all unknown faces" action could fail with `database is locked` when the background face reassessment was writing simultaneously. Fixed by batching face updates with `executemany` + single commit instead of per-face UPDATE + commit loops. Also fixed the same pattern in the unassign, suppress, and lock/unlock batch endpoints.
+- **Raw connection bypasses**: `_clone_transcode_record` and `_load_checksum_cache` used the raw `sqlite3.Connection` directly, bypassing `SafeConnection`'s safety guarantees. Now routed through `safe_conn`.
+- **Type annotations**: `init_face_tables()` and `_run_migrations()` in `faces.py` annotated their parameter as `SafeConnection` but received a raw connection during startup. Fixed to `SafeConnection | sqlite3.Connection`.
+
 ## v1.2.7-beta
 
 ### Quality Scoring Overhaul

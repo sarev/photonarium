@@ -387,51 +387,16 @@ _SQL_CREATE_INDEXES = [
 ]
 
 
-def init_database(db_path: Path | str) -> sqlite3.Connection:
-    """Initialise the SQLite database with schema and WAL mode.
+def _init_database_schema(conn: sqlite3.Connection) -> None:
+    """Create tables, run migrations, and build indexes on the write connection.
 
-    Creates the database file if it doesn't exist, sets up WAL mode for
-    concurrent access, creates all tables if they don't exist, and creates
-    indexes for query performance.
+    Called via ``safe_conn.write_fn()`` during startup so that all DDL
+    runs on the dedicated writer thread.  Connection setup (WAL mode,
+    PRAGMAs, row factory) is handled by :class:`SafeConnection` itself.
 
     Args:
-        db_path: Path to the SQLite database file.
-
-    Returns:
-        Open database connection configured for use.
-
-    Raises:
-        sqlite3.Error: If database initialisation fails.
+        conn: The raw writer connection (provided by the writer thread).
     """
-    db_path = Path(db_path)
-    logger.info(f'Initialising database: {db_path}')
-
-    # Ensure parent directory exists
-    db_path.parent.mkdir(parents=True, exist_ok=True)
-
-    # Connect with settings for multi-threaded access
-    conn = sqlite3.connect(
-        db_path,
-        check_same_thread=False,
-        timeout=5.0,
-    )
-
-    # Enable WAL mode for better concurrent read/write performance
-    conn.execute('PRAGMA journal_mode=WAL')
-
-    # Enable foreign key constraints
-    conn.execute('PRAGMA foreign_keys=ON')
-
-    # Set busy timeout (milliseconds) for lock contention
-    conn.execute('PRAGMA busy_timeout=5000')
-
-    # Increase cache size to 100MB (default is 2MB) for better read performance
-    # Negative value = kibibytes, so -102400 = 100 MB
-    conn.execute('PRAGMA cache_size=-102400')
-
-    # Use Row factory for dict-like access to rows
-    conn.row_factory = sqlite3.Row
-
     # Create tables
     conn.execute(_SQL_CREATE_FOLDERS)
     conn.execute(_SQL_CREATE_IMAGES)
@@ -475,9 +440,7 @@ def init_database(db_path: Path | str) -> sqlite3.Connection:
             logger.debug(f'    Index creation skipped (already exists): {e}')
 
     conn.commit()
-
     logger.info('Database initialisation complete')
-    return conn
 
 
 def has_migration_run(conn: SafeConnection, migration_id: str) -> bool:
@@ -2651,7 +2614,7 @@ def update_scene_transcription(
 ) -> str | None:
     """Update a scene's transcription text and optional embedding.
 
-    The caller must hold ``db._db_lock`` before calling this function.
+    Writes are serialised by SafeConnection's writer thread.
 
     Args:
         conn: Database connection.
@@ -3831,9 +3794,7 @@ class TranscodeWorker(threading.Thread):
         new_mtime = stat.st_mtime
 
         # -- Read the original record (separate connection for thread safety) --
-        ro_raw = sqlite3.connect(db.db_path, timeout=5.0)
-        ro_raw.row_factory = sqlite3.Row
-        ro_conn = SafeConnection(ro_raw, name='transcode-clone-ro')
+        ro_conn = SafeConnection(str(db.db_path), name='transcode-clone-ro')
         try:
             orig = get_image(ro_conn, job.image_id)
             if orig is None:
@@ -3861,10 +3822,10 @@ class TranscodeWorker(threading.Thread):
         old_pref = orig.get('preferred_scene_id')
         new_pref = scene_id_map.get(old_pref) if old_pref else None
 
-        with db._db_lock:
+        with db.safe_conn:
             try:
                 create_image(
-                    db.conn,
+                    db.safe_conn,
                     image_id=new_id,
                     path=dest,
                     size=new_size,
@@ -3896,14 +3857,14 @@ class TranscodeWorker(threading.Thread):
 
                 # Copy the embedding from the original image row
                 if orig.get('checksum'):
-                    db.conn.execute(
+                    db.safe_conn.execute(
                         'UPDATE images SET embedding = (SELECT embedding FROM images WHERE id = ?) WHERE id = ?',
                         (job.image_id, new_id),
                     )
 
                 # Copy stt_language if present
                 if orig.get('stt_language'):
-                    db.conn.execute(
+                    db.safe_conn.execute(
                         'UPDATE images SET stt_language = ? WHERE id = ?',
                         (orig['stt_language'], new_id),
                     )
@@ -3927,7 +3888,7 @@ class TranscodeWorker(threading.Thread):
                     for row in orig_scenes
                 ]
                 if scene_params:
-                    db.conn.executemany(
+                    db.safe_conn.executemany(
                         """INSERT INTO scenes
                            (id, image_id, scene_index, start_time, end_time,
                             keyframe_time, transcription, transcription_embedding,
@@ -3935,15 +3896,15 @@ class TranscodeWorker(threading.Thread):
                            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                         scene_params,
                     )
-                db.conn.commit()
+                db.safe_conn.commit()
             except Exception:
                 # create_image() commits its own INSERT, so on any
                 # subsequent failure we must clean up the partial record
                 # (cascade deletes its scenes too).
-                db.conn.rollback()
+                db.safe_conn.rollback()
                 try:
-                    db.conn.execute('DELETE FROM images WHERE id = ?', (new_id,))
-                    db.conn.commit()
+                    db.safe_conn.execute('DELETE FROM images WHERE id = ?', (new_id,))
+                    db.safe_conn.commit()
                 except Exception:
                     logger.exception('Clone cleanup also failed')
                 raise
@@ -4157,7 +4118,21 @@ class ImageDatabase:
 
         # Step 1-2: Initialise database
         logger.info('[2/5] Initialising database...')
-        self.conn = init_database(self.db_path)
+
+        # Ensure parent directory exists
+        self.db_path.parent.mkdir(parents=True, exist_ok=True)
+
+        # Single-writer SafeConnection: one writer thread for all writes,
+        # a separate read connection for concurrent reads under WAL mode.
+        # This eliminates SQLITE_BUSY / SQLITE_BUSY_SNAPSHOT entirely.
+        self.safe_conn = SafeConnection(
+            str(self.db_path),
+            name='shared',
+            pragmas=[('cache_size', '-102400')],
+        )
+
+        # Run DDL (tables, migrations, indexes) on the writer thread
+        self.safe_conn.write_fn(_init_database_schema)
         logger.info(f'        Database: {self.db_path.absolute()}')
 
         # Create event queue
@@ -4171,17 +4146,6 @@ class ImageDatabase:
         # Create thread control events
         self._stop_event = threading.Event()
         self._pause_event = threading.Event()
-
-        # Create locks for thread safety.
-        # LOCK ORDERING: always acquire _db_lock before any subsidiary lock
-        # (_image_locks_lock, _checksum_cache_lock, etc.) to prevent deadlocks.
-        self._db_lock = threading.RLock()  # Reentrant lock for nested calls
-
-        # Thread-safe connection wrapper — all database access should go
-        # through safe_conn rather than the raw conn.  The RLock serialises
-        # cross-thread access and the wrapper retries transient "database
-        # is locked" errors with automatic rollback on failure.
-        self.safe_conn = SafeConnection(self.conn, lock=self._db_lock, name='shared')
         self._image_locks: dict[str, threading.Lock] = {}  # Per-image locks for rotation
         self._image_locks_lock = threading.Lock()  # Lock for the locks dict
         self._active_rotations = 0  # Count of in-flight rotation operations
@@ -4243,7 +4207,7 @@ class ImageDatabase:
         self._closed = False
 
         # Duplicate manager handles duplicate detection across all 4 levels
-        self._duplicate_manager = DuplicateManager(str(self.db_path), self.config)
+        self._duplicate_manager = DuplicateManager(self.safe_conn, self.config)
 
         # RAM cache for image_id -> checksum lookups (avoids DB query per thumbnail)
         self._checksum_cache: dict[str, str] = {}
@@ -5012,7 +4976,7 @@ class ImageDatabase:
         Memory cost: ~100 bytes per entry (two 36-char UUID strings + dict overhead).
         100k images ≈ 10MB — small and essential for performance.
         """
-        cursor = self.conn.execute('SELECT id, checksum FROM images WHERE checksum IS NOT NULL AND deleted = 0')
+        cursor = self.safe_conn.execute('SELECT id, checksum FROM images WHERE checksum IS NOT NULL AND deleted = 0')
         cache = {row[0]: row[1] for row in cursor}
         with self._checksum_cache_lock:
             self._checksum_cache = cache
@@ -5020,7 +4984,9 @@ class ImageDatabase:
 
         # Warn about images missing checksums — these will 404 on
         # thumbnail/histogram requests until re-scanned
-        missing = self.conn.execute('SELECT COUNT(*) FROM images WHERE checksum IS NULL AND deleted = 0').fetchone()[0]
+        missing = self.safe_conn.execute(
+            'SELECT COUNT(*) FROM images WHERE checksum IS NULL AND deleted = 0',
+        ).fetchone()[0]
         if missing:
             logger.warning(f'        {missing} image(s) have NULL checksums — run with --scan to repair')
 
@@ -5261,11 +5227,8 @@ class ImageDatabase:
             self._shared_clip_model.unload()
             self._shared_clip_model = None
 
-        with self._db_lock:
-            if self.conn:
-                self.conn.close()
-                self.conn = None
-                logger.info('Database connection closed')
+        self.safe_conn.close()
+        logger.info('Database connection closed')
 
     def __enter__(self) -> ImageDatabase:
         """Context manager entry - returns self."""
@@ -5841,11 +5804,9 @@ class ImageDatabase:
 
         jobs: list[TranscodeWorker.Job] = []
 
-        # Use a separate read-only connection to avoid collisions with
-        # concurrent queries on self.conn (e.g. status polling).
-        ro_raw = sqlite3.connect(self.db_path, timeout=5.0)
-        ro_raw.row_factory = sqlite3.Row
-        ro_conn = SafeConnection(ro_raw, name='transcode-queue-ro')
+        # Use a separate read-only connection to avoid tying up the shared
+        # read connection during potentially slow transcode queue building.
+        ro_conn = SafeConnection(str(self.db_path), name='transcode-queue-ro')
         try:
             for vid in image_ids:
                 row = get_image(ro_conn, vid)
@@ -6613,8 +6574,9 @@ class ImageDatabase:
     ) -> None:
         """Create a custom group (album) or smart group with filter criteria.
 
-        Serialised with _db_lock to prevent concurrent group mutations
-        from corrupting the DuplicateManager's in-memory cache.
+        Writes are serialised by SafeConnection's writer thread, preventing
+        concurrent group mutations from corrupting the DuplicateManager's
+        in-memory cache.
 
         Args:
             group_hash: Frontend-generated UUID for the group.
@@ -6993,7 +6955,7 @@ class ImageDatabase:
 
         try:
             matches = reassess_unknown_faces(
-                self.safe_conn, self._db_lock, threshold=self.config.face_recognition_threshold
+                self.safe_conn, threshold=self.config.face_recognition_threshold
             )
             if matches:
                 logger.info(f'Face reassessment: matched {len(matches)} faces to known people')

@@ -21,14 +21,13 @@ Thread-safety model
 
 Both functions target the same database file (``photonarium.db`` by default),
 but operate on fully independent connections — no contention with the main
-``ImageDatabase._db_lock``.
+``SafeConnection`` writer thread.
 """
 
 from __future__ import annotations
 
 import collections
 import logging
-import sqlite3
 import sys
 import threading
 import time
@@ -106,15 +105,10 @@ class DatabaseLogHandler(logging.Handler):
         # explicit flush() calls from the pipeline or shutdown).
         self._flush_lock = threading.Lock()
 
-        # Open a dedicated connection for log writes, wrapped in SafeConnection
-        # for consistent retry/rollback behaviour.  The ``logs`` table is
-        # created by imagedb.init_database() during startup — the handler must
-        # be attached after that call so the table exists.
-        raw = sqlite3.connect(db_path, check_same_thread=False)
-        raw.execute('PRAGMA journal_mode=WAL')
-        raw.execute('PRAGMA busy_timeout=5000')
-        raw.commit()
-        self._conn = SafeConnection(raw, name='log-writer')
+        # Open a dedicated SafeConnection for log writes.  The ``logs`` table
+        # is created by imagedb._init_database_schema() during startup — the
+        # handler must be attached after that call so the table exists.
+        self._conn = SafeConnection(db_path, name='log-writer')
 
         # Background daemon thread that periodically flushes buffered records.
         self._stop_event = threading.Event()
@@ -261,9 +255,7 @@ def get_logs(
         ``message``, ordered oldest-first (most recent at the end).
     """
     try:
-        raw = sqlite3.connect(db_path, check_same_thread=False)
-        raw.row_factory = sqlite3.Row
-        conn = SafeConnection(raw, name='log-reader')
+        conn = SafeConnection(db_path, name='log-reader')
         try:
             # Check that the logs table exists — it won't if logging is
             # disabled (log_retention_lines == 0) and has never been created.

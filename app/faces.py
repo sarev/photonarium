@@ -153,7 +153,7 @@ _MIGRATIONS = [
 ]
 
 
-def init_face_tables(conn: SafeConnection) -> None:
+def init_face_tables(conn: SafeConnection | sqlite3.Connection) -> None:
     """Initialise the face recognition database tables.
 
     Creates the people and faces tables if they don't exist, along with
@@ -179,7 +179,7 @@ def init_face_tables(conn: SafeConnection) -> None:
     logger.info('Face recognition tables initialised')
 
 
-def _run_migrations(conn: SafeConnection) -> None:
+def _run_migrations(conn: SafeConnection | sqlite3.Connection) -> None:
     """Run pending schema migrations.
 
     Args:
@@ -2418,22 +2418,19 @@ def batch_identify_faces(
 
 def reassess_unknown_faces(
     conn: SafeConnection,
-    db_lock: threading.Lock,
     threshold: float = FACE_RECOGNITION_DEFAULT_THRESHOLD,
     person_id: str | None = None,
 ) -> list[tuple[str, str, float]]:
     """Re-assess all unknown faces against known embeddings.
 
-    Uses vectorized numpy operations for fast comparison.
+    Uses vectorised numpy operations for fast comparison.
     Supports per-person recognition thresholds (overrides global threshold).
 
-    Uses READ → COMPUTE → WRITE pattern to minimise db_lock hold time:
-    the lock is only held during DB reads and the final batched write,
-    not during the matrix multiplication and matching loop.
+    Uses READ → COMPUTE → WRITE pattern: reads go to the read connection
+    (concurrent under WAL), writes are serialised by the writer thread.
 
     Args:
-        conn: Database connection.
-        db_lock: The database lock for thread safety.
+        conn: SafeConnection instance.
         threshold: Default minimum cosine similarity for auto-match.
         person_id: If specified, only compare against this person's faces.
 
@@ -2442,49 +2439,51 @@ def reassess_unknown_faces(
     """
     logger.debug(f'Reassessing unknown faces with default threshold={threshold:.3f}, person_id={person_id}')
 
-    # ── READ phase (lock): load all data needed for computation ──
-    with db_lock:
-        # Load per-person thresholds and identify ignored people (name == '-')
-        person_thresholds: dict[str, float | None] = {}
-        ignored_person_ids: set[str] = set()
-        cursor = conn.execute('SELECT id, name, recognition_threshold FROM people')
-        for row in cursor.fetchall():
-            person_thresholds[row['id']] = row['recognition_threshold']
-            if row['name'] == '-':
-                ignored_person_ids.add(row['id'])
+    # ── READ phase: load all data needed for computation ──
+    # Reads are routed to the read connection by SafeConnection (concurrent
+    # under WAL, no lock needed).
 
-        # Get known embeddings
-        if person_id:
-            cursor = conn.execute(
-                """SELECT f.id, f.person_id, f.embedding
-                   FROM faces f
-                   JOIN images i ON f.image_id = i.id
-                   WHERE f.person_id = ? AND f.suppressed = 0 AND i.deleted = 0""",
-                (person_id,),
-            )
-            known_embeddings = []
-            for row in cursor.fetchall():
-                embedding = np.frombuffer(row['embedding'], dtype=np.float32)
-                known_embeddings.append((row['id'], row['person_id'], embedding))
-        else:
-            known_embeddings = get_cached_known_embeddings(conn)
+    # Load per-person thresholds and identify ignored people (name == '-')
+    person_thresholds: dict[str, float | None] = {}
+    ignored_person_ids: set[str] = set()
+    cursor = conn.execute('SELECT id, name, recognition_threshold FROM people')
+    for row in cursor.fetchall():
+        person_thresholds[row['id']] = row['recognition_threshold']
+        if row['name'] == '-':
+            ignored_person_ids.add(row['id'])
 
-        # Get candidate embeddings: unknown faces AND unlocked faces
-        # This allows faces to be reassigned to better-matching people
+    # Get known embeddings
+    if person_id:
         cursor = conn.execute(
-            """SELECT f.id, f.embedding, f.person_id
+            """SELECT f.id, f.person_id, f.embedding
                FROM faces f
                JOIN images i ON f.image_id = i.id
-               WHERE (f.person_id IS NULL OR f.manually_tagged = 0)
-                 AND f.suppressed = 0 AND f.embedding IS NOT NULL
-                 AND i.deleted = 0"""
+               WHERE f.person_id = ? AND f.suppressed = 0 AND i.deleted = 0""",
+            (person_id,),
         )
-        candidate_embeddings = []
-        candidate_person_ids: dict[str, str | None] = {}  # face_id -> current person_id
+        known_embeddings = []
         for row in cursor.fetchall():
             embedding = np.frombuffer(row['embedding'], dtype=np.float32)
-            candidate_embeddings.append((row['id'], embedding))
-            candidate_person_ids[row['id']] = row['person_id']
+            known_embeddings.append((row['id'], row['person_id'], embedding))
+    else:
+        known_embeddings = get_cached_known_embeddings(conn)
+
+    # Get candidate embeddings: unknown faces AND unlocked faces
+    # This allows faces to be reassigned to better-matching people
+    cursor = conn.execute(
+        """SELECT f.id, f.embedding, f.person_id
+           FROM faces f
+           JOIN images i ON f.image_id = i.id
+           WHERE (f.person_id IS NULL OR f.manually_tagged = 0)
+             AND f.suppressed = 0 AND f.embedding IS NOT NULL
+             AND i.deleted = 0"""
+    )
+    candidate_embeddings = []
+    candidate_person_ids: dict[str, str | None] = {}  # face_id -> current person_id
+    for row in cursor.fetchall():
+        embedding = np.frombuffer(row['embedding'], dtype=np.float32)
+        candidate_embeddings.append((row['id'], embedding))
+        candidate_person_ids[row['id']] = row['person_id']
 
     if not known_embeddings or not candidate_embeddings:
         return []
@@ -2653,16 +2652,17 @@ def reassess_unknown_faces(
         for face_id in unmatched:
             logger.debug(f'Unassigned face {face_id} (below all thresholds)')
 
-        with db_lock:
-            conn.executemany(
-                "UPDATE faces SET person_id = ?, manually_tagged = 0, updated_at = datetime('now') WHERE id = ?",
-                assign_params,
-            )
-            conn.executemany(
-                "UPDATE faces SET person_id = NULL, manually_tagged = 0, updated_at = datetime('now') WHERE id = ?",
-                unassign_params,
-            )
-            conn.commit()
+        # ── WRITE phase: batch update matched and unmatched faces ──
+        # Writes are serialised by SafeConnection's writer thread.
+        conn.executemany(
+            "UPDATE faces SET person_id = ?, manually_tagged = 0, updated_at = datetime('now') WHERE id = ?",
+            assign_params,
+        )
+        conn.executemany(
+            "UPDATE faces SET person_id = NULL, manually_tagged = 0, updated_at = datetime('now') WHERE id = ?",
+            unassign_params,
+        )
+        conn.commit()
 
         invalidate_embedding_cache()
 
@@ -2966,7 +2966,7 @@ def reassess_unknown_faces_async(
     3. WRITE (with lock): Update matched faces and build response
 
     Args:
-        db: ImageDatabase instance (provides conn and _db_lock).
+        db: ImageDatabase instance (provides safe_conn).
         threshold: Minimum cosine similarity for auto-match.
         person_id: If specified, only compare against this person's faces.
         callback: Optional callback(matched_count) when done.
@@ -2977,77 +2977,78 @@ def reassess_unknown_faces_async(
         global _reassess_thread, _reassess_result
         try:
             # ================================================================
-            # PHASE 1: READ (with lock) - fetch all data needed for computation
+            # PHASE 1: READ - fetch all data needed for computation
             # ================================================================
-            with db._db_lock:
-                logger.debug('Async reassessment: READ phase started')
+            # Reads are routed to the read connection by SafeConnection
+            # (concurrent under WAL, no lock needed).
+            logger.debug('Async reassessment: READ phase started')
 
-                # Load per-person thresholds
-                person_thresholds: dict[str, float | None] = {}
-                cursor = db.safe_conn.execute('SELECT id, recognition_threshold FROM people')
-                for row in cursor.fetchall():
-                    person_thresholds[row['id']] = row['recognition_threshold']
+            # Load per-person thresholds
+            person_thresholds: dict[str, float | None] = {}
+            cursor = db.safe_conn.execute('SELECT id, recognition_threshold FROM people')
+            for row in cursor.fetchall():
+                person_thresholds[row['id']] = row['recognition_threshold']
 
-                # Get known embeddings
-                if person_id:
-                    cursor = db.safe_conn.execute(
-                        """SELECT f.id, f.person_id, f.embedding
-                           FROM faces f
-                           JOIN images i ON f.image_id = i.id
-                           WHERE f.person_id = ? AND f.suppressed = 0
-                             AND i.deleted = 0""",
-                        (person_id,),
-                    )
-                    known_embeddings = []
-                    for row in cursor.fetchall():
-                        embedding = np.frombuffer(row['embedding'], dtype=np.float32)
-                        known_embeddings.append((row['id'], row['person_id'], embedding))
-                else:
-                    known_embeddings = get_cached_known_embeddings(db.safe_conn)
-
-                # Get candidate embeddings WITH updated_at for optimistic concurrency
-                # If updated_at changes between READ and WRITE, we skip that face
-                #
-                # Candidates include:
-                # - Unknown faces (person_id IS NULL)
-                # - Unlocked faces from OTHER people (person_id != target, manually_tagged = 0)
-                # This allows threshold changes to pull faces from other people if they
-                # match better. Locked faces (manually_tagged = 1) are never candidates.
-                if person_id:
-                    cursor = db.safe_conn.execute(
-                        """SELECT f.id, f.embedding, f.updated_at, f.person_id
-                           FROM faces f
-                           JOIN images i ON f.image_id = i.id
-                           WHERE (f.person_id IS NULL OR (f.person_id != ? AND f.manually_tagged = 0))
-                             AND f.suppressed = 0 AND f.embedding IS NOT NULL
-                             AND i.deleted = 0""",
-                        (person_id,),
-                    )
-                else:
-                    # Full sweep reassessment: unknown faces AND unlocked faces
-                    # This allows faces to be reassigned to better-matching people
-                    # or ejected to unknown if they no longer meet any threshold
-                    cursor = db.safe_conn.execute(
-                        """SELECT f.id, f.embedding, f.updated_at, f.person_id
-                           FROM faces f
-                           JOIN images i ON f.image_id = i.id
-                           WHERE (f.person_id IS NULL OR f.manually_tagged = 0)
-                             AND f.suppressed = 0 AND f.embedding IS NOT NULL
-                             AND i.deleted = 0"""
-                    )
-                candidate_embeddings = []
-                face_timestamps: dict[str, str | None] = {}  # face_id -> updated_at
-                candidate_person_ids: dict[str, str | None] = {}  # face_id -> current person_id
+            # Get known embeddings
+            if person_id:
+                cursor = db.safe_conn.execute(
+                    """SELECT f.id, f.person_id, f.embedding
+                       FROM faces f
+                       JOIN images i ON f.image_id = i.id
+                       WHERE f.person_id = ? AND f.suppressed = 0
+                         AND i.deleted = 0""",
+                    (person_id,),
+                )
+                known_embeddings = []
                 for row in cursor.fetchall():
                     embedding = np.frombuffer(row['embedding'], dtype=np.float32)
-                    candidate_embeddings.append((row['id'], embedding))
-                    face_timestamps[row['id']] = row['updated_at']
-                    candidate_person_ids[row['id']] = row['person_id']
+                    known_embeddings.append((row['id'], row['person_id'], embedding))
+            else:
+                known_embeddings = get_cached_known_embeddings(db.safe_conn)
 
-                logger.debug(
-                    f'Async reassessment: READ phase done - '
-                    f'{len(known_embeddings)} known, {len(candidate_embeddings)} candidates'
+            # Get candidate embeddings WITH updated_at for optimistic concurrency
+            # If updated_at changes between READ and WRITE, we skip that face
+            #
+            # Candidates include:
+            # - Unknown faces (person_id IS NULL)
+            # - Unlocked faces from OTHER people (person_id != target, manually_tagged = 0)
+            # This allows threshold changes to pull faces from other people if they
+            # match better. Locked faces (manually_tagged = 1) are never candidates.
+            if person_id:
+                cursor = db.safe_conn.execute(
+                    """SELECT f.id, f.embedding, f.updated_at, f.person_id
+                       FROM faces f
+                       JOIN images i ON f.image_id = i.id
+                       WHERE (f.person_id IS NULL OR (f.person_id != ? AND f.manually_tagged = 0))
+                         AND f.suppressed = 0 AND f.embedding IS NOT NULL
+                         AND i.deleted = 0""",
+                    (person_id,),
                 )
+            else:
+                # Full sweep reassessment: unknown faces AND unlocked faces
+                # This allows faces to be reassigned to better-matching people
+                # or ejected to unknown if they no longer meet any threshold
+                cursor = db.safe_conn.execute(
+                    """SELECT f.id, f.embedding, f.updated_at, f.person_id
+                       FROM faces f
+                       JOIN images i ON f.image_id = i.id
+                       WHERE (f.person_id IS NULL OR f.manually_tagged = 0)
+                         AND f.suppressed = 0 AND f.embedding IS NOT NULL
+                         AND i.deleted = 0"""
+                )
+            candidate_embeddings = []
+            face_timestamps: dict[str, str | None] = {}  # face_id -> updated_at
+            candidate_person_ids: dict[str, str | None] = {}  # face_id -> current person_id
+            for row in cursor.fetchall():
+                embedding = np.frombuffer(row['embedding'], dtype=np.float32)
+                candidate_embeddings.append((row['id'], embedding))
+                face_timestamps[row['id']] = row['updated_at']
+                candidate_person_ids[row['id']] = row['person_id']
+
+            logger.debug(
+                f'Async reassessment: READ phase done - '
+                f'{len(known_embeddings)} known, {len(candidate_embeddings)} candidates'
+            )
 
             # Early exit if nothing to compare
             if not known_embeddings or not candidate_embeddings:
@@ -3145,12 +3146,14 @@ def reassess_unknown_faces_async(
             )
 
             # ================================================================
-            # PHASE 3: WRITE (with lock) - persist matches and build response
+            # PHASE 3: WRITE - persist matches and build response
             # ================================================================
             # Use optimistic concurrency: only update faces whose updated_at
             # hasn't changed since READ phase. If the user (or another process)
             # modified a face, we skip it rather than overwriting their change.
-            with db._db_lock:
+            # The ``with`` block routes all operations to the writer thread
+            # atomically (no other writes can interleave).
+            with db.safe_conn:
                 logger.debug('Async reassessment: WRITE phase started')
 
                 actually_updated = []

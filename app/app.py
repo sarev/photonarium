@@ -1022,20 +1022,19 @@ def get_image_scenes(image_id):
 
     query = request.args.get('query', '').strip()
 
-    with db.safe_conn:
-        cols = 'id, scene_index, start_time, end_time, keyframe_time, transcription'
-        if query:
-            cols += ', embedding, transcription_embedding'
-        cursor = db.safe_conn.execute(
-            f"""
-            SELECT {cols}
-            FROM scenes
-            WHERE image_id = ?
-            ORDER BY scene_index ASC
-            """,
-            (image_id,),
-        )
-        rows = cursor.fetchall()
+    cols = 'id, scene_index, start_time, end_time, keyframe_time, transcription'
+    if query:
+        cols += ', embedding, transcription_embedding'
+    cursor = db.safe_conn.execute(
+        f"""
+        SELECT {cols}
+        FROM scenes
+        WHERE image_id = ?
+        ORDER BY scene_index ASC
+        """,
+        (image_id,),
+    )
+    rows = cursor.fetchall()
 
     scenes = []
     if query:
@@ -1107,16 +1106,15 @@ def get_subtitles_vtt(image_id):
     if image.get('media_type') != 'video':
         return error_response('Not a video', 400)
 
-    with db.safe_conn:
-        rows = db.safe_conn.execute(
-            """
-            SELECT start_time, end_time, transcription
-            FROM scenes
-            WHERE image_id = ?
-            ORDER BY scene_index ASC
-            """,
-            (image_id,),
-        ).fetchall()
+    rows = db.safe_conn.execute(
+        """
+        SELECT start_time, end_time, transcription
+        FROM scenes
+        WHERE image_id = ?
+        ORDER BY scene_index ASC
+        """,
+        (image_id,),
+    ).fetchall()
 
     # Filter to scenes with transcription text
     cues = [(r['start_time'], r['end_time'], r['transcription']) for r in rows if r['transcription']]
@@ -1543,16 +1541,15 @@ def import_preflight():
 
     # Build two sets for fast lookup: one keyed by import_name (original
     # filename at time of import) and one by basename (on-disk filename).
-    with db.safe_conn:
-        cursor = db.safe_conn.execute(
-            'SELECT basename, size, import_name FROM images WHERE deleted = 0',
-        )
-        basename_size = set()
-        import_name_size = set()
-        for row in cursor:
-            basename_size.add((row[0], row[1]))
-            if row[2]:
-                import_name_size.add((row[2], row[1]))
+    cursor = db.safe_conn.execute(
+        'SELECT basename, size, import_name FROM images WHERE deleted = 0',
+    )
+    basename_size = set()
+    import_name_size = set()
+    for row in cursor:
+        basename_size.add((row[0], row[1]))
+        if row[2]:
+            import_name_size.add((row[2], row[1]))
 
     results = [
         (f.get('name', ''), f.get('size', -1)) in import_name_size
@@ -2770,12 +2767,11 @@ def get_scene_thumbnail(scene_id):
             abort(404)
 
     # On-demand fallback: look up scene, generate thumbnail
-    with db.safe_conn:
-        cursor = db.safe_conn.execute(
-            'SELECT image_id, keyframe_time FROM scenes WHERE id = ?',
-            (scene_id,),
-        )
-        row = cursor.fetchone()
+    cursor = db.safe_conn.execute(
+        'SELECT image_id, keyframe_time FROM scenes WHERE id = ?',
+        (scene_id,),
+    )
+    row = cursor.fetchone()
 
     if row is None:
         return error_response('Scene not found', 404)
@@ -2839,12 +2835,11 @@ def update_preferred_scene(image_id):
         return error_response('Not a video', 400)
 
     # Get the scene's embedding
-    with db.safe_conn:
-        cursor = db.safe_conn.execute(
-            'SELECT embedding FROM scenes WHERE id = ? AND image_id = ?',
-            (scene_id, image_id),
-        )
-        row = cursor.fetchone()
+    cursor = db.safe_conn.execute(
+        'SELECT embedding FROM scenes WHERE id = ? AND image_id = ?',
+        (scene_id, image_id),
+    )
+    row = cursor.fetchone()
 
     if row is None:
         return error_response('Scene not found for this video', 404)
@@ -3770,20 +3765,29 @@ def assign_faces():
 
     db = get_db()
 
-    with db.safe_conn:
-        # Verify person exists
-        person = get_person(db.safe_conn, person_id)
-        if person is None:
-            return error_response('Person not found', 404)
+    # Verify person exists
+    person = get_person(db.safe_conn, person_id)
+    if person is None:
+        return error_response('Person not found', 404)
 
-        # Assign each face (just update person_id, don't touch manually_tagged)
-        assigned_count = 0
-        for face_id in face_ids:
-            face = get_face(db.safe_conn, face_id)
-            if face is None:
-                continue
-            update_face_person(db.safe_conn, face_id, person_id)
-            assigned_count += 1
+    # Collect valid face IDs (read phase — separate from writes to avoid
+    # SQLITE_BUSY_SNAPSHOT in WAL mode when another connection writes
+    # between our reads and writes).
+    valid_face_ids = []
+    for face_id in face_ids:
+        if get_face(db.safe_conn, face_id) is not None:
+            valid_face_ids.append(face_id)
+
+    # Batch update in a single transaction (minimises write lock duration
+    # and eliminates per-face commit contention with the log handler).
+    assigned_count = len(valid_face_ids)
+    if valid_face_ids:
+        db.safe_conn.executemany(
+            """UPDATE faces SET person_id = ?, updated_at = datetime('now')
+               WHERE id = ?""",
+            [(person_id, fid) for fid in valid_face_ids],
+        )
+        db.safe_conn.commit()
 
     # Trigger async reassessment to auto-match unknown faces against this person
     reassessment_triggered = False
@@ -3840,10 +3844,10 @@ def unassign_faces_simple():
 
     db = get_db()
 
-    with db.safe_conn:
-        # Filter to faces that actually exist before batch update
-        valid_ids = [fid for fid in face_ids if get_face(db.safe_conn, fid) is not None]
-        unassigned_count = _unassign_faces_batch(db.safe_conn, valid_ids)
+    # Read phase: filter to faces that actually exist
+    valid_ids = [fid for fid in face_ids if get_face(db.safe_conn, fid) is not None]
+    # Write phase: batch update in a single transaction
+    unassigned_count = _unassign_faces_batch(db.safe_conn, valid_ids)
 
     # Broadcast for other clients
     if unassigned_count > 0:
@@ -3887,10 +3891,10 @@ def suppress_faces_batch():
 
     db = get_db()
 
-    with db.safe_conn:
-        # Filter to faces that actually exist before batch update
-        valid_ids = [fid for fid in face_ids if get_face(db.safe_conn, fid) is not None]
-        suppressed_count = _suppress_faces_batch(db.safe_conn, valid_ids)
+    # Read phase: filter to faces that actually exist
+    valid_ids = [fid for fid in face_ids if get_face(db.safe_conn, fid) is not None]
+    # Write phase: batch update in a single transaction
+    suppressed_count = _suppress_faces_batch(db.safe_conn, valid_ids)
 
     # Broadcast for other clients
     if suppressed_count > 0:
@@ -3932,22 +3936,18 @@ def update_faces_batch():
 
     db = get_db()
 
-    with db.safe_conn:
-        updated_count = 0
-        for face_id in face_ids:
-            face = get_face(db.safe_conn, face_id)
-            if face is None:
-                continue
+    # Read phase: filter to faces that exist
+    valid_ids = [fid for fid in face_ids if get_face(db.safe_conn, fid) is not None]
 
-            if locked is not None:
-                # Update manually_tagged flag
-                db.safe_conn.execute(
-                    "UPDATE faces SET manually_tagged = ?, updated_at = datetime('now') WHERE id = ?",
-                    (1 if locked else 0, face_id),
-                )
-                updated_count += 1
-
+    # Write phase: batch update in a single transaction
+    updated_count = 0
+    if valid_ids and locked is not None:
+        db.safe_conn.executemany(
+            "UPDATE faces SET manually_tagged = ?, updated_at = datetime('now') WHERE id = ?",
+            [(1 if locked else 0, fid) for fid in valid_ids],
+        )
         db.safe_conn.commit()
+        updated_count = len(valid_ids)
 
     # Broadcast for other clients
     if updated_count > 0 and locked is not None:

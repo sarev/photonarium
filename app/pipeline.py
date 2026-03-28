@@ -30,10 +30,9 @@ Stages
 1. **Ingestion** — Walk registered folders, create/update DB records.
 
    *Threading*: `ThreadPoolExecutor` with `config.indexing_threads`
-   workers (capped at 16).  Each worker gets its own ``SafeConnection``
-   via ``_get_worker_conn()`` (WAL mode, ``busy_timeout=10 s``) for
-   parallel DB operations.  SafeConnection handles transient "database
-   is locked" errors with retry and auto-rollback.
+   workers (capped at 16).  Workers do I/O (stat, read, hash, EXIF) in
+   parallel and submit DB writes through the shared ``SafeConnection``,
+   which serialises them on a dedicated writer thread.
 
    *No GPU, no batching* — work is I/O-bound (stat, read, hash, EXIF).
 
@@ -285,14 +284,6 @@ class PipelineOrchestrator(threading.Thread):
         self._ingestion_needed = True
 
         # Thread-local storage for per-worker DB connections (Stage 1).
-        # Workers need their own connections for parallel I/O — serialising
-        # 16 threads through a single RLock would eliminate all parallelism.
-        # Each worker connection is wrapped in SafeConnection (private RLock)
-        # for retry and rollback on transient "database is locked" errors.
-        self._thread_local = threading.local()
-        self._worker_conns: list[SafeConnection] = []
-        self._worker_conns_lock = threading.Lock()
-
         # When set, Stage 1 only walks these folders instead of all
         # registered folders.  Populated by request_rescan_folder(),
         # cleared at the start of each ingestion run.
@@ -371,7 +362,6 @@ class PipelineOrchestrator(threading.Thread):
                 self._wake_event.clear()
             # If _rerun_requested was set during pipeline, loop immediately
 
-        self._close_worker_conns()
         logger.info('Pipeline orchestrator stopped')
 
     def _run_pipeline(self) -> bool:
@@ -521,38 +511,14 @@ class PipelineOrchestrator(threading.Thread):
         return self._db._get_clip_model()
 
     def _get_worker_conn(self) -> SafeConnection:
-        """Get or create a thread-local database connection for worker threads.
+        """Return the shared SafeConnection for worker thread DB access.
 
-        Each ThreadPoolExecutor worker gets its own SQLite connection
-        wrapped in :class:`SafeConnection` (with a private RLock).
-        This allows parallel DB operations across workers while
-        SafeConnection handles retry and rollback on transient
-        "database is locked" errors from SQLite-level write contention.
+        All writes are serialised by SafeConnection's writer thread,
+        so per-worker connections are no longer needed.  Workers still
+        do I/O (stat, hash, EXIF) in parallel — only the DB operations
+        go through the shared connection.
         """
-        conn = getattr(self._thread_local, 'conn', None)
-        if conn is None:
-            import sqlite3
-
-            raw = sqlite3.connect(str(self._db.db_path), timeout=10.0)
-            raw.execute('PRAGMA journal_mode=WAL')
-            raw.execute('PRAGMA busy_timeout=10000')
-            raw.execute('PRAGMA foreign_keys=ON')
-            raw.row_factory = sqlite3.Row
-            conn = SafeConnection(raw, name=f'worker-{threading.current_thread().name}')
-            self._thread_local.conn = conn
-            with self._worker_conns_lock:
-                self._worker_conns.append(conn)
-        return conn
-
-    def _close_worker_conns(self) -> None:
-        """Close all per-thread worker connections."""
-        with self._worker_conns_lock:
-            for wconn in self._worker_conns:
-                try:
-                    wconn.close()
-                except Exception:
-                    pass
-            self._worker_conns.clear()
+        return self._db.safe_conn
 
     def _get_stt_backend(self):
         """Lazy-load the STT backend."""
@@ -690,9 +656,6 @@ class PipelineOrchestrator(threading.Thread):
                 elif paths_exhausted:
                     # All paths submitted and all futures completed — done
                     break
-
-        # Close worker connections after ingestion
-        self._close_worker_conns()
 
         # Mark missing files as deleted
         self._mark_deleted_files(folder_paths, found_paths)
