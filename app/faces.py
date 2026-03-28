@@ -1545,6 +1545,7 @@ def get_faces_for_image(
     conn: SafeConnection,
     image_id: str,
     include_suppressed: bool = False,
+    include_embeddings: bool = False,
 ) -> list[dict[str, Any]]:
     """Get all faces detected in an image.
 
@@ -1552,13 +1553,26 @@ def get_faces_for_image(
         conn: Database connection.
         image_id: Image's UUID.
         include_suppressed: If True, include suppressed faces.
+        include_embeddings: If True, include embedding and semantic_embedding
+            BLOBs (expensive — ~2KB per face).  Default False to avoid
+            loading large BLOBs that most callers discard.
 
     Returns:
         List of face dicts.
     """
+    if include_embeddings:
+        cols = 'f.*, p.name as person_name'
+    else:
+        cols = (
+            'f.id, f.image_id, f.box_x, f.box_y, f.box_w, f.box_h, '
+            'f.confidence, f.person_id, f.suppressed, f.manually_tagged, '
+            'f.unknown_group_id, f.created_at, f.updated_at, '
+            'p.name as person_name'
+        )
+
     if include_suppressed:
         cursor = conn.execute(
-            """SELECT f.*, p.name as person_name
+            f"""SELECT {cols}
                FROM faces f
                LEFT JOIN people p ON f.person_id = p.id
                WHERE f.image_id = ?""",
@@ -1566,7 +1580,7 @@ def get_faces_for_image(
         )
     else:
         cursor = conn.execute(
-            """SELECT f.*, p.name as person_name
+            f"""SELECT {cols}
                FROM faces f
                LEFT JOIN people p ON f.person_id = p.id
                WHERE f.image_id = ? AND f.suppressed = 0""",
@@ -1576,8 +1590,8 @@ def get_faces_for_image(
     faces = []
     for row in cursor.fetchall():
         face = dict(row)
-        # Convert embedding bytes to numpy array
-        if face.get('embedding'):
+        # Convert embedding bytes to numpy array if present
+        if include_embeddings and face.get('embedding'):
             face['embedding'] = np.frombuffer(face['embedding'], dtype=np.float32)
         faces.append(face)
     return faces
@@ -1764,6 +1778,10 @@ def get_face_matches(
     Compares the given face's embedding against all locked (manually_tagged=1)
     faces and returns the top N people with their best-matching face.
 
+    Uses the RAM embedding cache (populated on first call, invalidated when
+    faces are assigned) to avoid reloading all embeddings from disk on every
+    "find matching person" click.
+
     Args:
         conn: Database connection.
         face_id: The face to find matches for.
@@ -1784,27 +1802,15 @@ def get_face_matches(
 
     target_embedding = np.frombuffer(row['embedding'], dtype=np.float32)
 
-    # Get all locked face embeddings with person info
-    cursor = conn.execute(
-        """SELECT f.id, f.person_id, f.embedding, p.name as person_name
-           FROM faces f
-           JOIN people p ON f.person_id = p.id
-           JOIN images i ON f.image_id = i.id
-           WHERE f.suppressed = 0 AND f.manually_tagged = 1
-             AND p.name != '-' AND i.deleted = 0"""
-    )
-
-    # Build list of (face_id, person_id, person_name, embedding)
-    locked_faces = []
-    for row in cursor.fetchall():
-        embedding = np.frombuffer(row['embedding'], dtype=np.float32)
-        locked_faces.append((row['id'], row['person_id'], row['person_name'], embedding))
-
-    if not locked_faces:
+    # Use the RAM cache for known (locked) face embeddings — avoids
+    # reloading megabytes of BLOBs from disk on every call.
+    known_embeddings = get_cached_known_embeddings(conn)
+    if not known_embeddings:
         return []
 
-    # Compute similarities
-    locked_matrix = np.vstack([emb for _, _, _, emb in locked_faces])
+    # Compute similarities against all known faces in one vectorised pass
+    known_ids = [(fid, pid) for fid, pid, _ in known_embeddings]
+    known_matrix = np.vstack([emb for _, _, emb in known_embeddings])
 
     # Ensure L2-normalised (guard against zero-norm from corruption)
     target_norm = np.linalg.norm(target_embedding)
@@ -1812,23 +1818,42 @@ def get_face_matches(
         return []  # Zero-norm embedding cannot produce meaningful matches
     if not np.isclose(target_norm, 1.0, atol=0.01):
         target_embedding = target_embedding / target_norm
-    locked_norms = np.linalg.norm(locked_matrix, axis=1)
-    if not np.allclose(locked_norms, 1.0, atol=0.01):
-        locked_norms[locked_norms == 0] = 1
-        locked_matrix = locked_matrix / locked_norms[:, np.newaxis]
+    known_norms = np.linalg.norm(known_matrix, axis=1)
+    if not np.allclose(known_norms, 1.0, atol=0.01):
+        known_norms[known_norms == 0] = 1
+        known_matrix = known_matrix / known_norms[:, np.newaxis]
 
     # Dot product = cosine similarity for L2-normalised vectors
-    similarities = target_embedding @ locked_matrix.T
+    similarities = target_embedding @ known_matrix.T
 
     # Group by person, keeping only the best match per person
-    person_best: dict[str, tuple[str, str, float]] = {}  # person_id -> (face_id, name, similarity)
-    for i, (fid, pid, pname, _) in enumerate(locked_faces):
+    person_best: dict[str, tuple[str, float]] = {}  # person_id -> (face_id, similarity)
+    for i, (fid, pid) in enumerate(known_ids):
         sim = float(similarities[i])
-        if pid not in person_best or sim > person_best[pid][2]:
-            person_best[pid] = (fid, pname, sim)
+        if pid not in person_best or sim > person_best[pid][1]:
+            person_best[pid] = (fid, sim)
+
+    # Look up person names (cheap query — just the people table, no BLOBs)
+    person_ids = list(person_best.keys())
+    if not person_ids:
+        return []
+    placeholders = sql_placeholders(person_ids)
+    cursor = conn.execute(
+        f'SELECT id, name FROM people WHERE id IN ({placeholders})',
+        person_ids,
+    )
+    person_names = {row['id']: row['name'] for row in cursor.fetchall()}
+
+    # Filter out ignored people (name == '-') and build result
+    person_best_named: dict[str, tuple[str, str, float]] = {}
+    for pid, (fid, sim) in person_best.items():
+        name = person_names.get(pid, '')
+        if name == '-':
+            continue
+        person_best_named[pid] = (fid, name, sim)
 
     # Sort by similarity descending and take top N
-    sorted_matches = sorted(person_best.items(), key=lambda x: x[1][2], reverse=True)[:limit]
+    sorted_matches = sorted(person_best_named.items(), key=lambda x: x[1][2], reverse=True)[:limit]
 
     return [
         {

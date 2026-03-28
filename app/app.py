@@ -3624,12 +3624,6 @@ def get_image_faces(image_id):
         return error_response('Image not found', 404)
 
     faces = get_faces_for_image(db.safe_conn, image_id, include_suppressed=False)
-
-    # Remove embeddings from response
-    for face in faces:
-        face.pop('embedding', None)
-        face.pop('semantic_embedding', None)
-
     return success_response(faces)
 
 
