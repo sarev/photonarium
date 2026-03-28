@@ -3860,7 +3860,7 @@
         if (isTaggingModeActive() && imageId) {
             // Clear old bboxes immediately before loading new ones
             clearFaceOverlay(false);
-            loadFacesForImage(imageId, { fresh: true });
+            loadFacesForImage(imageId);
         }
     }
 
@@ -3904,10 +3904,15 @@
 
     /**
      * Load faces for an image and render overlays.
-     * Uses cache by default (for optimistic updates), fetches fresh on navigation.
+     * Uses cache when available for instant bbox display during navigation.
+     * Falls back to an API fetch on cache miss.  Subsequent updates from
+     * backend reassessment arrive via AppState.faces.onChanged (event
+     * polling) and trigger a re-render automatically — see the subscriber
+     * in init().
      * @param {string} imageId - Image ID
      * @param {Object} [options]
-     * @param {boolean} [options.fresh=false] - Bypass cache and fetch from backend
+     * @param {boolean} [options.fresh=false] - Bypass cache and fetch from
+     *     backend (used when entering tagging mode for the first time)
      */
     async function loadFacesForImage(imageId, { fresh = false } = {}) {
         if (!faceOverlay) return;
@@ -3916,14 +3921,14 @@
         currentOverlayImageId = imageId;
 
         try {
-            // Use cache when available (has optimistic updates from user actions)
-            // Only fetch fresh when explicitly requested (e.g., initial load, navigation)
+            // Use cache when available (kept current by optimistic updates
+            // and backend event polling).  Only fetch from the API on a
+            // cache miss or when explicitly requested.
             let faces;
             if (!fresh) {
                 faces = AppState.faces.getForImage(imageId);
             }
 
-            // Fetch from backend if cache miss or fresh requested
             if (!faces || faces.length === 0 || fresh) {
                 faces = await AppState.faces.fetchForImage(imageId, { fresh });
             }

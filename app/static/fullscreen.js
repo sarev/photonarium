@@ -769,17 +769,12 @@ const Fullscreen = {
         const { imageList, currentIndex } = this.state;
         if (imageList.length <= 1) return;
 
-        const prevIndex = (currentIndex - 1 + imageList.length) % imageList.length;
         const nextIndex = (currentIndex + 1) % imageList.length;
 
-        // Preload by creating Image objects (with cache-bust for recently rotated images).
+        // Preload the next image only — forward navigation is far more
+        // common than backward, and each preload consumes a browser
+        // connection that competes with the current image display.
         // Skip video items — new Image() does not work for video preloading.
-        const prevImg = imageList[prevIndex];
-        if (prevImg.media_type !== 'video') {
-            const preloadPrev = new Image();
-            preloadPrev.src = ThumbnailLoader.getFullImageUrl(prevImg.id);
-        }
-
         const nextImg = imageList[nextIndex];
         if (nextImg.media_type !== 'video') {
             const preloadNext = new Image();
@@ -791,15 +786,25 @@ const Fullscreen = {
         if (this._slideshowActive && this._slideshowShuffled) {
             const shuffleNext = this._getNextSlideshowTarget();
             const shuffleImg = imageList[shuffleNext];
-            if (shuffleNext !== prevIndex && shuffleNext !== nextIndex && shuffleImg.media_type !== 'video') {
+            if (shuffleNext !== nextIndex && shuffleImg.media_type !== 'video') {
                 const preloadShuffle = new Image();
                 preloadShuffle.src = ThumbnailLoader.getFullImageUrl(shuffleImg.id);
             }
         }
 
-        // Note: Adjacent face preloading disabled - was causing SQLite contention
-        // that made fullscreen navigation unresponsive. Faces are loaded on-demand
-        // when navigating (minimal latency since face data is small).
+        // Preload face data for adjacent images into AppState cache so
+        // bboxes appear instantly on navigation (no API round-trip).
+        // Only when tagging mode is active — no point fetching face data
+        // that won't be displayed.  Deferred so the current image and its
+        // face overlay load first — firing immediately would saturate the
+        // browser's per-origin connection limit (~6) and delay display.
+        // (Previously disabled due to SQLite contention — resolved by
+        // single-writer SafeConnection.)
+        if (typeof Faces !== 'undefined' && Faces.isTaggingModeActive?.()) {
+            setTimeout(() => {
+                AppState.faces.fetchForImage(nextImg.id);
+            }, 500);
+        }
     },
 
     /**
