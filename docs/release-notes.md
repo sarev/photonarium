@@ -18,6 +18,13 @@ Key changes:
 - **DuplicateManager**: no longer creates transient per-call connections. Uses the shared `SafeConnection` throughout.
 - **Removed**: `_db_lock` (RLock), retry logic, backoff timers, per-worker connection tracking, `busy_timeout` reliance.
 
+### Face Endpoint Optimisation
+
+Two face-related API endpoints were doing unnecessary work:
+
+- **`get_faces_for_image()`** loaded full embedding BLOBs (~2KB per face) only to discard them — every fullscreen view toggle paid this cost. The query now excludes embeddings by default.
+- **`get_face_matches()`** ran a fresh DB query loading megabytes of embedding BLOBs on every "find matching person" click. Now uses the in-memory embedding cache instead, avoiding the DB round-trip entirely.
+
 ### Bug Fixes
 
 - **Face assign contention**: the "ignore all unknown faces" action could fail with `database is locked` when the background face reassessment was writing simultaneously. Fixed by batching face updates with `executemany` + single commit instead of per-face UPDATE + commit loops. Also fixed the same pattern in the unassign, suppress, and lock/unlock batch endpoints.
