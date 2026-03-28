@@ -103,6 +103,7 @@ from faces import (
     delete_face,
     delete_people_without_faces,
     delete_person,
+    detect_faces_preview,
     generate_face_thumbnail,
     get_all_faces,
     get_all_people,
@@ -1806,6 +1807,9 @@ def get_config():
             'stt_enabled': config.stt_enabled,
             'stt_language': config.stt_language,
             'stt_languages': config.stt_languages,
+            'face_detection_enabled': config.face_detection_enabled,
+            'face_detection_min_confidence': config.face_detection_min_confidence,
+            'face_detection_min_size': config.face_detection_min_size,
             'version': _app_version,
         }
     )
@@ -3624,6 +3628,47 @@ def get_image_faces(image_id):
         return error_response('Image not found', 404)
 
     faces = get_faces_for_image(db.safe_conn, image_id, include_suppressed=False)
+    return success_response(faces)
+
+
+@app.route('/api/faces/detect-preview', methods=['POST'])
+def faces_detect_preview():
+    """Run face detection preview with caller-supplied parameters.
+
+    Returns bounding boxes and confidence scores only — no embeddings
+    are computed and nothing is written to the database.  Detection
+    runs on CPU to avoid contention with the pipeline's GPU models.
+
+    All detections above a low confidence floor (0.5) are returned so
+    the frontend can refilter by confidence interactively without
+    another round-trip.  Only ``min_face_size`` changes require a new
+    backend call (it is baked into the MTCNN constructor).
+
+    Request body:
+        image_id (str): Image UUID.
+        min_face_size (int, optional): Minimum face size in pixels
+            (default: config value).
+
+    Returns:
+        JSON array of ``{box_x, box_y, box_w, box_h, confidence}`` dicts,
+        sorted by confidence descending.
+    """
+    data = request.get_json(silent=True) or {}
+    image_id = data.get('image_id')
+    if not image_id:
+        return error_response('image_id is required', 400)
+
+    db = get_db()
+    image = db.get_image(image_id)
+    if image is None:
+        return error_response('Image not found', 404)
+
+    min_face_size = int(data.get('min_face_size', db.config.face_detection_min_size))
+
+    faces = detect_faces_preview(
+        image_path=image['path'],
+        min_face_size=min_face_size,
+    )
     return success_response(faces)
 
 

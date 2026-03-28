@@ -2540,6 +2540,167 @@ a:hover {
     font-size: 13px;
 }
 
+/* -----------------------------------------------------------------------
+   Face detection tuning panel
+   ----------------------------------------------------------------------- */
+
+#face-tuning-overlay {
+    position: absolute;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 100%;
+    pointer-events: none;
+    overflow: visible;
+    z-index: 5;
+}
+
+.face-tuning-panel {
+    position: absolute;
+    bottom: 1.5rem;
+    right: 1.5rem;
+    z-index: 20;
+    width: 260px;
+    padding: 14px 16px;
+    background: var(--color-overlay-button-bg);
+    backdrop-filter: blur(12px);
+    -webkit-backdrop-filter: blur(12px);
+    border-radius: 10px;
+    color: #fff;
+    font-size: 13px;
+    pointer-events: auto;
+    animation: faceBoxFadeIn 0.2s ease-out;
+}
+
+.face-tuning-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin-bottom: 12px;
+}
+
+.face-tuning-title {
+    font-weight: 600;
+    font-size: 14px;
+}
+
+.face-tuning-count {
+    font-size: 12px;
+    font-family: var(--font-mono, monospace);
+    opacity: 0.8;
+}
+
+.face-tuning-controls {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    margin-bottom: 14px;
+}
+
+.face-tuning-slider {
+    display: grid;
+    grid-template-columns: 1fr auto;
+    grid-template-rows: auto auto;
+    gap: 2px 8px;
+    cursor: default;
+}
+
+.face-tuning-slider span:first-child {
+    grid-column: 1 / -1;
+    font-size: 12px;
+    opacity: 0.8;
+    margin-bottom: 2px;
+}
+
+.face-tuning-slider input[type="range"] {
+    grid-column: 1;
+    width: 100%;
+    accent-color: var(--color-accent);
+    cursor: pointer;
+}
+
+.face-tuning-value {
+    font-family: var(--font-mono, monospace);
+    font-size: 12px;
+    min-width: 36px;
+    text-align: right;
+    align-self: center;
+}
+
+.face-tuning-actions {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+
+.face-tuning-spacer {
+    flex: 1;
+}
+
+.face-tuning-actions .action-btn {
+    padding: 5px 12px;
+    border-radius: 5px;
+    border: 1px solid rgba(255, 255, 255, 0.25);
+    background: transparent;
+    color: #fff;
+    font-size: 12px;
+    cursor: pointer;
+    transition: background 0.15s;
+}
+
+.face-tuning-actions .action-btn:hover {
+    background: rgba(255, 255, 255, 0.15);
+}
+
+.face-tuning-actions .action-btn-primary {
+    background: var(--color-accent);
+    border-color: var(--color-accent);
+}
+
+.face-tuning-actions .action-btn-primary:hover {
+    background: var(--color-accent-hover);
+}
+
+.face-tuning-actions .action-btn:disabled {
+    opacity: 0.5;
+    cursor: default;
+}
+
+/* Tuning preview bounding boxes — filled, confidence-coloured */
+.face-tuning-box {
+    position: absolute;
+    border-radius: 4px;
+    box-sizing: border-box;
+    pointer-events: none;
+    animation: faceBoxFadeIn 0.15s ease-out;
+}
+
+.face-tuning-box.confidence-above {
+    background: rgba(102, 187, 106, 0.25);
+    border: 2px solid rgba(102, 187, 106, 0.7);
+}
+
+.face-tuning-box.confidence-borderline {
+    background: rgba(255, 167, 38, 0.3);
+    border: 2px solid rgba(255, 167, 38, 0.7);
+}
+
+.face-tuning-box.confidence-below {
+    background: rgba(239, 83, 80, 0.2);
+    border: 2px dashed rgba(239, 83, 80, 0.5);
+}
+
+.face-tuning-box .tuning-label {
+    position: absolute;
+    top: 2px;
+    left: 4px;
+    font-size: 11px;
+    font-family: var(--font-mono, monospace);
+    color: #fff;
+    text-shadow: 0 1px 3px rgba(0, 0, 0, 0.8);
+    pointer-events: none;
+}
+
 /* Preferred face indicator */
 .face-card-preferred {
     position: absolute;

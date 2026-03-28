@@ -468,6 +468,35 @@
                 <div id="face-overlay" class="face-overlay" hidden>
                     <!-- Face boxes are dynamically inserted here -->
                 </div>
+                <!-- Face detection tuning overlay (preview bboxes) -->
+                <div id="face-tuning-overlay" hidden>
+                    <!-- Tuning preview boxes are dynamically inserted here -->
+                </div>
+            </div>
+            <!-- Face detection tuning panel -->
+            <div id="face-tuning-panel" class="face-tuning-panel" hidden>
+                <div class="face-tuning-header">
+                    <span class="face-tuning-title">Face Detection</span>
+                    <span id="face-tuning-count" class="face-tuning-count"></span>
+                </div>
+                <div class="face-tuning-controls">
+                    <label class="face-tuning-slider">
+                        <span>Min confidence</span>
+                        <input type="range" id="tuning-confidence" min="0.5" max="1" step="0.01">
+                        <span id="tuning-confidence-value" class="face-tuning-value"></span>
+                    </label>
+                    <label class="face-tuning-slider">
+                        <span>Min face size</span>
+                        <input type="range" id="tuning-face-size" min="10" max="200" step="1">
+                        <span id="tuning-face-size-value" class="face-tuning-value"></span>
+                    </label>
+                </div>
+                <div class="face-tuning-actions">
+                    <button id="tuning-detect" class="action-btn" title="Re-run detection with current settings">Detect</button>
+                    <span class="face-tuning-spacer"></span>
+                    <button id="tuning-cancel" class="action-btn">Cancel</button>
+                    <button id="tuning-apply" class="action-btn action-btn-primary">Apply</button>
+                </div>
             </div>
             <!-- Top toolbar (evenly spaced buttons) -->
             <div id="fullscreen-toolbar" class="fullscreen-toolbar">
@@ -478,6 +507,10 @@
                 <!-- Ignore all unknown faces -->
                 <button id="fullscreen-ignore" class="fullscreen-btn" title="Ignore unknown faces (Ctrl+I)">
                     <span class="icon" data-icon="person_off">🚫</span>
+                </button>
+                <!-- Face detection tuning -->
+                <button id="fullscreen-tune-faces" class="fullscreen-btn" title="Tune face detection settings">
+                    <span class="icon" data-icon="tune">⚙</span>
                 </button>
                 <!-- Rotate left -->
                 <button id="fullscreen-rotate-left" class="fullscreen-btn" title="Rotate left (Ctrl+L)">
@@ -1186,6 +1219,7 @@
     <script src="search.js"></script>
     <script src="duplicates.js"></script>
     <script src="faces.js"></script>
+    <script src="face-tuning.js"></script>
     <script src="videos.js"></script>
     <script src="onthisday.js"></script>
 </body>

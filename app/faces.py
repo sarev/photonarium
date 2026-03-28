@@ -795,6 +795,122 @@ class FaceDetector:
 
 
 # =============================================================================
+# PREVIEW DETECTION (CPU-only, no embeddings, no DB writes)
+# =============================================================================
+
+
+# Floor confidence for preview detection — return everything above this so
+# the frontend can refilter interactively as the user drags the slider.
+_PREVIEW_CONFIDENCE_FLOOR = 0.5
+
+
+def detect_faces_preview(
+    image_path: Path | str,
+    min_face_size: int = FACE_DETECTION_MIN_SIZE_PX,
+    max_dimension: int = FACE_DETECTION_MAX_DIM,
+) -> list[dict[str, float]]:
+    """Run face detection on a single image for live preview/tuning.
+
+    This is a lightweight, CPU-only detection path designed for the
+    interactive face-detection tuning overlay.  It skips embedding
+    computation entirely and returns all detections above a low
+    confidence floor so the frontend can refilter by confidence
+    client-side without another round-trip.
+
+    Runs on CPU to avoid contention with the pipeline's GPU models.
+
+    Args:
+        image_path: Path to the image file.
+        min_face_size: Minimum face size in pixels for MTCNN.
+        max_dimension: Images larger than this are downscaled.
+
+    Returns:
+        List of dicts, each with ``box_x``, ``box_y``, ``box_w``,
+        ``box_h`` (normalised 0-1) and ``confidence`` (float).
+        Sorted by confidence descending.
+    """
+    image_path = Path(image_path)
+
+    try:
+        img = raw_open_image(image_path)
+        if img.mode != 'RGB':
+            img = img.convert('RGB')
+
+        original_width, original_height = img.size
+
+        # Downscale large images for performance
+        scale = 1.0
+        if max(original_width, original_height) > max_dimension:
+            scale = max_dimension / max(original_width, original_height)
+            new_size = (int(original_width * scale), int(original_height * scale))
+            img = img.resize(new_size, Image.Resampling.LANCZOS)
+
+        # Create a temporary CPU-only MTCNN (avoids GPU contention with the
+        # pipeline).  Construction is fast (~0.1s) since the weights are small.
+        mtcnn = MTCNN(
+            keep_all=True,
+            device='cpu',
+            min_face_size=min_face_size,
+            thresholds=FACE_MTCNN_THRESHOLDS,
+            post_process=False,  # No need for ResNet-ready tensors
+        )
+
+        boxes, probs = mtcnn.detect(img)
+
+        if boxes is None or len(boxes) == 0:
+            return []
+
+        processed_width, processed_height = img.size
+        results = []
+
+        for box, prob in zip(boxes, probs, strict=False):
+            if prob is None or prob < _PREVIEW_CONFIDENCE_FLOOR:
+                continue
+
+            # Convert MTCNN [x1, y1, x2, y2] to normalised (x, y, w, h)
+            x1, y1, x2, y2 = box
+            box_width = x2 - x1
+            box_height = y2 - y1
+            box_size = max(box_width, box_height)
+
+            # Centre the square box (same logic as detect_faces)
+            centre_x = (x1 + x2) / 2
+            centre_y = (y1 + y2) / 2
+            sq_x1 = centre_x - box_size / 2
+            sq_y1 = centre_y - box_size / 2
+
+            norm_x = max(0.0, min(1.0, sq_x1 / processed_width))
+            norm_y = max(0.0, min(1.0, sq_y1 / processed_height))
+            norm_w = max(0.0, min(1.0 - norm_x, box_size / processed_width))
+            norm_h = max(0.0, min(1.0 - norm_y, box_size / processed_height))
+
+            # Check minimum face size in original pixels
+            min_box_dim = min(box_width, box_height)
+            face_pixels = min_box_dim / scale if scale != 1.0 else min_box_dim
+            if face_pixels < min_face_size:
+                continue
+
+            results.append({
+                'box_x': float(norm_x),
+                'box_y': float(norm_y),
+                'box_w': float(norm_w),
+                'box_h': float(norm_h),
+                'confidence': float(prob),
+            })
+
+        results.sort(key=lambda f: f['confidence'], reverse=True)
+        logger.debug(
+            'Preview detection: %d faces in %s (min_face_size=%d)',
+            len(results), image_path.name, min_face_size,
+        )
+        return results
+
+    except Exception as e:
+        logger.error('Preview face detection failed for %s: %s', image_path, e)
+        return []
+
+
+# =============================================================================
 # FACE THUMBNAIL GENERATION
 # =============================================================================
 
