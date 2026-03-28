@@ -64,8 +64,9 @@
     // CONSTANTS
     // =========================================================================
 
-    /** Confidence band widths for colour coding relative to the threshold. */
-    const BAND_WIDTH = 0.05;
+    /** Confidence band width for the "borderline" zone above threshold.
+     *  Faces within this margin of the threshold are orange; above are green. */
+    const BAND_WIDTH = 0.02;
 
     /** How far below threshold to still show a bbox (avoids clutter). */
     const BELOW_CUTOFF = 0.10;
