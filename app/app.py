@@ -97,6 +97,7 @@ from config import (
     save_config,
 )
 from faces import (
+    apply_new_faces,
     batch_identify_faces,
     clear_reassessment_result,
     create_person,
@@ -3670,6 +3671,60 @@ def faces_detect_preview():
         min_face_size=min_face_size,
     )
     return success_response(faces)
+
+
+@app.route('/api/images/<image_id>/apply-detected-faces', methods=['POST'])
+def apply_detected_faces(image_id):
+    """Re-detect faces and add any genuinely new ones to the database.
+
+    Runs full face detection (with embeddings) using the supplied
+    parameters, reconciles against existing faces by bounding-box
+    overlap, and only inserts faces that don't already exist.  Existing
+    faces are never modified or deleted.
+
+    Request body:
+        min_face_size (int, optional): Minimum face size in pixels.
+        min_confidence (float, optional): Minimum detection confidence.
+
+    Returns:
+        ``{new, matched, total_detected}`` summary.
+    """
+    db = get_db()
+    image = db.get_image(image_id)
+    if image is None:
+        return error_response('Image not found', 404)
+
+    data = request.get_json(silent=True) or {}
+    min_face_size = int(data.get('min_face_size', db.config.face_detection_min_size))
+    min_confidence = float(data.get('min_confidence', db.config.face_detection_min_confidence))
+
+    clip_model = None
+    try:
+        clip_model = db._get_clip_model()
+    except Exception:
+        pass  # Semantic embeddings are optional
+
+    result = apply_new_faces(
+        conn=db.safe_conn,
+        image_id=image_id,
+        image_path=image['path'],
+        min_face_size=min_face_size,
+        min_confidence=min_confidence,
+        thumbnail_dir=db.thumbnail_dir,
+        thumbnail_quality=db.config.thumbnail_quality,
+        recognition_threshold=db.config.face_recognition_threshold,
+        clip_model=clip_model,
+    )
+
+    # Notify frontend caches if new faces were added
+    if result['new'] > 0:
+        from imagedb import EVENT_FACES_CHANGED
+        db.event_queue.emit(EVENT_FACES_CHANGED, {
+            'image_ids': [image_id],
+            'reason': 'apply_detected_faces',
+        })
+
+    return success_response(result)
 
 
 @app.route('/api/faces', methods=['GET'])

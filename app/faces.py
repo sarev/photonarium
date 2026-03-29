@@ -910,6 +910,210 @@ def detect_faces_preview(
         return []
 
 
+def _compute_iou(a: dict, b: dict) -> float:
+    """Compute Intersection-over-Union between two normalised (x, y, w, h) boxes.
+
+    Both *a* and *b* must have keys ``box_x``, ``box_y``, ``box_w``,
+    ``box_h`` in the 0-1 normalised coordinate space.
+    """
+    ax1, ay1 = a['box_x'], a['box_y']
+    ax2, ay2 = ax1 + a['box_w'], ay1 + a['box_h']
+    bx1, by1 = b['box_x'], b['box_y']
+    bx2, by2 = bx1 + b['box_w'], by1 + b['box_h']
+
+    inter_x1 = max(ax1, bx1)
+    inter_y1 = max(ay1, by1)
+    inter_x2 = min(ax2, bx2)
+    inter_y2 = min(ay2, by2)
+
+    inter_w = max(0.0, inter_x2 - inter_x1)
+    inter_h = max(0.0, inter_y2 - inter_y1)
+    inter_area = inter_w * inter_h
+
+    area_a = a['box_w'] * a['box_h']
+    area_b = b['box_w'] * b['box_h']
+    union_area = area_a + area_b - inter_area
+
+    return inter_area / union_area if union_area > 0 else 0.0
+
+
+def apply_new_faces(
+    conn: SafeConnection,
+    image_id: str,
+    image_path: Path | str,
+    min_face_size: int,
+    min_confidence: float,
+    thumbnail_dir: Path,
+    thumbnail_quality: int = 85,
+    recognition_threshold: float = FACE_RECOGNITION_DEFAULT_THRESHOLD,
+    clip_model: Any = None,
+    iou_threshold: float = 0.3,
+) -> dict[str, int]:
+    """Re-detect faces on an image and add any genuinely new ones.
+
+    Runs full face detection (with embeddings) using the supplied
+    parameters, then reconciles new detections against existing face
+    records using bounding-box IoU.  Existing faces are never modified
+    or deleted — only new, non-overlapping detections are inserted.
+
+    New faces are auto-matched against known people and get thumbnails
+    and semantic embeddings generated.
+
+    This function runs on CPU to avoid contention with the pipeline.
+
+    Args:
+        conn: Database connection (SafeConnection).
+        image_id: Image UUID.
+        image_path: Path to the image file on disk.
+        min_face_size: Minimum face size in pixels for MTCNN.
+        min_confidence: Minimum detection confidence to keep.
+        thumbnail_dir: Directory for face thumbnail output.
+        thumbnail_quality: JPEG quality for face thumbnails.
+        recognition_threshold: Cosine similarity threshold for auto-matching.
+        clip_model: Optional OpenCLIP model for semantic embeddings.
+        iou_threshold: IoU threshold for matching new vs existing faces.
+
+    Returns:
+        Dict with ``new`` (faces added), ``matched`` (faces already present),
+        and ``total_detected`` (raw detection count).
+    """
+    image_path = Path(image_path)
+
+    # Load existing faces (include suppressed so we don't re-add them)
+    existing = get_faces_for_image(conn, image_id, include_suppressed=True)
+
+    # Remove sentinels (box_w == 0 and box_h == 0) — these are just markers
+    # that face detection ran and found nothing.  They should not block new
+    # detections from being added.
+    sentinels = [f for f in existing if f['box_w'] == 0 and f['box_h'] == 0]
+    real_existing = [f for f in existing if f['box_w'] > 0 or f['box_h'] > 0]
+
+    # Run full face detection on CPU (with embeddings for auto-matching)
+    detector = FaceDetector(
+        min_confidence=min_confidence,
+        min_face_size=min_face_size,
+        device='cpu',
+    )
+    detected = detector.detect_faces(str(image_path))
+
+    if not detected:
+        return {'new': 0, 'matched': 0, 'total_detected': 0}
+
+    # Delete sentinels now that we have real detections to add
+    if sentinels:
+        with conn:
+            for s in sentinels:
+                conn.execute('DELETE FROM faces WHERE id = ?', (s['id'],))
+            conn.commit()
+
+    # Match new detections against existing faces by IoU
+    matched_existing: set[str] = set()
+    new_faces = []
+
+    for face in detected:
+        face_box = {
+            'box_x': face.box_x, 'box_y': face.box_y,
+            'box_w': face.box_w, 'box_h': face.box_h,
+        }
+        best_iou = 0.0
+        best_id = None
+        for ex in real_existing:
+            if ex['id'] in matched_existing:
+                continue
+            iou = _compute_iou(face_box, ex)
+            if iou > best_iou:
+                best_iou = iou
+                best_id = ex['id']
+
+        if best_iou >= iou_threshold and best_id:
+            matched_existing.add(best_id)
+        else:
+            new_faces.append(face)
+
+    if not new_faces:
+        return {
+            'new': 0,
+            'matched': len(matched_existing),
+            'total_detected': len(detected),
+        }
+
+    # Load known face embeddings for auto-matching
+    known_embeddings = get_all_known_face_embeddings(conn)
+    cursor = conn.execute('SELECT id, name, recognition_threshold FROM people')
+    per_person_thresholds: dict[str, float | None] = {}
+    ignored_person_ids: set[str] = set()
+    for prow in cursor.fetchall():
+        per_person_thresholds[prow['id']] = prow['recognition_threshold']
+        if prow['name'] == '-':
+            ignored_person_ids.add(prow['id'])
+
+    # Insert new faces atomically
+    face_rows: list[tuple] = []
+    for face in new_faces:
+        person_id = None
+        match = find_best_match(
+            face.embedding,
+            known_embeddings,
+            threshold=recognition_threshold,
+            person_thresholds=per_person_thresholds,
+            ignored_person_ids=ignored_person_ids,
+        )
+        if match:
+            _, person_id, _similarity = match
+
+        face_id = str(uuid.uuid4())
+        thumb_path = get_face_thumbnail_path(face_id, thumbnail_dir)
+        generate_face_thumbnail(
+            image_path,
+            thumb_path,
+            box_x=face.box_x,
+            box_y=face.box_y,
+            box_w=face.box_w,
+            box_h=face.box_h,
+            size=200,
+            quality=thumbnail_quality,
+        )
+
+        semantic_bytes = None
+        if clip_model and thumb_path.exists():
+            try:
+                semantic_embedding = clip_model.encode_image(thumb_path)
+                semantic_bytes = semantic_embedding.astype(np.float32).tobytes()
+            except Exception as e:
+                logger.debug('Failed to compute semantic embedding for face %s: %s', face_id, e)
+
+        embedding_bytes = face.embedding.astype(np.float32).tobytes()
+
+        face_rows.append((
+            face_id, image_id,
+            face.box_x, face.box_y, face.box_w, face.box_h,
+            face.confidence, embedding_bytes, person_id, semantic_bytes,
+        ))
+
+    with conn:
+        conn.executemany(
+            """INSERT INTO faces
+               (id, image_id, box_x, box_y, box_w, box_h,
+                confidence, embedding, person_id, semantic_embedding,
+                created_at, updated_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
+                       datetime('now'), datetime('now'))""",
+            face_rows,
+        )
+        conn.commit()
+
+    logger.info(
+        'Applied %d new faces to image %s (%d matched existing, %d total detected)',
+        len(new_faces), image_id, len(matched_existing), len(detected),
+    )
+
+    return {
+        'new': len(new_faces),
+        'matched': len(matched_existing),
+        'total_detected': len(detected),
+    }
+
+
 # =============================================================================
 # FACE THUMBNAIL GENERATION
 # =============================================================================

@@ -52,7 +52,8 @@
     let _faceSizeSlider = null;
     let _faceSizeValue = null;
     let _detectBtn = null;
-    let _applyBtn = null;
+    let _applyHereBtn = null;
+    let _applyGlobalBtn = null;
     let _cancelBtn = null;
     let _toggleBtn = null;
 
@@ -281,33 +282,86 @@
     // =========================================================================
 
     /**
-     * Save the current slider values to the config and exit tuning mode.
+     * Apply new detections to the current image only (no config change).
+     * Runs full face detection on the backend, reconciles against existing
+     * faces, and inserts any genuinely new ones.
      */
-    async function _apply() {
+    async function _applyHere() {
+        if (!_currentImageId) return;
+
         const confidence = parseFloat(_confidenceSlider.value);
         const faceSize = parseInt(_faceSizeSlider.value, 10);
 
-        _applyBtn.disabled = true;
+        _applyHereBtn.disabled = true;
+        _applyGlobalBtn.disabled = true;
+        _applyHereBtn.textContent = 'Applying\u2026';
         try {
+            const resp = await App.apiPost(
+                `/images/${_currentImageId}/apply-detected-faces`,
+                { min_face_size: faceSize, min_confidence: confidence },
+            );
+            const result = resp.data;
+            if (result.new > 0) {
+                App.toast?.(`Added ${result.new} new face${result.new !== 1 ? 's' : ''}`);
+            } else {
+                App.toast?.('No new faces to add');
+            }
+        } catch (err) {
+            console.error('[FaceTuning] Apply here failed:', err);
+            App.toast?.('Failed to apply faces');
+        } finally {
+            _applyHereBtn.disabled = false;
+            _applyGlobalBtn.disabled = false;
+            _applyHereBtn.textContent = 'Apply here';
+        }
+
+        exit();
+    }
+
+    /**
+     * Apply new detections to the current image AND save the settings
+     * to the global config.
+     */
+    async function _applyGlobal() {
+        if (!_currentImageId) return;
+
+        const confidence = parseFloat(_confidenceSlider.value);
+        const faceSize = parseInt(_faceSizeSlider.value, 10);
+
+        _applyHereBtn.disabled = true;
+        _applyGlobalBtn.disabled = true;
+        _applyGlobalBtn.textContent = 'Applying\u2026';
+        try {
+            // Save settings to config
             await App.apiPost('/config/save', {
                 values: {
                     face_detection_min_confidence: confidence,
                     face_detection_min_size: faceSize,
                 },
             });
-
-            // Update the cached config so future enters see the new values
             if (App.config) {
                 App.config.face_detection_min_confidence = confidence;
                 App.config.face_detection_min_size = faceSize;
             }
 
-            App.toast?.(`Face detection settings saved (confidence ${confidence.toFixed(2)}, min size ${faceSize}px)`);
+            // Apply new faces to the current image
+            const resp = await App.apiPost(
+                `/images/${_currentImageId}/apply-detected-faces`,
+                { min_face_size: faceSize, min_confidence: confidence },
+            );
+            const result = resp.data;
+            const parts = ['Settings saved'];
+            if (result.new > 0) {
+                parts.push(`${result.new} new face${result.new !== 1 ? 's' : ''} added`);
+            }
+            App.toast?.(parts.join(', '));
         } catch (err) {
-            console.error('[FaceTuning] Failed to save config:', err);
-            App.toast?.('Failed to save settings');
+            console.error('[FaceTuning] Apply global failed:', err);
+            App.toast?.('Failed to apply');
         } finally {
-            _applyBtn.disabled = false;
+            _applyHereBtn.disabled = false;
+            _applyGlobalBtn.disabled = false;
+            _applyGlobalBtn.textContent = 'Apply global';
         }
 
         exit();
@@ -376,7 +430,8 @@
         _faceSizeSlider = document.getElementById('tuning-face-size');
         _faceSizeValue = document.getElementById('tuning-face-size-value');
         _detectBtn = document.getElementById('tuning-detect');
-        _applyBtn = document.getElementById('tuning-apply');
+        _applyHereBtn = document.getElementById('tuning-apply-here');
+        _applyGlobalBtn = document.getElementById('tuning-apply-global');
         _cancelBtn = document.getElementById('tuning-cancel');
         _toggleBtn = document.getElementById('fullscreen-tune-faces');
 
@@ -393,7 +448,8 @@
 
         // Button events
         _detectBtn.addEventListener('click', _detect);
-        _applyBtn.addEventListener('click', _apply);
+        _applyHereBtn.addEventListener('click', _applyHere);
+        _applyGlobalBtn.addEventListener('click', _applyGlobal);
         _cancelBtn.addEventListener('click', exit);
         _toggleBtn?.addEventListener('click', () => {
             if (_active) {

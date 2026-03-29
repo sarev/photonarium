@@ -2637,6 +2637,11 @@ a:hover {
     flex: 1;
 }
 
+.face-tuning-apply-row {
+    margin-top: 6px;
+    justify-content: flex-end;
+}
+
 .face-tuning-actions .action-btn {
     padding: 5px 12px;
     border-radius: 5px;
