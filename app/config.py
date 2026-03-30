@@ -94,7 +94,7 @@ CONFIG_SCHEMA: list[tuple[str, list[tuple[str, list[str]]]]] = [
             (
                 'trash_dir',
                 [
-                    'Deleted photos are moved here instead of being permanently removed,',
+                    '[!] Deleted photos are moved here instead of being permanently removed,',
                     'so you can recover them if needed.',
                     'Leave empty to use the default: <data-dir>/trash/',
                 ],
@@ -134,7 +134,7 @@ CONFIG_SCHEMA: list[tuple[str, list[tuple[str, list[str]]]]] = [
             (
                 'scan_interval_minutes',
                 [
-                    'How often to automatically check folders for new photos (in minutes).',
+                    '[!] How often to automatically check folders for new photos (in minutes).',
                     'Set to 0 to disable automatic scanning — you can always scan manually.',
                     'Useful if photos sync into your folders continuously.',
                     'Range: 0-1440 (0 = off, 1440 = once a day)',
@@ -174,7 +174,7 @@ CONFIG_SCHEMA: list[tuple[str, list[tuple[str, list[str]]]]] = [
             (
                 'indexing_threads',
                 [
-                    'How many images to read from disk in parallel during scanning (1-16).',
+                    '[!] How many images to read from disk in parallel during scanning (1-16).',
                     'More threads = faster scanning, but heavier disk and CPU usage.',
                     'Recommended: 4-8 for traditional hard drives, 8-16 for SSDs.',
                 ],
@@ -182,13 +182,13 @@ CONFIG_SCHEMA: list[tuple[str, list[tuple[str, list[str]]]]] = [
             (
                 'import_threads',
                 [
-                    'How many files to copy in parallel when importing photos (1-16).',
+                    '[!] How many files to copy in parallel when importing photos (1-16).',
                 ],
             ),
             (
                 'trash_threads',
                 [
-                    'How many files to move in parallel when deleting photos (1-32).',
+                    '[!] How many files to move in parallel when deleting photos (1-32).',
                     'Higher values help when deleting large batches, especially on SSDs or NAS.',
                 ],
             ),
@@ -378,7 +378,7 @@ CONFIG_SCHEMA: list[tuple[str, list[tuple[str, list[str]]]]] = [
             (
                 'caption_max_length',
                 [
-                    'Maximum length of auto-generated photo descriptions (in words, roughly).',
+                    '[!] Maximum length of auto-generated photo descriptions (in words, roughly).',
                     'Higher values allow longer, more detailed descriptions.',
                     'Range: 10-200, recommended: 30-75',
                 ],
@@ -386,7 +386,7 @@ CONFIG_SCHEMA: list[tuple[str, list[tuple[str, list[str]]]]] = [
             (
                 'caption_min_length',
                 [
-                    'Minimum length of auto-generated descriptions.',
+                    '[!] Minimum length of auto-generated descriptions.',
                     'Set higher to force more detailed captions.',
                     'Range: 1-50, recommended: 5-20',
                 ],
@@ -394,7 +394,7 @@ CONFIG_SCHEMA: list[tuple[str, list[tuple[str, list[str]]]]] = [
             (
                 'caption_num_beams',
                 [
-                    'Controls caption quality vs speed. Higher values explore more',
+                    '[!] Controls caption quality vs speed. Higher values explore more',
                     'options and produce better captions, but take longer.',
                     'Set to 1 for fastest (but lower quality) captions.',
                     'Range: 1-10, recommended: 3-5',
@@ -403,7 +403,7 @@ CONFIG_SCHEMA: list[tuple[str, list[tuple[str, list[str]]]]] = [
             (
                 'caption_british_english',
                 [
-                    'Convert American spellings to British English in generated captions',
+                    '[!] Convert American spellings to British English in generated captions',
                     '(e.g. color\u2192colour, center\u2192centre, gray\u2192grey).',
                 ],
             ),
@@ -594,7 +594,7 @@ CONFIG_SCHEMA: list[tuple[str, list[tuple[str, list[str]]]]] = [
             (
                 'thumbnail_cache_size_mb',
                 [
-                    'How much memory (in MB) to use for caching thumbnails.',
+                    '[!] How much memory (in MB) to use for caching thumbnails.',
                     'Caching avoids re-reading thumbnails from disk when scrolling back.',
                     'Set to 0 to disable. Range: 0-1000, recommended: 50-200',
                 ],
@@ -608,7 +608,7 @@ CONFIG_SCHEMA: list[tuple[str, list[tuple[str, list[str]]]]] = [
             (
                 'log_retention_lines',
                 [
-                    'How many log lines to keep (viewable from the Database screen).',
+                    '[!] How many log lines to keep (viewable from the Database screen).',
                     'Set to 0 to disable logging. Range: 100-100000',
                 ],
             ),
@@ -1239,6 +1239,27 @@ _TYPE_MAP: dict[str, str] = {
     'set[str]': 'set',
     'list[str]': 'list',
 }
+
+
+def get_restricted_fields() -> tuple[set[str], set[str]]:
+    """Return the sets of fields tagged ``[!]`` and ``[M]`` in the schema.
+
+    These fields cannot be hot-reloaded — ``[!]`` fields require a
+    restart, ``[M]`` fields additionally require a model download.
+
+    Returns:
+        Tuple of (warning_fields, model_fields).
+    """
+    warning_fields: set[str] = set()
+    model_fields: set[str] = set()
+    for _section_title, section_fields in CONFIG_SCHEMA:
+        for field_name, comment_lines in section_fields:
+            for line in comment_lines:
+                if line.startswith('[!] '):
+                    warning_fields.add(field_name)
+                elif line.startswith('[M] '):
+                    model_fields.add(field_name)
+    return warning_fields, model_fields
 
 
 def get_config_schema(config: Config) -> dict[str, Any]:

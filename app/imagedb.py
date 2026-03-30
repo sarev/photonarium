@@ -292,6 +292,8 @@ _SQL_MIGRATIONS = [
     'ALTER TABLE images ADD COLUMN codec_video TEXT',
     'ALTER TABLE images ADD COLUMN codec_audio TEXT',
     'ALTER TABLE images ADD COLUMN codec_container TEXT',
+    # → No backfill needed (0 = normal, 1 = queued for face rescan after config change)
+    'ALTER TABLE images ADD COLUMN needs_face_rescan INTEGER NOT NULL DEFAULT 0',
 ]
 
 # SQL schema for the image_metadata table (indexed EXIF key-value pairs for search)
@@ -2905,6 +2907,7 @@ EVENT_IMPORT_COMPLETE = 'import_complete'
 EVENT_VIDEO_PROCESSED = 'video_processed'
 EVENT_TRANSCODE_COMPLETE = 'transcode_complete'
 EVENT_GPU_STATE_CHANGED = 'gpu_state_changed'
+EVENT_CONFIG_RELOADED = 'config_reloaded'
 
 
 @dataclass

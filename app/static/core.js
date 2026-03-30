@@ -1014,10 +1014,29 @@ const App = {
             // STT config for video language dropdown
             this._sttEnabled = data.stt_enabled ?? false;
             this._sttLanguages = data.stt_languages || [];
+            // Face detection config (used by face tuning panel)
+            this._faceDetectionEnabled = data.face_detection_enabled ?? true;
+            this._faceDetectionMinConfidence = data.face_detection_min_confidence ?? 0.95;
+            this._faceDetectionMinSize = data.face_detection_min_size ?? 40;
+            // Unified config object for modules that read App.config
+            this.config = {
+                ...data,
+            };
         } catch (error) {
             console.warn('Failed to load thumbnail config, using defaults:', error);
         }
         return this._thumbnailConfig;
+    },
+
+    /**
+     * Reload configuration from the backend.
+     * Alias for loadThumbnailConfig() — re-fetches /api/config and
+     * updates all cached values.  Called by the config_reloaded event
+     * handler so the frontend picks up hot-reloaded settings.
+     * @returns {Promise<Object>}
+     */
+    async loadConfig() {
+        return this.loadThumbnailConfig();
     },
 
     /**

@@ -177,10 +177,8 @@ from faces import (
     FaceDetector,
     compute_unknown_face_groups,
     delete_people_without_faces,
-    find_best_match,
-    generate_face_thumbnail,
     get_all_known_face_embeddings,
-    get_face_thumbnail_path,
+    reconcile_detected_faces,
 )
 from gputil import STATE_DISABLED, is_gpu_error, is_oom_error
 from metadata import derive_timestamp_with_confidence, extract_exif_data
@@ -2302,24 +2300,51 @@ class PipelineOrchestrator(threading.Thread):
     def _stage_faces(self) -> bool:
         """Detect faces in images using 400px thumbnails.
 
+        Handles both new images (no face records) and rescan images
+        (``needs_face_rescan = 1``, e.g. after a face detection config
+        change).  Both go through the same batched GPU detection
+        pipeline; the only difference is at write time — rescan images
+        use ``reconcile_detected_faces()`` which preserves named/ignored
+        faces and removes stale unnamed ones.  New images also use the
+        same reconciliation path (no existing faces → all detections
+        are simply inserted).
+
         Returns:
             True if any faces were detected.
         """
         if not self._db.config.face_detection_enabled:
             return False
 
+        # New images: no face records at all
         cursor = self._db.safe_conn.execute("""
-            SELECT i.id, i.checksum, i.width, i.height
+            SELECT i.id, i.checksum, i.width, i.height, 0 AS rescan
             FROM images i
             WHERE i.deleted = 0
               AND i.media_type = 'image'
               AND i.checksum IS NOT NULL
               AND NOT EXISTS (SELECT 1 FROM faces f WHERE f.image_id = i.id)
         """)
-        rows = cursor.fetchall()
+        new_rows = cursor.fetchall()
+
+        # Rescan images: flagged for re-detection after config change
+        cursor = self._db.safe_conn.execute("""
+            SELECT i.id, i.checksum, i.width, i.height, 1 AS rescan
+            FROM images i
+            WHERE i.deleted = 0
+              AND i.media_type = 'image'
+              AND i.checksum IS NOT NULL
+              AND i.needs_face_rescan = 1
+        """)
+        rescan_rows = cursor.fetchall()
+
+        rows = new_rows + rescan_rows
 
         if not rows:
             return False
+
+        rescan_ids = {r['id'] for r in rescan_rows}
+        if rescan_rows:
+            logger.info('Stage 5: %d new images + %d rescan images', len(new_rows), len(rescan_rows))
 
         self._set_stage('faces', len(rows), 0)
         logger.info(f'Stage 5: Detecting faces in {len(rows)} images...')
@@ -2452,10 +2477,9 @@ class PipelineOrchestrator(threading.Thread):
                     if prow['name'] == '-':
                         ignored_person_ids.add(prow['id'])
 
-            # Process detection results — commit all faces for one image
-            # atomically so partial face sets can't occur on crash.
-            batch_faces_total = 0
-            batch_matched = 0
+            # Process detection results via reconciliation (handles both
+            # new images and rescan images through one code path).
+            batch_faces_added = 0
 
             for path, detected_faces in results.items():
                 if path not in path_to_id:
@@ -2463,98 +2487,31 @@ class PipelineOrchestrator(threading.Thread):
                 image_id = path_to_id[path]
                 orig_path = id_to_orig_path.get(image_id, path)
 
-                if not detected_faces:
-                    # Sentinel record — single insert, atomic by itself
-                    dummy_embedding = np.zeros(512, dtype=np.float32).tobytes()
-                    sentinel_id = str(uuid.uuid4())
-                    with self._db.safe_conn:
+                with self._db.safe_conn:
+                    result = reconcile_detected_faces(
+                        conn=self._db.safe_conn,
+                        image_id=image_id,
+                        orig_path=orig_path,
+                        detected_faces=detected_faces or [],
+                        known_embeddings=known_embeddings,
+                        per_person_thresholds=per_person_thresholds,
+                        ignored_person_ids=ignored_person_ids,
+                        recognition_threshold=self._db.config.face_recognition_threshold,
+                        thumbnail_dir=self._db.thumbnail_dir,
+                        thumbnail_quality=self._db.config.thumbnail_quality,
+                        clip_model=clip,
+                    )
+
+                    # Clear rescan flag if this was a rescan image
+                    if image_id in rescan_ids:
                         self._db.safe_conn.execute(
-                            """INSERT INTO faces
-                               (id, image_id, box_x, box_y, box_w, box_h,
-                                confidence, embedding, person_id, suppressed,
-                                created_at, updated_at)
-                               VALUES (?, ?, 0, 0, 0, 0, 0, ?, NULL, 1,
-                                       datetime('now'), datetime('now'))""",
-                            (sentinel_id, image_id, dummy_embedding),
+                            'UPDATE images SET needs_face_rescan = 0 WHERE id = ?',
+                            (image_id,),
                         )
                         self._db.safe_conn.commit()
-                    processed_count += 1
-                    continue
 
-                # Prepare all face rows for this image before committing
-                face_rows: list[tuple] = []
-                for face in detected_faces:
-                    batch_faces_total += 1
-
-                    # Auto-match
-                    person_id = None
-                    match = find_best_match(
-                        face.embedding,
-                        known_embeddings,
-                        threshold=self._db.config.face_recognition_threshold,
-                        person_thresholds=per_person_thresholds,
-                        ignored_person_ids=ignored_person_ids,
-                    )
-                    if match:
-                        _, person_id, _similarity = match
-                        batch_matched += 1
-
-                    # Generate face thumbnail from original image
-                    face_id = str(uuid.uuid4())
-                    thumb_path = get_face_thumbnail_path(face_id, self._db.thumbnail_dir)
-                    generate_face_thumbnail(
-                        orig_path,
-                        thumb_path,
-                        box_x=face.box_x,
-                        box_y=face.box_y,
-                        box_w=face.box_w,
-                        box_h=face.box_h,
-                        size=200,
-                        quality=self._db.config.thumbnail_quality,
-                    )
-
-                    # Generate semantic embedding from face thumbnail
-                    semantic_embedding = None
-                    if thumb_path.exists():
-                        try:
-                            semantic_embedding = clip.encode_image(thumb_path)
-                        except Exception as e:
-                            logger.debug(f'Failed to compute semantic embedding for face {face_id}: {e}')
-
-                    embedding_bytes = face.embedding.astype(np.float32).tobytes()
-                    semantic_bytes = None
-                    if semantic_embedding is not None:
-                        semantic_bytes = semantic_embedding.astype(np.float32).tobytes()
-
-                    face_rows.append(
-                        (
-                            face_id,
-                            image_id,
-                            face.box_x,
-                            face.box_y,
-                            face.box_w,
-                            face.box_h,
-                            face.confidence,
-                            embedding_bytes,
-                            person_id,
-                            semantic_bytes,
-                        )
-                    )
-
-                # Atomically insert all faces for this image in one transaction
-                with self._db.safe_conn:
-                    self._db.safe_conn.executemany(
-                        """INSERT INTO faces
-                           (id, image_id, box_x, box_y, box_w, box_h,
-                            confidence, embedding, person_id, semantic_embedding,
-                            created_at, updated_at)
-                           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
-                                   datetime('now'), datetime('now'))""",
-                        face_rows,
-                    )
-                    self._db.safe_conn.commit()
-
-                faces_detected_count += len(face_rows)
+                batch_faces_added += result['added']
+                faces_detected_count += result['added'] + result['kept']
                 processed_count += 1
 
             self._update_done(processed_count)
@@ -2562,13 +2519,6 @@ class PipelineOrchestrator(threading.Thread):
             if processed_count < len(rows) and now - last_log >= 10.0:
                 logger.info(f'  Face detection: {processed_count}/{len(rows)} images')
                 last_log = now
-
-            # Log batch summary
-            if batch_faces_total > 0:
-                logger.info(
-                    f'Face auto-match: {batch_faces_total} faces detected, '
-                    f'{len(known_embeddings)} known references, {batch_matched} auto-matched'
-                )
 
             time.sleep(0.01)
 

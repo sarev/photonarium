@@ -197,6 +197,13 @@ AppState.events = (function() {
                 await handleGroupsChanged(data);
                 break;
 
+            case 'config_reloaded':
+                // Backend config was hot-reloaded — re-fetch so cached
+                // values (quality weights, feature flags, etc.) are current.
+                console.log('[AppState.events] Config reloaded, refreshing App.config');
+                await App.loadConfig();
+                break;
+
             default:
                 console.warn('[AppState.events.processEvent] Unknown event type:', type);
         }

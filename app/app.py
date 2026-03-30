@@ -93,6 +93,7 @@ from config import (
     Config,
     get_config_schema,
     get_default_config_path,
+    get_restricted_fields,
     load_config,
     save_config,
 )
@@ -172,6 +173,26 @@ for module in ['app', '__main__', 'imagedb', 'faces', 'thumbnails', 'duplicates'
 
 app = Flask(__name__, static_folder='static', static_url_path='')
 
+
+@app.before_request
+def _wait_for_config_reload():
+    """Block incoming requests while a config hot-reload is in progress.
+
+    The gate is normally open.  During hot-reload it is closed for the
+    brief window between stopping the pipeline and restarting it with
+    the new config.  Requests that arrive during this window wait
+    (up to 30s) rather than failing, so the user's actions resume
+    seamlessly once the reload completes.
+
+    Static file requests are excluded — CSS/JS/images should always load.
+    """
+    if request.path.startswith('/static/'):
+        return None
+    if not _request_gate.wait(timeout=30):
+        return error_response('Server is reloading configuration — please try again', 503)
+    return None
+
+
 # CORS is not needed since the frontend is served from the same origin.
 # If you need to run a separate frontend dev server, uncomment and restrict
 # origins appropriately:
@@ -205,6 +226,14 @@ _config_file_path: str | None = None
 # Application version — extracted from git at startup.
 # Format: "Photonarium: <tag> (<date>)" or "Photonarium: <hash> (<date>)".
 _app_version: str = ''
+
+# Request gate for config hot-reload.  When open (set), all requests
+# proceed normally.  When closed (cleared), incoming requests block in
+# before_request until the config swap completes.  This prevents requests
+# from running against a half-swapped state (old config, new pipeline, or
+# vice versa).
+_request_gate = threading.Event()
+_request_gate.set()  # Open by default
 
 
 def _get_version_from_git() -> str:
@@ -1926,6 +1955,128 @@ def save_config_endpoint():
         return error_response(f'Failed to write config file: {e}', 500)
 
     return success_response(message='Settings saved. Restart Photonarium for changes to take effect.')
+
+
+# Face detection fields that trigger a rescan of existing images when changed.
+_FACE_DETECTION_FIELDS = frozenset({
+    'face_detection_enabled',
+    'face_detection_min_confidence',
+    'face_detection_min_size',
+})
+
+
+@app.route('/api/config/hot-reload', methods=['POST'])
+def hot_reload_config():
+    """Hot-reload configuration without restarting the server.
+
+    Reads the config file from disk (which must already have been saved
+    via ``/api/config/save``), validates that no ``[!]`` or ``[M]``
+    fields have changed, stops the pipeline, swaps the config, and
+    restarts the pipeline.
+
+    All other Flask requests are gated during the swap to prevent
+    operations running against a half-swapped state.
+
+    If face detection settings changed, existing images are marked for
+    rescan so the pipeline re-detects faces with the new parameters.
+
+    Request Body:
+        ``{changed_fields: [field_name, ...]}`` — the list of fields
+        that were changed (used to determine whether a rescan is needed).
+
+    Returns:
+        Success response once the reload is complete.
+    """
+    data = request.get_json(silent=True) or {}
+    changed_fields = set(data.get('changed_fields', []))
+    logger.info('Hot-reload requested, changed fields: %s', sorted(changed_fields))
+
+    # Refuse to hot-reload if any restricted fields were changed
+    warning_fields, model_fields = get_restricted_fields()
+    restricted = changed_fields & (warning_fields | model_fields)
+    if restricted:
+        logger.warning('Hot-reload refused — restricted fields: %s', sorted(restricted))
+        return error_response(
+            f'These settings require a restart: {", ".join(sorted(restricted))}',
+            400,
+        )
+
+    database = get_db()
+    old_config = database.config
+
+    # Load the new config from disk
+    config_path = _config_file_path or str(get_default_config_path())
+    try:
+        new_config = load_config(config_path)
+    except Exception as e:
+        logger.exception('Hot-reload: failed to load config from disk')
+        return error_response(f'Failed to load config: {e}', 500)
+
+    # Check whether face detection settings changed (need image rescan)
+    face_settings_changed = any(
+        getattr(old_config, f, None) != getattr(new_config, f, None)
+        for f in _FACE_DETECTION_FIELDS
+    )
+    if face_settings_changed:
+        for f in _FACE_DETECTION_FIELDS:
+            old_val = getattr(old_config, f, None)
+            new_val = getattr(new_config, f, None)
+            if old_val != new_val:
+                logger.debug('Hot-reload: %s changed: %s -> %s', f, old_val, new_val)
+
+    # ── Gate all requests and perform the swap ──
+    logger.info('Hot-reload: closing request gate, stopping all threads...')
+    _request_gate.clear()
+    try:
+        # Stop all background threads.  They share _stop_event so we must
+        # stop and restart them together.  The timeout is generous because
+        # the pipeline may be mid-stage (e.g. duplicate grouping on a
+        # large library can take minutes).
+        database.stop_threads(timeout=120)
+
+        # Swap the config
+        database.config = new_config
+        if hasattr(database, '_duplicate_manager') and database._duplicate_manager is not None:
+            database._duplicate_manager._config = new_config
+        logger.info('Hot-reload: config swapped')
+
+        # Mark images for face rescan if detection settings changed
+        if face_settings_changed:
+            with database.safe_conn:
+                cursor = database.safe_conn.execute(
+                    """UPDATE images SET needs_face_rescan = 1
+                       WHERE deleted = 0 AND media_type = 'image'
+                         AND checksum IS NOT NULL
+                         AND EXISTS (SELECT 1 FROM faces f WHERE f.image_id = images.id)""",
+                )
+                database.safe_conn.commit()
+            rescan_count = cursor.rowcount
+            logger.info('Hot-reload: marked %d images for face rescan', rescan_count)
+
+        # Restart all threads with the new config
+        database.start_threads()
+
+        # Trigger a pipeline run if settings changed (to process the
+        # rescan queue or re-run stages with new parameters)
+        if (face_settings_changed or changed_fields) and database._orchestrator:
+            database._orchestrator.request_rerun()
+
+        logger.info('Hot-reload: all threads restarted')
+
+    except Exception:
+        logger.exception('Hot-reload: error during config swap')
+        # Re-open the gate even on error so the server isn't permanently stuck
+        raise
+    finally:
+        _request_gate.set()
+
+    # Notify frontend to re-fetch /api/config
+    from imagedb import EVENT_CONFIG_RELOADED
+    database.event_queue.emit(EVENT_CONFIG_RELOADED, {
+        'changed_fields': sorted(changed_fields),
+    })
+
+    return success_response(message='Settings applied')
 
 
 # ---------------------------------------------------------------------------
