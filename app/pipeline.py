@@ -348,7 +348,6 @@ class PipelineOrchestrator(threading.Thread):
         logger.info('Pipeline orchestrator started')
 
         while not self._stop_event.is_set():
-            self._rerun_requested = False
             had_work = self._run_pipeline()
             if not had_work and not self._rerun_requested:
                 self._set_stage(None, 0, 0)
@@ -382,6 +381,15 @@ class PipelineOrchestrator(threading.Thread):
         t0 = time.perf_counter()
         had_work = False
 
+        # Capture and consume the rerun flag.  This must happen inside
+        # _run_pipeline(), not in run(), because run() clearing it before
+        # we get here means we can't see it at the Stage 2-5 gate (line
+        # below that checks ``force_full``).  If request_rerun() is called
+        # *during* the pipeline, it sets the flag again and run() will
+        # loop immediately after we return.
+        force_full = self._rerun_requested
+        self._rerun_requested = False
+
         # Stage 1 is a full file-system walk — only run when needed
         if self._ingestion_needed and not self._stop_event.is_set():
             try:
@@ -403,7 +411,7 @@ class PipelineOrchestrator(threading.Thread):
 
         # Stages 2-5 check for unprocessed images.  Skip entirely when
         # idle — the wake event ensures we run when there's actual work.
-        if not (had_work or self._rerun_requested):
+        if not (had_work or force_full):
             return had_work
 
         # Stages that use the GPU — skipped if GPU is permanently disabled.
