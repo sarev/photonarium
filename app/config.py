@@ -1359,9 +1359,9 @@ def _parse_config_data(config_data: dict[str, Any]) -> Config:
     """Build a Config from a parsed YAML dict, coercing types as needed.
 
     Keys present in the dict are mapped to Config fields; missing keys fall
-    back to the dataclass defaults.
+    back to the dataclass defaults.  Logs warnings for any value that could
+    not be parsed or was unexpectedly None.
     """
-    # Map of field name -> type coercion function
     _FIELD_TYPES: dict[str, type] = {f.name: f.type for f in fields(Config)}
 
     kwargs: dict[str, Any] = {}
@@ -1372,19 +1372,53 @@ def _parse_config_data(config_data: dict[str, Any]) -> Config:
 
         raw = config_data[field_name]
 
-        # Coerce to the expected type
-        if field_type == 'str':
-            kwargs[field_name] = str(raw) if raw is not None else ''
-        elif field_type == 'int':
-            kwargs[field_name] = int(raw)
-        elif field_type == 'float':
-            kwargs[field_name] = float(raw)
-        elif field_type == 'bool':
-            kwargs[field_name] = bool(raw)
-        elif field_type == 'set[str]':
-            kwargs[field_name] = set(raw) if raw else set()
-        else:
-            kwargs[field_name] = raw
+        try:
+            if field_type == 'str':
+                if raw is None:
+                    logger.warning('Config field %s is null, using empty string', field_name)
+                    kwargs[field_name] = ''
+                else:
+                    kwargs[field_name] = str(raw)
+            elif field_type == 'int':
+                if raw is None:
+                    logger.warning('Config field %s is null, using default', field_name)
+                else:
+                    kwargs[field_name] = int(raw)
+            elif field_type == 'float':
+                if raw is None:
+                    logger.warning('Config field %s is null, using default', field_name)
+                else:
+                    kwargs[field_name] = float(raw)
+            elif field_type == 'bool':
+                if raw is None:
+                    logger.warning('Config field %s is null, using default', field_name)
+                elif isinstance(raw, bool):
+                    kwargs[field_name] = raw
+                else:
+                    # YAML should parse true/false as bool, but handle
+                    # strings defensively (e.g. from manual editing)
+                    kwargs[field_name] = str(raw).lower() in ('true', '1', 'yes')
+            elif field_type == 'set[str]':
+                if raw is None:
+                    logger.warning('Config field %s is null, using empty set', field_name)
+                    kwargs[field_name] = set()
+                else:
+                    kwargs[field_name] = set(raw)
+            elif field_type == 'list[str]':
+                if raw is None:
+                    logger.warning('Config field %s is null, using empty list', field_name)
+                    kwargs[field_name] = []
+                elif isinstance(raw, list):
+                    kwargs[field_name] = [str(item) for item in raw]
+                else:
+                    kwargs[field_name] = [str(raw)]
+            else:
+                kwargs[field_name] = raw
+        except (ValueError, TypeError) as e:
+            logger.warning(
+                'Config field %s: could not parse value %r (%s), using default',
+                field_name, raw, e,
+            )
 
     return Config(**kwargs)
 
@@ -1505,6 +1539,32 @@ def load_config(
     if not all_field_names.issubset(yaml_keys):
         missing = all_field_names - yaml_keys
         logger.info(f'Config upgrade: adding new settings {sorted(missing)}')
+
+        # Safety: back up the existing config before rewriting.
+        # If the rewrite corrupts anything, the user can recover.
+        backup_path = config_path.with_suffix('.yml.bak')
+        try:
+            import shutil
+            shutil.copy2(config_path, backup_path)
+            logger.info(f'Config upgrade: backed up existing config to {backup_path}')
+        except OSError as e:
+            logger.warning(f'Config upgrade: could not create backup: {e}')
+
+        # Log all field values being written so corruption is traceable.
+        # This is deliberately verbose — it only runs on config upgrades,
+        # not on every startup.
+        for f in fields(Config):
+            old_val = config_data.get(f.name, '<missing>')
+            new_val = getattr(config, f.name)
+            # Only log fields where the value might have changed
+            if f.name in missing:
+                logger.debug(f'  {f.name}: <new> = {new_val!r}')
+            elif str(old_val) != str(new_val):
+                logger.warning(
+                    f'Config upgrade: field {f.name} changed during parse: '
+                    f'{old_val!r} → {new_val!r}'
+                )
+
         save_config(config, config_path)
 
     return config
