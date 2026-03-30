@@ -5048,6 +5048,7 @@ class ImageDatabase:
                 ).fetchone()[0]
                 logger.info(f'  Cleared embeddings for {n_images} images — '
                             f'pipeline will recompute on next cycle')
+                self._needs_pipeline_rerun = True
             else:
                 logger.info(f'Recording OpenCLIP model identity: {current_id}')
 
@@ -5075,6 +5076,7 @@ class ImageDatabase:
                 )
                 self.safe_conn.execute('UPDATE images SET aesthetic_nima = NULL')
                 self.safe_conn.commit()
+                self._needs_pipeline_rerun = True
 
             set_metadata(self.safe_conn, 'nima_model', current_model)
 
@@ -5095,9 +5097,11 @@ class ImageDatabase:
             pause_event=self._pause_event,
         )
 
-        # If scan was requested, trigger the pipeline to run immediately
-        if self._run_scan:
+        # If scan was requested or a model invalidation cleared data that
+        # needs recomputation, trigger the pipeline to run immediately.
+        if self._run_scan or getattr(self, '_needs_pipeline_rerun', False):
             self._orchestrator.request_rerun()
+            self._needs_pipeline_rerun = False
 
         self._orchestrator.start()
 
