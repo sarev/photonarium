@@ -25,8 +25,44 @@ Two face-related API endpoints were doing unnecessary work:
 - **`get_faces_for_image()`** loaded full embedding BLOBs (~2KB per face) only to discard them — every fullscreen view toggle paid this cost. The query now excludes embeddings by default.
 - **`get_face_matches()`** ran a fresh DB query loading megabytes of embedding BLOBs on every "find matching person" click. Now uses the in-memory embedding cache instead, avoiding the DB round-trip entirely.
 
+### Live Face Detection Tuning
+
+A new fullscreen overlay for adjusting face detection parameters in real time. Activated via the tune button in the fullscreen toolbar, it shows filled, colour-coded bounding boxes (green = above threshold, orange = borderline, red = below) with confidence labels on the current image.
+
+- **Min confidence** slider refilters cached results client-side (instant, no backend call). **Min face size** slider triggers a backend re-detection on release (CPU-only, avoids GPU contention with the pipeline).
+- **Apply here** adds newly detected faces to the current image without changing global settings — useful for finding missed faces on specific photos.
+- **Apply global** saves the settings to the config file and additionally adds new faces to the current image.
+- Detection preview runs on CPU via a dedicated endpoint (`/api/faces/detect-preview`) to avoid contention with the pipeline's GPU models.
+
+### Config Hot-Reload
+
+Settings that don't require a restart (batch sizes, thresholds, quality weights, face detection parameters, feature flags, UI settings) can now be applied without restarting the server. The settings dialog detects which fields changed and either hot-reloads or prompts for a restart as appropriate.
+
+During hot-reload, all incoming requests are gated (queued, not rejected) while the pipeline is stopped, the config is swapped, and the pipeline is restarted. This prevents operations running against a half-swapped state. The gate is held by a `threading.Event` in a `before_request` hook — static file requests are excluded.
+
+When face detection settings change (`min_confidence`, `min_size`, `face_detection_enabled`), all images with existing face records are marked for rescan. The pipeline re-detects faces with the new parameters and reconciles against existing records: named, ignored, suppressed, and manually tagged faces are always preserved; unnamed faces that are no longer detected are removed; genuinely new detections are added with auto-matching against known people.
+
+Settings tagged `[!]` (thread pools, timers, cache sizes, caption parameters, directories) or `[M]` (AI model names) still require a restart. Several settings that were previously unmarked have been tagged `[!]` after an audit identified them as non-hot-reloadable.
+
+### Fullscreen Face Overlay Performance
+
+Face bounding boxes in the fullscreen viewer now appear instantly during navigation instead of waiting for an API round-trip. The overlay renders from the AppState cache and relies on backend event polling to update if reassessment changes assignments. The next image's face data is preloaded in the background (deferred by 500ms to avoid saturating the browser's connection limit). Backward preloading was dropped — forward navigation is far more common.
+
+### Unified Face Reconciliation
+
+Stage 5 (face detection) now uses a single reconciliation path for both new images and rescan images. The `reconcile_detected_faces()` function in `faces.py` handles sentinel management, face matching (by centre proximity and area ratio rather than IoU), auto-matching against known people, thumbnail generation, and semantic embedding computation. This replaces the previous inline insert logic in the pipeline write loop.
+
+Face matching uses centre-offset tolerance (33% of bbox width/height) and area ratio (50–125%) rather than IoU, which is more robust for re-detection where bboxes shift slightly but clearly target the same face.
+
+### Config Upgrade Safety
+
+The config upgrade path (which rewrites the YAML file when new settings are added) now backs up the existing file to `.yml.bak` before rewriting. It also logs a warning for any field whose value changed during parsing, making silent corruption visible in the logs. The YAML parser now handles null values, string-encoded booleans, and type coercion errors defensively per-field with warnings instead of crashing.
+
 ### Bug Fixes
 
+- **Pipeline stages 2–5 skipped after rerun request**: `_rerun_requested` was cleared at the top of the pipeline loop *before* `_run_pipeline()` checked it at the Stage 2–5 gate. If Stage 1 found no new files, stages 2–5 were skipped even when embeddings needed recomputation (e.g. after a model change). The flag is now consumed inside `_run_pipeline()` where it's actually used.
+- **Pipeline not recomputing after model invalidation without `--scan`**: The OpenCLIP and NIMA model invalidation code cleared embeddings but didn't trigger a pipeline rerun. Starting without `--scan` meant the pipeline went idle with 44k images stuck at NULL embeddings. The invalidation now sets a `_needs_pipeline_rerun` flag that `start_threads()` checks.
+- **`get_face()` embedding BLOB leak**: The single-face query used `SELECT f.*` which included embedding and semantic_embedding BLOBs. These bytes leaked into API responses, causing `orjson` serialisation errors (`TypeError: Type is not JSON serializable: bytes`). The query now excludes embeddings by default, matching `get_faces_for_image()`.
 - **Face assign contention**: the "ignore all unknown faces" action could fail with `database is locked` when the background face reassessment was writing simultaneously. Fixed by batching face updates with `executemany` + single commit instead of per-face UPDATE + commit loops. Also fixed the same pattern in the unassign, suppress, and lock/unlock batch endpoints.
 - **Raw connection bypasses**: `_clone_transcode_record` and `_load_checksum_cache` used the raw `sqlite3.Connection` directly, bypassing `SafeConnection`'s safety guarantees. Now routed through `safe_conn`.
 - **Type annotations**: `init_face_tables()` and `_run_migrations()` in `faces.py` annotated their parameter as `SafeConnection` but received a raw connection during startup. Fixed to `SafeConnection | sqlite3.Connection`.
