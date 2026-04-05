@@ -70,22 +70,14 @@ from pathlib import Path
 import numpy as np
 import orjson
 from flask import Flask, Response, abort, request, send_file
-from flask import jsonify as flask_jsonify
 from PIL import Image, ImageDraw
 from werkzeug.exceptions import HTTPException
 
 # flask_cors not needed — frontend is served from the same origin
 
-# Toggle between orjson and stdlib json for testing
-USE_ORJSON = True
-
-
 def jsonify(data):
-    """JSON response - uses orjson when USE_ORJSON is True."""
-    if USE_ORJSON:
-        return Response(orjson.dumps(data), mimetype='application/json')
-    else:
-        return flask_jsonify(data)
+    """JSON response using orjson for performance."""
+    return Response(orjson.dumps(data), mimetype='application/json')
 
 
 from caption import CaptionGenerator
