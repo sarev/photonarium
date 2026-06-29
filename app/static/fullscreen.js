@@ -55,6 +55,34 @@
  */
 const Fullscreen = {
     /**
+     * Curated quick-rating palette for the bottom-left widget.
+     *
+     * Each option renders as monochrome line-art SVG (see _ratingSvg) but is
+     * *stored* as a plain emoji string in the free-form `images.rating` field,
+     * so the Gallery sidebar and Search (substring match) keep working with no
+     * schema or query changes. Selecting an option REPLACES any existing
+     * rating (including custom emoji strings the user typed elsewhere) — this
+     * is a deliberate simplification: the widget offers a fast, fixed set, not
+     * the full emoji vocabulary.
+     *
+     * Stars are modelled as a run of 1–3 star emoji ('⭐', '⭐⭐', '⭐⭐⭐'),
+     * which substring search treats naturally; the optional "Exact match"
+     * search toggle distinguishes one star from two or three.
+     * @type {Array<{value: string, kind: string, stars?: number, svg?: string, label: string}>}
+     */
+    RATING_OPTIONS: [
+        { value: '⭐', kind: 'star', stars: 1, label: '1 star' },
+        { value: '⭐⭐', kind: 'star', stars: 2, label: '2 stars' },
+        { value: '⭐⭐⭐', kind: 'star', stars: 3, label: '3 stars' },
+        { value: '\u{1F641}', kind: 'icon', svg: 'face-sad', label: 'Unhappy' },
+        { value: '\u{1F610}', kind: 'icon', svg: 'face-neutral', label: 'Neutral' },
+        { value: '\u{1F642}', kind: 'icon', svg: 'face-happy', label: 'Happy' },
+        { value: '\u{1F44E}', kind: 'icon', svg: 'thumb-down', label: 'Thumb down' },
+        { value: '❤️', kind: 'icon', svg: 'heart', label: 'Love' },
+        { value: '\u{1F44D}', kind: 'icon', svg: 'thumb-up', label: 'Thumb up' },
+    ],
+
+    /**
      * Local state for the fullscreen viewer.
      * @type {Object}
      * @property {boolean} isOpen - Whether the overlay is currently visible
@@ -219,7 +247,21 @@ const Fullscreen = {
             slideshowBtn: App.$('fullscreen-slideshow'),
             shuffleBtn: App.$('fullscreen-shuffle'),
             video: App.$('fullscreen-video'),
+            rating: App.$('fullscreen-rating'),
+            ratingTrigger: App.$('fullscreen-rating-trigger'),
+            ratingPopup: App.$('fullscreen-rating-popup'),
+            ratingCurrent: App.$('fullscreen-rating-trigger')?.querySelector('.fs-rating-current'),
         };
+
+        // Build the quick-rating palette once (its contents never change)
+        this._buildRatingGrid();
+
+        // Clear the "dismissed" state when the pointer leaves the rating widget,
+        // so hovering again reopens the popup.  It is force-closed on select,
+        // navigation and exit (see _dismissRatingPopup).
+        this._els.rating?.addEventListener('mouseleave', () => {
+            this._els.rating.classList.remove('fs-rating-dismissed');
+        });
 
         // Bind button clicks (permanent, not per-session)
         this._els.closeBtn.addEventListener('click', () => {
@@ -259,6 +301,172 @@ const Fullscreen = {
         this._els.nextBtn.addEventListener('click', () => {
             this._navigateNext();
         });
+    },
+
+    /* ------------------------------------------------------------------
+       QUICK RATING WIDGET (bottom-left)
+
+       A fixed palette of star runs + sentiment icons, rendered as
+       monochrome SVG line-art (offline, theme-consistent, no emoji-font
+       reliance) but persisted as plain emoji into the free-form rating
+       field via AppState. See RATING_OPTIONS for the model.
+       ------------------------------------------------------------------ */
+
+    /**
+     * Returns the inner SVG markup for a named rating icon. Stroke follows
+     * currentColor so the three visual states (rest / hover / selected) are
+     * driven purely by CSS, exactly as in the design concept.
+     * @param {string} name - Icon name: 'star', 'face-sad', 'face-neutral',
+     *   'face-happy', 'thumb-down', 'thumb-up', 'heart'
+     * @returns {string} SVG element markup
+     * @private
+     */
+    _ratingSvg(name) {
+        // Mouth path varies per sentiment face; head + eyes are shared.
+        const FACE_MOUTHS = {
+            'face-sad': 'M8.5 16 Q12 12.5 15.5 16',
+            'face-neutral': 'M8.5 15 L15.5 15',
+            'face-happy': 'M8.5 14.5 Q12 18 15.5 14.5',
+        };
+        if (name in FACE_MOUTHS) {
+            return '<svg class="fs-rating-icon face" viewBox="0 0 24 24" aria-hidden="true">'
+                + '<circle class="head" cx="12" cy="12" r="9.5"/>'
+                + '<circle class="eye" cx="9" cy="10" r="1.1"/><circle class="eye" cx="15" cy="10" r="1.1"/>'
+                + `<path class="mouth" d="${FACE_MOUTHS[name]}"/></svg>`;
+        }
+        const PATHS = {
+            star: 'M12 17.27L18.18 21l-1.64-7.03L22 9.24l-7.19-.61L12 2 9.19 8.63 2 9.24l5.46 4.73L5.82 21z',
+            'thumb-down': 'M15 3H6c-.83 0-1.54.5-1.84 1.22L1.14 11.27c-.09.23-.14.47-.14.73v2c0 1.1.9 2 2 2h6.31l-.95 4.57-.03.32c0 .41.17.79.44 1.06L9.83 23l6.59-6.59c.36-.36.58-.86.58-1.41V5c0-1.1-.9-2-2-2zm4 0v12h4V3h-4z',
+            'thumb-up': 'M1 21h4V9H1v12zM23 10c0-1.1-.9-2-2-2h-6.31l.95-4.57.03-.32c0-.41-.17-.79-.44-1.06L14.17 1 7.59 7.59C7.22 7.95 7 8.45 7 9v10c0 1.1.9 2 2 2h9c.83 0 1.54-.5 1.84-1.22l3.02-7.05c.09-.23.14-.47.14-.73v-2z',
+            heart: 'M12 21.35l-1.45-1.32C5.4 15.36 2 12.28 2 8.5 2 5.42 4.42 3 7.5 3c1.74 0 3.41.81 4.5 2.09C13.09 3.81 14.76 3 16.5 3 19.58 3 22 5.42 22 8.5c0 3.78-3.4 6.86-8.55 11.54L12 21.35z',
+        };
+        return `<svg class="fs-rating-icon solid" viewBox="0 0 24 24" aria-hidden="true"><path d="${PATHS[name]}"/></svg>`;
+    },
+
+    /**
+     * Builds the quick-rating palette grid once during init. Star cells get a
+     * shared `.star` class so CSS `:has()` can render the run cascade; each
+     * cell carries its option index for the click handler.
+     * @private
+     */
+    _buildRatingGrid() {
+        const popup = this._els.ratingPopup;
+        if (!popup) return;
+
+        popup.innerHTML = this.RATING_OPTIONS.map((opt, i) => {
+            const svg = this._ratingSvg(opt.kind === 'star' ? 'star' : opt.svg);
+            const starCls = opt.kind === 'star' ? ' star' : '';
+            return `<button type="button" class="fs-rating-cell${starCls}" data-index="${i}"`
+                + ` title="${App.escapeHtml(opt.label)}" aria-label="${App.escapeHtml(opt.label)}"`
+                + ` aria-pressed="false">${svg}</button>`;
+        }).join('');
+
+        // Single delegated click handler for the whole palette
+        popup.addEventListener('click', (e) => {
+            const cell = e.target.closest('.fs-rating-cell');
+            if (!cell) return;
+            const opt = this.RATING_OPTIONS[Number(cell.dataset.index)];
+            if (opt) this._setRating(opt.value);
+            // Close the popup after a selection (don't leave it hanging open).
+            this._dismissRatingPopup();
+        });
+    },
+
+    /**
+     * Force-closes the rating popup — on select, navigation or exit — even
+     * while the pointer is still over it.  The class is cleared on the next
+     * mouseleave so hovering reopens it.  Also drops focus from any rating cell
+     * so :focus-within does not hold the popup open.
+     * @private
+     */
+    _dismissRatingPopup() {
+        const el = this._els.rating;
+        if (!el) return;
+        el.classList.add('fs-rating-dismissed');
+        if (el.contains(document.activeElement)) {
+            document.activeElement.blur();
+        }
+    },
+
+    /**
+     * Persists a rating selection. Clicking the already-current rating clears
+     * it; otherwise the chosen value REPLACES whatever was stored. Writes go
+     * through AppState (single source of truth), which optimistically updates
+     * the cache and notifies subscribers — including the Gallery sidebar.
+     * @param {string} value - The emoji string for the chosen option
+     * @private
+     */
+    async _setRating(value) {
+        const imageId = this.state.currentId;
+        if (!imageId) return;
+
+        const current = AppState.images.getById(imageId)?.rating || '';
+        const next = (current === value) ? '' : value;
+
+        // Optimistically paint the widget before the async round-trip
+        this._updateRatingWidget(next);
+
+        try {
+            await AppState.images.update({ id: imageId, rating: next });
+        } catch (error) {
+            console.error('Failed to save rating:', error);
+            App.showError('Failed to save rating.');
+            // AppState rolls back on error; repaint from the cache
+            this._updateRatingWidget(AppState.images.getById(imageId)?.rating || '');
+        }
+    },
+
+    /**
+     * Refreshes the rating trigger and palette selection to reflect a value.
+     *
+     * The trigger shows: the matching monochrome SVG(s) when the rating is one
+     * of the curated values; the raw rating text for a custom string (so the
+     * user can see they've rated it, even though the palette can't represent
+     * it); or a muted "Rating…" prompt when empty. The palette highlights the
+     * matching cell, lighting the star run up to N.
+     * @param {string} [rating] - Rating value; defaults to the current image's
+     * @private
+     */
+    _updateRatingWidget(rating) {
+        if (!this._els.rating) return;
+        if (rating === undefined) {
+            rating = AppState.images.getById(this.state.currentId)?.rating || '';
+        }
+
+        const matched = this.RATING_OPTIONS.find(o => o.value === rating);
+
+        // Trigger content
+        if (this._els.ratingCurrent) {
+            if (!rating) {
+                this._els.ratingCurrent.className = 'fs-rating-current empty';
+                this._els.ratingCurrent.textContent = 'Rating…';
+            } else if (matched && matched.kind === 'star') {
+                this._els.ratingCurrent.className = 'fs-rating-current';
+                this._els.ratingCurrent.innerHTML = this._ratingSvg('star').repeat(matched.stars);
+            } else if (matched) {
+                this._els.ratingCurrent.className = 'fs-rating-current';
+                this._els.ratingCurrent.innerHTML = this._ratingSvg(matched.svg);
+            } else {
+                // Custom string we can't render as line-art — show it verbatim
+                this._els.ratingCurrent.className = 'fs-rating-current custom';
+                this._els.ratingCurrent.textContent = rating;
+            }
+        }
+
+        // Palette selection state
+        const cells = this._els.ratingPopup?.querySelectorAll('.fs-rating-cell');
+        cells?.forEach((cell) => {
+            const opt = this.RATING_OPTIONS[Number(cell.dataset.index)];
+            const on = opt.kind === 'star'
+                ? (!!matched && matched.kind === 'star' && opt.stars <= matched.stars)
+                : (opt.value === rating);
+            cell.classList.toggle('selected', on);
+            cell.setAttribute('aria-pressed', String(on));
+        });
+
+        if (this._els.ratingTrigger) {
+            this._els.ratingTrigger.setAttribute('title', rating ? `Rated ${rating}` : 'Rate this image');
+        }
     },
 
     /**
@@ -330,6 +538,10 @@ const Fullscreen = {
 
         // Bind event listeners
         this._bindEvents();
+
+        // Fresh open starts with the rating popup closed (clear any stale
+        // dismissed state from a previous session).
+        this._els.rating?.classList.remove('fs-rating-dismissed');
 
         // Show the overlay
         this._show();
@@ -658,6 +870,9 @@ const Fullscreen = {
             this._preloadAdjacent();
         }
 
+        // Reflect this image's current rating in the quick-rating widget
+        this._updateRatingWidget(metadata.rating || '');
+
         // Notify AppState (triggers face overlay load, selection sync, etc.)
         AppState.nav.setFullscreenImageId(imageId);
     },
@@ -738,6 +953,7 @@ const Fullscreen = {
             this._els.toolbar.classList.remove('hidden');
             this._els.prevBtn.classList.remove('hidden');
             this._els.nextBtn.classList.remove('hidden');
+            this._els.rating?.classList.remove('hidden');
             this._updateTaggingButton();
             this._overlaysVisible = true;
         }
@@ -751,6 +967,7 @@ const Fullscreen = {
             this._els.toolbar.classList.add('hidden');
             this._els.prevBtn.classList.add('hidden');
             this._els.nextBtn.classList.add('hidden');
+            this._els.rating?.classList.add('hidden');
             this._overlaysVisible = false;
             this._overlayTimeout = null;
         }, this.FILENAME_DISPLAY_MS);
@@ -1454,6 +1671,9 @@ const Fullscreen = {
         const { imageList } = this.state;
         if (index < 0 || index >= imageList.length) return;
 
+        // Navigating between images closes the rating popup.
+        this._dismissRatingPopup();
+
         const newImage = imageList[index];
 
         // Reset zoom/pan for new image
@@ -1680,6 +1900,10 @@ const Fullscreen = {
             this.close();
             return;
         }
+
+        // Keep the rating widget in sync with edits from elsewhere (e.g. the
+        // Gallery sidebar) while fullscreen is open.
+        this._updateRatingWidget();
 
         // Prune any removed images from the navigation list
         const prevLength = this.state.imageList.length;

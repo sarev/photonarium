@@ -545,6 +545,18 @@
             </button>
             <!-- Filename overlay (shown temporarily) -->
             <div id="fullscreen-filename" class="fullscreen-btn"></div>
+            <!-- Quick rating widget (bottom-left). The trigger shows the current
+                 rating; hovering opens a small fixed palette. The surrounding
+                 padding acts as a hit-buffer so the popup stays open while the
+                 mouse travels between items, and self-closes on mouse-leave. -->
+            <div id="fullscreen-rating" class="fs-rating hidden">
+                <button id="fullscreen-rating-trigger" class="fs-rating-trigger" type="button"
+                        title="Rate this image" aria-haspopup="true" aria-expanded="false">
+                    <span class="fs-rating-current"></span>
+                </button>
+                <!-- Popup grid is built once by fullscreen.js (_buildRatingGrid) -->
+                <div id="fullscreen-rating-popup" class="fs-rating-popup" role="group" aria-label="Rate this image"></div>
+            </div>
         </div>
 
         <!-- ============================================================
@@ -770,6 +782,10 @@
                                 <span class="icon" data-icon="add_reaction">&#x263A;</span>
                             </button>
                         </div>
+                        <label class="rating-exact-toggle" title="Match the rating exactly rather than as a substring. With this off, ★ also matches ★★ and ★★★; with it on, only images rated exactly ★ match.">
+                            <input type="checkbox" id="filter-rating-exact">
+                            <span>Exact match</span>
+                        </label>
                     </div>
 
                     <!-- Metadata filter -->

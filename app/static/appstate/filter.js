@@ -41,6 +41,8 @@ AppState.filter = (function() {
      * @property {DateComponents} [dateTo] - To-date components (null fields = wildcard)
      * @property {boolean} [dateRange] - Whether range mode is active
      * @property {string} [rating] - Rating emoji to filter by
+     * @property {boolean} [ratingExact] - If true, match the rating string
+     *   exactly rather than as a substring (e.g. '⭐' excludes '⭐⭐')
      * @property {string[]} [people] - Person IDs to filter by
      * @property {Set<string>} [peopleImageIds] - Precomputed image IDs for people filter
      * @property {string[]} [imageIds] - Image IDs for semantic/duplicates filter

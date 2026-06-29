@@ -1453,7 +1453,8 @@ a:hover {
 /* Dark mode support for date inputs */
 [data-theme="dark"] .info-timestamp,
 [data-theme="dark"] .date-month-select,
-[data-theme="dark"] .date-day-select {
+[data-theme="dark"] .date-day-select,
+[data-theme="dark"] .date-hidden-picker {
     color-scheme: dark;
     background-color: var(--color-bg-elevated);
     color: var(--color-text-primary);
@@ -1628,6 +1629,206 @@ a:hover {
 
 #fullscreen-filename.hidden {
     opacity: 0;
+}
+
+/* ------------------------------------------------------------------
+   Quick rating widget (bottom-left of the fullscreen viewer)
+
+   A trigger pill showing the current rating; hovering reveals a small
+   fixed palette of star runs + sentiment icons. The wrapper padding is
+   a deliberate hit-buffer so the popup stays open while the mouse moves
+   between items, and self-closes on mouse-leave. Icons are inline SVG
+   line-art with a three-state model (rest / hover / selected) driven
+   entirely by CSS — no emoji font, identical across browsers/offline.
+   ------------------------------------------------------------------ */
+.fs-rating {
+    /* Palette colours — the viewer backdrop is always dark, so this fixed
+       grey/yellow scheme reads correctly in both light and dark themes. */
+    --fsr-grey: hsl(0 0% 75%);
+    --fsr-hot: #f5c518;   /* hover outline (bright)              */
+    --fsr-sel: #c9a227;   /* selected flood fill (duller yellow) */
+    --fsr-bg: #121212;    /* face features when flooded          */
+
+    position: absolute;
+    bottom: 0;
+    left: 0;
+    z-index: 11;          /* above the filename gradient and toolbar */
+    padding: 0.75rem;     /* modest inset for the trigger from the corner */
+    opacity: 1;
+    transition: opacity 0.3s;
+}
+
+/* Fades out with the other overlays, but stays visible while hovered so a
+   mid-interaction rating isn't snatched away by the auto-hide timer. */
+.fs-rating.hidden {
+    opacity: 0;
+}
+.fs-rating.hidden:hover {
+    opacity: 1;
+}
+
+.fs-rating-trigger {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.3rem;
+    min-height: 1.8rem;
+    padding: 0.25rem 0.6rem;
+    border: none;
+    border-radius: 6px;
+    background: var(--color-overlay-button-bg);
+    color: var(--color-overlay-text);
+    font: inherit;
+    font-size: 0.9rem;
+    cursor: pointer;
+    transition: background 0.15s ease;
+}
+.fs-rating-trigger:hover {
+    background: var(--color-overlay-button-hover);
+}
+
+.fs-rating-current {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.05rem;
+    line-height: 1;
+}
+.fs-rating-current.empty {
+    opacity: 0.85;
+    font-style: italic;
+}
+/* Monochrome outline icons in the trigger (match other fullscreen glyphs) */
+.fs-rating-current .fs-rating-icon {
+    width: 1.2em;
+    height: 1.2em;
+    fill-opacity: 0;
+    stroke: currentColor;
+}
+
+/* Popup palette: hidden until the wrapper is hovered or holds focus */
+.fs-rating-popup {
+    position: absolute;
+    bottom: 100%;
+    left: 0.75rem;              /* aligns with the trigger (wrapper padding) */
+    margin-bottom: 0.4rem;
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 0.25rem;
+    padding: 0.5rem;
+    background: var(--color-overlay-toast-bg);
+    border-radius: 10px;
+    box-shadow: 0 6px 24px rgba(0, 0, 0, 0.45);
+    font-size: 2.5rem;          /* icons sized in em scale from here */
+    opacity: 0;
+    visibility: hidden;
+    transform: translateY(4px);
+    transition: opacity 0.22s ease, transform 0.22s ease, visibility 0.22s;
+}
+.fs-rating:hover .fs-rating-popup,
+.fs-rating:focus-within .fs-rating-popup {
+    opacity: 1;
+    visibility: visible;
+    transform: translateY(0);
+}
+
+/* Force-closed after a selection / on navigation / on exit, even while still
+   hovered or focused. Listed last so it wins the equal-specificity battle with
+   the :hover/:focus-within rule above; cleared on mouseleave (see JS). */
+.fs-rating.fs-rating-dismissed .fs-rating-popup {
+    opacity: 0;
+    visibility: hidden;
+    transform: translateY(4px);
+}
+
+/* Invisible hit-buffer extending the popup's hover region on every side, so
+   the picker doesn't snap shut the instant the mouse strays a pixel past an
+   edge. The downward extent also bridges the gap to the trigger. It only
+   exists while the popup is visible (visibility is inherited), and sits
+   behind the buttons (z-index) so it never intercepts their clicks. */
+.fs-rating-popup::before {
+    content: '';
+    position: absolute;
+    inset: -1.5rem;
+    z-index: -1;
+}
+
+.fs-rating-cell {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 1.4em;
+    height: 1.4em;
+    padding: 0;
+    border: none;
+    background: none;
+    cursor: pointer;
+    /* Buttons reset font-size to the UA default, which would collapse the
+       em-based icon sizing — inherit the popup's font-size so the glyphs
+       scale with it. */
+    font-size: inherit;
+    color: var(--fsr-grey);     /* drives currentColor (the stroke) */
+}
+.fs-rating-cell:focus-visible {
+    outline: 2px solid var(--fsr-hot);
+    outline-offset: 2px;
+    border-radius: 6px;
+}
+
+/* Base icon. Fill is always present but hidden via fill-opacity, so selecting
+   eases the flood in/out rather than snapping. Stroke rides currentColor and
+   is therefore independent of the fill. */
+.fs-rating-icon {
+    width: 1em;
+    height: 1em;
+    fill: var(--fsr-sel);
+    fill-opacity: 0;
+    stroke: currentColor;
+    stroke-width: 1;
+    stroke-linejoin: round;
+    stroke-linecap: round;
+    transition: color 0.15s ease, stroke-width 0.15s ease, fill-opacity 0.15s ease;
+}
+.fs-rating-icon .eye {
+    fill: currentColor;
+    fill-opacity: 1;
+    stroke: none;
+}
+.fs-rating-icon .mouth {
+    fill: none;
+}
+
+/* Selected: flood the shape; for faces force the features dark so the
+   expression survives the fill. Stroke stays on currentColor so hover can
+   still brighten the outline. */
+.fs-rating-cell.selected {
+    color: var(--fsr-sel);
+}
+.fs-rating-cell.selected .fs-rating-icon {
+    fill-opacity: 1;
+}
+.fs-rating-cell.selected .face .eye {
+    fill: var(--fsr-bg);
+}
+.fs-rating-cell.selected .face .mouth {
+    stroke: var(--fsr-bg);
+}
+
+/* Hover AFTER selected, so the outline brightens on mouseover even when
+   selected, while the fill (a separate property) is left untouched. */
+.fs-rating-cell:hover {
+    color: var(--fsr-hot);
+}
+.fs-rating-cell:hover .fs-rating-icon {
+    stroke-width: 2;
+}
+
+/* Star run preview: a star also lights if any star to its right is hovered,
+   giving the one/two/three cascade (heavier stroke as a colour-independent
+   cue for low-contrast / colour-blind cases). */
+.fs-rating-cell.star:has(~ .star:hover) {
+    color: var(--fsr-hot);
+}
+.fs-rating-cell.star:has(~ .star:hover) .fs-rating-icon {
+    stroke-width: 2;
 }
 
 /* Top toolbar (evenly spaced buttons) */
@@ -3688,7 +3889,8 @@ a:hover {
 /* Light mode date component inputs */
 [data-theme="light"] .info-timestamp,
 [data-theme="light"] .date-month-select,
-[data-theme="light"] .date-day-select {
+[data-theme="light"] .date-day-select,
+[data-theme="light"] .date-hidden-picker {
     color-scheme: light;
 }
 
@@ -3699,6 +3901,19 @@ a:hover {
 
 .rating-filter input {
     flex: 1;
+}
+
+.rating-exact-toggle {
+    display: flex;
+    align-items: center;
+    gap: 0.4rem;
+    margin-top: 0.4rem;
+    font-size: 0.85rem;
+    color: var(--color-text-secondary);
+    cursor: pointer;
+}
+.rating-exact-toggle input {
+    cursor: pointer;
 }
 
 .similarity-slider {
@@ -4990,10 +5205,49 @@ dialog {
     max-width: 90vw;
     max-height: 90vh;
     max-height: 90dvh;     /* dynamic viewport height — tracks mobile address bar */
+
+    /* Ease in and out on open/close (same feel as the fullscreen rating popup).
+       `allow-discrete` keeps the dialog in the top layer through the closing
+       transition; `@starting-style` supplies the entry from-state.  Browsers
+       lacking these features simply show/hide instantly (graceful fallback). */
+    opacity: 0;
+    transform: translateY(8px) scale(0.98);
+    transition:
+        opacity 0.2s ease,
+        transform 0.2s ease,
+        overlay 0.2s ease allow-discrete,
+        display 0.2s ease allow-discrete;
+}
+
+dialog[open] {
+    opacity: 1;
+    transform: none;
+}
+
+@starting-style {
+    dialog[open] {
+        opacity: 0;
+        transform: translateY(8px) scale(0.98);
+    }
 }
 
 dialog::backdrop {
     background-color: var(--color-overlay-bg);
+    opacity: 0;
+    transition:
+        opacity 0.2s ease,
+        overlay 0.2s ease allow-discrete,
+        display 0.2s ease allow-discrete;
+}
+
+dialog[open]::backdrop {
+    opacity: 1;
+}
+
+@starting-style {
+    dialog[open]::backdrop {
+        opacity: 0;
+    }
 }
 
 .dialog-content {
@@ -5156,6 +5410,12 @@ dialog::backdrop {
 /* Emoji picker dialog */
 #dialog-emoji .dialog-content {
     max-width: 800px;
+    /* Cap height and scroll the grid internally so the Close button (and
+       heading) stay visible rather than falling off the bottom. */
+    display: flex;
+    flex-direction: column;
+    max-height: 80vh;
+    max-height: 80dvh;
 }
 
 .emoji-grid {
@@ -5163,6 +5423,13 @@ dialog::backdrop {
     grid-template-columns: repeat(12, 1fr);
     gap: 0.25rem;
     margin-bottom: 1rem;
+}
+
+/* Only the emoji grid scrolls; heading and actions stay pinned. */
+#dialog-emoji #emoji-grid {
+    flex: 1 1 auto;
+    min-height: 0;
+    overflow-y: auto;
 }
 
 .emoji-divider {
@@ -5175,6 +5442,13 @@ dialog::backdrop {
     color: var(--color-text-primary);
     pointer-events: none;
     user-select: none;
+}
+
+/* The leading section header needs no top rule/spacing */
+.emoji-divider:first-child {
+    margin-top: 0;
+    padding-top: 0;
+    border-top: none;
 }
 
 .emoji-btn {
@@ -5190,6 +5464,18 @@ dialog::backdrop {
 
 .emoji-btn:hover {
     background-color: var(--color-accent-light);
+}
+
+/* Star-run options size to their content (1–3 stars) rather than the fixed
+   square, so the multi-star runs aren't clipped. justify-self stops them
+   stretching to fill their spanned columns (which would scatter the stars
+   with wide internal gaps); they sit snug and centred instead. */
+.emoji-btn-stars {
+    width: auto;
+    justify-self: center;
+    padding: 0 0.4rem;
+    font-size: 1.5rem;
+    white-space: nowrap;
 }
 
 /* Action buttons */

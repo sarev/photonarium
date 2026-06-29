@@ -2266,11 +2266,33 @@ const App = {
             }
         };
 
+        // Auto-close when the pointer moves off the card (plus a small buffer),
+        // so there's no need to scroll to find the Close button. We hit-test the
+        // pointer against the card's rect on mousemove rather than using
+        // mouseleave: a modal <dialog>'s ::backdrop counts as part of the dialog,
+        // so mouseleave would only fire at the viewport edge, not the card edge.
+        // Armed only once the pointer is over the card, so opening it while the
+        // cursor is still on the trigger button doesn't close it immediately.
+        const content = dialog.querySelector('.dialog-content');
+        const CLOSE_BUFFER = 24;
+        let armed = false;
+        const handleMove = (e) => {
+            const r = content.getBoundingClientRect();
+            const inside = e.clientX >= r.left - CLOSE_BUFFER && e.clientX <= r.right + CLOSE_BUFFER
+                && e.clientY >= r.top - CLOSE_BUFFER && e.clientY <= r.bottom + CLOSE_BUFFER;
+            if (inside) {
+                armed = true;
+            } else if (armed) {
+                cleanup();
+            }
+        };
+
         const cleanup = () => {
             grid.removeEventListener('click', handleClick);
             closeBtn.removeEventListener('click', cleanup);
             dialog.removeEventListener('cancel', cleanup);
             dialog.removeEventListener('keydown', handleKeyDown);
+            dialog.removeEventListener('mousemove', handleMove);
             dialog.close();
         };
 
@@ -2278,6 +2300,7 @@ const App = {
         closeBtn.addEventListener('click', cleanup);
         dialog.addEventListener('cancel', cleanup);
         dialog.addEventListener('keydown', handleKeyDown);
+        dialog.addEventListener('mousemove', handleMove);
 
         dialog.showModal();
     },
@@ -2289,6 +2312,22 @@ const App = {
      */
     _populateEmojiGrid(grid) {
         const sections = [
+            {
+                // Mirrors the fullscreen viewer's quick-rating palette, so the
+                // two rating surfaces share a common vocabulary.
+                title: 'Quick ratings',
+                items: {
+                    '⭐': '1 star',
+                    '⭐⭐': '2 stars',
+                    '⭐⭐⭐': '3 stars',
+                    '\u{1F641}': 'Unhappy',
+                    '\u{1F610}': 'Neutral',
+                    '\u{1F642}': 'Happy',
+                    '\u{1F44E}': 'Thumbs down',
+                    '❤️': 'Red heart',
+                    '\u{1F44D}': 'Thumbs up',
+                },
+            },
             {
                 title: 'Hearts',
                 items: {
@@ -2391,12 +2430,10 @@ const App = {
         for (let i = 0; i < sections.length; i++) {
             const section = sections[i];
 
-            if (i > 0) {
-                const divider = document.createElement('div');
-                divider.className = 'emoji-divider';
-                divider.textContent = section.title;
-                grid.appendChild(divider);
-            }
+            const divider = document.createElement('div');
+            divider.className = 'emoji-divider';
+            divider.textContent = section.title;
+            grid.appendChild(divider);
 
             for (const [e, desc] of Object.entries(section.items)) {
                 const btn = document.createElement('button');
@@ -2404,6 +2441,14 @@ const App = {
                 btn.className = 'emoji-btn';
                 btn.textContent = e;
                 btn.title = desc;
+                // Star-run options (★, ★★, ★★★) are wider than one glyph, so
+                // they get a content-sized variant that spans extra columns
+                // instead of being clipped by the fixed square button.
+                const starCount = [...e].filter(ch => ch === '⭐').length;
+                if (starCount > 0 && starCount === [...e].length) {
+                    btn.classList.add('emoji-btn-stars');
+                    btn.style.gridColumn = `span ${starCount}`;
+                }
                 grid.appendChild(btn);
             }
         }

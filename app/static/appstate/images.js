@@ -253,6 +253,7 @@ AppState.images = (function() {
         const isDateRange = !!currentFilter.dateRange;
         const hasDateFilter = dateFrom !== null || dateTo !== null;
         const filterEmoji = currentFilter.rating ? [...currentFilter.rating] : null;
+        const filterRatingExact = !!currentFilter.ratingExact;
         const peopleImageIds = (currentFilter.people && currentFilter.peopleImageIds) || null;
         const metadataImageIds = currentFilter.metadataImageIds || null;
         const searchMode = currentFilter.searchMode || 'all';
@@ -271,7 +272,13 @@ AppState.images = (function() {
                 if (!AppState.filter.matchDate(img.timestamp, dateFrom, dateTo, isDateRange)) return false;
             }
             if (filterEmoji) {
-                if (!filterEmoji.some(e => img.rating && img.rating.includes(e))) return false;
+                if (filterRatingExact) {
+                    // Exact: the rating must equal the entered string verbatim,
+                    // so '⭐' matches only one-star, not '⭐⭐'/'⭐⭐⭐'.
+                    if ((img.rating || '') !== currentFilter.rating) return false;
+                } else if (!filterEmoji.some(e => img.rating && img.rating.includes(e))) {
+                    return false;
+                }
             }
             if (peopleImageIds && !peopleImageIds.has(String(img.id))) return false;
             if (metadataImageIds && !metadataImageIds.has(String(img.id))) return false;

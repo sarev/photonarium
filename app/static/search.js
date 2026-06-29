@@ -172,6 +172,7 @@ const Search = {
             dateToRow: App.$('date-to-row'),
             dateRangeToggle: App.$('btn-date-range-toggle'),
             ratingInput: App.$('filter-rating'),
+            ratingExact: App.$('filter-rating-exact'),
             emojiBtn: App.$('btn-emoji-picker'),
             applyBtn: App.$('btn-apply-filter'),
             clearBtn: App.$('btn-clear-filter-action'),
@@ -1159,6 +1160,7 @@ const Search = {
                 this._setDateComponents('to', filter.dateTo || null);
             }
             this._els.ratingInput.value = filter.rating || '';
+            if (this._els.ratingExact) this._els.ratingExact.checked = !!filter.ratingExact;
 
             // Sync similarity slider from filter threshold if available
             if (filter.threshold) {
@@ -1205,6 +1207,7 @@ const Search = {
         this._setDateComponents('to', null);
         this._setDateRangeMode(false);
         this._els.ratingInput.value = '';
+        if (this._els.ratingExact) this._els.ratingExact.checked = false;
         this._selectedPeople = [];
         this._autoAddedPeopleIds = new Set();
         this._renderPeopleChips();
@@ -1226,6 +1229,8 @@ const Search = {
         const isRange = this._isDateRangeMode();
         const dateTo = isRange ? this._readDateComponents('to') : null;
         const rating = this._els.ratingInput.value.trim();
+        // Exact match only carries meaning when a rating is present.
+        const ratingExact = rating && this._els.ratingExact?.checked ? true : undefined;
         const people = this._selectedPeople.length > 0 ? [...this._selectedPeople] : null;
         const metadata = Object.keys(this._selectedMetadata).length > 0
             ? { ...this._selectedMetadata } : null;
@@ -1241,6 +1246,7 @@ const Search = {
             dateTo: dateTo,
             dateRange: isRange && (dateFrom || dateTo) ? true : undefined,
             rating: rating || null,
+            ratingExact: ratingExact,
             people: people,
             metadata: metadata,
             searchMode: this._searchMode,
@@ -1489,6 +1495,7 @@ const Search = {
         if (form.dateTo) filterJson.dateTo = form.dateTo;
         if (form.dateRange) filterJson.dateRange = true;
         if (form.rating) filterJson.rating = form.rating;
+        if (form.ratingExact) filterJson.ratingExact = true;
         if (form.people) filterJson.people = form.people.map(p => ({ id: p.id, name: p.name }));
         if (form.metadata) filterJson.metadata = form.metadata;
 
