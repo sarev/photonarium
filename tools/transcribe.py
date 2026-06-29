@@ -13,7 +13,7 @@ language = sys.argv[2] if len(sys.argv) > 2 else None
 
 from faster_whisper import WhisperModel
 
-print(f'Loading model...', flush=True)
+print('Loading model...', flush=True)
 model = WhisperModel('large-v3', device='cuda', compute_type='float16')
 
 print(f'Transcribing {audio_path}...', flush=True)

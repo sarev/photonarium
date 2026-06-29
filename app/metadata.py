@@ -332,7 +332,9 @@ def _extract_resolution_numbers(text: str) -> set[str]:
     """
     excluded: set[str] = set()
     for m in re.finditer(
-        r'(?<!\d)(\d{3,4})\s*[x×_\-]\s*(\d{3,4})(?!\d)', text, re.IGNORECASE,
+        r'(?<!\d)(\d{3,4})\s*[x×_\-]\s*(\d{3,4})(?!\d)',
+        text,
+        re.IGNORECASE,
     ):
         a, b = int(m.group(1)), int(m.group(2))
         if 120 <= a <= 8640 and 120 <= b <= 8640:
@@ -569,13 +571,7 @@ def _extract_delimited_numeric_triplets(
         # A triplet is time-like when all values fit valid time ranges AND
         # it's preceded by whitespace (e.g. "2024-05-17 16.08.33") — the
         # space indicates it follows a date, making it a time suffix.
-        if (
-            m.start() > 0
-            and component[m.start() - 1] == ' '
-            and 0 <= a <= 23
-            and 0 <= b <= 59
-            and 0 <= c_val <= 59
-        ):
+        if m.start() > 0 and component[m.start() - 1] == ' ' and 0 <= a <= 23 and 0 <= b <= 59 and 0 <= c_val <= 59:
             continue
 
         out.extend(
@@ -704,8 +700,7 @@ def _extract_month_word_candidates(
             c.add(0.25, 'default day of month')
 
         # Allow year=None — _finalise_candidate will fill it later
-        if (c.month is not None and c.day is not None
-                and (c.year is None or _safe_date(c.year, c.month, c.day))):
+        if c.month is not None and c.day is not None and (c.year is None or _safe_date(c.year, c.month, c.day)):
             out.append(c)
 
     return out
@@ -940,8 +935,12 @@ def _parse_timestamp_scoring(
                 coarse_bias = _component_weight(start, total)
                 fine_bias = _leaf_weight(start + offset, total)
                 for cand in _numeric_triplet_candidates(
-                    vals[0][0], vals[1][0], vals[2][0],
-                    len_a=vals[0][1], len_b=vals[1][1], len_c=vals[2][1],
+                    vals[0][0],
+                    vals[1][0],
+                    vals[2][0],
+                    len_a=vals[0][1],
+                    len_b=vals[1][1],
+                    len_c=vals[2][1],
                     policy=policy,
                     today=today,
                     coarse_bias=coarse_bias,
@@ -2184,77 +2183,98 @@ if __name__ == '__main__':
         ('photo_240307.jpg', 'DMY', '2024-03-07', None, 'scoring', 'YYMMDD compact'),
         ('album_202403.jpg', 'DMY', '2024-03-01', None, 'scoring', 'YYYYMM compact'),
         ('album_2024.jpg', 'DMY', '2024-01-01', None, 'scoring', 'YYYY only'),
-
         # -- Separated dates --
         ('photo_2024-03-07.jpg', 'DMY', '2024-03-07', None, 'both', 'YYYY-MM-DD separated'),
         ('photo_2024.03.07.jpg', 'DMY', '2024-03-07', None, 'both', 'YYYY.MM.DD separated'),
         ('photo_2024_03_07.jpg', 'DMY', '2024-03-07', None, 'both', 'YYYY_MM_DD separated'),
         ('/photos/2024/03/07/pic.jpg', 'DMY', '2024-03-07', None, 'both', 'YYYY/MM/DD in path'),
-
         # -- DMY/MDY ambiguity --
         ('photo_07-03-2024.jpg', 'DMY', '2024-03-07', None, 'scoring', 'DD-MM-YYYY (DMY order)'),
         ('photo_07-03-2024.jpg', 'MDY', '2024-07-03', None, 'scoring', 'MM-DD-YYYY (MDY order)'),
         ('photo_03-07-2024.jpg', 'MDY', '2024-03-07', None, 'scoring', 'MM-DD-YYYY (MDY, Mar 7)'),
-
         # -- Month words --
         ('/Photos/May 2023/pic.jpg', 'DMY', '2023-05-01', None, 'scoring', 'Month Year folder'),
         ('/Photos/January 15 2024/pic.jpg', 'DMY', '2024-01-15', None, 'scoring', 'Month Day Year folder'),
         ('/Photos/15 March 2024/pic.jpg', 'DMY', '2024-03-15', None, 'scoring', 'Day Month Year folder'),
         ('/Photos/early June/pic.jpg', 'DMY', None, None, 'scoring', '"early June" — no year, no match'),
         ('/Photos/2023/early June/pic.jpg', 'DMY', '2023-06-01', None, 'scoring', '"early June" with year hint'),
-
         # -- Seasons / holidays --
         ('/Photos/Summer 2006/pic.jpg', 'DMY', '2006-06-01', None, 'scoring', 'Season word (June=start)'),
         ('/Photos/Christmas 2023/pic.jpg', 'DMY', '2023-12-25', None, 'scoring', 'Holiday word'),
         ('/Photos/Halloween 2020/pic.jpg', 'DMY', '2020-10-31', None, 'scoring', 'Holiday word'),
-
         # -- Path hierarchy dates --
         ('/Photos/2024/March/IMG_001.jpg', 'DMY', '2024-03-01', None, 'scoring', 'Year/Month path hierarchy'),
         ('/2023/06/photo.jpg', 'DMY', '2023-06-01', None, 'both', 'Year/Month numeric path'),
-
         # -- WhatsApp-style --
-        ('WhatsApp Image 2024-03-07 at 14.30.45.jpg', 'DMY', '2024-03-07', '14:30:45', 'both',
-         'WhatsApp date+time'),
-
+        ('WhatsApp Image 2024-03-07 at 14.30.45.jpg', 'DMY', '2024-03-07', '14:30:45', 'both', 'WhatsApp date+time'),
         # -- Camera-style --
         ('DSC_20240307_143045.jpg', 'DMY', '2024-03-07', '14:30:45', 'both', 'Camera prefix YYYYMMDD_HHMMSS'),
         ('IMG_20240307.jpg', 'DMY', '2024-03-07', None, 'both', 'Camera prefix YYYYMMDD'),
-
         # -- Resolution / technical metadata in filenames --
-        ('cars-hd_1920_1080_25fps.mp4', 'DMY', None, None, 'both',
-         'Resolution 1920x1080 not a date'),
-        ('flowers-hd_1080_1920_30fps.mp4', 'DMY', None, None, 'both',
-         'Resolution 1080x1920 (portrait) not a date'),
-        ('apollo2-sd_960_540_30fps.mp4', 'DMY', None, None, 'both',
-         'Resolution 960x540 not a date'),
-
+        ('cars-hd_1920_1080_25fps.mp4', 'DMY', None, None, 'both', 'Resolution 1920x1080 not a date'),
+        ('flowers-hd_1080_1920_30fps.mp4', 'DMY', None, None, 'both', 'Resolution 1080x1920 (portrait) not a date'),
+        ('apollo2-sd_960_540_30fps.mp4', 'DMY', None, None, 'both', 'Resolution 960x540 not a date'),
         # -- Date + time in filename (dot-delimited time after date) --
         # The HH.MM.SS portion must not be parsed as a DMY date.  These
         # tests use forward slashes so path splitting works on all platforms.
-        ('C:/Users/srevi/Dropbox/Photos and Videos/Videos/2025/2025-07-13 14.02.30.mp4',
-         'DMY', '2025-07-13', '14:02:30', 'scoring',
-         'Date + dot time (14.02.30 not a date)'),
-        ('C:/Users/srevi/Dropbox/Photos and Videos/Videos/2024/2024-05-17 16.08.33.jpg',
-         'DMY', '2024-05-17', '16:08:33', 'scoring',
-         'Date + dot time (16.08.33 not a date)'),
-        ('C:/Users/srevi/Dropbox/Photos and Videos/Videos/2018/2018-12-14 17.11.33.mp4',
-         'DMY', '2018-12-14', '17:11:33', 'scoring',
-         'Date + dot time (17.11.33 not a date)'),
-        ('C:/Users/srevi/Dropbox/Photos and Videos/Videos/2018/2018-01-06 11.10.40.mp4',
-         'DMY', '2018-01-06', '11:10:40', 'scoring',
-         'Date + dot time (11.10.40 not a date)'),
-        ('C:/Users/srevi/Dropbox/Photos and Videos/Videos/2018/2018-08-04 21.01.52.mp4',
-         'DMY', '2018-08-04', '21:01:52', 'scoring',
-         'Date + dot time (21.01.52 not a date)'),
+        (
+            'C:/Users/srevi/Dropbox/Photos and Videos/Videos/2025/2025-07-13 14.02.30.mp4',
+            'DMY',
+            '2025-07-13',
+            '14:02:30',
+            'scoring',
+            'Date + dot time (14.02.30 not a date)',
+        ),
+        (
+            'C:/Users/srevi/Dropbox/Photos and Videos/Videos/2024/2024-05-17 16.08.33.jpg',
+            'DMY',
+            '2024-05-17',
+            '16:08:33',
+            'scoring',
+            'Date + dot time (16.08.33 not a date)',
+        ),
+        (
+            'C:/Users/srevi/Dropbox/Photos and Videos/Videos/2018/2018-12-14 17.11.33.mp4',
+            'DMY',
+            '2018-12-14',
+            '17:11:33',
+            'scoring',
+            'Date + dot time (17.11.33 not a date)',
+        ),
+        (
+            'C:/Users/srevi/Dropbox/Photos and Videos/Videos/2018/2018-01-06 11.10.40.mp4',
+            'DMY',
+            '2018-01-06',
+            '11:10:40',
+            'scoring',
+            'Date + dot time (11.10.40 not a date)',
+        ),
+        (
+            'C:/Users/srevi/Dropbox/Photos and Videos/Videos/2018/2018-08-04 21.01.52.mp4',
+            'DMY',
+            '2018-08-04',
+            '21:01:52',
+            'scoring',
+            'Date + dot time (21.01.52 not a date)',
+        ),
         # Time where middle value > 12 — already worked (can't be a month)
-        ('C:/Users/srevi/Dropbox/Photos and Videos/Videos/2018/2018-02-10 10.36.08.mp4',
-         'DMY', '2018-02-10', '10:36:08', 'scoring',
-         'Date + dot time (10.36.08 — minute > 12)'),
+        (
+            'C:/Users/srevi/Dropbox/Photos and Videos/Videos/2018/2018-02-10 10.36.08.mp4',
+            'DMY',
+            '2018-02-10',
+            '10:36:08',
+            'scoring',
+            'Date + dot time (10.36.08 — minute > 12)',
+        ),
         # Backslash variant — must also work (normalised internally)
-        (r'C:\Users\srevi\Dropbox\Photos and Videos\Videos\2025\2025-07-13 14.02.30.mp4',
-         'DMY', '2025-07-13', '14:02:30', 'scoring',
-         'Backslash path with date + dot time'),
-
+        (
+            r'C:\Users\srevi\Dropbox\Photos and Videos\Videos\2025\2025-07-13 14.02.30.mp4',
+            'DMY',
+            '2025-07-13',
+            '14:02:30',
+            'scoring',
+            'Backslash path with date + dot time',
+        ),
         # -- Edge cases --
         ('random_photo.jpg', 'DMY', None, None, 'both', 'No date at all'),
         ('photo_99991231.jpg', 'DMY', None, None, 'both', 'Future date (should be rejected)'),
@@ -2291,8 +2311,7 @@ if __name__ == '__main__':
                 expected_date = _dt.date(parts[0], parts[1], parts[2])
                 if exp_time:
                     tparts = [int(x) for x in exp_time.split(':')]
-                    expected_dt = datetime(parts[0], parts[1], parts[2],
-                                           tparts[0], tparts[1], tparts[2])
+                    expected_dt = datetime(parts[0], parts[1], parts[2], tparts[0], tparts[1], tparts[2])
                 else:
                     expected_dt = None  # date-only check
 
@@ -2411,8 +2430,7 @@ if __name__ == '__main__':
         if is_real:
             # Extract EXIF for real files
             exif_data = extract_exif_data(str(p))
-            ts, conf = derive_timestamp_with_confidence(
-                path_str, exif_data=exif_data, date_order=date_order)
+            ts, conf = derive_timestamp_with_confidence(path_str, exif_data=exif_data, date_order=date_order)
 
             print(_bold('derive_timestamp_with_confidence:'))
             print(f'  Timestamp:   {_cyan(str(ts)) if ts else _dim("None")}')
@@ -2421,16 +2439,14 @@ if __name__ == '__main__':
 
             # Show relevant EXIF dates
             if exif_data:
-                date_keys = [k for k in exif_data if 'date' in k.lower()
-                             or 'time' in k.lower()]
+                date_keys = [k for k in exif_data if 'date' in k.lower() or 'time' in k.lower()]
                 if date_keys:
                     print(_bold('EXIF date fields:'))
                     for k in sorted(date_keys):
                         print(f'  {k}: {exif_data[k]}')
         else:
             # For synthetic paths, just run without EXIF
-            ts, conf = derive_timestamp_with_confidence(
-                path_str, date_order=date_order)
+            ts, conf = derive_timestamp_with_confidence(path_str, date_order=date_order)
             print(_bold('derive_timestamp_with_confidence:'))
             print(f'  Timestamp:   {_cyan(str(ts)) if ts else _dim("None")}')
             print(f'  Confidence:  {conf} ({confidence_names.get(conf, "?")})')
@@ -2442,27 +2458,28 @@ if __name__ == '__main__':
     parser = argparse.ArgumentParser(
         description='Test harness for metadata.py filename date parsing.',
         formatter_class=argparse.RawDescriptionHelpFormatter,
-        epilog='''\
+        epilog="""\
 examples:
   python metadata.py --test                          Run built-in test suite
   python metadata.py --date-order MDY --test         Test with MDY date order
   python metadata.py /Photos/2024/March/IMG_001.jpg  Inspect a synthetic path
   python metadata.py ../tools/mktutorial/examples/some_image.jpg  Inspect real file
-''',
+""",
     )
     parser.add_argument(
         'path',
         nargs='?',
-        help='File path (real or synthetic) to inspect.  '
-        'Runs both parsers and shows results.',
+        help='File path (real or synthetic) to inspect.  Runs both parsers and shows results.',
     )
     parser.add_argument(
-        '--test', '-t',
+        '--test',
+        '-t',
         action='store_true',
         help='Run the built-in test suite.',
     )
     parser.add_argument(
-        '--date-order', '-d',
+        '--date-order',
+        '-d',
         choices=['DMY', 'MDY', 'YMD'],
         default=None,
         help='Date order for ambiguous numeric dates (default: per-case or DMY).',
@@ -2476,8 +2493,7 @@ examples:
         sys.exit(1)
 
     if args.test:
-        print(_bold(f'Running metadata filename parser tests'
-                     f' (date_order={args.date_order or "per-case"})'))
+        print(_bold(f'Running metadata filename parser tests (date_order={args.date_order or "per-case"})'))
         print()
         ok = _run_tests(date_order_override=args.date_order)
         sys.exit(0 if ok else 1)

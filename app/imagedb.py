@@ -2007,29 +2007,20 @@ class OpenCLIPModel:
                     torch.cuda.empty_cache()
                 if is_oom_error(e):
                     self._load_failed = True
-                    logger.error(
-                        f'OOM loading OpenCLIP model '
-                        f'({self.model_name}/{self.pretrained}): {e}'
-                    )
+                    logger.error(f'OOM loading OpenCLIP model ({self.model_name}/{self.pretrained}): {e}')
                 elif self._gpu_health:
                     retry_device = self._gpu_health.report_failure('search')
                     self.device = retry_device
                     # Don't set _load_failed — let the next call retry with the new device
                 else:
                     self._load_failed = True
-                    logger.error(
-                        f'GPU error loading OpenCLIP model '
-                        f'({self.model_name}/{self.pretrained}): {e}'
-                    )
+                    logger.error(f'GPU error loading OpenCLIP model ({self.model_name}/{self.pretrained}): {e}')
                 return
             except Exception as e:
                 self._load_failed = True
                 self._model = None
                 self._preprocess = None
-                logger.error(
-                    f'Failed to load OpenCLIP model '
-                    f'({self.model_name}/{self.pretrained}): {e}'
-                )
+                logger.error(f'Failed to load OpenCLIP model ({self.model_name}/{self.pretrained}): {e}')
                 return
 
             elapsed = time.time() - start_time
@@ -5048,32 +5039,22 @@ class ImageDatabase:
             if stored_id is not None:
                 # Model has changed — wipe all OpenCLIP-derived data
                 logger.info(
-                    f'OpenCLIP model changed ({stored_id} → {current_id}), '
-                    f'clearing embeddings for re-computation'
+                    f'OpenCLIP model changed ({stored_id} → {current_id}), clearing embeddings for re-computation'
                 )
                 self.safe_conn.execute(
-                    'UPDATE images SET embedding = NULL, aesthetic_laion = NULL, '
-                    'description_embedding = NULL'
+                    'UPDATE images SET embedding = NULL, aesthetic_laion = NULL, description_embedding = NULL'
                 )
-                self.safe_conn.execute(
-                    'UPDATE scenes SET embedding = NULL, transcription_embedding = NULL'
-                )
-                self.safe_conn.execute(
-                    'UPDATE faces SET semantic_embedding = NULL'
-                )
+                self.safe_conn.execute('UPDATE scenes SET embedding = NULL, transcription_embedding = NULL')
+                self.safe_conn.execute('UPDATE faces SET semantic_embedding = NULL')
                 # Also clear the preferred_scene_id for videos so the
                 # pipeline re-selects the best scene after re-embedding.
                 self.safe_conn.execute(
-                    "UPDATE images SET embedding = NULL, preferred_scene_id = NULL "
-                    "WHERE media_type = 'video'"
+                    "UPDATE images SET embedding = NULL, preferred_scene_id = NULL WHERE media_type = 'video'"
                 )
                 self.safe_conn.commit()
 
-                n_images = self.safe_conn.execute(
-                    'SELECT COUNT(*) FROM images WHERE deleted = 0'
-                ).fetchone()[0]
-                logger.info(f'  Cleared embeddings for {n_images} images — '
-                            f'pipeline will recompute on next cycle')
+                n_images = self.safe_conn.execute('SELECT COUNT(*) FROM images WHERE deleted = 0').fetchone()[0]
+                logger.info(f'  Cleared embeddings for {n_images} images — pipeline will recompute on next cycle')
                 self._needs_pipeline_rerun = True
             else:
                 logger.info(f'Recording OpenCLIP model identity: {current_id}')
@@ -7010,9 +6991,7 @@ class ImageDatabase:
             self._face_reassess_status = {'status': 'computing'}
 
         try:
-            matches = reassess_unknown_faces(
-                self.safe_conn, threshold=self.config.face_recognition_threshold
-            )
+            matches = reassess_unknown_faces(self.safe_conn, threshold=self.config.face_recognition_threshold)
             if matches:
                 logger.info(f'Face reassessment: matched {len(matches)} faces to known people')
                 # Build per-face update list for the frontend (same format as

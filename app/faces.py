@@ -890,18 +890,22 @@ def detect_faces_preview(
             if face_pixels < min_face_size:
                 continue
 
-            results.append({
-                'box_x': float(norm_x),
-                'box_y': float(norm_y),
-                'box_w': float(norm_w),
-                'box_h': float(norm_h),
-                'confidence': float(prob),
-            })
+            results.append(
+                {
+                    'box_x': float(norm_x),
+                    'box_y': float(norm_y),
+                    'box_w': float(norm_w),
+                    'box_h': float(norm_h),
+                    'confidence': float(prob),
+                }
+            )
 
         results.sort(key=lambda f: f['confidence'], reverse=True)
         logger.debug(
             'Preview detection: %d faces in %s (min_face_size=%d)',
-            len(results), image_path.name, min_face_size,
+            len(results),
+            image_path.name,
+            min_face_size,
         )
         return results
 
@@ -1021,8 +1025,11 @@ def reconcile_detected_faces(
 
     logger.debug(
         'reconcile %s: %d detected, %d existing (%d real, %d sentinels)',
-        image_id[:8], len(detected_faces), len(existing),
-        len(real_existing), len(sentinels),
+        image_id[:8],
+        len(detected_faces),
+        len(existing),
+        len(real_existing),
+        len(sentinels),
     )
 
     if not detected_faces and not real_existing:
@@ -1057,8 +1064,10 @@ def reconcile_detected_faces(
 
     for face in detected_faces:
         face_box = {
-            'box_x': face.box_x, 'box_y': face.box_y,
-            'box_w': face.box_w, 'box_h': face.box_h,
+            'box_x': face.box_x,
+            'box_y': face.box_y,
+            'box_w': face.box_w,
+            'box_h': face.box_h,
         }
         matched = False
         for ex in real_existing:
@@ -1069,7 +1078,10 @@ def reconcile_detected_faces(
                 matched = True
                 logger.debug(
                     'reconcile %s: detection (%.2f,%.2f) matched existing %s',
-                    image_id[:8], face.box_x, face.box_y, ex['id'][:8],
+                    image_id[:8],
+                    face.box_x,
+                    face.box_y,
+                    ex['id'][:8],
                 )
                 break
 
@@ -1090,14 +1102,20 @@ def reconcile_detected_faces(
             reason = 'named' if ex.get('person_id') else 'suppressed' if ex.get('suppressed') else 'manual'
             logger.debug(
                 'reconcile %s: keeping unmatched face %s (reason=%s)',
-                image_id[:8], ex['id'][:8], reason,
+                image_id[:8],
+                ex['id'][:8],
+                reason,
             )
             continue
         to_remove.append(ex)
 
     logger.debug(
         'reconcile %s: %d matched, %d new, %d kept (protected), %d to remove',
-        image_id[:8], len(matched_existing), len(new_faces), kept, len(to_remove),
+        image_id[:8],
+        len(matched_existing),
+        len(new_faces),
+        kept,
+        len(to_remove),
     )
 
     # Remove stale unnamed faces
@@ -1105,7 +1123,8 @@ def reconcile_detected_faces(
         remove_ids = [f['id'] for f in to_remove]
         logger.debug(
             'reconcile %s: removing %d stale unnamed faces: %s',
-            image_id[:8], len(remove_ids),
+            image_id[:8],
+            len(remove_ids),
             ', '.join(rid[:8] for rid in remove_ids),
         )
         placeholders = ','.join('?' * len(remove_ids))
@@ -1160,11 +1179,20 @@ def reconcile_detected_faces(
 
         embedding_bytes = face.embedding.astype(np.float32).tobytes()
 
-        face_rows.append((
-            face_id, image_id,
-            face.box_x, face.box_y, face.box_w, face.box_h,
-            face.confidence, embedding_bytes, person_id, semantic_bytes,
-        ))
+        face_rows.append(
+            (
+                face_id,
+                image_id,
+                face.box_x,
+                face.box_y,
+                face.box_w,
+                face.box_h,
+                face.confidence,
+                embedding_bytes,
+                person_id,
+                semantic_bytes,
+            )
+        )
 
     if face_rows:
         conn.executemany(
@@ -1181,7 +1209,8 @@ def reconcile_detected_faces(
     if face_rows:
         logger.debug(
             'reconcile %s: inserted %d new faces',
-            image_id[:8], len(face_rows),
+            image_id[:8],
+            len(face_rows),
         )
 
     # If we removed everything and added nothing, and no protected faces
@@ -1286,8 +1315,10 @@ def apply_new_faces(
 
     for face in detected:
         face_box = {
-            'box_x': face.box_x, 'box_y': face.box_y,
-            'box_w': face.box_w, 'box_h': face.box_h,
+            'box_x': face.box_x,
+            'box_y': face.box_y,
+            'box_w': face.box_w,
+            'box_h': face.box_h,
         }
         matched = False
         for ex in real_existing:
@@ -1355,11 +1386,20 @@ def apply_new_faces(
 
         embedding_bytes = face.embedding.astype(np.float32).tobytes()
 
-        face_rows.append((
-            face_id, image_id,
-            face.box_x, face.box_y, face.box_w, face.box_h,
-            face.confidence, embedding_bytes, person_id, semantic_bytes,
-        ))
+        face_rows.append(
+            (
+                face_id,
+                image_id,
+                face.box_x,
+                face.box_y,
+                face.box_w,
+                face.box_h,
+                face.confidence,
+                embedding_bytes,
+                person_id,
+                semantic_bytes,
+            )
+        )
 
     with conn:
         conn.executemany(
@@ -1375,7 +1415,10 @@ def apply_new_faces(
 
     logger.info(
         'Applied %d new faces to image %s (%d matched existing, %d total detected)',
-        len(new_faces), image_id, len(matched_existing), len(detected),
+        len(new_faces),
+        image_id,
+        len(matched_existing),
+        len(detected),
     )
 
     return {

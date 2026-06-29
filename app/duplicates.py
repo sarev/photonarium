@@ -855,9 +855,7 @@ def _compute_duplicates_level1_incremental(
     image_to_group = _get_image_to_group_mapping(conn, level=1)
 
     # Load all perceptual hashes (small — ~350KB for 44k images)
-    cursor = conn.execute(
-        'SELECT id, perceptual_hash FROM images WHERE deleted = 0 AND perceptual_hash IS NOT NULL'
-    )
+    cursor = conn.execute('SELECT id, perceptual_hash FROM images WHERE deleted = 0 AND perceptual_hash IS NOT NULL')
     all_hashes: dict[str, int] = {}
     for row in cursor.fetchall():
         try:
@@ -1466,9 +1464,7 @@ def _compute_duplicates_embedding_incremental_multi(
 
                 for other_group in existing_groups:
                     if other_group != target_group:
-                        _merge_groups(
-                            conn, level=level, group_hash_keep=target_group, group_hash_merge=other_group
-                        )
+                        _merge_groups(conn, level=level, group_hash_keep=target_group, group_hash_merge=other_group)
                         for img_id, grp in list(image_to_group.items()):
                             if grp == other_group:
                                 image_to_group[img_id] = target_group
@@ -1979,6 +1975,7 @@ class DuplicateManager:
                 )
 
         return groups
+
     def get_explicit_groups_ranked(
         self,
         explicit_groups: list[dict[str, Any]],
@@ -2027,6 +2024,7 @@ class DuplicateManager:
                     }
                 )
         return groups
+
     def get_groups_lightweight(self, level: int) -> list[dict[str, Any]]:
         """Get duplicate groups with minimal data for efficient display.
 
@@ -2106,6 +2104,7 @@ class DuplicateManager:
                 )
 
         return groups
+
     def _get_custom_groups_lightweight(self) -> list[dict[str, Any]]:
         """Get custom groups (level 5) with names, including empty groups.
 
@@ -2207,6 +2206,7 @@ class DuplicateManager:
                 groups.append(group_dict)
 
         return groups
+
     def _get_directory_groups_lightweight(self) -> list[dict[str, Any]]:
         """Get directory groups (level 4) with names and source paths.
 
@@ -2280,6 +2280,7 @@ class DuplicateManager:
                 )
 
         return groups
+
     # =========================================================================
     # Directory Group Sync (Level 4)
     # =========================================================================
@@ -2316,10 +2317,7 @@ class DuplicateManager:
             cursor = conn.execute(
                 'SELECT group_hash, source_path, name FROM custom_groups WHERE source_path IS NOT NULL'
             )
-            existing_groups = {
-                row['source_path']: (row['group_hash'], row['name'])
-                for row in cursor.fetchall()
-            }
+            existing_groups = {row['source_path']: (row['group_hash'], row['name']) for row in cursor.fetchall()}
 
             # Existing memberships: group_hash → set of image_ids
             cursor = conn.execute(
@@ -2405,11 +2403,7 @@ class DuplicateManager:
                 removed += 1
 
         has_changes = (
-            add_member_params
-            or remove_member_params
-            or update_name_params
-            or create_group_params
-            or remove_dup_params
+            add_member_params or remove_member_params or update_name_params or create_group_params or remove_dup_params
         )
 
         if not has_changes:
@@ -2490,6 +2484,7 @@ class DuplicateManager:
         """Get the current epoch timestamp for duplicate groups."""
         conn = self._get_db()
         return _get_duplicate_epoch(conn)
+
     # =========================================================================
     # Computation
     # =========================================================================
@@ -2617,9 +2612,7 @@ class DuplicateManager:
                         )
                     else:
                         logger.info('Level 1: full computation (LSH)')
-                        results[level] = _compute_duplicates_level1(
-                            conn, self._config.perceptual_hash_threshold
-                        )
+                        results[level] = _compute_duplicates_level1(conn, self._config.perceptual_hash_threshold)
                 elif group_count == 0:
                     # No existing groups - must do full computation
                     logger.info(f'Level {level}: no existing groups, full computation')
@@ -2680,6 +2673,7 @@ class DuplicateManager:
             conn = self._get_db()
 
         return _get_images_by_similarity(conn, reference_embedding)
+
     # =========================================================================
     # Custom Groups (Level 5 — Albums)
     # =========================================================================
@@ -2744,11 +2738,10 @@ class DuplicateManager:
         """
         now = datetime.now().isoformat()
         conn = self._get_db()
-        conn.execute(
-            'UPDATE custom_groups SET name = ?, updated_at = ? WHERE group_hash = ?', (name, now, group_hash)
-        )
+        conn.execute('UPDATE custom_groups SET name = ?, updated_at = ? WHERE group_hash = ?', (name, now, group_hash))
         conn.commit()
         logger.info(f'Renamed custom group {group_hash} to "{name}"')
+
     def update_custom_group_filter(
         self, group_hash: str, filter_json: str, preview_image_id: str | None = None
     ) -> None:
@@ -2768,6 +2761,7 @@ class DuplicateManager:
         )
         conn.commit()
         logger.info(f'Updated filter for smart group {group_hash}')
+
     def mark_smart_groups_damaged(self, removed_person_ids: list[str]) -> bool:
         """Mark smart groups as damaged if they reference deleted people.
 
@@ -2815,6 +2809,7 @@ class DuplicateManager:
         conn.commit()
         logger.info('Marked %d smart group(s) as damaged: %s', len(damaged_hashes), damaged_hashes)
         return True
+
     def update_smart_group_preview(self, group_hash: str, preview_image_id: str | None) -> None:
         """Update only the preview thumbnail of a smart group.
 
@@ -2832,6 +2827,7 @@ class DuplicateManager:
             (preview_image_id, now, group_hash),
         )
         conn.commit()
+
     def delete_custom_group(self, group_hash: str) -> None:
         """Delete a custom group and its image associations.
 
@@ -2863,9 +2859,7 @@ class DuplicateManager:
         conn = self._get_db()
         for image_id in image_ids:
             conn.execute(
-                'INSERT OR IGNORE INTO duplicate_groups'
-                ' (level, group_hash, image_id, updated_at)'
-                ' VALUES (?, ?, ?, ?)',
+                'INSERT OR IGNORE INTO duplicate_groups (level, group_hash, image_id, updated_at) VALUES (?, ?, ?, ?)',
                 (LEVEL_CUSTOM, group_hash, image_id, now),
             )
         conn.execute(

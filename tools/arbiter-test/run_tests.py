@@ -21,10 +21,11 @@ _HERE = os.path.dirname(os.path.abspath(__file__))
 _APP = os.path.normpath(os.path.join(_HERE, '..', '..', 'app'))
 sys.path.insert(0, _APP)
 
-from arbiter import ArbiterError, ArbiterShutdown, ComputeArbiter, Priority  # noqa: E402
-from arbiter.backend import InsufficientMemory  # noqa: E402
-from fake import FakeBackend, FakeHealthSink, FakeModel, FakeOOM  # noqa: E402
-from arbiter.residency import ResidencyManager  # noqa: E402
+from fake import FakeBackend, FakeHealthSink, FakeModel, FakeOOM
+
+from arbiter import ArbiterError, ArbiterShutdown, ComputeArbiter, Priority
+from arbiter.backend import InsufficientMemory
+from arbiter.residency import ResidencyManager
 
 _TESTS = []
 
@@ -92,11 +93,11 @@ def test_lru_eviction_and_transparent_reload():
     arb, b, _ = make(100)
     for k in ('a', 'b', 'c'):
         arb.register(k, loader(k, 40), 40)
-    arb.run('a', lambda mm: None)              # resident: a
-    arb.run('b', lambda mm: None)              # resident: a, b
-    arb.run('c', lambda mm: None)              # evicts LRU idle (a); resident: b, c
+    arb.run('a', lambda mm: None)  # resident: a
+    arb.run('b', lambda mm: None)  # resident: a, b
+    arb.run('c', lambda mm: None)  # evicts LRU idle (a); resident: b, c
     assert_eq(b.load_count, {'a': 1, 'b': 1, 'c': 1}, 'each loaded once so far')
-    arb.run('a', lambda mm: 'ok')              # a was evicted -> transparent reload
+    arb.run('a', lambda mm: 'ok')  # a was evicted -> transparent reload
     assert_eq(b.load_count['a'], 2, 'a reloaded after eviction')
     arb.shutdown()
     assert_eq(b.allocated, 0, 'no leak')
@@ -108,15 +109,17 @@ def test_pinned_never_evicted():
     rm = ResidencyManager(b, clock=lambda: 0.0)
     for k in ('a', 'b', 'c'):
         rm.register(k, loader(k, 40), 40)
-    rm.ensure('a'); rm.pin('a')
-    rm.ensure('b'); rm.pin('b')                # full: a, b both pinned
+    rm.ensure('a')
+    rm.pin('a')
+    rm.ensure('b')
+    rm.pin('b')  # full: a, b both pinned
     try:
-        rm.ensure('c')                          # nothing idle to evict
+        rm.ensure('c')  # nothing idle to evict
         raise AssertionError('expected InsufficientMemory')
     except InsufficientMemory:
         pass
-    rm.unpin('a')                               # a now idle
-    rm.ensure('c')                              # should evict a, not b
+    rm.unpin('a')  # a now idle
+    rm.ensure('c')  # should evict a, not b
     assert_eq(set(rm.resident_keys()), {'b', 'c'}, 'evicted the idle (a), kept pinned (b)')
 
 
@@ -209,15 +212,15 @@ def test_shutdown_fails_pending_and_rejects_new():
     def pending():
         try:
             arb.run('x', lambda _m: None, Priority.BULK)
-        except BaseException as e:  # noqa: BLE001
+        except BaseException as e:
             captured['err'] = e
 
     threading.Thread(target=pending, daemon=True).start()
     assert wait_until(lambda: arb.status()['queued']['BULK'] == 1), 'job pending'
 
     threading.Thread(target=arb.shutdown, daemon=True).start()
-    time.sleep(0.05)            # let shutdown set the stopping flag
-    gate.set()                  # release the in-flight blocker so the owner can drain
+    time.sleep(0.05)  # let shutdown set the stopping flag
+    gate.set()  # release the in-flight blocker so the owner can drain
     assert wait_until(lambda: 'err' in captured), 'pending job resolved'
     assert isinstance(captured['err'], ArbiterShutdown), f'got {captured["err"]!r}'
 
@@ -245,8 +248,8 @@ def test_oom_during_run_reports_failure():
 
 @test
 def test_cpu_fallback_when_model_too_big():
-    arb, _, h = make(50)                         # budget 50
-    arb.register('big', loader('big', 80), 80)   # bigger than the whole budget
+    arb, _, h = make(50)  # budget 50
+    arb.register('big', loader('big', 80), 80)  # bigger than the whole budget
     assert_eq(arb.run('big', lambda mm: 'ok'), 'ok', 'ran after CPU fallback')
     assert_eq(h.failures, ['big'], 'reported the fit failure')
     assert_eq(arb.status()['cpu_fallbacks'], 1, 'cpu fallback counted')
@@ -259,8 +262,7 @@ def test_queue_wait_never_reports_failure():
     # 20 concurrent callers all wait their turn; waiting is not failure.
     arb, _, h = make()
     arb.register('m', loader('m', 1), 1)
-    threads = [threading.Thread(target=lambda: arb.run('m', lambda mm: None), daemon=True)
-               for _ in range(20)]
+    threads = [threading.Thread(target=lambda: arb.run('m', lambda mm: None), daemon=True) for _ in range(20)]
     for t in threads:
         t.start()
     for t in threads:
@@ -276,7 +278,7 @@ def test_reentrancy_is_rejected_not_deadlocked():
     arb.register('m', loader('m', 1), 1)
 
     def reenter(_m):
-        return arb.run('m', lambda x: 1)         # illegal: on the owner thread
+        return arb.run('m', lambda x: 1)  # illegal: on the owner thread
 
     try:
         arb.run('m', reenter)
@@ -342,7 +344,7 @@ def main():
         try:
             fn()
             print(f'PASS  {fn.__name__}')
-        except BaseException as e:  # noqa: BLE001
+        except BaseException as e:
             failures += 1
             print(f'FAIL  {fn.__name__}: {type(e).__name__}: {e}')
             traceback.print_exc()

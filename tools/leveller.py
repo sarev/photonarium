@@ -25,6 +25,7 @@ import numpy as np
 # Ensure ffmpeg/ffprobe from ffmpeg-binaries pip package are findable
 try:
     from pathlib import Path
+
     _bindir = Path(__import__('ffmpeg').__path__[0]) / 'binaries'
     if _bindir.is_dir():
         os.environ['PATH'] = str(_bindir) + os.pathsep + os.environ.get('PATH', '')
@@ -120,6 +121,7 @@ def level_audio(
     # transitions between loud and quiet speakers better than a moving
     # average (which drags quiet gains down when adjacent to loud sections).
     from scipy.ndimage import median_filter
+
     smooth_radius = max(3, int(0.15 / (hop_size / sample_rate)))  # ~150ms
     smooth_radius = smooth_radius | 1  # Must be odd
     gains_smooth = median_filter(gains, size=smooth_radius)
@@ -170,17 +172,22 @@ def main():
     parser.add_argument('input', help='Input audio file (mp3, wav, etc.)')
     parser.add_argument('output', help='Output audio file')
     parser.add_argument(
-        '--window', type=float, default=0.3,
+        '--window',
+        type=float,
+        default=0.3,
         help='Analysis window in seconds (default: 0.3)',
     )
     parser.add_argument(
-        '--target', type=float, default=-18.0,
+        '--target',
+        type=float,
+        default=-18.0,
         help='Target RMS level in dBFS (default: -18)',
     )
     parser.add_argument(
-        '--first', type=str, default=None,
-        help='Only process the first N seconds (e.g. "4:30" or "270"). '
-             'The rest is passed through unchanged.',
+        '--first',
+        type=str,
+        default=None,
+        help='Only process the first N seconds (e.g. "4:30" or "270"). The rest is passed through unchanged.',
     )
     args = parser.parse_args()
 
@@ -213,14 +220,20 @@ def main():
         else:
             process_samples = samples[:split_sample]
             passthrough = samples[split_sample:]
-        print(f'Processing first {first_sec:.1f}s ({split_sample} samples), '
-              f'passing through remaining {len(passthrough)} samples', flush=True)
+        print(
+            f'Processing first {first_sec:.1f}s ({split_sample} samples), '
+            f'passing through remaining {len(passthrough)} samples',
+            flush=True,
+        )
     else:
         process_samples = samples
         passthrough = None
 
-    print(f'Levelling ({len(process_samples) / sample_rate:.1f}s, {sample_rate}Hz, '
-          f'{channels}ch, window={args.window}s, target={args.target}dBFS)...', flush=True)
+    print(
+        f'Levelling ({len(process_samples) / sample_rate:.1f}s, {sample_rate}Hz, '
+        f'{channels}ch, window={args.window}s, target={args.target}dBFS)...',
+        flush=True,
+    )
 
     levelled = level_audio(process_samples, sample_rate, args.window, args.target)
 

@@ -43,13 +43,13 @@ logger = logging.getLogger(__name__)
 # Keywords that identify GPU/accelerator errors across all backends.
 # Matched case-insensitively against RuntimeError messages.
 _GPU_ERROR_KEYWORDS = (
-    'out of memory',       # All backends (CUDA, MPS, XPU)
-    'cuda',                # NVIDIA CUDA errors
-    'mps',                 # Apple Metal Performance Shaders errors
-    'xpu',                 # Intel XPU errors
-    'ipex',                # Intel Extension for PyTorch errors
-    'native api failed',   # Intel XPU driver errors
-    'dpcpp',               # Intel oneAPI DPC++ runtime errors
+    'out of memory',  # All backends (CUDA, MPS, XPU)
+    'cuda',  # NVIDIA CUDA errors
+    'mps',  # Apple Metal Performance Shaders errors
+    'xpu',  # Intel XPU errors
+    'ipex',  # Intel Extension for PyTorch errors
+    'native api failed',  # Intel XPU driver errors
+    'dpcpp',  # Intel oneAPI DPC++ runtime errors
 )
 
 
@@ -72,6 +72,7 @@ def is_gpu_error(exc: Exception) -> bool:
     # when available.  Present on CUDA builds; may exist on others.
     try:
         import torch
+
         if isinstance(exc, torch.OutOfMemoryError):
             return True
     except (ImportError, AttributeError):
@@ -100,6 +101,7 @@ def is_oom_error(exc: Exception) -> bool:
         return True
     try:
         import torch
+
         if isinstance(exc, torch.OutOfMemoryError):
             return True
     except (ImportError, AttributeError):
@@ -202,35 +204,33 @@ class GpuHealth:
                 if feature not in self._retried_features:
                     # First failure — allow one retry on the same device
                     self._retried_features.add(feature)
-                    logger.warning(
-                        f'GPU error in {feature} — will retry once on {self.device}'
-                    )
+                    logger.warning(f'GPU error in {feature} — will retry once on {self.device}')
                     return self.device
                 # Second failure — fall back to CPU
                 self._state = STATE_CPU_FALLBACK
                 self._affected_features.add(feature)
-                logger.error(
-                    f'GPU error in {feature} persists after retry — '
-                    f'falling back to CPU'
+                logger.error(f'GPU error in {feature} persists after retry — falling back to CPU')
+                self._emit(
+                    'gpu_state_changed',
+                    {
+                        'state': STATE_CPU_FALLBACK,
+                        'features': sorted(self._affected_features),
+                    },
                 )
-                self._emit('gpu_state_changed', {
-                    'state': STATE_CPU_FALLBACK,
-                    'features': sorted(self._affected_features),
-                })
                 return 'cpu'
 
             if self._state == STATE_CPU_FALLBACK:
                 # CPU also failed — disable the feature
                 self._state = STATE_DISABLED
                 self._affected_features.add(feature)
-                logger.error(
-                    f'CPU fallback also failed for {feature} — '
-                    f'feature disabled (restart server to retry)'
+                logger.error(f'CPU fallback also failed for {feature} — feature disabled (restart server to retry)')
+                self._emit(
+                    'gpu_state_changed',
+                    {
+                        'state': STATE_DISABLED,
+                        'features': sorted(self._affected_features),
+                    },
                 )
-                self._emit('gpu_state_changed', {
-                    'state': STATE_DISABLED,
-                    'features': sorted(self._affected_features),
-                })
                 return 'cpu'
 
             # Already disabled

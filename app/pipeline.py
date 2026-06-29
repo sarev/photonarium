@@ -667,9 +667,7 @@ class PipelineOrchestrator(threading.Thread):
         # Mark missing files as deleted
         self._mark_deleted_files(folder_paths, found_paths)
 
-        logger.info(
-            f'Stage 1 complete: {processed_count} checked, {changed_count} new/changed, {error_count} errors'
-        )
+        logger.info(f'Stage 1 complete: {processed_count} checked, {changed_count} new/changed, {error_count} errors')
         if changed_count > 0 or error_count > 0:
             # Notify frontend that images are indexed
             self._db.event_queue.emit('images_indexed', {})
@@ -783,10 +781,7 @@ class PipelineOrchestrator(threading.Thread):
         # Use a tolerance for mtime comparison: floating-point round-trip
         # through SQLite can introduce sub-second drift, causing false
         # "changed" detections and unnecessary DB writes on every reindex.
-        mtime_matches = (
-            existing_mtime is not None
-            and abs(existing_mtime - current_mtime) < 0.01
-        )
+        mtime_matches = existing_mtime is not None and abs(existing_mtime - current_mtime) < 0.01
         file_unchanged = existing['size'] == current_size and mtime_matches
 
         if not file_unchanged and existing['size'] == current_size and existing_checksum:
@@ -2496,7 +2491,8 @@ class PipelineOrchestrator(threading.Thread):
             # (Image preloading above stays on the prefetch threads.)
             results = self._db.arbiter.run_exclusive(
                 lambda det=face_detector, imgs=loaded_images: det.detect_faces_from_preloaded(
-                    imgs, stop_event=self._stop_event,
+                    imgs,
+                    stop_event=self._stop_event,
                 ),
                 priority=Priority.BULK,
             )

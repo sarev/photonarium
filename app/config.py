@@ -85,7 +85,7 @@ CONFIG_SCHEMA: list[tuple[str, list[tuple[str, list[str]]]]] = [
                 'data_dir',
                 [
                     '[!] Where Photonarium keeps its database, thumbnails, and model files.',
-                    'Set automatically by the installer — you normally don\'t need to change this.',
+                    "Set automatically by the installer — you normally don't need to change this.",
                     'If you do move it, copy the entire contents of the old directory first,',
                     'then run download_models.py to restore any missing model files.',
                     'Leave empty to use the current working directory.',
@@ -120,7 +120,7 @@ CONFIG_SCHEMA: list[tuple[str, list[tuple[str, list[str]]]]] = [
                 'server_port',
                 [
                     '[!] Port number for the web server (1024-65535).',
-                    'You\'ll need to update any bookmarks if you change this.',
+                    "You'll need to update any bookmarks if you change this.",
                 ],
             ),
             (
@@ -167,7 +167,7 @@ CONFIG_SCHEMA: list[tuple[str, list[tuple[str, list[str]]]]] = [
                 'face_detection_batch_size',
                 [
                     'How many images to scan for faces at once (1-256).',
-                    'Unlike the other batch sizes, larger values don\'t always help here.',
+                    "Unlike the other batch sizes, larger values don't always help here.",
                     'Run tools/benchmark_batch_sizes.py to find the best value for your hardware.',
                 ],
             ),
@@ -217,7 +217,7 @@ CONFIG_SCHEMA: list[tuple[str, list[tuple[str, list[str]]]]] = [
             (
                 'openclip_model',
                 [
-                    '[M] The AI model used for search — it understands what\'s in your photos',
+                    "[M] The AI model used for search — it understands what's in your photos",
                     'so you can search by description (e.g. "sunset at the beach").',
                     'Larger models give better results but are slower and use more memory.',
                     '',
@@ -363,7 +363,7 @@ CONFIG_SCHEMA: list[tuple[str, list[tuple[str, list[str]]]]] = [
             (
                 'face_recognition_threshold',
                 [
-                    'How similar a face must be to a known person before it\'s auto-assigned.',
+                    "How similar a face must be to a known person before it's auto-assigned.",
                     'Higher values are stricter — fewer wrong matches, but more faces',
                     'left as "unknown" for you to sort manually.',
                     'Range: 0.0-1.0, recommended: 0.65-0.90',
@@ -451,7 +451,7 @@ CONFIG_SCHEMA: list[tuple[str, list[tuple[str, list[str]]]]] = [
                 [
                     'Languages shown in the per-video language dropdown.',
                     'You can set any Whisper-supported language via the API even if',
-                    'it\'s not listed here.',
+                    "it's not listed here.",
                     '',
                     'Supported codes: af, am, ar, as, az, ba, be, bg, bn, bo, br,',
                     '  bs, ca, cs, cy, da, de, el, en, es, et, eu, fa, fi, fo, fr, gl, gu,',
@@ -571,7 +571,7 @@ CONFIG_SCHEMA: list[tuple[str, list[tuple[str, list[str]]]]] = [
             (
                 'thumbnail_extra_rows',
                 [
-                    'How many extra rows of thumbnails to load above and below what\'s visible.',
+                    "How many extra rows of thumbnails to load above and below what's visible.",
                     'More rows = smoother scrolling, but uses more memory.',
                     'Range: 1-20, recommended: 3-8',
                 ],
@@ -1417,7 +1417,9 @@ def _parse_config_data(config_data: dict[str, Any]) -> Config:
         except (ValueError, TypeError) as e:
             logger.warning(
                 'Config field %s: could not parse value %r (%s), using default',
-                field_name, raw, e,
+                field_name,
+                raw,
+                e,
             )
 
     return Config(**kwargs)
@@ -1545,6 +1547,7 @@ def load_config(
         backup_path = config_path.with_suffix('.yml.bak')
         try:
             import shutil
+
             shutil.copy2(config_path, backup_path)
             logger.info(f'Config upgrade: backed up existing config to {backup_path}')
         except OSError as e:
@@ -1560,10 +1563,7 @@ def load_config(
             if f.name in missing:
                 logger.debug(f'  {f.name}: <new> = {new_val!r}')
             elif str(old_val) != str(new_val):
-                logger.warning(
-                    f'Config upgrade: field {f.name} changed during parse: '
-                    f'{old_val!r} → {new_val!r}'
-                )
+                logger.warning(f'Config upgrade: field {f.name} changed during parse: {old_val!r} → {new_val!r}')
 
         save_config(config, config_path)
 

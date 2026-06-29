@@ -122,6 +122,7 @@ class _WriteCursor:
     def __iter__(self):
         return iter(self._rows)
 
+
 # Sentinel placed on the write queue to trigger clean shutdown.
 _SHUTDOWN = object()
 

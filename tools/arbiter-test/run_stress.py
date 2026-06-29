@@ -28,8 +28,9 @@ _HERE = os.path.dirname(os.path.abspath(__file__))
 _APP = os.path.normpath(os.path.join(_HERE, '..', '..', 'app'))
 sys.path.insert(0, _APP)
 
-from arbiter import ComputeArbiter, Priority  # noqa: E402
-from fake import FakeBackend, FakeHealthSink, FakeModel, FakeOOM  # noqa: E402
+from fake import FakeBackend, FakeHealthSink, FakeModel, FakeOOM
+
+from arbiter import ComputeArbiter, Priority
 
 SEED = int(sys.argv[1]) if len(sys.argv) > 1 else 1234
 DURATION_S = float(sys.argv[2]) if len(sys.argv) > 2 else 4.0
@@ -37,14 +38,13 @@ N_THREADS = 8
 WATCHDOG_S = DURATION_S + 30.0
 
 # Five models; budget fits ~3-4 of them, forcing constant eviction churn.
-MODELS = {f'm{i}': 30 + 10 * i for i in range(5)}   # costs 30..70
+MODELS = {f'm{i}': 30 + 10 * i for i in range(5)}  # costs 30..70
 BUDGET = 200
 
 
 def main() -> int:
     random.seed(SEED)
-    print(f'stress: seed={SEED} duration={DURATION_S}s threads={N_THREADS} '
-          f'models={MODELS} budget={BUDGET}')
+    print(f'stress: seed={SEED} duration={DURATION_S}s threads={N_THREADS} models={MODELS} budget={BUDGET}')
 
     # Watchdog: if the whole run wedges, dump every thread's stack and abort.
     faulthandler.dump_traceback_later(WATCHDOG_S, exit=True)
@@ -86,8 +86,8 @@ def main() -> int:
                     stats['expected_exc'] += 1
             except FakeOOM:
                 with lock:
-                    stats['unexpected_oom'] += 1   # a budget bug — must stay 0
-            except BaseException:  # noqa: BLE001
+                    stats['unexpected_oom'] += 1  # a budget bug — must stay 0
+            except BaseException:
                 with lock:
                     stats['other_exc'] += 1
 
@@ -105,13 +105,16 @@ def main() -> int:
     status = arb.status()
     resolved = stats['ok'] + stats['expected_exc'] + stats['unexpected_oom'] + stats['other_exc']
 
-    print(f'submitted={stats["submitted"]} resolved={resolved} '
-          f'ok={stats["ok"]} expected_exc={stats["expected_exc"]} '
-          f'unexpected_oom={stats["unexpected_oom"]} other_exc={stats["other_exc"]}')
-    print(f'served={status["served"]} loads={status["loads"]} evictions={status["evictions"]} '
-          f'cpu_fallbacks={status["cpu_fallbacks"]} oom_events={status["oom_events"]}')
-    print(f'allocated_after_shutdown={backend.allocated} '
-          f'invariant_violation={status["invariant_violation"]}')
+    print(
+        f'submitted={stats["submitted"]} resolved={resolved} '
+        f'ok={stats["ok"]} expected_exc={stats["expected_exc"]} '
+        f'unexpected_oom={stats["unexpected_oom"]} other_exc={stats["other_exc"]}'
+    )
+    print(
+        f'served={status["served"]} loads={status["loads"]} evictions={status["evictions"]} '
+        f'cpu_fallbacks={status["cpu_fallbacks"]} oom_events={status["oom_events"]}'
+    )
+    print(f'allocated_after_shutdown={backend.allocated} invariant_violation={status["invariant_violation"]}')
 
     ok = True
 

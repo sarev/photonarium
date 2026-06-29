@@ -511,12 +511,12 @@ def get_non_face_ids(page):
 # =========================================================================
 section('getting-started')
 
-setup_step('setup-wizard')   # 0-1.png -- first-run wizard dialog
+setup_step('setup-wizard')  # 0-1.png -- first-run wizard dialog
 setup_step('first-launch')  # 0-2.png -- light theme empty DB screen
-setup_step('dark-theme')    # 0-3.png -- dark theme empty DB screen
-setup_step('adding-images') # 0-4.png -- composite: dark DB + OS picker overlay
-setup_step('indexing')      # 0-5.png -- folder added, scan starting
-setup_step('processing')    # 0-6.png -- importing in progress
+setup_step('dark-theme')  # 0-3.png -- dark theme empty DB screen
+setup_step('adding-images')  # 0-4.png -- composite: dark DB + OS picker overlay
+setup_step('indexing')  # 0-5.png -- folder added, scan starting
+setup_step('processing')  # 0-6.png -- importing in progress
 
 
 # =========================================================================
@@ -1574,9 +1574,7 @@ def step_videos_in_gallery(page, ctx):
     page.wait_for_timeout(300)
     # Ensure descending order (newest first) — the direction button
     # toggles, so check the current state and flip if needed.
-    is_asc = page.evaluate(
-        '() => AppState.view.getSortDirection() === "asc"'
-    )
+    is_asc = page.evaluate('() => AppState.view.getSortDirection() === "asc"')
     if is_asc:
         click_toolbar(page, 'btn-sort-direction')
         page.wait_for_timeout(300)
@@ -1835,9 +1833,7 @@ def step_extras_sorting_by_people(page, ctx):
         pass
     # Navigate to gallery — check if already there to avoid clicking
     # a disabled nav button
-    on_gallery = page.evaluate(
-        '() => document.getElementById("screen-gallery")?.offsetParent !== null'
-    )
+    on_gallery = page.evaluate('() => document.getElementById("screen-gallery")?.offsetParent !== null')
     if not on_gallery:
         navigate_to(page, 'gallery')
     else:
@@ -1992,15 +1988,17 @@ def start_server(add_folders=None, scan=False):
         '--data-dir',
         str(TUTORIALS_DIR),
     ]
-    for folder in (add_folders or []):
+    for folder in add_folders or []:
         cmd.extend(['--add-folder', folder])
     if scan:
         cmd.append('--scan')
-    cmd.extend([
-        '--port',
-        str(SERVER_PORT),
-        '--debug',
-    ])
+    cmd.extend(
+        [
+            '--port',
+            str(SERVER_PORT),
+            '--debug',
+        ]
+    )
     proc = subprocess.Popen(
         cmd,
         cwd=str(PROJECT_DIR),
@@ -2246,7 +2244,8 @@ def run_setup():
     # ---- Phase 2: Ingestion server — add folders, scan, capture -----------
     print('\n[5/7] Restarting server with demo folders...')
     server, server_log_fh = start_server(
-        add_folders=[examples_dir], scan=True,
+        add_folders=[examples_dir],
+        scan=True,
     )
     try:
         wait_for_server()

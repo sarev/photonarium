@@ -139,18 +139,21 @@ class FasterWhisperBackend(STTBackend):
                 )
                 logger.info(
                     'faster-whisper model loaded: %s (%.1fs)',
-                    self._model_size, time.perf_counter() - t0,
+                    self._model_size,
+                    time.perf_counter() - t0,
                 )
                 return True
 
             except (MemoryError, RuntimeError) as e:
                 try:
                     import torch
+
                     if torch.cuda.is_available():
                         torch.cuda.empty_cache()
                 except ImportError:
                     pass
                 from gputil import is_oom_error
+
                 if is_oom_error(e):
                     self._load_failed = True
                     logger.error(f'OOM loading faster-whisper model: {e}')
@@ -214,11 +217,13 @@ class FasterWhisperBackend(STTBackend):
         except (MemoryError, RuntimeError) as e:
             try:
                 import torch
+
                 if torch.cuda.is_available():
                     torch.cuda.empty_cache()
             except ImportError:
                 pass
             from gputil import is_oom_error
+
             if is_oom_error(e):
                 self._load_failed = True
                 logger.error(f'OOM during transcription of {audio_path}: {e}')

@@ -75,6 +75,7 @@ from werkzeug.exceptions import HTTPException
 
 # flask_cors not needed — frontend is served from the same origin
 
+
 def jsonify(data):
     """JSON response using orjson for performance."""
     return Response(orjson.dumps(data), mimetype='application/json')
@@ -436,9 +437,7 @@ def _prepopulate_images_cache(database: ImageDatabase):
         _set_images_cache(epoch, json_bytes)
         elapsed = time.perf_counter() - t0
         mb = len(json_bytes) // 1024 // 1024
-        logger.info(
-            f'Images cache pre-populated: {len(images)} images, {mb}MB, {elapsed * 1000:.0f}ms'
-        )
+        logger.info(f'Images cache pre-populated: {len(images)} images, {mb}MB, {elapsed * 1000:.0f}ms')
     except Exception:
         # Non-fatal — cache miss fallback handles this gracefully.
         logger.warning('Failed to pre-populate images cache', exc_info=True)
@@ -1728,6 +1727,7 @@ def restart_server():
             # Windows: os.execv spawns a child without killing the parent.
             # Start a new process explicitly, then exit the current one.
             import subprocess
+
             subprocess.Popen(
                 [sys.executable] + sys.argv,
                 close_fds=True,
@@ -1963,11 +1963,13 @@ def save_config_endpoint():
 
 
 # Face detection fields that trigger a rescan of existing images when changed.
-_FACE_DETECTION_FIELDS = frozenset({
-    'face_detection_enabled',
-    'face_detection_min_confidence',
-    'face_detection_min_size',
-})
+_FACE_DETECTION_FIELDS = frozenset(
+    {
+        'face_detection_enabled',
+        'face_detection_min_confidence',
+        'face_detection_min_size',
+    }
+)
 
 
 @app.route('/api/config/hot-reload', methods=['POST'])
@@ -2019,8 +2021,7 @@ def hot_reload_config():
 
     # Check whether face detection settings changed (need image rescan)
     face_settings_changed = any(
-        getattr(old_config, f, None) != getattr(new_config, f, None)
-        for f in _FACE_DETECTION_FIELDS
+        getattr(old_config, f, None) != getattr(new_config, f, None) for f in _FACE_DETECTION_FIELDS
     )
     if face_settings_changed:
         for f in _FACE_DETECTION_FIELDS:
@@ -2077,9 +2078,13 @@ def hot_reload_config():
 
     # Notify frontend to re-fetch /api/config
     from imagedb import EVENT_CONFIG_RELOADED
-    database.event_queue.emit(EVENT_CONFIG_RELOADED, {
-        'changed_fields': sorted(changed_fields),
-    })
+
+    database.event_queue.emit(
+        EVENT_CONFIG_RELOADED,
+        {
+            'changed_fields': sorted(changed_fields),
+        },
+    )
 
     return success_response(message='Settings applied')
 
@@ -3878,10 +3883,14 @@ def apply_detected_faces(image_id):
     # Notify frontend caches if new faces were added
     if result['new'] > 0:
         from imagedb import EVENT_FACES_CHANGED
-        db.event_queue.emit(EVENT_FACES_CHANGED, {
-            'image_ids': [image_id],
-            'reason': 'apply_detected_faces',
-        })
+
+        db.event_queue.emit(
+            EVENT_FACES_CHANGED,
+            {
+                'image_ids': [image_id],
+                'reason': 'apply_detected_faces',
+            },
+        )
 
     return success_response(result)
 
@@ -4950,8 +4959,7 @@ def unassign_faces_batch():
             {
                 'removed': removed_pids,
                 'upserted': [
-                    dict(p) for pid in affected_person_ids
-                    if (p := get_person(db.safe_conn, pid)) is not None
+                    dict(p) for pid in affected_person_ids if (p := get_person(db.safe_conn, pid)) is not None
                 ],
             },
         )
