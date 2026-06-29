@@ -1,5 +1,35 @@
 # Release Notes
 
+## v1.2.9-beta
+
+### Compute Arbiter
+
+All GPU/model work now flows through a single coordination point, eliminating a class of multi-user contention bugs. Previously, semantic search, on-demand face detection and captioning, and the background processing pipeline all hit the GPU with no coordination between them. Concurrent model loads and inference could exhaust VRAM and, in the worst case, corrupt the CUDA context — disabling all GPU features until a restart. With a single user this rarely surfaced; with multiple clients driving the same instance it became likely.
+
+The new arbiter (`app/arbiter/`) is the GPU analogue of the single-writer database design: one owner thread holds the device and serialises all inference, so two model operations can never run — or load — concurrently. Interactive work (search, captioning) is prioritised over bulk work (pipeline stages), so a user's search never waits behind more than one batch, while a forward-progress guarantee stops bulk work from being starved. Contention surfaces as a brief wait, never an error or a "GPU busy" message.
+
+- **Two integration modes**: `run()` for models the arbiter owns (OpenCLIP — search, embeddings, text embeddings), and `run_exclusive()` for models whose lifecycle is managed by their own pipeline stage (NIMA, face detection, Whisper STT, BLIP captioning) — which still serialises their loads and inference against everything else.
+- **Graceful degradation**: out-of-memory and device failures route through the existing `GpuHealth` authority (retry, CPU fallback, then disable) rather than crashing.
+- **Works without a GPU**: on CPU-only systems the arbiter still serialises work to avoid thrashing — a supported, tested configuration.
+- Face-detection preview remains on CPU by design (fast, isolated, and parameterised per call).
+- The sealed `app/arbiter/` package has no inbound dependencies on the rest of the application and is covered by a standalone unit and concurrency-stress test suite.
+
+### Quick Rating Widget
+
+Images and videos can now be rated directly from the fullscreen viewer, without having to judge a low-resolution gallery thumbnail. A trigger in the bottom-left corner shows the current rating; hovering it opens a small palette of star runs (★–★★★) and sentiment icons (faces, thumbs, heart).
+
+The palette icons are inline SVG line-art — monochrome, theme-consistent, and fully offline (no emoji-font dependency) — but each is stored as a plain emoji in the existing free-form `rating` field. The Gallery sidebar and Search filter therefore keep working unchanged. Selecting an option replaces any existing rating; re-selecting it clears it. Writes go through AppState, so the Gallery sidebar updates live.
+
+- **Quick ratings in the emoji picker**: the shared emoji picker gains a "Quick ratings" section at the top mirroring the widget's set (including the ★/★★/★★★ runs), tying the two rating surfaces together.
+- **Exact-match rating filter**: the Search screen gains an "Exact match" checkbox so a single ★ matches only one-star images, not the two- and three-star ones a substring match would otherwise include.
+
+### UI Polish
+
+- **Rating popup dismissal**: the fullscreen rating popup now closes on selection, navigation, and exit (it could previously be left hanging open), and eases out rather than vanishing abruptly.
+- **Emoji picker auto-close**: the emoji picker closes when the pointer leaves it (with a small buffer), and its grid scrolls internally so the close button can no longer fall off the bottom of the screen.
+- **Modal transitions**: all modal dialogs now ease in and out, with a graceful instant fallback on browsers that lack the underlying CSS support.
+- **Themed date pickers**: the Search screen's date-picker calendars now follow the active theme (dark in dark mode), matching the Gallery's timestamp picker.
+
 ## v1.2.8-beta
 
 ### Single-Writer Database Architecture
