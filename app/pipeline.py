@@ -173,6 +173,7 @@ import numpy as np
 import torch
 from PIL import Image
 
+from arbiter import Priority
 from faces import (
     FaceDetector,
     compute_unknown_face_groups,
@@ -1659,8 +1660,13 @@ class PipelineOrchestrator(threading.Thread):
                     self._update_done(done)
                     continue
 
-                # Encode on GPU
-                embeddings = clip.encode_tensors_batch(tensors)
+                # Encode on GPU, routed through the arbiter at BULK priority so
+                # an interactive search yields ahead of the next batch.
+                embeddings = self._db.arbiter.run(
+                    'openclip',
+                    lambda m, t=tensors: m.encode_tensors_batch(t),
+                    priority=Priority.BULK,
+                )
 
                 updates = []
                 for embedding, image_id in zip(embeddings, valid_ids, strict=True):
@@ -1731,7 +1737,6 @@ class PipelineOrchestrator(threading.Thread):
 
         logger.info(f'Stage 3b: Computing scene embeddings for {len(rows)} videos...')
 
-        clip = self._get_clip_model()
         count = 0
 
         for row in rows:
@@ -1777,7 +1782,11 @@ class PipelineOrchestrator(threading.Thread):
 
                 try:
                     pil_img = Image.open(thumb_path).convert('RGB')
-                    embedding = clip.encode_pil_image(pil_img)
+                    embedding = self._db.arbiter.run(
+                        'openclip',
+                        lambda m, p=pil_img: m.encode_pil_image(p),
+                        priority=Priority.BULK,
+                    )
                     if embedding is not None:
                         scene_embeddings[scene_idx] = embedding
                         emb_blob = embedding.astype(np.float32).tobytes()
@@ -2076,7 +2085,12 @@ class PipelineOrchestrator(threading.Thread):
 
             logger.info('Loading NIMA model...')
             t0 = time.perf_counter()
-            model = load_nima_model(str(checkpoint_path), device=device)
+            # Serialise the load through the arbiter so it never collides with
+            # other GPU model loads/inference.
+            model = self._db.arbiter.run_exclusive(
+                lambda: load_nima_model(str(checkpoint_path), device=device),
+                priority=Priority.BULK,
+            )
             logger.info('NIMA model loaded (%.1fs)', time.perf_counter() - t0)
         except (MemoryError, RuntimeError) as e:
             if is_gpu_error(e):
@@ -2164,7 +2178,10 @@ class PipelineOrchestrator(threading.Thread):
 
                 # Score batch — with OOM fallback (single-item) or CUDA error (abort)
                 try:
-                    scores = score_images_batch(model, pil_images, device=device)
+                    scores = self._db.arbiter.run_exclusive(
+                        lambda m=model, p=pil_images, d=device: score_images_batch(m, p, device=d),
+                        priority=Priority.BULK,
+                    )
                 except (MemoryError, RuntimeError) as e:
                     if not is_gpu_error(e):
                         raise
@@ -2182,7 +2199,10 @@ class PipelineOrchestrator(threading.Thread):
                     scores = []
                     for i, img in enumerate(pil_images):
                         try:
-                            single = score_images_batch(model, [img], device=device)
+                            single = self._db.arbiter.run_exclusive(
+                                lambda m=model, im=img, d=device: score_images_batch(m, [im], device=d),
+                                priority=Priority.BULK,
+                            )
                             scores.append(single[0])
                         except (MemoryError, RuntimeError):
                             logger.error(f'OOM scoring single image {valid_ids[i]}, skipping')
@@ -2472,7 +2492,14 @@ class PipelineOrchestrator(threading.Thread):
 
             _id_to_path, path_to_id, id_to_orig_path, _id_to_thumb_scale, loaded_images = prep
 
-            results = face_detector.detect_faces_from_preloaded(loaded_images, stop_event=self._stop_event)
+            # GPU face detection + embedding, serialised through the arbiter.
+            # (Image preloading above stays on the prefetch threads.)
+            results = self._db.arbiter.run_exclusive(
+                lambda det=face_detector, imgs=loaded_images: det.detect_faces_from_preloaded(
+                    imgs, stop_event=self._stop_event,
+                ),
+                priority=Priority.BULK,
+            )
 
             # Get known face embeddings for auto-recognition
             with self._db.safe_conn:
@@ -2768,7 +2795,11 @@ class PipelineOrchestrator(threading.Thread):
 
             # Resolve effective language: per-video override > global config
             effective_language = language if language is not None else self._db.config.stt_language
-            stt_result = stt.transcribe(tmp_path, language=effective_language)
+            # Serialise Whisper transcription (GPU) through the arbiter.
+            stt_result = self._db.arbiter.run_exclusive(
+                lambda: stt.transcribe(tmp_path, language=effective_language),
+                priority=Priority.BULK,
+            )
             stt_segments = stt_result.segments
             detected_language = stt_result.language
 
@@ -2803,7 +2834,11 @@ class PipelineOrchestrator(threading.Thread):
                             scene_texts.append(text)
 
                 full_text = ' '.join(scene_texts) if scene_texts else ''
-                text_emb = clip.encode_text(full_text) if clip and full_text else None
+                text_emb = (
+                    self._db.arbiter.run('openclip', lambda m, t=full_text: m.encode_text(t), priority=Priority.BULK)
+                    if clip and full_text
+                    else None
+                )
                 text_emb_blob = text_emb.astype(np.float32).tobytes() if text_emb is not None else None
 
                 now_ts = datetime.now().isoformat()

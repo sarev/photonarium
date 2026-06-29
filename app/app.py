@@ -80,6 +80,7 @@ def jsonify(data):
     return Response(orjson.dumps(data), mimetype='application/json')
 
 
+from arbiter import Priority
 from caption import CaptionGenerator
 from config import (
     Config,
@@ -737,7 +738,15 @@ def generate_caption(image_id):
         # Run caption generation in a daemon thread so it can be abandoned
         # on shutdown (PyTorch CUDA operations block Python signal handlers)
         with ThreadPoolExecutor(max_workers=1, thread_name_prefix='caption') as executor:
-            future = executor.submit(generator.generate, path)
+            # Route the GPU caption through the arbiter (INTERACTIVE) so it is
+            # serialised against other model work; the executor wrapper is kept
+            # so the request can still be abandoned on shutdown.
+            future = executor.submit(
+                lambda: database.arbiter.run_exclusive(
+                    lambda: generator.generate(path),
+                    priority=Priority.INTERACTIVE,
+                ),
+            )
 
             # Poll for completion with short timeouts to allow shutdown checks
             while True:
@@ -1062,7 +1071,11 @@ def get_image_scenes(image_id):
     scenes = []
     if query:
         TRANSCRIPT_BOOST = 0.05
-        query_embedding = db._get_clip_model().encode_semantic_query(query)
+        query_embedding = db.arbiter.run(
+            'openclip',
+            lambda m: m.encode_semantic_query(query),
+            priority=Priority.INTERACTIVE,
+        )
 
         for row in rows:
             scene = {
@@ -3082,8 +3095,11 @@ def update_scene_transcription_endpoint(scene_id):
     emb_blob = None
     if transcription:
         try:
-            clip = db._get_clip_model()
-            emb = clip.encode_text(transcription)
+            emb = db.arbiter.run(
+                'openclip',
+                lambda m: m.encode_text(transcription),
+                priority=Priority.INTERACTIVE,
+            )
             emb_blob = emb.astype(np.float32).tobytes()
         except Exception as e:
             logger.warning('Failed to encode transcription embedding: %s', e)
@@ -3904,7 +3920,11 @@ def get_faces_list():
     if search_query:
         try:
             # Encode query with CLIP (supports negative terms like "beach -face")
-            query_embedding = db._get_clip_model().encode_semantic_query(search_query)
+            query_embedding = db.arbiter.run(
+                'openclip',
+                lambda m: m.encode_semantic_query(search_query),
+                priority=Priority.INTERACTIVE,
+            )
             # Search unknown faces by semantic similarity
             faces = search_unknown_faces_semantic(db.safe_conn, query_embedding)
             return success_response(faces)

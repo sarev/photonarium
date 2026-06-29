@@ -138,6 +138,8 @@ import open_clip
 import torch
 
 # Local imports
+from arbiter import ComputeArbiter, Priority
+from arbiter_backend import TorchBackend
 from config import Config, load_config
 from dbutil import sql_placeholders
 from duplicates import DuplicateManager, embedding_to_numpy
@@ -4184,6 +4186,21 @@ class ImageDatabase:
         # Shared OpenCLIP model instance (used by pipeline and search)
         self._shared_clip_model: OpenCLIPModel | None = None
 
+        # Compute arbiter — the single coordination point for GPU/model work
+        # (see snippets/compute-arbiter-design.md).  Phase 0 proving slice:
+        # currently fronts semantic search only; further consumers (pipeline
+        # stages, detect-preview, caption, STT) are retrofitted incrementally.
+        # idle_evict_s=0 and est_cost=0 because full VRAM residency accounting
+        # is part of the later retrofit — for now the arbiter provides
+        # serialisation, priority and graceful shutdown.  GpuHealth doubles as
+        # the arbiter's health sink (it exposes device + report_failure).
+        self.arbiter = ComputeArbiter(
+            TorchBackend(self.gpu_health),
+            self.gpu_health,
+            idle_evict_s=0.0,
+        )
+        self.arbiter.register('openclip', loader=self._get_clip_model, est_cost=0)
+
         # Transcode progress tracking
         self._transcode_progress: dict | None = None  # {total, done, current_id, current_basename, current_pct}
         self._transcode_progress_lock = threading.Lock()
@@ -4325,7 +4342,6 @@ class ImageDatabase:
 
         logger.info(f'Backfilling {len(rows)} description embeddings...')
 
-        clip_model = self._get_clip_model()
         count = 0
         batch_size = 100
 
@@ -4345,7 +4361,11 @@ class ImageDatabase:
                 if self._stop_event.is_set():
                     break
                 try:
-                    embedding = clip_model.encode_text(row['description'])
+                    embedding = self.arbiter.run(
+                        'openclip',
+                        lambda m, t=row['description']: m.encode_text(t),
+                        priority=Priority.BULK,
+                    )
                     updates.append((embedding.astype(np.float32).tobytes(), row['id']))
                 except Exception as e:
                     logger.warning(f'Failed to compute description embedding for {row["id"]}: {e}')
@@ -4405,7 +4425,6 @@ class ImageDatabase:
 
         logger.info(f'Backfilling {len(rows)} transcription embeddings...')
 
-        clip_model = self._get_clip_model()
         count = 0
         batch_size = 100
 
@@ -4425,7 +4444,11 @@ class ImageDatabase:
                 if self._stop_event.is_set():
                     break
                 try:
-                    embedding = clip_model.encode_text(row['transcription'])
+                    embedding = self.arbiter.run(
+                        'openclip',
+                        lambda m, t=row['transcription']: m.encode_text(t),
+                        priority=Priority.BULK,
+                    )
                     updates.append((embedding.astype(np.float32).tobytes(), row['id']))
                 except Exception as e:
                     logger.warning(f'Failed to compute transcription embedding for scene {row["id"]}: {e}')
@@ -4488,7 +4511,6 @@ class ImageDatabase:
                 'total': total,
             }
 
-        clip_model = self._get_clip_model()
         count = 0
 
         try:
@@ -4505,7 +4527,11 @@ class ImageDatabase:
                     continue
 
                 try:
-                    embedding = clip_model.encode_image(thumb_path)
+                    embedding = self.arbiter.run(
+                        'openclip',
+                        lambda m, p=thumb_path: m.encode_image(p),
+                        priority=Priority.BULK,
+                    )
                     if embedding is not None:
                         update_face_semantic_embedding(self.safe_conn, face_id, embedding)
                         count += 1
@@ -5229,6 +5255,11 @@ class ImageDatabase:
             logging.getLogger().removeHandler(self._log_handler)
             self._log_handler = None
 
+        # Stop the compute arbiter (drains pending jobs, joins the owner thread)
+        # before releasing models, so no job is mid-inference during teardown.
+        if getattr(self, 'arbiter', None) is not None:
+            self.arbiter.shutdown()
+
         # Release GPU models before closing the DB connection
         if self._shared_clip_model is not None:
             self._shared_clip_model.unload()
@@ -5462,7 +5493,11 @@ class ImageDatabase:
             if description:
                 # Compute embedding for the new description (outside lock - CPU intensive)
                 try:
-                    embedding = self._get_clip_model().encode_text(description)
+                    embedding = self.arbiter.run(
+                        'openclip',
+                        lambda m: m.encode_text(description),
+                        priority=Priority.INTERACTIVE,
+                    )
                     data['description_embedding'] = embedding.astype(np.float32).tobytes()
                 except Exception as e:
                     logger.warning(f'Failed to compute description embedding: {e}')
@@ -6384,8 +6419,14 @@ class ImageDatabase:
         Returns:
             List of matching images with 'score' field, sorted by similarity.
         """
-        # Encode the query text (with support for negative terms)
-        query_embedding = self._get_clip_model().encode_semantic_query(query)
+        # Encode the query text (with support for negative terms).  Routed
+        # through the arbiter at INTERACTIVE priority so a user's search never
+        # waits behind more than one bulk batch.
+        query_embedding = self.arbiter.run(
+            'openclip',
+            lambda m: m.encode_semantic_query(query),
+            priority=Priority.INTERACTIVE,
+        )
 
         # Perform semantic search
         return semantic_search(self.safe_conn, query_embedding, threshold, limit)
@@ -6410,7 +6451,11 @@ class ImageDatabase:
         Returns:
             List of per-video result dicts with nested per-scene scores.
         """
-        query_embedding = self._get_clip_model().encode_semantic_query(query)
+        query_embedding = self.arbiter.run(
+            'openclip',
+            lambda m: m.encode_semantic_query(query),
+            priority=Priority.INTERACTIVE,
+        )
         return video_search(self.safe_conn, query_embedding, threshold, limit)
 
     def get_semantic_scores_for_images(
@@ -6435,7 +6480,11 @@ class ImageDatabase:
 
         # Encode the query text (with support for negative terms)
         # encode_semantic_query returns a normalised embedding
-        query_embedding = self._get_clip_model().encode_semantic_query(query)
+        query_embedding = self.arbiter.run(
+            'openclip',
+            lambda m: m.encode_semantic_query(query),
+            priority=Priority.INTERACTIVE,
+        )
 
         # Get embeddings for the specified images
         placeholders = sql_placeholders(image_ids)
