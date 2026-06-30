@@ -1112,6 +1112,12 @@ class PipelineOrchestrator(threading.Thread):
         image_id = str(uuid.uuid4())
         checksum = self._compute_checksum(path)
 
+        # Don't bring back a video the user trashed (same leaf name + checksum).
+        from imagedb import find_trashed_twin
+        if find_trashed_twin(conn, path.name, checksum):
+            logger.info(f'Not re-ingesting trashed content (deleted twin exists): {path}')
+            return False
+
         path_str_canon = str(canonicalise_path(path))
         with self._db._import_names_lock:
             import_info = self._db._import_names.pop(path_str_canon, None)
@@ -1206,6 +1212,14 @@ class PipelineOrchestrator(threading.Thread):
             )
             conn.commit()
             return True
+
+        # Don't bring back content the user trashed: a deleted record with the
+        # same leaf name + checksum means this file (re-synced into a watched
+        # folder, or re-imported) is a copy of something already in the trash.
+        from imagedb import find_trashed_twin
+        if find_trashed_twin(conn, Path(metadata.path).name, metadata.checksum):
+            logger.info(f'Not re-ingesting trashed content (deleted twin exists): {path}')
+            return False
 
         image_id = str(uuid.uuid4())
 

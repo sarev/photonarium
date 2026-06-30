@@ -1051,6 +1051,25 @@ def get_image_by_path(conn: SafeConnection, path: Path | str) -> dict[str, Any] 
     return row_to_dict(cursor.fetchone())
 
 
+def find_trashed_twin(conn: SafeConnection, basename: str, checksum: str | None) -> bool:
+    """Return True if a trashed (deleted) record has this leaf name and checksum.
+
+    A trashed image's record is kept as a sentinel, but its path moves into the
+    trash folder — so it can no longer be recognised by path.  This matches it by
+    **content + leaf name** instead, so a file that re-appears (a folder re-sync)
+    or is re-imported with the same name and bytes as something the user trashed
+    is not silently brought back to life.  ``basename`` is the original leaf name
+    (the basename column is not rewritten when the record is repathed to trash).
+    """
+    if not checksum:
+        return False
+    cursor = conn.execute(
+        'SELECT 1 FROM images WHERE deleted = 1 AND basename = ? AND checksum = ? LIMIT 1',
+        (basename, checksum),
+    )
+    return cursor.fetchone() is not None
+
+
 def create_image(
     conn: SafeConnection,
     image_id: str,
@@ -3069,6 +3088,7 @@ class TrashWorker(threading.Thread):
         max_workers: int,
         progress: dict | None,
         progress_lock: threading.Lock,
+        db: ImageDatabase,
     ):
         """Initialise the trash worker thread.
 
@@ -3079,12 +3099,15 @@ class TrashWorker(threading.Thread):
             max_workers: Number of threads in the file-move pool.
             progress: Shared ``_trash_progress`` dict reference (may be None).
             progress_lock: Lock protecting ``_trash_progress`` mutations.
+            db: Owning :class:`ImageDatabase`, used to repath the record to its
+                trash location once the file has moved.
         """
         super().__init__(name='TrashWorker', daemon=True)
         self._queue = trash_queue
         self._stop_event = stop_event
         self._trash_dir = trash_dir
         self._max_workers = max_workers
+        self._db = db
         # The progress dict is *replaced* (not mutated) by the owner, so
         # we store a reference to the owner object and read its attribute.
         self._progress = progress
@@ -3164,9 +3187,20 @@ class TrashWorker(threading.Thread):
         Args:
             item: ``(image_id, file_path)`` tuple.
         """
-        _image_id, file_path = item
+        image_id, file_path = item
         try:
-            move_to_trash(Path(file_path), self._trash_dir)
+            dest = move_to_trash(Path(file_path), self._trash_dir)
+            # Repath the record to where the file now lives.  The record is kept
+            # (deleted=1) as a sentinel, but it must point at the trash file, not
+            # the now-empty catalogue slot it used to occupy — otherwise a new
+            # image written to that slot would collide with this stale path.
+            # The trash path is unique by construction (resolve_trash_path), so
+            # the path UNIQUE constraint is never threatened.
+            if dest is not None:
+                self._db.safe_conn.execute(
+                    'UPDATE images SET path = ?, updated_at = ? WHERE id = ?',
+                    (str(canonicalise_path(dest)), datetime.now().isoformat(), image_id),
+                )
         except Exception as e:
             logger.error(f'TrashWorker: failed to move {file_path}: {e}')
         finally:
@@ -3240,6 +3274,7 @@ class ImportWorker(threading.Thread):
         image_extensions: set[str],
         import_names: dict[str, tuple[str, datetime]],
         import_names_lock: threading.Lock,
+        db: ImageDatabase,
         on_complete: Callable[[dict], None] | None = None,
         filename_date_overrides: list[str] | None = None,
         date_order: str = 'DMY',
@@ -3260,6 +3295,8 @@ class ImportWorker(threading.Thread):
                 ``(original_filename, derived_timestamp)`` tuple, consumed
                 by ``_process_image()`` during ingestion.
             import_names_lock: Lock protecting the import_names dict.
+            db: Owning :class:`ImageDatabase`, used to skip re-importing content
+                the user has trashed (matched by leaf name + checksum).
             on_complete: Callback invoked when all queued files have been
                 processed (``done >= total``).  Receives the final progress
                 snapshot dict.  Called from the ImportWorker thread.
@@ -3279,6 +3316,7 @@ class ImportWorker(threading.Thread):
         self._on_complete = on_complete
         self._import_names = import_names
         self._import_names_lock = import_names_lock
+        self._db = db
         self._filename_date_overrides = filename_date_overrides
         self._date_order = date_order
 
@@ -3462,6 +3500,18 @@ class ImportWorker(threading.Thread):
             # Check if this checksum already exists in the database
             if src_checksum in known_checksums:
                 logger.info(f'ImportWorker: duplicate checksum, skipping: {src.name}')
+                with self._progress_lock:
+                    if self._progress is not None:
+                        self._progress['skipped'] += 1
+                        self._progress['done'] += 1
+                self._cleanup_staging_file(src)
+                return
+
+            # Don't re-import content the user trashed (same leaf name + checksum).
+            # The trashed record is kept as a sentinel; bringing the file back
+            # into the catalogue would undo a deliberate deletion.
+            if find_trashed_twin(self._db.safe_conn, src.name, src_checksum):
+                logger.info(f'ImportWorker: matches trashed content, skipping: {src.name}')
                 with self._progress_lock:
                     if self._progress is not None:
                         self._progress['skipped'] += 1
@@ -5121,6 +5171,7 @@ class ImageDatabase:
                 max_workers=self.config.trash_threads,
                 progress=self._trash_progress,
                 progress_lock=self._trash_progress_lock,
+                db=self,
             )
             self._trash_thread.start()
 
@@ -5148,6 +5199,7 @@ class ImageDatabase:
                 image_extensions=self.config.image_extensions | self.config.video_extensions,
                 import_names=self._import_names,
                 import_names_lock=self._import_names_lock,
+                db=self,
                 on_complete=self._on_import_complete,
                 filename_date_overrides=self.config.filename_date_overrides,
                 date_order=self.config.date_order,
