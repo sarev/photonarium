@@ -14,7 +14,7 @@ The HTTP layer. Receives requests from the frontend and delegates to the
 backend modules for database operations and image processing. Uses the waitress
 WSGI server in production.
 
-**Routes (83):**
+**Routes (86):**
 
 Mutation endpoints prefer batch format (arrays, not single items).
 
@@ -107,6 +107,14 @@ Mutation endpoints prefer batch format (arrays, not single items).
 | POST | `/api/import` | Import from local paths `{paths: []}` |
 | POST | `/api/import/preflight` | Check which files are new `{checksums: []}` |
 | POST | `/api/import/upload` | Import via multipart file upload |
+
+#### Enhance (3 routes)
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| GET | `/api/enhance/capabilities` | List installed enhancement capabilities |
+| POST | `/api/enhance` | Queue an image for enhancement `{image_id, recipe}` |
+| POST | `/api/enhance/preview` | Before/after centre-crop preview `{image_id, recipe}` |
 
 #### Stats (2 routes)
 

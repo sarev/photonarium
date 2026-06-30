@@ -49,6 +49,7 @@ Find out more about the motivations behind Photonarium in [`BACKGROUND.md`](docs
 - **Duplicate detection** at four levels of similarity (identical, near-identical, similar, related) plus auto-generated **directory groups** and user-curated **custom groups** (albums), with **Refine Groups** to filter by quality and view the best (or worst) images in the Gallery, or prune duplicates to trash
 - **100% free and open source** - Apache 2.0 licensed, no cloud, no accounts, no tracking. Runs entirely on your machine; your files never leave your computer.
 - **Automatic captioning** - generate image descriptions using AI (BLIP/BLIP-2), then edit them if needed. Captions are searchable.
+- **Image enhancement** - reduce noise, remove motion blur, auto-sharpen a soft photo, or upscale 2× or 4× with on-device neural models (SwinIR, Restormer, Real-ESRGAN). Runs entirely offline, on demand; the result is saved as a new version and your original is never changed.
 - **Quality scoring** - AI aesthetic scoring ranks your images by visual quality. Find your best shots instantly.
 - **Sort by similarity** - select any image or video and sort the entire collection by visual similarity to it. Great for finding related shots.
 - **Smart Groups** - saved searches that stay up to date automatically. Set your filter criteria once and matching items appear whenever you open the group, even files added later.
@@ -160,6 +161,7 @@ Photonarium is built on the shoulders of some remarkable open-source AI/ML work:
 - [facenet-pytorch](https://github.com/timesler/facenet-pytorch) - MTCNN face detection and InceptionResnetV1 face recognition
 - [LAION Aesthetic Predictor](https://github.com/LAION-AI/aesthetic-predictor) (LAION) - lightweight aesthetic quality scoring
 - [NIMA](https://github.com/truskovskiyk/nima.pytorch) - neural image quality assessment trained on human aesthetic judgements
+- [SwinIR](https://github.com/JingyunLiang/SwinIR), [Real-ESRGAN](https://github.com/xinntao/Real-ESRGAN) and [Restormer](https://github.com/swz30/Restormer) - on-device image enhancement (denoise, deblur, sharpen, super-resolution)
 - [PyTorch](https://pytorch.org/) (Meta) - the foundation all of the above is built on
 
 Thanks to the broader Python community - Flask, Pillow, NumPy, OpenCV, and countless other libraries - for making a project like this feasible for a small team.

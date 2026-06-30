@@ -979,6 +979,21 @@ const Gallery = {
 
         item.appendChild(thumb);
 
+        // Enhanced-version badge: a small sparkle marking a derived image, with
+        // the processing depth when it has been enhanced more than once.
+        if (img.derived_from) {
+            const depth = img.processing_depth || 1;
+            const enhBadge = App.createElement('span', { className: 'gallery-enhanced-badge' });
+            enhBadge.innerHTML = App.icon('auto_fix_high', '✨');
+            enhBadge.title = depth > 1 ? `Enhanced version (×${depth})` : 'Enhanced version';
+            if (depth > 1) {
+                const count = App.createElement('span', { className: 'gallery-enhanced-depth' });
+                count.textContent = depth;
+                enhBadge.appendChild(count);
+            }
+            item.appendChild(enhBadge);
+        }
+
         // Video overlays: duration badge and play icon
         if (img.media_type === 'video') {
             item.classList.add('gallery-item-video');
@@ -1241,11 +1256,32 @@ const Gallery = {
             durationStr = mins + ':' + String(secs).padStart(2, '0');
         }
 
+        // Derived-version lineage: shown only for enhanced images (derived_from set).
+        // The original may itself have been renamed, so fall back gracefully.
+        let derivedHtml = '';
+        if (img.derived_from) {
+            const original = AppState.images.getById(img.derived_from);
+            const originalName = original ? original.basename : 'the original';
+            const depth = img.processing_depth || 1;
+            derivedHtml = `
+            <div class="info-section">
+                <div class="info-row">
+                    <span class="info-label">Version</span>
+                    <span class="info-value">Enhanced${depth > 1 ? ` (×${depth})` : ''}</span>
+                </div>
+                <div class="info-row${original ? ' info-row-clickable' : ''}" ${original ? `id="info-derived-from-btn" data-original-id="${App.escapeHtml(img.derived_from)}" title="Show the original"` : ''}>
+                    <span class="info-label">Derived from</span>
+                    <span class="info-value${original ? ' info-link' : ''}">${App.escapeHtml(originalName)}${original ? ' →' : ''}</span>
+                </div>
+            </div>`;
+        }
+
         content.innerHTML = `
             <div class="info-section">
                 <p class="info-filename">${App.escapeHtml(img.basename)}<button class="info-copy-btn" title="Copy full path to clipboard" data-copy="${App.escapeHtml(img.path)}"><span class="icon" data-icon="content_copy">\u{1F4CB}</span></button></p>
                 <p class="${pathClass}" ${pathTitle} ${pathDataId}>${App.escapeHtml(img.path)}</p>
             </div>
+            ${derivedHtml}
 
             <div class="info-section">
                 ${isVideo ? `
@@ -1359,6 +1395,17 @@ const Gallery = {
         if (metadataBtn) {
             metadataBtn.addEventListener('click', () => {
                 this._showMetadataDialog(imageId, 'readonly');
+            });
+        }
+
+        // "Derived from" → select the original image (updates the info panel to it)
+        const derivedBtn = App.$('info-derived-from-btn');
+        if (derivedBtn) {
+            derivedBtn.addEventListener('click', () => {
+                const originalId = derivedBtn.dataset.originalId;
+                if (originalId && AppState.images.getById(originalId)) {
+                    AppState.selection.set('gallery', [originalId]);
+                }
             });
         }
 

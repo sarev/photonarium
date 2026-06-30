@@ -129,6 +129,21 @@ AppState.events = (function() {
                 AppState.images.load();
                 break;
 
+            case 'enhance_complete':
+                // An enhanced (derived) image was produced and is being ingested
+                // as a new version of the original.
+                // data: { image_id, recipe, label, new_path }
+                console.log('[AppState.events] Enhance complete:', data);
+                App.showInfo(`${data?.label || 'Enhancement'} complete.`);
+                AppState.images.load();
+                break;
+
+            case 'enhance_failed':
+                // An enhancement job failed. data: { image_id, recipe, error }
+                console.warn('[AppState.events] Enhance failed:', data);
+                App.showError(`Enhancement failed: ${data?.error || 'unknown error'}.`);
+                break;
+
             case 'gpu_state_changed':
                 // GPU health degraded — show modal warning
                 // data: { state: 'cpu_fallback'|'disabled', features: [...] }

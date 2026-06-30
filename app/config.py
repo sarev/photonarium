@@ -535,7 +535,51 @@ CONFIG_SCHEMA: list[tuple[str, list[tuple[str, list[str]]]]] = [
             ),
         ],
     ),
-    # ── 10. Features ─────────────────────────────────────────────────
+    # ── 10. Image Enhancement ────────────────────────────────────────
+    (
+        'Image Enhancement',
+        [
+            (
+                'enhance_enabled',
+                [
+                    'Enable the on-demand "Enhance" tool (neural denoise, super-resolution,',
+                    'and JPEG-artefact removal) in the fullscreen viewer.',
+                    '',
+                    'Enhancement never runs during indexing — only when you ask for it on a',
+                    'specific photo — so leaving this on costs nothing until used. Each',
+                    'enhanced result is saved as a new version of the original, never an edit.',
+                ],
+            ),
+            (
+                'enhance_denoise_enabled',
+                [
+                    'Which enhancement options appear. Each also requires its model weights',
+                    'to be downloaded (see the setup wizard or Settings).',
+                ],
+            ),
+            ('enhance_deblur_enabled', []),
+            ('enhance_sharpen_enabled', []),
+            ('enhance_upscale_enabled', []),
+            (
+                'enhance_tile_size',
+                [
+                    'Tile size in pixels for processing large images in pieces.',
+                    'Larger tiles are faster but use more memory; on an out-of-memory',
+                    'error the tile size is reduced automatically.',
+                    '0 = choose automatically from the available memory.',
+                ],
+            ),
+            (
+                'enhance_output_format',
+                [
+                    'File format for enhanced images. Lossless by default, because',
+                    're-saving an AI-cleaned image as JPEG would re-introduce the',
+                    'compression artefacts just removed. One of: png, tiff.',
+                ],
+            ),
+        ],
+    ),
+    # ── 11. Features ─────────────────────────────────────────────────
     (
         'Features',
         [
@@ -556,7 +600,7 @@ CONFIG_SCHEMA: list[tuple[str, list[tuple[str, list[str]]]]] = [
             ),
         ],
     ),
-    # ── 11. Thumbnail Loading ────────────────────────────────────────
+    # ── 12. Thumbnail Loading ────────────────────────────────────────
     (
         'Thumbnail Loading (Frontend)',
         [
@@ -601,7 +645,7 @@ CONFIG_SCHEMA: list[tuple[str, list[tuple[str, list[str]]]]] = [
             ),
         ],
     ),
-    # ── 12. Logging ──────────────────────────────────────────────────
+    # ── 13. Logging ──────────────────────────────────────────────────
     (
         'Logging',
         [
@@ -706,6 +750,7 @@ FIELD_CONSTRAINTS: dict[str, dict[str, int | float | bool]] = {
     'import_threads': {'min': 1, 'max': 16, 'step': 1},
     'scan_interval_minutes': {'min': 1, 'max': 1440, 'step': 1, 'special_zero': True},
     'log_retention_lines': {'min': 100, 'max': 100000, 'step': 100, 'special_zero': True},
+    'enhance_tile_size': {'min': 64, 'max': 2048, 'step': 32, 'special_zero': True},
 }
 
 # STT_LANGUAGES_DEFAULT — top 15 global languages for the per-video dropdown
@@ -736,6 +781,7 @@ _STT_LANGUAGES_DEFAULT = [
 FIELD_CHOICES: dict[str, list[str]] = {
     'date_order': ['DMY', 'MDY', 'YMD'],
     'stt_model': ['tiny', 'base', 'small', 'medium', 'large-v3'],
+    'enhance_output_format': ['png', 'tiff'],
 }
 
 
@@ -957,6 +1003,24 @@ class Config:
     quality_weight_bpp: float = 0.05
     # Blend ratio for NIMA vs LAION aesthetic scores (0=LAION only, 1=NIMA only).
     quality_alpha: float = 0.60
+    # Master switch for the on-demand "Enhance" tool (neural denoise,
+    # super-resolution, JPEG-artefact removal).  Independent of indexing —
+    # enhancement only runs when the user requests it, so leaving it on costs
+    # nothing until used.
+    enhance_enabled: bool = True
+    # Per-capability switches.  A capability appears in the Enhance dialog only
+    # when its flag is on AND its model weights have been downloaded.
+    enhance_denoise_enabled: bool = True
+    enhance_deblur_enabled: bool = True
+    enhance_sharpen_enabled: bool = True
+    enhance_upscale_enabled: bool = True
+    # Tile size (px) for tiled inference; the worker shrinks it automatically on
+    # out-of-memory.  0 = auto (from device + live free VRAM).
+    enhance_tile_size: int = 0
+    # Output format for enhanced images.  Lossless by default — re-encoding an
+    # AI-cleaned image as JPEG would re-introduce the artefacts just removed.
+    # One of 'png', 'tiff'.
+    enhance_output_format: str = 'png'
     # Whether to show "On This Day" memories on the gallery screen.
     on_this_day_enabled: bool = True
     # Set of lowercase file extensions to treat as videos.
@@ -1034,6 +1098,15 @@ class Config:
             raise ValueError('on_this_day_enabled must be a boolean')
         if not isinstance(self.stt_enabled, bool):
             raise ValueError('stt_enabled must be a boolean')
+        for _flag in (
+            'enhance_enabled',
+            'enhance_denoise_enabled',
+            'enhance_deblur_enabled',
+            'enhance_sharpen_enabled',
+            'enhance_upscale_enabled',
+        ):
+            if not isinstance(getattr(self, _flag), bool):
+                raise ValueError(f'{_flag} must be a boolean')
 
         # --- Enumerated choice fields (from FIELD_CHOICES) ---
         for field_name, choices in FIELD_CHOICES.items():

@@ -937,13 +937,17 @@ class PipelineOrchestrator(threading.Thread):
             new_ts_str = existing.get('timestamp')
             new_conf = ts_conf
 
+        # Revive a stale 'deleted' sentinel — a file present at a live path is
+        # authoritative (see _reingest_changed_image for the rationale).
+        if existing.get('deleted'):
+            logger.info(f'Reviving stale-deleted record for file present on disk: {path}')
         now_ts = datetime.now().isoformat()
         conn.execute(
             """UPDATE images SET size = ?, width = ?, height = ?, duration = ?,
                timestamp = ?, timestamp_confidence = ?,
                mtime = ?, checksum = ?, embedding = NULL,
                aesthetic_nima = NULL, aesthetic_laion = NULL,
-               thumbnails_pending = 1, updated_at = ?,
+               thumbnails_pending = 1, updated_at = ?, deleted = 0,
                codec_video = ?, codec_audio = ?, codec_container = ?
                WHERE id = ?""",
             (
@@ -1018,12 +1022,22 @@ class PipelineOrchestrator(threading.Thread):
             exif_data=metadata.exif_data,
         )
 
+        # A file physically present at a live path must be visible.  If the
+        # record was a stale 'deleted' sentinel — e.g. its catalogue slot was
+        # reused by a freshly-written enhancement output, or it was trashed
+        # before the trash-repath fix and so still points at the live slot —
+        # revive it: the file on disk is authoritative.  (Properly-trashed files
+        # never reach here; their record points at the trash path, so this path
+        # is only ever a live slot.)
+        if existing.get('deleted'):
+            logger.info(f'Reviving stale-deleted record for file present on disk: {path}')
         # Clear embedding and scores so Stages 3-5 re-process; mark
         # thumbnails as pending so Stage 2a regenerates them.
         conn.execute(
             """UPDATE images SET embedding = NULL, aesthetic_nima = NULL,
-               aesthetic_laion = NULL, thumbnails_pending = 1 WHERE id = ?""",
-            (existing['id'],),
+               aesthetic_laion = NULL, thumbnails_pending = 1, deleted = 0,
+               updated_at = ? WHERE id = ?""",
+            (datetime.now().isoformat(), existing['id']),
         )
         # Delete faces so Stage 5 re-detects
         conn.execute('DELETE FROM faces WHERE image_id = ?', (existing['id'],))
@@ -1114,6 +1128,7 @@ class PipelineOrchestrator(threading.Thread):
 
         # Don't bring back a video the user trashed (same leaf name + checksum).
         from imagedb import find_trashed_twin
+
         if find_trashed_twin(conn, path.name, checksum):
             logger.info(f'Not re-ingesting trashed content (deleted twin exists): {path}')
             return False
@@ -1213,19 +1228,25 @@ class PipelineOrchestrator(threading.Thread):
             conn.commit()
             return True
 
-        # Don't bring back content the user trashed: a deleted record with the
-        # same leaf name + checksum means this file (re-synced into a watched
-        # folder, or re-imported) is a copy of something already in the trash.
-        from imagedb import find_trashed_twin
-        if find_trashed_twin(conn, Path(metadata.path).name, metadata.checksum):
-            logger.info(f'Not re-ingesting trashed content (deleted twin exists): {path}')
-            return False
-
         image_id = str(uuid.uuid4())
 
         path_str_canon = str(canonicalise_path(path))
         with self._db._import_names_lock:
             import_info = self._db._import_names.pop(path_str_canon, None)
+        with self._db._derived_meta_lock:
+            derived_info = self._db._derived_meta.pop(path_str_canon, None)
+
+        # Don't bring back content the user trashed: a deleted record with the
+        # same leaf name + checksum means this file (re-synced into a watched
+        # folder, or re-imported) is a copy of something already in the trash.
+        # Deliberate processing outputs (enhance) don't reach here as twins —
+        # the worker clears any identical trashed record before triggering the
+        # rescan, so this check stays purely about external re-sync/re-import.
+        from imagedb import find_trashed_twin
+
+        if find_trashed_twin(conn, Path(metadata.path).name, metadata.checksum):
+            logger.info(f'Not re-ingesting trashed content (deleted twin exists): {path}')
+            return False
 
         if import_info:
             # Use the timestamp derived by ImportWorker from the original
@@ -1255,6 +1276,9 @@ class PipelineOrchestrator(threading.Thread):
             exif_data=metadata.exif_data,
             import_name=import_name,
             thumbnails_pending=True,
+            derived_from=derived_info['derived_from'] if derived_info else None,
+            processing_depth=derived_info['processing_depth'] if derived_info else 0,
+            processing_ops=derived_info['processing_ops'] if derived_info else None,
         )
 
         if metadata.checksum:

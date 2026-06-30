@@ -2,6 +2,19 @@
 
 ## v1.2.9-beta
 
+### Image Enhancement
+
+Photonarium can now enhance a photo with local, offline neural models — from the fullscreen viewer, an "Enhance" tool offers the capabilities whose model weights are installed: noise reduction (SwinIR, Apache-2.0), motion deblur and defocus auto-sharpen (Restormer, MIT), and 2× and 4× super-resolution (Real-ESRGAN, BSD-3). They run entirely on-device, on the existing PyTorch stack, with no new training-framework dependency (the architectures are vendored and loaded directly; only the lightweight `timm` layer library is added).
+
+True to the principle that Photonarium is a catalogue, not an editor, **the original is never modified**. Each enhanced result is written as a *new image* and catalogued as a derived version of its source (`<name>__enhanced_<n>`), with its lineage recorded — parent, processing depth, and the operations applied. Re-enhancing a derived image chains cleanly (depth 2, 3, …) rather than nesting names.
+
+- **Preview before you commit**: the dialog renders a live before/after on a crop you can drag to reposition over the original, so you can judge the effect on the region you care about before running the full image. Restoration capabilities (noise, deblur, sharpen) add a strength slider to dial the effect back when you want a gentler result.
+- **On-demand, never during indexing**: enhancement only runs when you ask for it on a specific photo, so leaving the feature enabled costs nothing until used — it stays available even on low-end hardware (slower, but never blocking the catalogue).
+- **Serialised through the compute arbiter**: enhancement is a bulk GPU client like any other, so it queues politely behind interactive work instead of competing for the GPU.
+- **Tiled inference**: large images and upscales are processed in overlapping, feather-blended tiles, with automatic tile-shrinking on out-of-memory — so a 4× upscale doesn't exhaust VRAM. Outputs too large to assemble in system memory are declined cleanly rather than risking the process.
+- **Lossless output** (PNG by default), because re-encoding an AI-cleaned image as JPEG would re-introduce the very artefacts just removed.
+- **Honest UI**: the Enhance dialog only offers capabilities whose weights are actually downloaded; models are fetched by `download_models.py` (and the setup wizard) like the other optional models.
+
 ### Compute Arbiter
 
 All GPU/model work now flows through a single coordination point, eliminating a class of multi-user contention bugs. Previously, semantic search, on-demand face detection and captioning, and the background processing pipeline all hit the GPU with no coordination between them. Concurrent model loads and inference could exhaust VRAM and, in the worst case, corrupt the CUDA context — disabling all GPU features until a restart. With a single user this rarely surfaced; with multiple clients driving the same instance it became likely.

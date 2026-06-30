@@ -120,6 +120,7 @@ import hashlib
 import json
 import logging
 import queue
+import re
 import shutil
 import signal
 import sqlite3
@@ -296,6 +297,17 @@ _SQL_MIGRATIONS = [
     'ALTER TABLE images ADD COLUMN codec_container TEXT',
     # → No backfill needed (0 = normal, 1 = queued for face rescan after config change)
     'ALTER TABLE images ADD COLUMN needs_face_rescan INTEGER NOT NULL DEFAULT 0',
+    # Derived-image lineage (an enhanced image is a new image, never an edit of
+    # the original).  No backfill needed: existing rows are all originals, and
+    # NULL / 0 / NULL are exactly the column defaults.
+    #   derived_from   — parent image id; SET NULL on delete so trashing an
+    #                    original orphans its derivatives rather than cascading.
+    #   processing_depth — original→A = 1, A→B = 2 …; denormalised for badge
+    #                    display without walking the chain.
+    #   processing_ops — JSON provenance of this image: [{recipe, models, params}].
+    'ALTER TABLE images ADD COLUMN derived_from TEXT REFERENCES images(id) ON DELETE SET NULL',
+    'ALTER TABLE images ADD COLUMN processing_depth INTEGER NOT NULL DEFAULT 0',
+    'ALTER TABLE images ADD COLUMN processing_ops TEXT',
 ]
 
 # SQL schema for the image_metadata table (indexed EXIF key-value pairs for search)
@@ -388,6 +400,8 @@ _SQL_CREATE_INDEXES = [
     'CREATE INDEX IF NOT EXISTS idx_scenes_image_id ON scenes(image_id)',
     # Index for filtering by media type
     'CREATE INDEX IF NOT EXISTS idx_images_media_type ON images(media_type)',
+    # Index for version-stack lookups (find an original's derivatives)
+    'CREATE INDEX IF NOT EXISTS idx_images_derived_from ON images(derived_from)',
 ]
 
 
@@ -831,7 +845,8 @@ def get_all_images_lightweight(conn: SafeConnection) -> list[dict[str, Any]]:
         SELECT id, path, basename, size, width, height, timestamp, timestamp_confidence,
                rating, description, aesthetic_laion, aesthetic_nima, laplacian_var,
                media_type, duration, preferred_scene_id, stt_language,
-               codec_video, codec_audio, codec_container
+               codec_video, codec_audio, codec_container,
+               derived_from, processing_depth
         FROM images
         WHERE deleted = 0
         ORDER BY timestamp DESC
@@ -895,7 +910,8 @@ def get_images_delta(
         """
         SELECT id, path, basename, size, width, height, timestamp, timestamp_confidence,
                rating, description, aesthetic_laion, aesthetic_nima, laplacian_var,
-               media_type, duration, preferred_scene_id, stt_language, deleted, updated_at
+               media_type, duration, preferred_scene_id, stt_language,
+               derived_from, processing_depth, deleted, updated_at
         FROM images
         WHERE updated_at > ?
         ORDER BY updated_at ASC
@@ -956,7 +972,8 @@ def get_image(conn: SafeConnection, image_id: str) -> dict[str, Any] | None:
                timestamp_confidence, checksum, perceptual_hash, laplacian_var,
                lossless, description, rating, deleted, created_at, updated_at,
                mtime, media_type, duration, preferred_scene_id, stt_language,
-               codec_video, codec_audio, codec_container
+               codec_video, codec_audio, codec_container,
+               derived_from, processing_depth, processing_ops
         FROM images
         WHERE id = ?
     """,
@@ -967,7 +984,14 @@ def get_image(conn: SafeConnection, image_id: str) -> dict[str, Any] | None:
     if row is None:
         return None
 
-    return row_to_dict(row)
+    result = row_to_dict(row)
+    # processing_ops is stored as a JSON string; hand the frontend a parsed list.
+    if result is not None and result.get('processing_ops'):
+        try:
+            result['processing_ops'] = json.loads(result['processing_ops'])
+        except (ValueError, TypeError):
+            result['processing_ops'] = None
+    return result
 
 
 def get_image_exif(conn: SafeConnection, image_id: str) -> dict[str, str] | None:
@@ -1070,6 +1094,36 @@ def find_trashed_twin(conn: SafeConnection, basename: str, checksum: str | None)
     return cursor.fetchone() is not None
 
 
+# Matches a trailing "__enhanced_<N>" suffix on a filename stem, so re-enhancing
+# a derivative collapses the suffix (A → A__enhanced_1 → A__enhanced_2) instead
+# of nesting it (never A__enhanced_1__enhanced_2).
+_ENHANCED_SUFFIX_RE = re.compile(r'__enhanced_\d+$')
+
+
+def derived_image_name(parent_name: str, depth: int, ext: str) -> str:
+    """Build the catalogue filename for an enhanced (derived) image.
+
+    The depth suffix is rebased rather than appended, so a chain of
+    enhancements stays flat::
+
+        holiday.jpg            (depth 0)  →  holiday__enhanced_1.png  (depth 1)
+        holiday__enhanced_1.png (depth 1) →  holiday__enhanced_2.png  (depth 2)
+
+    Args:
+        parent_name: Basename of the immediate parent image (with or without an
+            existing ``__enhanced_<M>`` suffix).
+        depth: Processing depth of the new image (parent depth + 1).
+        ext: Output extension for the new file (with or without a leading dot);
+            chosen by the output format, not inherited from the parent.
+
+    Returns:
+        The derived basename, e.g. ``holiday__enhanced_2.png``.
+    """
+    stem = _ENHANCED_SUFFIX_RE.sub('', Path(parent_name).stem)
+    ext = ext if ext.startswith('.') else f'.{ext}'
+    return f'{stem}__enhanced_{depth}{ext}'
+
+
 def create_image(
     conn: SafeConnection,
     image_id: str,
@@ -1095,6 +1149,9 @@ def create_image(
     codec_video: str | None = None,
     codec_audio: str | None = None,
     codec_container: str | None = None,
+    derived_from: str | None = None,
+    processing_depth: int = 0,
+    processing_ops: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     """Create a new image record in the database.
 
@@ -1128,6 +1185,13 @@ def create_image(
         codec_video: Video codec name (e.g. 'h264', 'hevc').
         codec_audio: Audio codec name (e.g. 'aac', 'eac3').
         codec_container: Container format (e.g. 'matroska', 'mov').
+        derived_from: Parent image id when this image is an enhanced version of
+            another; NULL for camera originals.
+        processing_depth: Number of enhancement steps from the original
+            (original→A = 1, A→B = 2 …); 0 for originals.
+        processing_ops: Provenance of this image as a list of operation dicts
+            (e.g. [{'recipe': 'denoise', 'models': ['swinir'], 'params': {…}}]);
+            stored as a JSON string.  None for originals.
 
     Returns:
         Dictionary with the created image record.
@@ -1141,6 +1205,7 @@ def create_image(
     now = datetime.now().isoformat()
     timestamp_str = timestamp.isoformat() if timestamp else None
     exif_json = json.dumps(exif_data) if exif_data else None
+    processing_ops_json = json.dumps(processing_ops) if processing_ops else None
 
     conn.execute(
         """
@@ -1149,9 +1214,10 @@ def create_image(
             checksum, perceptual_hash, laplacian_var, lossless, mtime,
             description, rating, embedding, deleted, created_at, updated_at,
             exif_data, import_name, media_type, duration, preferred_scene_id,
-            thumbnails_pending, codec_video, codec_audio, codec_container
+            thumbnails_pending, codec_video, codec_audio, codec_container,
+            derived_from, processing_depth, processing_ops
         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, 0, ?, ?, ?, ?, ?, ?, ?, ?,
-                  ?, ?, ?)
+                  ?, ?, ?, ?, ?, ?)
     """,
         (
             image_id,
@@ -1180,6 +1246,9 @@ def create_image(
             codec_video,
             codec_audio,
             codec_container,
+            derived_from,
+            processing_depth,
+            processing_ops_json,
         ),
     )
 
@@ -1213,6 +1282,9 @@ def create_image(
         'media_type': media_type,
         'duration': duration,
         'preferred_scene_id': preferred_scene_id,
+        'derived_from': derived_from,
+        'processing_depth': processing_depth,
+        'processing_ops': processing_ops,
     }
 
 
@@ -2920,6 +2992,8 @@ EVENT_VIDEO_PROCESSED = 'video_processed'
 EVENT_TRANSCODE_COMPLETE = 'transcode_complete'
 EVENT_GPU_STATE_CHANGED = 'gpu_state_changed'
 EVENT_CONFIG_RELOADED = 'config_reloaded'
+EVENT_ENHANCE_COMPLETE = 'enhance_complete'
+EVENT_ENHANCE_FAILED = 'enhance_failed'
 
 
 @dataclass
@@ -4009,6 +4083,240 @@ class TranscodeWorker(threading.Thread):
 
 
 # =============================================================================
+# ENHANCE WORKER (ON-DEMAND NEURAL IMAGE ENHANCEMENT)
+# =============================================================================
+
+
+class EnhanceWorker(threading.Thread):
+    """Background thread for on-demand neural image enhancement.
+
+    Processes one :class:`EnhanceWorker.Job` at a time: the source image is run
+    through the requested capability's model (tiled, via the compute arbiter),
+    the result is written as a new lossless file in a watched folder, and a
+    rescan ingests it as a *derived version* of the original — Photonarium never
+    edits an original in place.
+
+    Feedback is deliberately coarse: an ``EVENT_ENHANCE_COMPLETE`` (or
+    ``EVENT_ENHANCE_FAILED``) event on finish, no progress bar.  There is no
+    user cancellation, but the worker honours the graceful-shutdown stop event
+    between tiles (abandoning the partial output).
+
+    Follows the same daemon-thread + graceful-shutdown pattern as
+    :class:`TranscodeWorker`.
+    """
+
+    @dataclass
+    class Job:
+        """A single enhancement work item."""
+
+        image_id: str  # source image to enhance
+        recipe: str  # capability key (e.g. 'denoise')
+        strength: float = 1.0  # blend with original, 0.0–1.0 (1.0 = fully enhanced)
+
+    def __init__(
+        self,
+        enhance_queue: queue.Queue[EnhanceWorker.Job],
+        stop_event: threading.Event,
+        db: ImageDatabase,
+    ):
+        """Initialise the enhance worker thread.
+
+        Args:
+            enhance_queue: Queue of ``EnhanceWorker.Job`` items.
+            stop_event: Event signalling the thread should stop.
+            db: Owning :class:`ImageDatabase` (for arbiter, config, ingest).
+        """
+        super().__init__(name='EnhanceWorker', daemon=True)
+        self._queue = enhance_queue
+        self._stop_event = stop_event
+        self._db = db
+
+    def run(self) -> None:
+        """Main loop — process one enhancement job at a time."""
+        logger.info('Enhance worker thread started')
+        try:
+            while not self._stop_event.is_set():
+                try:
+                    job = self._queue.get(timeout=0.5)
+                except queue.Empty:
+                    continue
+                self._process_job(job)
+        except Exception:
+            logger.exception('Enhance worker thread crashed')
+        finally:
+            logger.info('Enhance worker thread stopped')
+
+    def _process_job(self, job: EnhanceWorker.Job) -> None:
+        """Enhance one source image and ingest the result as a derived version."""
+        import enhance
+
+        db = self._db
+        cap = enhance.CAPABILITIES.get(job.recipe)
+        if cap is None:
+            logger.error('Enhance: unknown recipe %r', job.recipe)
+            self._emit_failed(job, 'Unknown enhancement option')
+            return
+
+        source = get_image(db.safe_conn, job.image_id)
+        if source is None:
+            self._emit_failed(job, 'Source image not found')
+            return
+        src_path = Path(source['path'])
+        if not src_path.is_file():
+            self._emit_failed(job, 'Source file is missing')
+            return
+
+        data_dir = str(db.db_path.parent)
+        if not enhance.capability_weight_path(data_dir, cap).is_file():
+            self._emit_failed(job, 'Enhancement model not downloaded')
+            return
+
+        # Derived naming + lineage.  Depth is the parent's depth + 1; the name
+        # rebases any existing __enhanced_<N> suffix rather than nesting it.
+        depth = (source.get('processing_depth') or 0) + 1
+        ext = db.config.enhance_output_format
+        dest_dir = self._dest_dir(source, src_path)
+        dest_dir.mkdir(parents=True, exist_ok=True)
+        dest = self._unique_path(dest_dir / derived_image_name(source['basename'], depth, ext))
+
+        # Display name + timestamp reuse the import_names mechanism so the new
+        # image sorts next to its original; lineage rides _derived_meta.  Both
+        # are keyed by the catalogue path and consumed once at ingest.
+        display_name = source.get('import_name') or source['basename']
+        ts = source.get('timestamp')
+        try:
+            file_date = datetime.fromisoformat(ts) if ts else datetime.now()
+        except (TypeError, ValueError):
+            file_date = datetime.now()
+        canon_dest = str(canonicalise_path(dest))
+        with db._import_names_lock:
+            db._import_names[canon_dest] = (display_name, file_date)
+        with db._derived_meta_lock:
+            db._derived_meta[canon_dest] = {
+                'derived_from': job.image_id,
+                'processing_depth': depth,
+                'processing_ops': self._build_ops(source, cap, job.strength),
+            }
+
+        try:
+            enhance.enhance_image_to_file(
+                cap,
+                src_path,
+                dest,
+                arbiter=db.arbiter,
+                device=db.gpu_health.device,
+                data_dir=data_dir,
+                tile_size=db.config.enhance_tile_size,
+                output_format=ext,
+                strength=job.strength,
+                stop_event=self._stop_event,
+            )
+        except enhance.EnhanceAborted:
+            logger.info('Enhance aborted (shutdown): %s', src_path.name)
+            self._cleanup(dest, canon_dest)
+            return
+        except Exception as e:
+            logger.error('Enhance failed for %s: %s', src_path.name, e)
+            self._cleanup(dest, canon_dest)
+            self._emit_failed(job, str(e))
+            return
+
+        # A deliberate processing output that happens to be byte-identical to an
+        # image already in the trash (e.g. re-running the same enhancement after
+        # trashing its earlier result) is a de-facto duplicate of what we just
+        # created — not content the user meant to keep buried.  Drop the stale
+        # trashed record (and its trash file) so it neither blocks ingest via the
+        # re-import guard nor lingers as a phantom duplicate.  This is the
+        # fundamental difference from importing: imports respect the trash as a
+        # sentinel; processing ops supersede it.
+        try:
+            out_checksum = compute_checksum(dest)
+            twins = db.safe_conn.execute(
+                'SELECT id FROM images WHERE deleted = 1 AND basename = ? AND checksum = ?',
+                (dest.name, out_checksum),
+            ).fetchall()
+            for twin in twins:
+                delete_image(db.safe_conn, twin['id'], from_disk=True)
+                logger.info('Removed stale trashed duplicate of enhanced output: %s', dest.name)
+        except Exception as e:
+            logger.warning('Could not check trash for duplicate of %s: %s', dest.name, e)
+
+        # Ingest the new file (picks up _import_names + _derived_meta) and tell
+        # the frontend.  The new image id is assigned at ingest and reaches the
+        # client via delta sync; the event carries the source id for correlation.
+        db.queue_rescan_all()
+        db.event_queue.emit(
+            EVENT_ENHANCE_COMPLETE,
+            {
+                'image_id': job.image_id,
+                'recipe': job.recipe,
+                'label': cap.label,
+                'new_path': str(dest),
+            },
+        )
+        db._status_counts = None
+
+    def _dest_dir(self, source: dict[str, Any], src_path: Path) -> Path:
+        """Watched folder for the output: catalogue (by date) or next to source."""
+        db = self._db
+        if getattr(db, '_import_enabled', False):
+            ts = source.get('timestamp')
+            try:
+                d = datetime.fromisoformat(ts) if ts else datetime.now()
+            except (TypeError, ValueError):
+                d = datetime.now()
+            return db.catalogue_dir / d.strftime('%Y') / d.strftime('%Y-%m-%d')
+        return src_path.parent
+
+    @staticmethod
+    def _unique_path(dest: Path) -> Path:
+        """Return *dest* or a ``_<n>``-suffixed sibling that does not yet exist.
+
+        A plain on-disk check suffices: trashed records are repathed into the
+        trash folder, so they never claim a live catalogue slot a new derived
+        image might be written to.
+        """
+        if not dest.exists():
+            return dest
+        stem, suffix, parent = dest.stem, dest.suffix, dest.parent
+        n = 1
+        while True:
+            candidate = parent / f'{stem}_{n}{suffix}'
+            if not candidate.exists():
+                return candidate
+            n += 1
+
+    @staticmethod
+    def _build_ops(source: dict[str, Any], cap: Any, strength: float) -> list[dict[str, Any]]:
+        """Cumulative provenance: the parent's ops plus this enhancement step."""
+        parent_ops = source.get('processing_ops') or []
+        if not isinstance(parent_ops, list):
+            parent_ops = []
+        op = {'recipe': cap.key, 'label': cap.label, 'model': cap.weight_filename}
+        if strength < 1.0:
+            op['strength'] = round(strength, 2)
+        return [*parent_ops, op]
+
+    def _cleanup(self, dest: Path, canon_dest: str) -> None:
+        """Remove a partial output and drop its pending ingest metadata."""
+        try:
+            dest.unlink(missing_ok=True)
+        except OSError as e:
+            logger.debug('Enhance cleanup: could not remove %s: %s', dest, e)
+        with self._db._import_names_lock:
+            self._db._import_names.pop(canon_dest, None)
+        with self._db._derived_meta_lock:
+            self._db._derived_meta.pop(canon_dest, None)
+
+    def _emit_failed(self, job: EnhanceWorker.Job, message: str) -> None:
+        """Emit EVENT_ENHANCE_FAILED with a human-readable reason."""
+        self._db.event_queue.emit(
+            EVENT_ENHANCE_FAILED,
+            {'image_id': job.image_id, 'recipe': job.recipe, 'error': message},
+        )
+
+
+# =============================================================================
 # SCAN TIMER THREAD (HEADLESS/DOCKER SCHEDULED RESCANS)
 # =============================================================================
 
@@ -4212,11 +4520,18 @@ class ImageDatabase:
         # Populated by ImportWorker, consumed by _process_image().
         self._import_names: dict[str, tuple[str, datetime]] = {}
         self._import_names_lock = threading.Lock()
+        # Maps catalogue destination path → lineage for an enhanced output,
+        # {derived_from, processing_depth, processing_ops}.  Populated by the
+        # enhancement worker when it places a derived file, consumed once by the
+        # ingestion pipeline.  (import_name / timestamp reuse _import_names.)
+        self._derived_meta: dict[str, dict[str, Any]] = {}
+        self._derived_meta_lock = threading.Lock()
 
         # Queues for independent workers (trash, import, transcode)
         self._trash_queue: queue.Queue[tuple[str, str]] = queue.Queue()  # (image_id, file_path)
         self._import_queue: queue.Queue[str] = queue.Queue()  # source file paths
         self._transcode_queue: queue.Queue[TranscodeWorker.Job] = queue.Queue()
+        self._enhance_queue: queue.Queue[EnhanceWorker.Job] = queue.Queue()
 
         # Centralised GPU health tracker — shared by all model loaders.
         # Event callback wired to the event queue for frontend notification.
@@ -4251,6 +4566,7 @@ class ImageDatabase:
         self._trash_thread: TrashWorker | None = None
         self._import_thread: ImportWorker | None = None
         self._transcode_thread: TranscodeWorker | None = None
+        self._enhance_thread: EnhanceWorker | None = None
         self._scan_timer_thread: ScanTimerThread | None = None
 
         # Phase 4 status tracking (post-processing after queues empty)
@@ -5185,6 +5501,14 @@ class ImageDatabase:
         )
         self._transcode_thread.start()
 
+        # Start enhance worker thread (on-demand neural image enhancement)
+        self._enhance_thread = EnhanceWorker(
+            enhance_queue=self._enhance_queue,
+            stop_event=self._stop_event,
+            db=self,
+        )
+        self._enhance_thread.start()
+
         # Start import worker thread (copies files into catalogue)
         if getattr(self, '_import_enabled', False):
             self._import_thread = ImportWorker(
@@ -5248,6 +5572,11 @@ class ImageDatabase:
             self._transcode_thread.join(timeout=timeout)
             if self._transcode_thread.is_alive():
                 logger.warning('Transcode worker thread did not stop in time')
+
+        if self._enhance_thread is not None:
+            self._enhance_thread.join(timeout=timeout)
+            if self._enhance_thread.is_alive():
+                logger.warning('Enhance worker thread did not stop in time')
 
         if self._scan_timer_thread is not None:
             self._scan_timer_thread.join(timeout=timeout)
@@ -5856,6 +6185,97 @@ class ImageDatabase:
         """
         with self._transcode_progress_lock:
             return dict(self._transcode_progress) if self._transcode_progress else None
+
+    # =========================================================================
+    # ENHANCE
+    # =========================================================================
+
+    def available_enhance_capabilities(self) -> list[dict[str, str]]:
+        """List enhancement capabilities ready to offer (enabled + weights present).
+
+        Returns:
+            List of ``{key, label, description}`` dicts for the Enhance dialog.
+            Empty if the feature is disabled or no weights are downloaded.
+        """
+        import enhance
+
+        caps = enhance.available_capabilities(self.config, str(self.db_path.parent))
+        # strength: whether the dialog should offer a blend slider — meaningful
+        # for restoration (scale 1: denoise, deblur), not for upscaling.
+        return [{'key': c.key, 'label': c.label, 'description': c.description, 'strength': c.scale == 1} for c in caps]
+
+    def enqueue_enhance(self, image_id: str, recipe: str, strength: float = 1.0) -> None:
+        """Queue one image for enhancement (processed by the EnhanceWorker).
+
+        Args:
+            image_id: Source image to enhance.
+            recipe: Capability key (must be enabled and have downloaded weights).
+            strength: Blend of the result with the original, 0.0–1.0.
+
+        Raises:
+            ValueError: If enhancement is disabled, the recipe is unknown or not
+                enabled, or its weights are not downloaded.
+        """
+        if not self.config.enhance_enabled:
+            raise ValueError('Image enhancement is disabled.')
+        valid = {c['key'] for c in self.available_enhance_capabilities()}
+        if recipe not in valid:
+            raise ValueError(f'Enhancement option {recipe!r} is unavailable (not enabled or not downloaded).')
+        strength = max(0.0, min(1.0, strength))
+        self._enhance_queue.put(EnhanceWorker.Job(image_id=image_id, recipe=recipe, strength=strength))
+        logger.info('Queued enhancement: image=%s recipe=%s strength=%.2f', image_id, recipe, strength)
+
+    def enhance_preview(
+        self,
+        image_id: str,
+        recipe: str,
+        crop_left: int | None = None,
+        crop_top: int | None = None,
+    ) -> bytes:
+        """Render a fast enhanced-crop preview for the Enhance dialog.
+
+        Args:
+            image_id: Source image.
+            recipe: Capability key (must be enabled and downloaded).
+            crop_left: Left edge of the preview crop in source pixels (centred if
+                None — e.g. the dialog's first preview before any panning).
+            crop_top: Top edge of the preview crop in source pixels (centred if
+                None).
+
+        Returns:
+            The enhanced crop as PNG bytes (the dialog draws the "before"
+            itself by panning the original).
+
+        Raises:
+            ValueError: If enhancement is disabled, the recipe is unavailable, or
+                the source image/file is missing.
+        """
+        import enhance
+
+        if not self.config.enhance_enabled:
+            raise ValueError('Image enhancement is disabled.')
+        cap = enhance.CAPABILITIES.get(recipe)
+        valid = {c['key'] for c in self.available_enhance_capabilities()}
+        if cap is None or recipe not in valid:
+            raise ValueError(f'Enhancement option {recipe!r} is unavailable.')
+        source = get_image(self.safe_conn, image_id)
+        if source is None:
+            raise ValueError('Source image not found.')
+        if not Path(source['path']).is_file():
+            raise ValueError('Source file is missing.')
+        try:
+            return enhance.enhance_preview(
+                cap,
+                source['path'],
+                arbiter=self.arbiter,
+                device=self.gpu_health.device,
+                data_dir=str(self.db_path.parent),
+                crop_left=crop_left,
+                crop_top=crop_top,
+            )
+        except enhance.EnhanceUnstable as e:
+            # Expected outcome for some images — a clean message, not a 500.
+            raise ValueError(str(e)) from e
 
     def enqueue_transcode(self, image_ids: list[str], *, trash_original: bool = False) -> int:
         """Enqueue videos for transcoding to browser-compatible MP4.

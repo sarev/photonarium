@@ -9,4 +9,6 @@ imagehash
 rawpy
 open_clip_torch
 transformers
+timm
+einops
 faster-whisper

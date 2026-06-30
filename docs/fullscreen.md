@@ -25,6 +25,12 @@ These shortcuts use Ctrl on Windows/Linux and Cmd on macOS:
 - **Ctrl/Cmd + L** rotates the image left (90 deg). Not available for videos.
 - **Ctrl/Cmd + Backspace** or **Ctrl/Cmd + Delete** moves the current item to trash and advances to the next one.
 
+## Rating
+
+A rating widget sits in the **bottom-left** corner. Click it to open a small palette and pick a rating; the choice is saved immediately and shown back in the widget. Click the same rating again to clear it.
+
+The palette offers **1, 2, or 3 stars** plus a set of reaction icons - happy, neutral, and unhappy faces, thumbs up and down, and a heart - so you can rate however suits you. Ratings are stored on the image and are used by the Gallery's **rating sort** and the **rating filter** in [Search](search.md), so a quick pass here makes images easy to find again later.
+
 ## Video playback
 
 When a video is opened in full-screen, it displays with standard playback controls (play/pause, seek, volume). Videos start paused so you can decide when to begin watching. The face tagging and rotate buttons are visually disabled for videos, since those features apply only to images.
@@ -96,3 +102,26 @@ When you hover a face box, you may see:
 - **Tab / Shift+Tab** cycles through unknown face inputs so you can name several quickly.
 
 As more photos are tagged, Photonarium can recognise that person in other images.
+
+---
+
+# Enhancing a photo (in full-screen)
+
+Enhancement runs local, offline neural models to clean up or enlarge a photo. It is available for images only. Open it with the **Enhance** tool (the wand icon) in the full-screen viewer.
+
+Photonarium is a catalogue, not an editor, so **your original is never changed**. Each enhancement is saved as a **new version** of the photo, kept alongside the original in your library (named `…__enhanced_1`, `…__enhanced_2`, and so on for repeated passes). The new version links back to the photo it came from - see [enhanced versions in the Gallery](gallery.md#enhanced-versions).
+
+## Choosing what to do
+
+The dialog only offers the capabilities whose models are installed (downloaded from Settings or the setup wizard). Depending on what you have, you may see:
+
+- **Reduce noise** - remove sensor noise and grain while preserving detail.
+- **Remove motion blur** - undo camera shake and motion streaks, while keeping soft backgrounds soft.
+- **Auto-sharpen** - strongly sharpen a soft or out-of-focus photo.
+- **Increase resolution (2× / 4×)** - upscale to larger dimensions with sharp, natural detail.
+
+## Preview and commit
+
+- A **before / after** preview shows the effect on a crop of the image. **Drag** the "before" pane to reposition the crop over the part you most care about; the preview regenerates for the new region.
+- Noise, deblur, and sharpen offer a **strength** slider to dial the effect back when you want a gentler result.
+- Choose **Save as new version** to process the full image. Enhancement runs in the background - you can carry on working, and you're notified when the new version is ready and it appears in the Gallery.

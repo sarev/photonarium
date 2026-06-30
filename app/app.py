@@ -81,6 +81,7 @@ def jsonify(data):
     return Response(orjson.dumps(data), mimetype='application/json')
 
 
+import enhance
 from arbiter import Priority
 from caption import CaptionGenerator
 from config import (
@@ -162,7 +163,18 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 # Set our modules to INFO level
-for module in ['app', '__main__', 'imagedb', 'faces', 'thumbnails', 'duplicates', 'config', 'timestamps', 'pipeline']:
+for module in [
+    'app',
+    '__main__',
+    'imagedb',
+    'faces',
+    'thumbnails',
+    'duplicates',
+    'config',
+    'timestamps',
+    'pipeline',
+    'enhance',
+]:
     logging.getLogger(module).setLevel(logging.INFO)
 
 app = Flask(__name__, static_folder='static', static_url_path='')
@@ -1545,6 +1557,100 @@ def import_images():
 
     queued = db.enqueue_import(valid_paths)
     return success_response({'queued': queued})
+
+
+@app.route('/api/enhance/capabilities', methods=['GET'])
+def enhance_capabilities():
+    """List enhancement capabilities available to offer in the Enhance dialog.
+
+    A capability is listed only when it is enabled in config *and* its model
+    weights are downloaded, so the dialog reflects what is actually installed.
+
+    Returns:
+        ``{"capabilities": [{"key", "label", "description"}, ...]}`` (possibly empty).
+    """
+    db = get_db()
+    return success_response({'capabilities': db.available_enhance_capabilities()})
+
+
+@app.route('/api/enhance', methods=['POST'])
+def enhance_image():
+    """Queue an image for neural enhancement and return immediately.
+
+    The heavy work runs on the background EnhanceWorker; the result is ingested
+    as a new derived version of the original and announced via the
+    ``enhance_complete`` event (no progress bar, no held request thread).
+
+    Request body:
+        ``{"image_id": "...", "recipe": "denoise"}``
+
+    Returns:
+        ``{"queued": true}`` on success, or an error if enhancement is disabled
+        or the recipe is unavailable.
+    """
+    db = get_db()
+    data = request.get_json(silent=True) or {}
+    image_id = data.get('image_id')
+    recipe = data.get('recipe')
+    if not image_id or not recipe:
+        return error_response('image_id and recipe are required', 400)
+    try:
+        strength = float(data.get('strength', 1.0))
+    except (TypeError, ValueError):
+        strength = 1.0
+    try:
+        db.enqueue_enhance(image_id, recipe, strength)
+    except ValueError as e:
+        return error_response(str(e), 400)
+    return success_response({'queued': True})
+
+
+@app.route('/api/enhance/preview', methods=['POST'])
+def enhance_preview_route():
+    """Render a before/after centre-crop preview for a capability.
+
+    Synchronous (a small crop, prioritised ahead of bulk work) so the dialog can
+    show the result before the user commits to the full-resolution run.
+
+    Request body:
+        ``{"image_id": "...", "recipe": "denoise", "crop_left": 320, "crop_top": 240}``
+
+    ``crop_left``/``crop_top`` are optional source-pixel coordinates for the
+    preview crop (omitted → centred); the dialog sends them as the user drags to
+    reposition the crop.  Only the enhanced crop is returned — the dialog renders
+    the "before" by panning the original itself, so there's no need to ship it.
+
+    Returns:
+        ``{"after": <data-url>}`` PNG preview of the enhanced crop.
+    """
+    import base64
+
+    db = get_db()
+    data = request.get_json(silent=True) or {}
+    image_id = data.get('image_id')
+    recipe = data.get('recipe')
+    if not image_id or not recipe:
+        return error_response('image_id and recipe are required', 400)
+
+    def _coord(key):
+        value = data.get(key)
+        try:
+            return int(value) if value is not None else None
+        except (TypeError, ValueError):
+            return None
+
+    try:
+        after = db.enhance_preview(image_id, recipe, _coord('crop_left'), _coord('crop_top'))
+    except ValueError as e:
+        return error_response(str(e), 400)
+    except Exception:
+        logger.exception('Enhance preview failed')
+        return error_response('Could not generate preview', 500)
+    return success_response(
+        {
+            'after': 'data:image/png;base64,' + base64.b64encode(after).decode('ascii'),
+        }
+    )
 
 
 @app.route('/api/import/preflight', methods=['POST'])
@@ -5434,6 +5540,15 @@ if __name__ == '__main__':
             'stt': {
                 'enabled': _config.stt_enabled,
                 'model': _config.stt_model,
+            },
+            'enhance': {
+                'enabled': _config.enhance_enabled,
+                'data_dir': _data_dir,
+                'weights': [
+                    {'filename': cap.weight_filename, 'url': cap.weight_url}
+                    for cap in enhance.CAPABILITIES.values()
+                    if getattr(_config, cap.config_flag, False)
+                ],
             },
         }
         print(json.dumps(models))

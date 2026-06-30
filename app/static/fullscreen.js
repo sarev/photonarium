@@ -240,6 +240,7 @@ const Fullscreen = {
             closeBtn: App.$('fullscreen-close'),
             taggingBtn: App.$('fullscreen-tagging'),
             ignoreBtn: App.$('fullscreen-ignore'),
+            enhanceBtn: App.$('fullscreen-enhance'),
             rotateLeftBtn: App.$('fullscreen-rotate-left'),
             rotateRightBtn: App.$('fullscreen-rotate-right'),
             prevBtn: App.$('fullscreen-prev'),
@@ -288,6 +289,34 @@ const Fullscreen = {
         });
         this._els.ignoreBtn.addEventListener('click', () => {
             this._ignoreUnknownFaces();
+        });
+        this._els.enhanceBtn?.addEventListener('click', () => {
+            this._openEnhanceDialog();
+        });
+        // Enhance dialog: cancel, delegated capability selection (→ preview),
+        // and confirm (→ commit the full-resolution run).  Bound once.
+        App.$('dialog-enhance-cancel')?.addEventListener('click', () => {
+            App.$('dialog-enhance')?.close();
+        });
+        // Closing the dialog (Cancel, Esc, or after confirm) must cancel any
+        // in-progress crop drag so a late pointerup can't fire a stray preview.
+        App.$('dialog-enhance')?.addEventListener('close', () => {
+            this._cancelEnhanceDrag?.();
+        });
+        App.$('enhance-options')?.addEventListener('click', (e) => {
+            const btn = e.target.closest('.enhance-option');
+            if (btn) this._previewEnhance(btn.dataset.recipe);
+        });
+        App.$('dialog-enhance-confirm')?.addEventListener('click', () => {
+            this._submitEnhance(this._enhanceRecipe);
+        });
+        // Strength slider: live client-side blend by setting the overlay opacity.
+        App.$('enhance-strength')?.addEventListener('input', (e) => {
+            const pct = Number(e.target.value);
+            const afterImg = App.$('enhance-preview-after');
+            if (afterImg) afterImg.style.opacity = String(pct / 100);
+            const label = App.$('enhance-strength-value');
+            if (label) label.textContent = `${pct}%`;
         });
         this._els.rotateLeftBtn.addEventListener('click', () => {
             this._rotateImage(270);
@@ -1031,6 +1060,298 @@ const Fullscreen = {
      */
     _getCurrentImage() {
         return this.state.imageList[this.state.currentIndex] || null;
+    },
+
+    /* ----------------------------------------------------------------------
+       ENHANCE DIALOG
+
+       Lists the enhancement capabilities the backend currently offers (only
+       those whose model weights are downloaded) and submits the chosen one.
+       Enhancement runs in the background; the result is ingested as a new
+       version of the original and announced via the enhance_complete event.
+       ---------------------------------------------------------------------- */
+
+    /**
+     * Open the Enhance dialog for the current image and populate it with the
+     * capabilities the backend can currently offer.
+     * @private
+     */
+    async _openEnhanceDialog() {
+        const img = this._getCurrentImage();
+        if (!img) return;
+        if (img.media_type === 'video') {
+            App.showInfo('Enhancement applies to photos, not videos.');
+            return;
+        }
+
+        const dialog = App.$('dialog-enhance');
+        const optionsEl = App.$('enhance-options');
+        const emptyEl = App.$('enhance-empty');
+        if (!dialog || !optionsEl) return;
+
+        this._enhanceImageId = img.id;
+        this._enhanceRecipe = null;
+        // Crop state for the pannable preview: native source dimensions, the
+        // square crop side, and the chosen top-left (null → centred on the first
+        // preview).  The panned region persists across capability switches.
+        this._enhanceImgW = img.width || 0;
+        this._enhanceImgH = img.height || 0;
+        this._enhanceCropSide = Math.min(256, this._enhanceImgW || 256, this._enhanceImgH || 256);
+        this._enhanceCrop = null;
+        this._setupEnhanceCropDrag();
+        // Load the full-resolution original into both panes' base layers so the
+        // user can pan over it entirely client-side (no round-trip per drag).
+        const fullUrl = ThumbnailLoader.getFullImageUrl(img.id);
+        const beforeBaseImg = App.$('enhance-preview-before');
+        const afterBaseImg = App.$('enhance-preview-after-base');
+        if (beforeBaseImg) beforeBaseImg.src = fullUrl;
+        if (afterBaseImg) afterBaseImg.src = fullUrl;
+        // Catalogue metadata should carry dimensions, but fall back to the
+        // loaded image's natural size if they're missing or zero — otherwise the
+        // Before pane would size to 0px and panning would be disabled.
+        if ((!this._enhanceImgW || !this._enhanceImgH) && beforeBaseImg) {
+            beforeBaseImg.addEventListener('load', () => {
+                this._enhanceImgW = beforeBaseImg.naturalWidth || this._enhanceImgW;
+                this._enhanceImgH = beforeBaseImg.naturalHeight || this._enhanceImgH;
+                this._enhanceCropSide = Math.min(256, this._enhanceImgW || 256, this._enhanceImgH || 256);
+                if (this._enhanceCrop) this._positionCropView(this._enhanceCrop.left, this._enhanceCrop.top);
+            }, { once: true });
+        }
+        optionsEl.innerHTML = '<div class="enhance-loading">Loading…</div>';
+        if (emptyEl) emptyEl.hidden = true;
+        // Reset preview + confirm to their initial (pick-a-capability) state.
+        const previewEl = App.$('enhance-preview');
+        if (previewEl) previewEl.hidden = true;
+        const confirmBtn = App.$('dialog-enhance-confirm');
+        if (confirmBtn) confirmBtn.hidden = true;
+        dialog.showModal();
+
+        let caps = [];
+        try {
+            const resp = await App.apiGet('/enhance/capabilities');
+            caps = resp?.data?.capabilities || [];
+        } catch (err) {
+            console.error('[Enhance] failed to load capabilities', err);
+        }
+        this._enhanceCaps = caps;
+
+        if (!caps.length) {
+            optionsEl.innerHTML = '';
+            if (emptyEl) emptyEl.hidden = false;
+            return;
+        }
+
+        optionsEl.innerHTML = caps.map((c) => (
+            `<button type="button" class="enhance-option" data-recipe="${App.escapeHtml(c.key)}">`
+            + `<span class="enhance-option-label">${App.escapeHtml(c.label)}</span>`
+            + `<span class="enhance-option-desc">${App.escapeHtml(c.description)}</span>`
+            + '</button>'
+        )).join('');
+    },
+
+    /**
+     * Render a before/after preview for a capability on a fast centre-crop,
+     * then reveal the "Save as new version" confirm button.
+     * @param {string} recipe - Capability key (e.g. 'denoise').
+     * @private
+     */
+    async _previewEnhance(recipe) {
+        const imageId = this._enhanceImageId;
+        if (!imageId || !recipe) return;
+        this._enhanceRecipe = recipe;
+
+        const previewEl = App.$('enhance-preview');
+        const afterImg = App.$('enhance-preview-after');
+        const spinner = App.$('enhance-preview-spinner');
+        const confirmBtn = App.$('dialog-enhance-confirm');
+        const strengthRow = App.$('enhance-strength-row');
+        const strengthInput = App.$('enhance-strength');
+        const strengthValue = App.$('enhance-strength-value');
+
+        // Show a strength slider only for capabilities that support it
+        // (restoration — denoise/deblur), reset to 100% on each selection.
+        const cap = (this._enhanceCaps || []).find((c) => c.key === recipe);
+        const supportsStrength = !!cap?.strength;
+        if (strengthRow) strengthRow.hidden = !supportsStrength;
+        if (supportsStrength && strengthInput) {
+            strengthInput.value = '100';
+            if (strengthValue) strengthValue.textContent = '100%';
+        }
+        if (afterImg) afterImg.style.opacity = '1';
+
+        // Mark the chosen option and show the preview area with a spinner.
+        App.$('enhance-options')?.querySelectorAll('.enhance-option').forEach((b) => {
+            b.classList.toggle('selected', b.dataset.recipe === recipe);
+        });
+        // Resolve the crop: the user's panned region, or a centred crop the
+        // first time.  Position both panes' base layers to show it, then request
+        // just the enhanced overlay for that exact crop.
+        const side = this._enhanceCropSide;
+        if (!this._enhanceCrop) {
+            this._enhanceCrop = {
+                left: Math.floor((this._enhanceImgW - side) / 2),
+                top: Math.floor((this._enhanceImgH - side) / 2),
+            };
+        }
+        const { left, top } = this._enhanceCrop;
+        afterImg?.removeAttribute('src');
+        if (previewEl) previewEl.hidden = false;
+        if (spinner) spinner.hidden = false;
+        if (confirmBtn) confirmBtn.hidden = false;
+        // Position after un-hiding so the viewport has a measurable width.
+        this._positionCropView(left, top);
+
+        // Guard against a slow preview being overtaken by a newer selection.
+        const token = (this._enhancePreviewToken || 0) + 1;
+        this._enhancePreviewToken = token;
+        try {
+            const resp = await App.apiPost('/enhance/preview', {
+                image_id: imageId, recipe, crop_left: left, crop_top: top,
+            });
+            if (token !== this._enhancePreviewToken) return; // superseded
+            const after = resp?.data?.after || '';
+            if (afterImg) afterImg.src = after;
+        } catch (err) {
+            if (token !== this._enhancePreviewToken) return;
+            console.error('[Enhance] preview failed', err);
+            // Most often this image just isn't a good fit for the chosen model
+            // (the backend rejects unstable output rather than show garbage).
+            App.showError('This image couldn’t be enhanced that way.');
+            if (previewEl) previewEl.hidden = true;
+            if (confirmBtn) confirmBtn.hidden = true;
+        } finally {
+            if (token === this._enhancePreviewToken && spinner) spinner.hidden = true;
+        }
+    },
+
+    /**
+     * Submit the full-resolution enhancement and close the dialog. The backend
+     * returns immediately; completion arrives via the enhance_complete event
+     * (a toast), and the new version via delta sync.
+     * @param {string} recipe - Capability key (e.g. 'denoise').
+     * @private
+     */
+    async _submitEnhance(recipe) {
+        const imageId = this._enhanceImageId;
+        if (!imageId || !recipe) return;
+        // Strength only applies to capabilities that offer the slider.
+        const cap = (this._enhanceCaps || []).find((c) => c.key === recipe);
+        const strengthInput = App.$('enhance-strength');
+        const strength = (cap?.strength && strengthInput)
+            ? Number(strengthInput.value) / 100
+            : 1.0;
+        App.$('dialog-enhance')?.close();
+        try {
+            await App.apiPost('/enhance', { image_id: imageId, recipe, strength });
+            App.showInfo('Enhancing… you’ll be notified when it’s ready.');
+        } catch (err) {
+            console.error('[Enhance] submit failed', err);
+            App.showError('Could not start enhancement.');
+        }
+    },
+
+    /**
+     * Size and translate both panes' base original layers so the square viewport
+     * shows the crop at (left, top). The original is scaled by viewport/side and
+     * shifted by the crop's top-left — so panning is a pure transform with no
+     * server round-trip, and the enhanced overlay (which fills the viewport)
+     * stays aligned over the same region.
+     * @param {number} left - Crop left edge in source pixels.
+     * @param {number} top - Crop top edge in source pixels.
+     * @private
+     */
+    _positionCropView(left, top) {
+        const view = App.$('enhance-before-view');
+        const side = this._enhanceCropSide;
+        if (!view || !side) return;
+        const factor = (view.clientWidth || 1) / side;
+        const w = `${this._enhanceImgW * factor}px`;
+        const h = `${this._enhanceImgH * factor}px`;
+        const transform = `translate(${-left * factor}px, ${-top * factor}px)`;
+        for (const el of [App.$('enhance-preview-before'), App.$('enhance-preview-after-base')]) {
+            if (!el) continue;
+            el.style.width = w;
+            el.style.height = h;
+            el.style.transform = transform;
+        }
+    },
+
+    /**
+     * Wire pointer-drag panning on the preview viewports (bound once). Dragging
+     * either pane moves the crop over the original live; on release, if the crop
+     * moved, the enhanced preview regenerates for the new region.
+     * @private
+     */
+    _setupEnhanceCropDrag() {
+        if (this._enhanceDragBound) return;
+        this._enhanceDragBound = true;
+        const views = ['enhance-before-view', 'enhance-after-view']
+            .map((id) => App.$(id)).filter(Boolean);
+
+        let dragging = false;
+        let startX = 0; let startY = 0; let startLeft = 0; let startTop = 0; let factor = 1;
+
+        const onMove = (e) => {
+            if (!dragging) return;
+            const side = this._enhanceCropSide;
+            // Dragging right reveals content to the left, so the crop moves the
+            // opposite way to the pointer.  Clamp inside the image.
+            const left = Math.max(0, Math.min(this._enhanceImgW - side, startLeft - (e.clientX - startX) / factor));
+            const top = Math.max(0, Math.min(this._enhanceImgH - side, startTop - (e.clientY - startY) / factor));
+            this._enhancePendingCrop = { left: Math.round(left), top: Math.round(top) };
+            this._positionCropView(left, top);
+        };
+
+        // Tear down the live drag (drop the window listeners, clear the drag
+        // flag and visual state).  Shared by the normal release path and the
+        // dialog-close cancel path below.
+        const stopDrag = () => {
+            dragging = false;
+            views.forEach((v) => v.classList.remove('dragging'));
+            window.removeEventListener('pointermove', onMove);
+            window.removeEventListener('pointerup', onUp);
+        };
+
+        const onUp = () => {
+            if (!dragging) return;
+            stopDrag();
+            const next = this._enhancePendingCrop;
+            const cur = this._enhanceCrop;
+            if (next && (!cur || next.left !== cur.left || next.top !== cur.top)) {
+                this._enhanceCrop = next;
+                if (this._enhanceRecipe) this._previewEnhance(this._enhanceRecipe);
+            }
+        };
+
+        // Abort an in-progress drag without regenerating the preview.  Called
+        // when the dialog closes mid-drag so a pointerup landing after the close
+        // can't fire a stray preview request against a now-hidden dialog.
+        this._cancelEnhanceDrag = () => {
+            if (!dragging) return;
+            stopDrag();
+            this._enhancePendingCrop = null;
+        };
+
+        for (const view of views) {
+            view.addEventListener('pointerdown', (e) => {
+                // Nothing to pan until a capability is chosen, and no room if the
+                // image isn't larger than the crop in either axis.
+                const side = this._enhanceCropSide;
+                if (!this._enhanceRecipe) return;
+                if (this._enhanceImgW <= side && this._enhanceImgH <= side) return;
+                dragging = true;
+                factor = (view.clientWidth || 1) / side;
+                startX = e.clientX;
+                startY = e.clientY;
+                startLeft = this._enhanceCrop?.left ?? Math.floor((this._enhanceImgW - side) / 2);
+                startTop = this._enhanceCrop?.top ?? Math.floor((this._enhanceImgH - side) / 2);
+                this._enhancePendingCrop = { left: startLeft, top: startTop };
+                views.forEach((v) => v.classList.add('dragging'));
+                window.addEventListener('pointermove', onMove);
+                window.addEventListener('pointerup', onUp);
+                e.preventDefault();
+            });
+        }
     },
 
     /* ----------------------------------------------------------------------

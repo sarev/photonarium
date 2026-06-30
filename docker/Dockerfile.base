@@ -39,6 +39,11 @@ WORKDIR /app
 COPY docker/models/.laion-aesthetic-head.pth /defaults/
 COPY docker/models/.nima-mobilenetv2-ava.pth /defaults/
 
+# Image-enhancement weights (SwinIR denoise, Real-ESRGAN super-resolution).
+# Populated by `make models`; the entrypoint seeds /defaults into the data dir,
+# so these land in <data>/.enhance/ on first run.
+COPY docker/models/.enhance/ /defaults/.enhance/
+
 # HuggingFace models (OpenCLIP, BLIP)
 COPY docker/models/huggingface/ /root/.cache/huggingface/
 

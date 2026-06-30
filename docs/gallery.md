@@ -58,6 +58,12 @@ Videos appear alongside images in the Gallery. Each video's thumbnail shows its 
 
 To manage videos in more detail - browse all videos, see their scene timelines, or search specifically for video content - use the dedicated [Videos](videos.md) screen.
 
+## Enhanced versions
+
+When you [enhance a photo](fullscreen.md#enhancing-a-photo-in-full-screen), the result is added to your library as a separate image rather than replacing the original. Enhanced images carry a small **wand badge** in the corner of their thumbnail, so you can spot them at a glance.
+
+Select an enhanced image and the info panel shows which photo it was **enhanced from**, with a button to jump straight to that original. Because each enhancement is just a normal catalogued image, you can rate it, search it, add it to groups, or enhance it again - repeated passes are numbered (`__enhanced_1`, `__enhanced_2`, …) and stay flat rather than nesting.
+
 ## Reviewing groups in the Gallery
 
 If you opened a group into the Gallery, you can move between groups without going back:

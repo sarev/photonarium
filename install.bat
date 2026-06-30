@@ -301,7 +301,7 @@ if !errorlevel! neq 0 goto :error
 
 echo.
 echo --- Installing remaining dependencies ---
-"%VENV_PIP%" install pillow opencv-python imagehash numpy pyyaml flask waitress orjson requests transformers rawpy exifread av ffmpeg-binaries faster-whisper
+"%VENV_PIP%" install pillow opencv-python imagehash numpy pyyaml flask waitress orjson requests transformers timm einops rawpy exifread av ffmpeg-binaries faster-whisper
 if !errorlevel! neq 0 goto :error
 
 :: Install facenet-pytorch last with --no-deps to avoid its overly strict

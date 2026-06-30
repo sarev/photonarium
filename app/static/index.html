@@ -515,6 +515,10 @@
                 <button id="fullscreen-tune-faces" class="fullscreen-btn" title="Tune face detection settings">
                     <span class="icon" data-icon="tune">⚙</span>
                 </button>
+                <!-- Image enhancement -->
+                <button id="fullscreen-enhance" class="fullscreen-btn" title="Enhance — denoise, upscale, restore">
+                    <span class="icon" data-icon="auto_fix_high">✨</span>
+                </button>
                 <!-- Rotate left -->
                 <button id="fullscreen-rotate-left" class="fullscreen-btn" title="Rotate left (Ctrl+L)">
                     <span class="icon" data-icon="rotate_left">⟲</span>
@@ -960,6 +964,58 @@
                 <div class="dialog-actions">
                     <button id="dialog-transcode-cancel" class="action-btn">Cancel</button>
                     <button id="dialog-transcode-ok" class="action-btn primary">Transcode</button>
+                </div>
+            </div>
+        </dialog>
+
+        <!-- Enhance dialog -->
+        <dialog id="dialog-enhance">
+            <div class="dialog-content">
+                <h3>Enhance</h3>
+                <p class="dialog-subtitle">
+                    Save an enhanced copy as a new version. Your original is never changed.
+                </p>
+                <!-- Before/after preview of a crop (populated on select).  Each
+                     pane is a square viewport onto the full-resolution original;
+                     dragging the "Before" pane pans the crop (a client-side
+                     transform — instant), and the enhanced crop regenerates when
+                     the drag ends. -->
+                <div id="enhance-preview" class="enhance-preview" hidden>
+                    <div class="enhance-preview-pane">
+                        <span class="enhance-preview-label">Before · drag to reposition</span>
+                        <div id="enhance-before-view" class="enhance-crop-view" title="Drag to choose which part of the image to preview">
+                            <img id="enhance-preview-before" class="enhance-crop-img" alt="Before enhancement" draggable="false">
+                        </div>
+                    </div>
+                    <div class="enhance-preview-pane">
+                        <span class="enhance-preview-label">After</span>
+                        <!-- The enhanced crop is overlaid on the original; its
+                             opacity is the strength, so the blend is live and
+                             client-side. -->
+                        <div id="enhance-after-view" class="enhance-crop-view" title="Drag to choose which part of the image to preview">
+                            <img id="enhance-preview-after-base" class="enhance-crop-img" alt="" draggable="false">
+                            <img id="enhance-preview-after" alt="After enhancement">
+                            <div id="enhance-preview-spinner" class="enhance-preview-spinner" hidden></div>
+                        </div>
+                    </div>
+                </div>
+                <!-- Strength slider (restoration only — denoise/deblur) -->
+                <div id="enhance-strength-row" class="enhance-strength-row" hidden>
+                    <label for="enhance-strength">Strength</label>
+                    <input type="range" id="enhance-strength" min="0" max="100" value="100"
+                           title="How strongly to apply the effect — lower keeps more of the original">
+                    <span id="enhance-strength-value">100%</span>
+                </div>
+                <div id="enhance-options" class="enhance-options">
+                    <!-- Capability buttons inserted dynamically -->
+                </div>
+                <p id="enhance-empty" class="enhance-empty" hidden>
+                    No enhancement models are installed yet. You can download them from
+                    Settings or the setup wizard.
+                </p>
+                <div class="dialog-actions">
+                    <button id="dialog-enhance-cancel" class="action-btn">Cancel</button>
+                    <button id="dialog-enhance-confirm" class="action-btn primary" hidden>Save as new version</button>
                 </div>
             </div>
         </dialog>

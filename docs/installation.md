@@ -194,6 +194,8 @@ Requires `/dev/dri` to be accessible on the host (standard on most Linux systems
 | `/catalogue` | Imported photos and videos (organised by date) |
 | `/photos` | Your media library (mount read-only with `:ro`) |
 
+> **Read-only library:** mounting `/photos` with `:ro` is recommended so Photonarium can never modify your originals. The trade-off is that anything which writes back to a file *in place* will not work on that mount - in particular, **rotating** an image rewrites the original file, so it needs write access. Image **enhancement** is unaffected when you use the catalogue (the default here): enhanced versions are new files written to `/catalogue`, never to your media library.
+
 ### Configuration File
 
 On first run, Photonarium creates `/config/photonarium.yml` with Docker-appropriate defaults:
@@ -423,7 +425,7 @@ If you prefer to install manually, or the installer script doesn't suit your set
 
    # Other dependencies
    pip install open_clip_torch
-   pip install pillow numpy pyyaml opencv-python imagehash flask waitress requests orjson transformers rawpy exifread av ffmpeg-binaries faster-whisper
+   pip install pillow numpy pyyaml opencv-python imagehash flask waitress requests orjson transformers timm einops rawpy exifread av ffmpeg-binaries faster-whisper
 
    # Install facenet-pytorch last with --no-deps to avoid its overly strict
    # version bounds on torch/numpy/pillow (the package is unmaintained)

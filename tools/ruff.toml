@@ -5,7 +5,7 @@ src = ["app"]
 # (node_modules, build, dist, .venv, .git, …) and we only add to them.  Using
 # plain `exclude` would replace the defaults and cause third-party trees such as
 # tools/node_modules to be linted/formatted.  `env` is the project's virtualenv.
-extend-exclude = ["tools/vulture_whitelist.py", "env"]
+extend-exclude = ["tools/vulture_whitelist.py", "env", "app/archs"]
 
 [lint]
 select = [

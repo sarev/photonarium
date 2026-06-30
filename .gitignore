@@ -24,3 +24,9 @@ docker/models/
 .thumbnails/
 catalogue/
 photonarium.db
+
+# Third-party sample images used only for local enhancement testing — not our
+# copyright, must never be committed or distributed.
+snippets/blurry-images-*.jpg
+# WSL "mark-of-the-web" metadata streams from downloaded files.
+*:Zone.Identifier

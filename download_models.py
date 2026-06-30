@@ -259,6 +259,65 @@ def download_nima_model(data_dir: str = '.') -> bool:
         return True  # Non-fatal — app works without it
 
 
+def download_enhance_models(weights: list[dict], data_dir: str = '.') -> bool:
+    """Download image-enhancement model weights (SwinIR, etc.).
+
+    Each weight is a permissively-licensed ``.pth`` fetched from its release URL
+    into ``<data_dir>/.enhance/``.  Follows the LAION/NIMA pattern: skip
+    already-present files, retry transient failures, and stay non-fatal — a
+    capability whose weight is missing simply won't be offered in the app.
+
+    Args:
+        weights: List of ``{'filename': ..., 'url': ...}`` dicts (from
+            ``app.py --list-models``).
+        data_dir: Directory whose ``.enhance/`` subdir stores the weights.
+
+    Returns:
+        True (non-fatal — the app works without enhancement weights).
+    """
+    print(f'\n{"=" * 60}')
+    print('Downloading image-enhancement models')
+    print('=' * 60)
+
+    if not weights:
+        print('No enhancement weights required (feature disabled or no capabilities enabled).')
+        return True
+
+    # The app looks for these under <data_dir>/.enhance/ (enhance.ENHANCE_WEIGHTS_SUBDIR).
+    enhance_dir = os.path.join(data_dir, '.enhance')
+    os.makedirs(enhance_dir, exist_ok=True)
+
+    for weight in weights:
+        filename = weight['filename']
+        url = weight['url']
+        dest = os.path.join(enhance_dir, filename)
+        if os.path.exists(dest):
+            print(f'Already present: {filename}')
+            continue
+
+        max_retries = 3
+        for attempt in range(max_retries):
+            try:
+                print(f'Downloading {filename} ...')
+                urllib.request.urlretrieve(url, dest)
+                file_size = os.path.getsize(dest)
+                print(f'  done ({file_size:,} bytes)')
+                break
+            except Exception as e:
+                # Clean up a partial download before retrying.
+                if os.path.exists(dest):
+                    os.remove(dest)
+                if attempt < max_retries - 1:
+                    wait = 5 * (attempt + 1)
+                    print(f'  failed ({e}), retrying in {wait}s ({attempt + 1}/{max_retries})...')
+                    time.sleep(wait)
+                else:
+                    print(f'  error downloading {filename} after {max_retries} attempts: {e}', file=sys.stderr)
+                    print('  This enhancement capability will be unavailable until its weight is downloaded.')
+
+    return True
+
+
 def download_stt_model(model_size: str = 'base') -> bool:
     """Download a faster-whisper STT model.
 
@@ -395,6 +454,14 @@ Examples:
     # Download STT model (always attempt — non-fatal if faster-whisper not installed)
     stt_info = models.get('stt', {})
     download_stt_model(model_size=stt_info.get('model', 'base') if stt_info else 'base')
+
+    # Download image-enhancement weights (non-fatal if unavailable)
+    enhance_info = models.get('enhance', {})
+    if enhance_info and enhance_info.get('enabled', False):
+        download_enhance_models(
+            enhance_info.get('weights', []),
+            data_dir=enhance_info.get('data_dir', '.'),
+        )
 
     print()
     print('=' * 60)
