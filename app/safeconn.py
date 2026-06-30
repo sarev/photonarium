@@ -132,6 +132,17 @@ _TXN_END = object()
 # Warn if a synchronous write takes longer than this (seconds).
 _WRITE_WARN_THRESHOLD = 5.0
 
+# Wait this long (ms) for a contended write lock before giving up.  The main
+# data path is single-writer (this queue), so it never self-contends — but a few
+# connections deliberately stay independent, notably the log handler, which
+# keeps its own writer so it can still record even if the main writer is wedged.
+# Independent *writers* serialise on SQLite's one file write-lock, so without a
+# busy timeout the loser fails instantly with "database is locked" the moment two
+# overlap.  A few seconds lets it wait for the other's (sub-millisecond) commit
+# instead.  SQLite still returns immediately on a genuine deadlock, so this can
+# never hang.
+_BUSY_TIMEOUT_MS = 5000
+
 
 def _is_read_only(sql: str) -> bool:
     """Return True if *sql* is a read-only statement.
@@ -215,6 +226,9 @@ class SafeConnection:
             self._db_path,
             check_same_thread=False,
         )
+        # Set busy_timeout first, so even enabling WAL waits for a momentary
+        # lock (e.g. another instance starting up) instead of failing instantly.
+        self._read_conn.execute(f'PRAGMA busy_timeout={_BUSY_TIMEOUT_MS}')
         self._read_conn.execute('PRAGMA journal_mode=WAL')
         self._read_conn.execute('PRAGMA query_only=ON')
         for pragma_name, value in self._pragmas:
@@ -250,6 +264,10 @@ class SafeConnection:
             self._db_path,
             check_same_thread=False,
         )
+        # busy_timeout first (see read connection): wait for a contended write
+        # lock rather than failing instantly when an independent writer (e.g. the
+        # log handler) overlaps with this one.
+        write_conn.execute(f'PRAGMA busy_timeout={_BUSY_TIMEOUT_MS}')
         write_conn.execute('PRAGMA journal_mode=WAL')
         write_conn.execute('PRAGMA foreign_keys=ON')
         for pragma_name, value in self._pragmas:

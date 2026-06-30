@@ -19,9 +19,15 @@ Thread-safety model
   SQLite), so it requires no lock.  WAL mode safely supports concurrent
   readers alongside the handler's single writer.
 
-Both functions target the same database file (``photonarium.db`` by default),
-but operate on fully independent connections — no contention with the main
-``SafeConnection`` writer thread.
+Both functions target the same database file (``photonarium.db`` by default) on
+independent connections.  Readers never contend (WAL allows concurrent readers),
+but the handler's *writer* is a genuine second writer to the file and so still
+serialises against the main ``SafeConnection`` writer on SQLite's single write
+lock.  That contention is rare (records are batched and flushed every 3 s) and
+handled gracefully — a contended flush waits via ``busy_timeout`` and, failing
+that, re-buffers and retries — so no records are lost.  See the ``log-writer``
+note in :meth:`DatabaseLogHandler.__init__` for why this second writer is
+deliberate.
 """
 
 from __future__ import annotations
@@ -108,6 +114,16 @@ class DatabaseLogHandler(logging.Handler):
         # Open a dedicated SafeConnection for log writes.  The ``logs`` table
         # is created by imagedb._init_database_schema() during startup — the
         # handler must be attached after that call so the table exists.
+        #
+        # IMPORTANT: this is the *intentional* second writer in the system. It is
+        # kept independent of the main ``safe_conn`` on purpose — so logging keeps
+        # working even if the main writer thread is wedged (exactly when you most
+        # need the logs).  The trade-off is that it still serialises against the
+        # main writer on SQLite's single file write-lock, so it RELIES on
+        # SafeConnection's ``busy_timeout`` (see safeconn._BUSY_TIMEOUT_MS) to wait
+        # for a contended commit instead of failing with "database is locked".
+        # Do not "simplify" by removing that timeout on the assumption the system
+        # is single-writer — it isn't, here.  (See git 08b5329 / 44f8fc6.)
         self._conn = SafeConnection(db_path, name='log-writer')
 
         # Background daemon thread that periodically flushes buffered records.
