@@ -43,6 +43,11 @@ The palette icons are inline SVG line-art — monochrome, theme-consistent, and 
 - **Modal transitions**: all modal dialogs now ease in and out, with a graceful instant fallback on browsers that lack the underlying CSS support.
 - **Themed date pickers**: the Search screen's date-picker calendars now follow the active theme (dark in dark mode), matching the Gallery's timestamp picker.
 
+### Bug Fixes
+
+- **`database is locked` from the log handler under heavy write bursts**: The single-writer refactor (v1.2.8) dropped `PRAGMA busy_timeout` on the assumption that all writes share one connection — overlooking that the database log handler keeps its *own* writer connection on purpose, so it can still record even if the main writer is wedged. Those two writers serialise on SQLite's single file write-lock, and with the timeout gone an overlapping log flush failed instantly (`[DatabaseLogHandler] flush failed`) instead of waiting, under sustained bursts like a large rescan + dedup + trash + enhancement ingest at once. `busy_timeout` is restored on every `SafeConnection`, so a contended writer now waits for the other's sub-millisecond commit. No log records were ever lost — the handler re-buffers and retries — but the noise (and the underlying latent fragility) is gone.
+- **Silent enhancement failures**: the enhancement preview and queue endpoints returned a `400` for expected rejections — an unstable model result, a missing source file, or an unavailable recipe — without logging anything, so a user-facing "couldn't be enhanced" message left no trace in the log. Both paths now log a warning carrying the image, recipe, and reason.
+
 ## v1.2.8-beta
 
 ### Single-Writer Database Architecture
