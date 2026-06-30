@@ -1601,6 +1601,7 @@ def enhance_image():
     try:
         db.enqueue_enhance(image_id, recipe, strength)
     except ValueError as e:
+        logger.warning('Enhance request rejected (image=%s recipe=%s): %s', image_id, recipe, e)
         return error_response(str(e), 400)
     return success_response({'queued': True})
 
@@ -1642,6 +1643,10 @@ def enhance_preview_route():
     try:
         after = db.enhance_preview(image_id, recipe, _coord('crop_left'), _coord('crop_top'))
     except ValueError as e:
+        # Expected, user-facing rejections (model produced an unstable result,
+        # source file missing, recipe unavailable). Log the reason — a failure
+        # the user can see must never be silent in the log.
+        logger.warning('Enhance preview rejected (image=%s recipe=%s): %s', image_id, recipe, e)
         return error_response(str(e), 400)
     except Exception:
         logger.exception('Enhance preview failed')
