@@ -30,6 +30,7 @@ from __future__ import annotations
 import io
 import logging
 import os
+import time
 import warnings
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -523,6 +524,23 @@ def _process_tiles(
     w_over = _axis_overlaps(w_starts, tile)
     total = len(h_starts) * len(w_starts)
 
+    # This is a long, GPU-pinning, otherwise-silent loop (hundreds of tiles for a
+    # full-size photo through a heavy model), so announce the scale up front and
+    # emit a throttled heartbeat — a run must never look like a hang.  Logging
+    # each pass also makes an OOM shrink-retry visible (it re-enters here with a
+    # smaller tile and a larger tile count).
+    started = time.monotonic()
+    logger.info(
+        'Tiled enhancement: %d tiles (%dx%d input, tile=%d, overlap=%d, scale=%d)',
+        total,
+        w,
+        h,
+        tile,
+        _TILE_OVERLAP,
+        scale,
+    )
+    last_log = started
+
     out = torch.zeros(1, c, h * scale, w * scale)
     weight = torch.zeros(1, 1, h * scale, w * scale)
     done = 0
@@ -543,7 +561,22 @@ def _process_tiles(
             done += 1
             if on_progress is not None:
                 on_progress(done, total)
+            # Heartbeat at most every ~15 s so the log shows steady progress and
+            # a rough rate without spamming a line per tile.
+            now = time.monotonic()
+            if now - last_log >= 15.0:
+                rate = done / (now - started)
+                eta = (total - done) / rate if rate > 0 else 0.0
+                logger.info(
+                    '  enhancement progress: %d/%d tiles (%.0f%%), ~%.0fs remaining',
+                    done,
+                    total,
+                    100.0 * done / total,
+                    eta,
+                )
+                last_log = now
     weight.clamp_(min=1e-6)
+    logger.info('Tiled enhancement: %d/%d tiles done in %.0fs', done, total, time.monotonic() - started)
     return out / weight
 
 
@@ -671,6 +704,7 @@ def enhance_image_to_file(
     """
     # Load and normalise the source to a (1, 3, H, W) float tensor in [0, 1].
     pil = open_image(src_path).convert('RGB')
+    logger.info('Enhancing %s with %r (%dx%d) on %s', Path(src_path).name, cap.key, pil.width, pil.height, device)
     arr = np.asarray(pil, dtype=np.float32) / 255.0
     img = torch.from_numpy(arr).permute(2, 0, 1).unsqueeze(0).contiguous()
 
