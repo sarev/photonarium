@@ -61,9 +61,11 @@ ENHANCE_WEIGHTS_SUBDIR = '.enhance'
 # Overlap (px) between adjacent tiles.  The models restore a tile's centre well
 # but its edges poorly (truncated receptive field), so each tile contributes only
 # its central core and the outer ~_TILE_OVERLAP/2 px on every side are discarded,
-# covered by a neighbour's centre.  This must be generous — a small overlap lets
-# the soft edges leak through and the whole result looks under-sharpened.
-_TILE_OVERLAP = 160
+# covered by a neighbour's centre.  This is a direct quality-vs-speed dial: every
+# pixel is processed (tile/stride)^2 times, so a big overlap on a small tile
+# triples the compute.  ~19% of the (larger) tile keeps edges clean without the
+# ~3x redundancy the old 160/384 (42%) setting cost.
+_TILE_OVERLAP = 96
 # Width (px) of the seam blend centred on each overlap midpoint (the boundary
 # between two tiles' cores).  Only this thin band is cross-faded; every other
 # pixel is taken verbatim from its nearest tile, so the result is never a wide
@@ -71,10 +73,11 @@ _TILE_OVERLAP = 160
 _BLEND_BAND = 16
 # Smallest tile we will shrink to before giving up on an out-of-memory error.
 _MIN_TILE = 64
-# Per-device starting tile size when config requests auto (0).  Large enough that
-# the discarded borders leave a healthy central core, small enough that the
-# models still sharpen strongly (they weaken on very large inputs).
-_AUTO_TILE = {'cuda': 384, 'mps': 384, 'cpu': 384}
+# Per-device starting tile size when config requests auto (0).  Larger tiles
+# amortise the fixed overlap (fewer tiles, less redundant edge compute) and cut
+# per-tile dispatch overhead; FP16 on CUDA halves the activation memory that
+# would otherwise make 512 too big.  On an OOM the shrink-retry drops this.
+_AUTO_TILE = {'cuda': 512, 'mps': 512, 'cpu': 512}
 # Minimum correlation between an enhanced result and its input before we trust
 # it.  Some models (NAFNet on out-of-distribution blur) can diverge into
 # high-frequency colour noise — valid-range but uncorrelated garbage; we reject
@@ -89,6 +92,10 @@ _PLAUSIBLE_MIN_CORR = 0.2
 # whole process.  ~180 MP caps peak host use around ~4 GB; 4× of a ~11 MP photo
 # or 2× of a ~45 MP photo still fits.
 _MAX_OUTPUT_PIXELS = 180_000_000
+# Architectures that are stable under FP16 autocast on CUDA (big speed/memory win).
+# SwinIR is excluded: it overflows in FP16 and produces garbage (the plausibility
+# guard rejects it), so denoise runs in FP32 — correct over fast.
+_FP16_SAFE_ARCHS = frozenset({'restormer', 'rrdbnet'})
 
 
 # ---------------------------------------------------------------------------
@@ -382,7 +389,18 @@ def _forward_model(cap: Capability, model: torch.nn.Module, x: torch.Tensor) -> 
     pad_w = (factor - w % factor) % factor
     if pad_h or pad_w:
         x = torch.nn.functional.pad(x, (0, pad_w, 0, pad_h), mode='reflect')
-    out = model(x)
+    # FP16 autocast on CUDA for FP16-safe archs: runs the heavy conv/matmul in
+    # half precision (~2-4x faster, ~half the activation memory — what lets us use
+    # the 512 tile) while keeping precision-sensitive ops in FP32.  Autocast (not
+    # a hard model.half()) because some archs build FP32 tensors internally that a
+    # blanket half() would leave mismatched.  SwinIR is excluded entirely — it
+    # overflows in FP16 (see _FP16_SAFE_ARCHS).  The output may be FP16; callers
+    # cast back.
+    if x.is_cuda and cap.arch in _FP16_SAFE_ARCHS:
+        with torch.autocast(device_type='cuda', dtype=torch.float16):
+            out = model(x)
+    else:
+        out = model(x)
     if pad_h or pad_w:
         out = out[..., : h * cap.scale, : w * cap.scale]
     return out
@@ -491,22 +509,30 @@ def _process_tiles(
     *,
     tile: int,
     scale: int,
+    device: str,
     stop_event: Any | None,
     on_progress: Callable[[int, int], None] | None,
 ) -> torch.Tensor:
     """Run *run_tile* over overlapping tiles of *img* and feather-blend the output.
 
+    The feather-blend accumulators live on the GPU when the finished image fits
+    in VRAM, so each tile is blended on-device and the result is copied to the
+    host exactly once — no per-tile GPU->CPU transfer, and none of the per-tile
+    CPU tensor maths that otherwise pins every core.  For a large upscale that
+    won't fit, the accumulators fall back to the host.
+
     Args:
-        img: Input tensor, shape (1, C, H, W), values in [0, 1].
-        run_tile: Callable that maps one input tile to its enhanced tile (already
-            on CPU, shape (1, C, th*scale, tw*scale)).
+        img: Input tensor, shape (1, C, H, W), values in [0, 1], on CPU.
+        run_tile: Callable that maps one input tile to its enhanced tile, left on
+            *device* (shape (1, C, th*scale, tw*scale)); may be FP16.
         tile: Tile size in input pixels.
         scale: Output upscale factor.
+        device: Device the tiles are produced on ('cuda[:n]', 'mps', 'cpu').
         stop_event: Optional event; if set between tiles, raises :class:`EnhanceAborted`.
         on_progress: Optional callback ``(tiles_done, tiles_total)``.
 
     Returns:
-        Output tensor, shape (1, C, H*scale, W*scale), values in [0, 1].
+        Output tensor on CPU, shape (1, C, H*scale, W*scale), values in [0, 1].
     """
     _, c, h, w = img.shape
     tile = min(tile, h, w)
@@ -524,6 +550,20 @@ def _process_tiles(
     w_over = _axis_overlaps(w_starts, tile)
     total = len(h_starts) * len(w_starts)
 
+    # Blend on the GPU when the full-resolution FP32 accumulators (out: C ch +
+    # weight: 1 ch) fit in a safe slice of free VRAM — that keeps every tile on
+    # the device and copies the finished image to the host just once.  A large
+    # upscale won't fit, so fall back to a host accumulator (per-tile transfer).
+    accum_bytes = (c + 1) * (h * scale) * (w * scale) * 4
+    accum_device = 'cpu'
+    if device.startswith('cuda'):
+        try:
+            free, _total_vram = torch.cuda.mem_get_info()
+            if accum_bytes < free * 0.5:
+                accum_device = device
+        except Exception:
+            accum_device = 'cpu'
+
     # This is a long, GPU-pinning, otherwise-silent loop (hundreds of tiles for a
     # full-size photo through a heavy model), so announce the scale up front and
     # emit a throttled heartbeat — a run must never look like a hang.  Logging
@@ -531,18 +571,32 @@ def _process_tiles(
     # smaller tile and a larger tile count).
     started = time.monotonic()
     logger.info(
-        'Tiled enhancement: %d tiles (%dx%d input, tile=%d, overlap=%d, scale=%d)',
+        'Tiled enhancement: %d tiles (%dx%d input, tile=%d, overlap=%d, scale=%d, blend=%s)',
         total,
         w,
         h,
         tile,
         _TILE_OVERLAP,
         scale,
+        accum_device,
     )
     last_log = started
 
-    out = torch.zeros(1, c, h * scale, w * scale)
-    weight = torch.zeros(1, 1, h * scale, w * scale)
+    try:
+        out = torch.zeros(1, c, h * scale, w * scale, device=accum_device)
+        weight = torch.zeros(1, 1, h * scale, w * scale, device=accum_device)
+    except (MemoryError, RuntimeError) as e:
+        # The GPU accumulator didn't fit after all — retry the blend on the host
+        # rather than fail the whole run.
+        if accum_device == 'cpu' or not is_oom_error(e):
+            raise
+        logger.warning('GPU blend buffer did not fit; blending on the host instead')
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+        accum_device = 'cpu'
+        out = torch.zeros(1, c, h * scale, w * scale)
+        weight = torch.zeros(1, 1, h * scale, w * scale)
+
     done = 0
     for hi, hs in enumerate(h_starts):
         for wi, ws in enumerate(w_starts):
@@ -555,8 +609,10 @@ def _process_tiles(
             feather = _BLEND_BAND * scale
             wy = _axis_weight(th, h_over[hi][0] * scale, h_over[hi][1] * scale, feather)
             wx = _axis_weight(tw, w_over[wi][0] * scale, w_over[wi][1] * scale, feather)
-            mask = torch.outer(wy, wx).view(1, 1, th, tw)
-            out[..., oh : oh + th, ow : ow + tw].add_(result * mask)
+            mask = torch.outer(wy, wx).view(1, 1, th, tw).to(accum_device)
+            # Match the accumulator (FP32): the tile may be FP16 and/or on the GPU.
+            tile_out = result.to(device=accum_device, dtype=torch.float32)
+            out[..., oh : oh + th, ow : ow + tw].add_(tile_out * mask)
             weight[..., oh : oh + th, ow : ow + tw].add_(mask)
             done += 1
             if on_progress is not None:
@@ -577,7 +633,8 @@ def _process_tiles(
                 last_log = now
     weight.clamp_(min=1e-6)
     logger.info('Tiled enhancement: %d/%d tiles done in %.0fs', done, total, time.monotonic() - started)
-    return out / weight
+    # Single host transfer of the finished image (a no-op if we blended on CPU).
+    return (out / weight).cpu()
 
 
 class EnhanceAborted(Exception):
@@ -715,7 +772,9 @@ def enhance_image_to_file(
             model = _CACHE.get(cap, device, data_dir)
             with torch.no_grad():
                 out = _forward_model(cap, model, patch.to(device))
-            return out.detach().float().clamp_(0, 1).cpu()
+            # Leave the tile on the device: _process_tiles blends it there (single
+            # host transfer at the end).  Clamp now; the blend casts to FP32.
+            return out.detach().clamp_(0, 1)
 
         return arbiter.run_exclusive(_infer)
 
@@ -735,7 +794,13 @@ def enhance_image_to_file(
     while True:
         try:
             result = _process_tiles(
-                img, run_tile, tile=tile, scale=cap.scale, stop_event=stop_event, on_progress=on_progress
+                img,
+                run_tile,
+                tile=tile,
+                scale=cap.scale,
+                device=device,
+                stop_event=stop_event,
+                on_progress=on_progress,
             )
             break
         except (MemoryError, RuntimeError) as e:
