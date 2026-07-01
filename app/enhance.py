@@ -363,7 +363,18 @@ def _load_model(cap: Capability, weight_path: Path, device: str) -> torch.nn.Mod
             break
     model.load_state_dict(state, strict=True)
     model.eval()
-    return model.to(device)
+    model = model.to(device)
+    if logger.isEnabledFor(logging.DEBUG):
+        params = sum(p.numel() for p in model.parameters())
+        logger.debug(
+            'Built %s: arch=%s, %.1fM params, checkpoint=%s, device=%s',
+            cap.key,
+            cap.arch,
+            params / 1e6,
+            weight_path.name,
+            device,
+        )
+    return model
 
 
 # Module-level cache shared across enhancement jobs (the worker is single-threaded).
@@ -428,7 +439,9 @@ def _is_plausible(src: torch.Tensor, out: torch.Tensor) -> bool:
     a = a - a.mean()
     b = b - b.mean()
     denom = (a.norm() * b.norm()).clamp_min(1e-8)
-    return float((a @ b) / denom) >= _PLAUSIBLE_MIN_CORR
+    corr = float((a @ b) / denom)
+    logger.debug('plausibility check: correlation=%.4f (reject below %.2f)', corr, _PLAUSIBLE_MIN_CORR)
+    return corr >= _PLAUSIBLE_MIN_CORR
 
 
 # ---------------------------------------------------------------------------
@@ -561,8 +574,23 @@ def _process_tiles(
             free, _total_vram = torch.cuda.mem_get_info()
             if accum_bytes < free * 0.5:
                 accum_device = device
+            logger.debug(
+                'blend accumulator: need %.0f MB, free VRAM %.0f MB -> %s',
+                accum_bytes / 1e6,
+                free / 1e6,
+                accum_device,
+            )
         except Exception:
             accum_device = 'cpu'
+    logger.debug(
+        'tile grid: %d x %d = %d tiles, stride=%d, tile=%d, overlap=%d',
+        len(w_starts),
+        len(h_starts),
+        total,
+        stride,
+        tile,
+        _TILE_OVERLAP,
+    )
 
     # This is a long, GPU-pinning, otherwise-silent loop (hundreds of tiles for a
     # full-size photo through a heavy model), so announce the scale up front and
@@ -598,10 +626,12 @@ def _process_tiles(
         weight = torch.zeros(1, 1, h * scale, w * scale)
 
     done = 0
+    debug_tiles = logger.isEnabledFor(logging.DEBUG)
     for hi, hs in enumerate(h_starts):
         for wi, ws in enumerate(w_starts):
             if stop_event is not None and stop_event.is_set():
                 raise EnhanceAborted('enhancement aborted')
+            tile_started = time.monotonic() if debug_tiles else 0.0
             patch = img[..., hs : hs + tile, ws : ws + tile]
             result = run_tile(patch)
             oh, ow = hs * scale, ws * scale
@@ -615,6 +645,19 @@ def _process_tiles(
             out[..., oh : oh + th, ow : ow + tw].add_(tile_out * mask)
             weight[..., oh : oh + th, ow : ow + tw].add_(mask)
             done += 1
+            if debug_tiles:
+                logger.debug(
+                    '  tile %d/%d [y %d:%d, x %d:%d] -> %dx%d in %.2fs',
+                    done,
+                    total,
+                    hs,
+                    hs + tile,
+                    ws,
+                    ws + tile,
+                    th,
+                    tw,
+                    time.monotonic() - tile_started,
+                )
             if on_progress is not None:
                 on_progress(done, total)
             # Heartbeat at most every ~15 s so the log shows steady progress and
@@ -688,6 +731,17 @@ def enhance_preview(
         left = max(0, min(w - side, int(crop_left)))
         top = max(0, min(h - side, int(crop_top)))
     crop = pil.crop((left, top, left + side, top + side))
+    logger.debug(
+        'preview %r: source %dx%d, crop %dx%d at (%d,%d), device=%s',
+        cap.key,
+        w,
+        h,
+        side,
+        side,
+        left,
+        top,
+        device,
+    )
 
     arr = np.asarray(crop, dtype=np.float32) / 255.0
     img = torch.from_numpy(arr).permute(2, 0, 1).unsqueeze(0).contiguous()
@@ -762,6 +816,16 @@ def enhance_image_to_file(
     # Load and normalise the source to a (1, 3, H, W) float tensor in [0, 1].
     pil = open_image(src_path).convert('RGB')
     logger.info('Enhancing %s with %r (%dx%d) on %s', Path(src_path).name, cap.key, pil.width, pil.height, device)
+    precision = 'FP16 autocast' if (device.startswith('cuda') and cap.arch in _FP16_SAFE_ARCHS) else 'FP32'
+    logger.debug(
+        'enhance params: arch=%s, scale=%d, tile_size=%s, strength=%.2f, format=%s, precision=%s',
+        cap.arch,
+        cap.scale,
+        tile_size or 'auto',
+        strength,
+        output_format,
+        precision,
+    )
     arr = np.asarray(pil, dtype=np.float32) / 255.0
     img = torch.from_numpy(arr).permute(2, 0, 1).unsqueeze(0).contiguous()
 
