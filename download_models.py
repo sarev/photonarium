@@ -33,6 +33,7 @@ Environment Variables:
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import subprocess
@@ -139,11 +140,22 @@ def download_laion_head(model: str, pretrained: str, data_dir: str = '.') -> boo
     # Using them with other pretrained weights (e.g. laion2b_s34b_b88k)
     # produces garbage scores — the embedding geometry differs even when
     # the dimension matches.  _load_laion_head() in pipeline.py enforces this.
+    #
+    # Self-hosted on the Photonarium models repo (originals from LAION-AI's
+    # aesthetic-predictor repo, which serves them from a mutable branch HEAD).
+    # These tiny heads are committed to the repo; the URL is pinned to the
+    # immutable ``aesthetic-v1`` tag and the checksum below backstops it.
     # See: https://github.com/LAION-AI/aesthetic-predictor
+    _LAION_BASE = 'https://raw.githubusercontent.com/sarev/photonarium-models/aesthetic-v1'
     _LAION_HEAD_URLS = {
-        'ViT-B-16': 'https://raw.githubusercontent.com/LAION-AI/aesthetic-predictor/main/sa_0_4_vit_b_16_linear.pth',
-        'ViT-B-32': 'https://raw.githubusercontent.com/LAION-AI/aesthetic-predictor/main/sa_0_4_vit_b_32_linear.pth',
-        'ViT-L-14': 'https://raw.githubusercontent.com/LAION-AI/aesthetic-predictor/main/sa_0_4_vit_l_14_linear.pth',
+        'ViT-B-16': f'{_LAION_BASE}/sa_0_4_vit_b_16_linear.pth',
+        'ViT-B-32': f'{_LAION_BASE}/sa_0_4_vit_b_32_linear.pth',
+        'ViT-L-14': f'{_LAION_BASE}/sa_0_4_vit_l_14_linear.pth',
+    }
+    _LAION_HEAD_SHA256 = {
+        'ViT-B-16': '8ad3923d7ecf019df20ecd2ab5542a3075fbba0278d239c0371345f3d7fcbde0',
+        'ViT-B-32': 'c7b14cead230694acc7b9447974d3cad78003c72da032e402a303b6c2429e85f',
+        'ViT-L-14': '2cd4e60f4f24ae3bcd57b847b13c1f3ba27edc28cc1a7f9ce74ee9f421243cba',
     }
 
     print(f'\n{"=" * 60}')
@@ -155,11 +167,17 @@ def download_laion_head(model: str, pretrained: str, data_dir: str = '.') -> boo
         print(f'No LAION aesthetic head available for {model} ({pretrained})')
         print('Aesthetic scoring will be disabled — quality ranking will fall back to sharpness/resolution.')
         return True  # Not an error, just unsupported
+    expected_sha = _LAION_HEAD_SHA256.get(model)
 
     dest = os.path.join(data_dir, '.laion-aesthetic-head.pth')
     if os.path.exists(dest):
-        print(f'LAION aesthetic head already exists: {dest}')
-        return True
+        # Re-verify a cached head against its pinned hash; refetch if corrupt.
+        if expected_sha and _sha256(dest) != expected_sha:
+            print(f'Checksum mismatch on cached LAION head — re-downloading: {dest}', file=sys.stderr)
+            os.remove(dest)
+        else:
+            print(f'LAION aesthetic head already exists: {dest}')
+            return True
 
     max_retries = 3
     for attempt in range(max_retries):
@@ -167,6 +185,10 @@ def download_laion_head(model: str, pretrained: str, data_dir: str = '.') -> boo
             print(f'Downloading from: {url}')
             urllib.request.urlretrieve(url, dest)
             file_size = os.path.getsize(dest)
+            if expected_sha:
+                actual = _sha256(dest)
+                if actual != expected_sha:
+                    raise ValueError(f'checksum mismatch (expected {expected_sha[:12]}…, got {actual[:12]}…)')
             print(f'LAION aesthetic head downloaded successfully ({file_size:,} bytes)')
             return True
         except Exception as e:
@@ -224,7 +246,9 @@ def download_nima_model(data_dir: str = '.') -> bool:
     AVA dataset to predict aesthetic quality distributions.  The checkpoint is
     ~9MB and stored as ``<data_dir>/.nima-mobilenetv2-ava.pth``.
 
-    Source: truskovskiyk/nima.pytorch (MIT licence), hosted on AWS S3.
+    Source: truskovskiyk/nima.pytorch (MIT licence).  Self-hosted on the
+    Photonarium models repo — the original was published on the author's personal
+    AWS S3 bucket, which carries no persistence or integrity guarantee.
 
     Args:
         data_dir: Directory to store the downloaded checkpoint.
@@ -232,8 +256,10 @@ def download_nima_model(data_dir: str = '.') -> bool:
     Returns:
         True if downloaded (or already present), False on fatal error.
     """
-    # Publicly-hosted checkpoint from truskovskiyk/nima.pytorch (v1 branch, MIT licence)
-    _NIMA_URL = 'https://s3-us-west-1.amazonaws.com/models-nima/pretrain-model.pth'
+    # Re-hosted from the original truskovskiyk/nima.pytorch S3 checkpoint (MIT).
+    # Committed to the models repo; URL pinned to the immutable ``aesthetic-v1`` tag.
+    _NIMA_URL = 'https://raw.githubusercontent.com/sarev/photonarium-models/aesthetic-v1/nima-mobilenetv2-ava.pth'
+    _NIMA_SHA256 = 'd59436a40a85c3f2ca9bfcb8e33f4a825b378a8f6596f7b61cda9e8406119fe3'
 
     print(f'\n{"=" * 60}')
     print('Downloading NIMA aesthetic model (MobileNetV2-AVA)')
@@ -241,26 +267,34 @@ def download_nima_model(data_dir: str = '.') -> bool:
 
     dest = os.path.join(data_dir, '.nima-mobilenetv2-ava.pth')
     if os.path.exists(dest):
-        print(f'NIMA checkpoint already exists: {dest}')
-        return True
+        # Re-verify a cached checkpoint against its pinned hash; refetch if corrupt.
+        if _sha256(dest) != _NIMA_SHA256:
+            print(f'Checksum mismatch on cached NIMA checkpoint — re-downloading: {dest}', file=sys.stderr)
+            os.remove(dest)
+        else:
+            print(f'NIMA checkpoint already exists: {dest}')
+            return True
 
     try:
         print(f'Downloading from: {_NIMA_URL}')
         urllib.request.urlretrieve(_NIMA_URL, dest)
         file_size = os.path.getsize(dest)
+        actual = _sha256(dest)
+        if actual != _NIMA_SHA256:
+            raise ValueError(f'checksum mismatch (expected {_NIMA_SHA256[:12]}…, got {actual[:12]}…)')
         print(f'NIMA checkpoint downloaded successfully ({file_size:,} bytes)')
         return True
     except Exception as e:
         print(f'Error downloading NIMA checkpoint: {e}', file=sys.stderr)
         print('NIMA aesthetic scoring will be disabled — quality ranking will use LAION only.')
-        # Clean up partial download
+        # Clean up partial or corrupt download
         if os.path.exists(dest):
             os.remove(dest)
         return True  # Non-fatal — app works without it
 
 
 def download_enhance_models(weights: list[dict], data_dir: str = '.') -> bool:
-    """Download image-enhancement model weights (SwinIR, etc.).
+    """Download image-enhancement model weights (NAFNet, Restormer, etc.).
 
     Each weight is a permissively-licensed ``.pth`` fetched from its release URL
     into ``<data_dir>/.enhance/``.  Follows the LAION/NIMA pattern: skip
@@ -290,10 +324,17 @@ def download_enhance_models(weights: list[dict], data_dir: str = '.') -> bool:
     for weight in weights:
         filename = weight['filename']
         url = weight['url']
+        expected_sha = weight.get('sha256')
         dest = os.path.join(enhance_dir, filename)
         if os.path.exists(dest):
-            print(f'Already present: {filename}')
-            continue
+            # Re-verify a cached file against its pinned hash so a corrupt or
+            # truncated earlier download is caught and refetched, not trusted.
+            if expected_sha and _sha256(dest) != expected_sha:
+                print(f'Checksum mismatch on cached {filename} — re-downloading.', file=sys.stderr)
+                os.remove(dest)
+            else:
+                print(f'Already present: {filename}')
+                continue
 
         max_retries = 3
         for attempt in range(max_retries):
@@ -301,10 +342,16 @@ def download_enhance_models(weights: list[dict], data_dir: str = '.') -> bool:
                 print(f'Downloading {filename} ...')
                 urllib.request.urlretrieve(url, dest)
                 file_size = os.path.getsize(dest)
+                # A pinned hash guards against a corrupt download or a tampered
+                # mirror.  A mismatch is treated like any download failure.
+                if expected_sha:
+                    actual = _sha256(dest)
+                    if actual != expected_sha:
+                        raise ValueError(f'checksum mismatch (expected {expected_sha[:12]}…, got {actual[:12]}…)')
                 print(f'  done ({file_size:,} bytes)')
                 break
             except Exception as e:
-                # Clean up a partial download before retrying.
+                # Clean up a partial or corrupt download before retrying.
                 if os.path.exists(dest):
                     os.remove(dest)
                 if attempt < max_retries - 1:
@@ -316,6 +363,15 @@ def download_enhance_models(weights: list[dict], data_dir: str = '.') -> bool:
                     print('  This enhancement capability will be unavailable until its weight is downloaded.')
 
     return True
+
+
+def _sha256(path: str) -> str:
+    """Return the hex SHA256 of a file, read in chunks to bound memory."""
+    h = hashlib.sha256()
+    with open(path, 'rb') as f:
+        for chunk in iter(lambda: f.read(1 << 20), b''):
+            h.update(chunk)
+    return h.hexdigest()
 
 
 def download_stt_model(model_size: str = 'base') -> bool:

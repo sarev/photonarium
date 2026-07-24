@@ -1,7 +1,7 @@
 """Neural image enhancement — denoise / super-resolution / artefact removal.
 
 Mirrors :mod:`caption` and :mod:`nima` as a **compute-arbiter client**: the
-heavy SwinIR inference is submitted to the shared arbiter (via
+heavy restoration inference is submitted to the shared arbiter (via
 ``run_exclusive``) so it serialises against indexing and search instead of
 competing for the GPU.  Photonarium never edits an original in place — an
 enhanced result is always written as a *new* image and catalogued as a derived
@@ -31,7 +31,6 @@ import io
 import logging
 import os
 import time
-import warnings
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable
@@ -48,12 +47,6 @@ logger = logging.getLogger(__name__)
 
 # Preview crops jump ahead of bulk enhancement work so the dialog stays snappy.
 _INTERACTIVE = Priority.INTERACTIVE
-
-# SwinIR's relative-position-index construction calls torch.meshgrid without the
-# 'indexing' kwarg, which emits a harmless UserWarning on modern torch (the
-# default indexing is exactly what SwinIR expects).  Silence it so it does not
-# spam the logs once per tile.
-warnings.filterwarnings('ignore', message='torch.meshgrid:.*', category=UserWarning)
 
 # Subdirectory under the data directory holding downloaded enhancement weights.
 ENHANCE_WEIGHTS_SUBDIR = '.enhance'
@@ -93,9 +86,10 @@ _PLAUSIBLE_MIN_CORR = 0.2
 # or 2× of a ~45 MP photo still fits.
 _MAX_OUTPUT_PIXELS = 180_000_000
 # Architectures that are stable under FP16 autocast on CUDA (big speed/memory win).
-# SwinIR is excluded: it overflows in FP16 and produces garbage (the plausibility
-# guard rejects it), so denoise runs in FP32 — correct over fast.
-_FP16_SAFE_ARCHS = frozenset({'restormer', 'rrdbnet'})
+# These are all convolutional (or windowed-attention) nets without the wide
+# softmax / relative-position-bias accumulations that overflow FP16.  Verified by
+# the plausibility guard, which rejects any model whose output diverges.
+_FP16_SAFE_ARCHS = frozenset({'restormer', 'rrdbnet', 'nafnet'})
 
 
 # ---------------------------------------------------------------------------
@@ -123,27 +117,16 @@ class Capability:
     scale: int
     # Config attribute that gates this capability.
     config_flag: str
-    # Which vendored architecture backs this capability ('swinir' or 'rrdbnet').
-    arch: str = 'swinir'
+    # Which vendored architecture backs this capability ('nafnet', 'restormer'
+    # or 'rrdbnet').
+    arch: str
     # Keyword arguments for constructing that architecture.
     arch_kwargs: dict[str, Any] = field(default_factory=dict)
+    # Expected SHA256 of the weight file, verified after download.  Set for the
+    # weights we self-host (where we control the bytes); None to skip the check
+    # for third-party release URLs whose hashes we do not pin.
+    sha256: str | None = None
 
-
-# SwinIR-M colour-denoise architecture (DFWB, window 8, mid noise level).
-# Matches the 005_colorDN_DFWB_s128w8_SwinIR-M_noise25 checkpoint.
-_SWINIR_COLOR_DN = {
-    'upscale': 1,
-    'in_chans': 3,
-    'img_size': 128,
-    'window_size': 8,
-    'img_range': 1.0,
-    'depths': [6, 6, 6, 6, 6, 6],
-    'embed_dim': 180,
-    'num_heads': [6, 6, 6, 6, 6, 6],
-    'mlp_ratio': 2,
-    'upsampler': '',
-    'resi_connection': '1conv',
-}
 
 # RRDBNet super-resolution architecture (Real-ESRGAN x4plus / x2plus — identical
 # but for the scale factor, which is baked into each weight file).
@@ -173,6 +156,25 @@ _RESTORMER_DEBLUR = {
     'dual_pixel_task': False,
 }
 
+# NAFNet architectures.  The denoise (SIDD) and deblur (GoPro) checkpoints use
+# different block distributions — SIDD spreads depth across the pyramid, GoPro
+# stacks it in the deepest encoder — so each needs its own config (matching the
+# official NAFNet-*-width64 test YMLs).  Both run in FP16 (see _FP16_SAFE_ARCHS).
+_NAFNET_SIDD_W64 = {
+    'img_channel': 3,
+    'width': 64,
+    'enc_blk_nums': [2, 2, 4, 8],
+    'middle_blk_num': 12,
+    'dec_blk_nums': [2, 2, 2, 2],
+}
+_NAFNET_GOPRO_W64 = {
+    'img_channel': 3,
+    'width': 64,
+    'enc_blk_nums': [1, 1, 1, 28],
+    'middle_blk_num': 1,
+    'dec_blk_nums': [1, 1, 1, 1],
+}
+
 # Registry of enhancement capabilities.  Each is backed by one permissively
 # licensed weight file and one vendored architecture.
 CAPABILITIES: dict[str, Capability] = {
@@ -180,25 +182,31 @@ CAPABILITIES: dict[str, Capability] = {
         key='denoise',
         label='Reduce noise',
         description='Remove sensor noise and grain while preserving detail.',
-        weight_filename='005_colorDN_DFWB_s128w8_SwinIR-M_noise25.pth',
-        weight_url=(
-            'https://github.com/JingyunLiang/SwinIR/releases/download/v0.0/005_colorDN_DFWB_s128w8_SwinIR-M_noise25.pth'
-        ),
+        weight_filename='NAFNet-SIDD-width64.pth',
+        # Self-hosted on the Photonarium models repo (originals from the NAFNet
+        # authors' Hugging Face Space).  ~464 MB.
+        weight_url='https://github.com/sarev/photonarium-models/releases/download/nafnet-v1/NAFNet-SIDD-width64.pth',
         scale=1,
         config_flag='enhance_denoise_enabled',
-        arch='swinir',
-        arch_kwargs=_SWINIR_COLOR_DN,
+        arch='nafnet',
+        arch_kwargs=_NAFNET_SIDD_W64,
+        sha256='cd685efaae01f7c4e9951f2deab05780079c8eb1e49ed664b72f6db04dabb445',
     ),
     'deblur': Capability(
         key='deblur',
         label='Remove motion blur',
         description='Undo camera shake and motion streaks, while keeping soft backgrounds soft.',
-        weight_filename='motion_deblurring.pth',
-        weight_url='https://github.com/swz30/Restormer/releases/download/v1.0/motion_deblurring.pth',
+        weight_filename='NAFNet-GoPro-width64.pth',
+        # Self-hosted on the Photonarium models repo.  The NAFNet authors' Space
+        # hosts SIDD + REDS but not GoPro-width64, so the original was taken from
+        # a community mirror and re-hosted here with the checksum pinned below.
+        # ~272 MB.
+        weight_url='https://github.com/sarev/photonarium-models/releases/download/nafnet-v1/NAFNet-GoPro-width64.pth',
         scale=1,
         config_flag='enhance_deblur_enabled',
-        arch='restormer',
-        arch_kwargs=_RESTORMER_DEBLUR,
+        arch='nafnet',
+        arch_kwargs=_NAFNET_GOPRO_W64,
+        sha256='329d3ab4077b8d6b7ff61de376e483714667960bf85be027bf4335cda701196f',
     ),
     'sharpen': Capability(
         key='sharpen',
@@ -274,7 +282,7 @@ def available_capabilities(config: Any, data_dir: str) -> list[Capability]:
 
 
 class _ModelCache:
-    """Holds at most one loaded SwinIR model, swapped when the recipe changes.
+    """Holds at most one loaded enhancement model, swapped when the recipe changes.
 
     Keeping a single model resident bounds VRAM use: enhancement is on-demand,
     so we trade a reload when the user switches capability for never holding
@@ -333,10 +341,6 @@ class _ModelCache:
 
 def _build_arch(cap: Capability) -> torch.nn.Module:
     """Construct the vendored architecture for a capability (no weights loaded)."""
-    if cap.arch == 'swinir':
-        from archs.swinir import SwinIR
-
-        return SwinIR(**cap.arch_kwargs)
     if cap.arch == 'rrdbnet':
         from archs.rrdbnet import RRDBNet
 
@@ -345,6 +349,10 @@ def _build_arch(cap: Capability) -> torch.nn.Module:
         from archs.restormer import Restormer
 
         return Restormer(**cap.arch_kwargs)
+    if cap.arch == 'nafnet':
+        from archs.nafnet import NAFNet
+
+        return NAFNet(**cap.arch_kwargs)
     raise RuntimeError(f'unknown enhancement architecture {cap.arch!r}')
 
 
@@ -355,8 +363,8 @@ def _load_model(cap: Capability, weight_path: Path, device: str) -> torch.nn.Mod
 
     model = _build_arch(cap)
     state = torch.load(weight_path, map_location='cpu', weights_only=True)
-    # Checkpoints wrap the weights under 'params' or 'params_ema' (SwinIR,
-    # Real-ESRGAN); some are a bare state dict.
+    # Checkpoints wrap the weights under 'params' (NAFNet, Real-ESRGAN) or
+    # 'params_ema'; some are a bare state dict.
     for wrapper in ('params_ema', 'params'):
         if isinstance(state, dict) and wrapper in state:
             state = state[wrapper]
@@ -387,7 +395,7 @@ def _forward_model(cap: Capability, model: torch.nn.Module, x: torch.Tensor) -> 
     RRDBNet pixel-unshuffles its input by its pre-conv factor (scale=2 → ÷2,
     scale=1 → ÷4); Restormer's 4-level encoder needs input divisible by 8.  We
     reflect-pad up to the nearest multiple and crop the (scaled) output back.
-    SwinIR pads internally (window alignment), so it needs no handling here.
+    NAFNet pads internally (``check_image_size``), so it needs no handling here.
     """
     if cap.arch == 'rrdbnet':
         factor = {2: 2, 1: 4}.get(cap.scale, 1)
@@ -401,12 +409,12 @@ def _forward_model(cap: Capability, model: torch.nn.Module, x: torch.Tensor) -> 
     if pad_h or pad_w:
         x = torch.nn.functional.pad(x, (0, pad_w, 0, pad_h), mode='reflect')
     # FP16 autocast on CUDA for FP16-safe archs: runs the heavy conv/matmul in
-    # half precision (~2-4x faster, ~half the activation memory — what lets us use
-    # the 512 tile) while keeping precision-sensitive ops in FP32.  Autocast (not
-    # a hard model.half()) because some archs build FP32 tensors internally that a
-    # blanket half() would leave mismatched.  SwinIR is excluded entirely — it
-    # overflows in FP16 (see _FP16_SAFE_ARCHS).  The output may be FP16; callers
-    # cast back.
+    # half precision (halves the activation memory — what lets us use the 512 tile
+    # — and speeds up matmul-bound archs) while keeping precision-sensitive ops in
+    # FP32.  Autocast (not a hard model.half()) because some archs build FP32
+    # tensors internally that a blanket half() would leave mismatched.  Any arch
+    # not in _FP16_SAFE_ARCHS runs in FP32.  The output may be FP16; callers cast
+    # back.
     if x.is_cuda and cap.arch in _FP16_SAFE_ARCHS:
         with torch.autocast(device_type='cuda', dtype=torch.float16):
             out = model(x)

@@ -4,7 +4,7 @@
 
 ### Image Enhancement
 
-Photonarium can now enhance a photo with local, offline neural models — from the fullscreen viewer, an "Enhance" tool offers the capabilities whose model weights are installed: noise reduction (SwinIR, Apache-2.0), motion deblur and defocus auto-sharpen (Restormer, MIT), and 2× and 4× super-resolution (Real-ESRGAN, BSD-3). They run entirely on-device, on the existing PyTorch stack, with no new training-framework dependency (the architectures are vendored and loaded directly; only the lightweight `timm` layer library is added).
+Photonarium can now enhance a photo with local, offline neural models — from the fullscreen viewer, an "Enhance" tool offers the capabilities whose model weights are installed: noise reduction and motion deblur (NAFNet, MIT), defocus auto-sharpen (Restormer, MIT), and 2× and 4× super-resolution (Real-ESRGAN, BSD-3). They run entirely on-device, on the existing PyTorch stack, with no new training-framework dependency (the architectures are vendored and loaded directly; the only extra library the feature needs is the small `einops` tensor-reshaping package, used by Restormer).
 
 True to the principle that Photonarium is a catalogue, not an editor, **the original is never modified**. Each enhanced result is written as a *new image* and catalogued as a derived version of its source (`<name>__enhanced_<n>`), with its lineage recorded — parent, processing depth, and the operations applied. Re-enhancing a derived image chains cleanly (depth 2, 3, …) rather than nesting names.
 

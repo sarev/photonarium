@@ -1190,8 +1190,9 @@ def create_image(
         processing_depth: Number of enhancement steps from the original
             (original→A = 1, A→B = 2 …); 0 for originals.
         processing_ops: Provenance of this image as a list of operation dicts
-            (e.g. [{'recipe': 'denoise', 'models': ['swinir'], 'params': {…}}]);
-            stored as a JSON string.  None for originals.
+            (e.g. [{'recipe': 'denoise', 'label': 'Reduce noise',
+            'model': 'NAFNet-SIDD-width64.pth'}]); stored as a JSON string.
+            None for originals.
 
     Returns:
         Dictionary with the created image record.

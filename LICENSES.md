@@ -49,14 +49,20 @@ compatible with Photonarium's Apache 2.0 license.
 | BLIP / BLIP-2 (Salesforce) | BSD-3-Clause | https://github.com/salesforce/LAVIS/blob/main/LICENSE.txt |
 | LAION Aesthetic Predictor | MIT | https://github.com/LAION-AI/aesthetic-predictor/blob/main/LICENSE |
 | NIMA (truskovskiyk) | MIT | https://github.com/truskovskiyk/nima.pytorch/blob/master/LICENSE |
-| SwinIR (image enhancement) | Apache-2.0 | https://github.com/JingyunLiang/SwinIR/blob/main/LICENSE |
+| NAFNet (noise reduction + motion deblur) | MIT† | https://github.com/megvii-research/NAFNet/blob/main/LICENSE |
 | Real-ESRGAN (super-resolution) | BSD-3-Clause | https://github.com/xinntao/Real-ESRGAN/blob/master/LICENSE |
-| Restormer (motion deblur + defocus sharpen) | MIT | https://github.com/swz30/Restormer/blob/main/LICENSE.md |
+| Restormer (defocus auto-sharpen) | MIT | https://github.com/swz30/Restormer/blob/main/LICENSE.md |
 | VGGFace2 (facenet-pytorch) | CC BY-NC 4.0* | https://github.com/timesler/facenet-pytorch#pretrained-models |
 
 *\* The VGGFace2 dataset (used to train InceptionResnetV1) has a non-commercial
 license, but the facenet-pytorch model weights themselves are distributed under
 MIT. For commercial use, consider retraining on a permissively-licensed dataset.*
+
+*† NAFNet's code is MIT, but its pretrained weights are trained on the SIDD
+(denoising) and GoPro (deblurring) datasets, which carry research/non-commercial
+terms. This mirrors the VGGFace2 situation above: the vendored architecture is
+freely redistributable; the weights' dataset provenance is the caveat for
+commercial use.*
 
 ### Image Processing
 

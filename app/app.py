@@ -5550,7 +5550,7 @@ if __name__ == '__main__':
                 'enabled': _config.enhance_enabled,
                 'data_dir': _data_dir,
                 'weights': [
-                    {'filename': cap.weight_filename, 'url': cap.weight_url}
+                    {'filename': cap.weight_filename, 'url': cap.weight_url, 'sha256': cap.sha256}
                     for cap in enhance.CAPABILITIES.values()
                     if getattr(_config, cap.config_flag, False)
                 ],
