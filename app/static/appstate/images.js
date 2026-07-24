@@ -86,6 +86,24 @@ AppState.images = (function() {
     }
 
     /**
+     * Parse an image basename into its enhancement family key and depth.
+     *
+     * A derived image is named ``<stem>__enhanced_<depth>.<ext>`` (kept flat —
+     * see imagedb.derived_image_name), so its source and all its derivatives
+     * share ``stem``, and ``depth`` (0 for the source) orders them by recency.
+     * Used as the sort tie-break so a derived image groups with — and sorts by
+     * age relative to — its source when they share a timestamp.
+     * @param {string} basename
+     * @returns {{ stem: string, depth: number }}
+     * @private
+     */
+    function _enhancedFamilyKey(basename) {
+        const stem = (basename || '').replace(/\.[^.]*$/, '');  // drop extension
+        const m = stem.match(/^(.*)__enhanced_(\d+)$/);
+        return m ? { stem: m[1], depth: parseInt(m[2], 10) } : { stem, depth: 0 };
+    }
+
+    /**
      * Sort images based on view settings.
      * @param {Array} images
      * @returns {Array}
@@ -130,6 +148,21 @@ AppState.images = (function() {
                 const namesA = _peopleNames?.[a.id] || '';
                 const namesB = _peopleNames?.[b.id] || '';
                 cmp = namesA.localeCompare(namesB, undefined, { sensitivity: 'base' });
+            }
+            // Deterministic tie-break for equal sort keys.  Images sharing a
+            // key — most importantly a derived "…__enhanced_N" image, which
+            // inherits its source's timestamp — would otherwise fall back to
+            // arbitrary insertion order and drift to the far end of the run.
+            // Break ties by enhancement family (stem) then depth: this keeps a
+            // derived image adjacent to its source, ordered oldest→newest
+            // (source before its derivatives).  Folded into cmp *before* the
+            // direction flip, so it reverses with the sort — newest-first shows
+            // the derived above its source, oldest-first shows it below.
+            if (cmp === 0) {
+                const fa = _enhancedFamilyKey(a.basename);
+                const fb = _enhancedFamilyKey(b.basename);
+                cmp = fa.stem.localeCompare(fb.stem, undefined, { numeric: true, sensitivity: 'base' })
+                    || (fa.depth - fb.depth);
             }
             return direction === 'asc' ? cmp : -cmp;
         });
