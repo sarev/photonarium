@@ -1897,10 +1897,12 @@ const App = {
      * @param {Object} [options] - Optional configuration
      * @param {string} [options.actionLabel] - Label for the action button
      * @param {Function} [options.onAction] - Callback when action button is clicked
+     * @param {Function} [options.onClick] - Callback when the toast itself is
+     *   clicked (makes the whole toast a click target). Dismisses on click.
      * @param {number} [options.duration=5000] - Auto-dismiss time in ms
      */
     showInfo(message, options = {}) {
-        const { actionLabel, onAction, duration = 5000 } = options;
+        const { actionLabel, onAction, onClick, duration = 5000 } = options;
 
         let toast = document.getElementById('info-toast');
         if (!toast) {
@@ -1910,8 +1912,13 @@ const App = {
             (document.getElementById('app') || document.body).appendChild(toast);
         }
 
-        // Build content: message text + optional action button
+        // The toast is a reused singleton — clear any handler/state from a
+        // previous call before rebuilding its content.
         toast.textContent = '';
+        toast.onclick = null;
+        toast.classList.remove('clickable');
+
+        // Build content: message text + optional action button
         const textSpan = document.createElement('span');
         textSpan.textContent = message;
         toast.appendChild(textSpan);
@@ -1919,13 +1926,23 @@ const App = {
         if (actionLabel && onAction) {
             const btn = document.createElement('button');
             btn.className = 'info-toast-action';
-            btn.textContent = actionLabel;
-            btn.addEventListener('click', () => {
+            btn.addEventListener('click', (e) => {
+                e.stopPropagation();  // don't also trigger a whole-toast onClick
                 toast.classList.remove('visible');
                 clearTimeout(toast._hideTimeout);
                 onAction();
             });
+            btn.textContent = actionLabel;
             toast.appendChild(btn);
+        }
+
+        if (onClick) {
+            toast.classList.add('clickable');
+            toast.onclick = () => {
+                toast.classList.remove('visible');
+                clearTimeout(toast._hideTimeout);
+                onClick();
+            };
         }
 
         toast.classList.add('visible');

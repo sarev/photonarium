@@ -134,8 +134,13 @@ AppState.events = (function() {
                 // as a new version of the original.
                 // data: { image_id, recipe, label, new_path }
                 console.log('[AppState.events] Enhance complete:', data);
-                App.showInfo(`${data?.label || 'Enhancement'} complete.`);
                 AppState.images.load();
+                // Clicking the toast reveals the new image in the Gallery.  The
+                // derived image is identified by its file path — its id is only
+                // assigned at ingest and reaches us later via delta sync.
+                App.showInfo(`${data?.label || 'Enhancement'} complete.`, {
+                    onClick: () => revealEnhancedImage(data?.new_path),
+                });
                 break;
 
             case 'enhance_failed':
@@ -396,6 +401,47 @@ AppState.events = (function() {
     function handleImageIngested(data) {
         // Don't log every image - could be thousands during scan
         // Just mark images as needing refresh when processing completes
+    }
+
+    /**
+     * Navigate to the Gallery and reveal the enhanced (derived) image with the
+     * given file path.  Called when the user clicks an enhance-complete toast.
+     *
+     * The derived image is matched by path because the toast only carries the
+     * source image's id; the new image's id is assigned at ingest and arrives
+     * via delta sync.  It may still be ingesting when the toast is clicked, so
+     * if it isn't loaded yet we reveal it once it appears (one-shot subscription,
+     * with a timeout so we don't leak it if ingestion never completes).
+     *
+     * @param {string} [newPath] - Absolute path of the enhanced image file.
+     */
+    function revealEnhancedImage(newPath) {
+        // Enhance is launched from the fullscreen viewer, which is an overlay
+        // (not a screen), so close it first — otherwise it stays on top of the
+        // Gallery.  Both calls are safe no-ops when not applicable.
+        App.exitFullscreen();
+        App.navigateTo('gallery');
+        if (!newPath) return;
+
+        const reveal = () => {
+            const img = AppState.images.getAll().find((i) => i.path === newPath);
+            if (!img) return false;
+            App.getModule('gallery')?.revealImageId(img.id, 'auto');
+            return true;
+        };
+        if (reveal()) return;
+
+        // Not ingested yet — reveal it when the image cache next changes.
+        const unsub = AppState.images.onChanged(() => {
+            if (reveal()) unsub();
+        });
+        setTimeout(() => {
+            try {
+                unsub();
+            } catch {
+                // Already unsubscribed.
+            }
+        }, 30000);
     }
 
     /**

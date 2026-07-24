@@ -162,6 +162,17 @@ AppState.nav = (function() {
         },
 
         /**
+         * Seed the last-viewed image ID so the Gallery selects and scrolls to
+         * it on entry — the same one-shot the fullscreen viewer sets implicitly.
+         * Exposed for other flows that want to land the Gallery on a specific
+         * image (e.g. revealing an enhanced image from its completion toast).
+         * @param {string} imageId
+         */
+        setLastViewedImageId(imageId) {
+            if (imageId) _lastViewedImageId = imageId;
+        },
+
+        /**
          * Consume the last viewed fullscreen image ID.
          * Returns the ID and clears it (one-shot). Gallery calls this on
          * entry to select and scroll to the last viewed image.

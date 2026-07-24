@@ -412,40 +412,51 @@ const Gallery = {
         // Update duplicate group nav button state
         this._updateDupGroupNavState();
 
-        // If fullscreen was viewing an image, select it in the gallery
-        // (if it's in the current display list) so the user returns to it.
-        // consumeLastViewedImageId() is one-shot — returns null on subsequent calls.
+        // If fullscreen was viewing an image (or another flow seeded a target),
+        // select it and scroll to it so the user lands on it.  This is one-shot —
+        // consumeLastViewedImageId() returns null on subsequent calls.
         const lastViewedId = AppState.nav.consumeLastViewedImageId();
-        let throbId = null;
-        if (lastViewedId) {
-            const displayList = AppState.images.getDisplayList();
-            const inList = displayList.some(img => img.id === lastViewedId);
-            if (inList) {
-                this._selection.select(lastViewedId);
-                throbId = lastViewedId;
+        if (!this.revealImageId(lastViewedId, 'instant')) {
+            // No target (or not in the display list yet) — scroll to any existing
+            // selection so the user keeps their place returning from another screen.
+            const selected = this._selection.getSelected();
+            if (selected.length > 0) {
+                this._grid.scrollToId(selected[0], 'instant');
             }
         }
+    },
 
-        // Scroll the first selected thumbnail into view so the user can
-        // see their selection when returning from another screen
-        const selected = this._selection.getSelected();
-        if (selected.length > 0) {
-            this._grid.scrollToId(selected[0], 'instant');
+    /**
+     * Select an image, scroll it into view, and throb it — the single visual
+     * "here it is" action, shared by cross-screen return (fullscreen → gallery)
+     * and the enhance-complete toast.  The throb is deferred via _throbTargetId
+     * when the thumbnail element has not rendered yet (onItemCreated applies it).
+     * Only meaningful on the gallery screen (the grid must be bound).
+     * @param {string} id - Image ID.  No-op if falsy or not in the display list.
+     * @param {'instant'|'auto'} [scrollMode='instant'] - Scroll behaviour.
+     * @returns {boolean} True if the image was found and revealed.
+     */
+    revealImageId(id, scrollMode = 'instant') {
+        if (!id) return false;
+        const inList = AppState.images.getDisplayList().some(img => img.id === id);
+        if (!inList) return false;
+
+        this._selection.select(id);
+        if (this._grid) {
+            this._grid.scrollToId(id, scrollMode);
         }
 
-        // Throb the thumbnail so it's easy to spot after cross-screen navigation.
-        // The element may not exist yet (thumbnails load asynchronously), so we
-        // set a target ID that onItemCreated checks when the element is added.
-        // Also try immediately in case it's already rendered.
-        if (throbId) {
-            this._throbTargetId = throbId;
-            const el = this._grid._innerContainer?.querySelector(`[data-id="${throbId}"]`);
-            if (el) {
-                this._throbTargetId = null;
-                el.classList.add('throb');
-                el.addEventListener('animationend', () => el.classList.remove('throb'), { once: true });
-            }
+        // Throb so it's easy to spot.  The element may not exist yet (thumbnails
+        // load asynchronously), so set a target ID that onItemCreated checks when
+        // the element is added; also try immediately in case it is already there.
+        this._throbTargetId = id;
+        const el = this._grid?._innerContainer?.querySelector(`[data-id="${id}"]`);
+        if (el) {
+            this._throbTargetId = null;
+            el.classList.add('throb');
+            el.addEventListener('animationend', () => el.classList.remove('throb'), { once: true });
         }
+        return true;
     },
 
     /**

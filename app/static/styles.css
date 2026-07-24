@@ -5206,6 +5206,11 @@ a:hover {
     transform: translateX(-50%) translateY(0);
 }
 
+/* Whole-toast click target (e.g. "Enhancement complete" → reveal in Gallery). */
+.info-toast.clickable {
+    cursor: pointer;
+}
+
 .info-toast-action {
     background: var(--color-overlay-toast-action);
     color: inherit;
