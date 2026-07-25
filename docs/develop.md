@@ -108,6 +108,12 @@ Mutation endpoints prefer batch format (arrays, not single items).
 | POST | `/api/import/preflight` | Check which files are new `{checksums: []}` |
 | POST | `/api/import/upload` | Import via multipart file upload |
 
+#### Share (1 route)
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| GET/POST | `/api/share/download` | Download selection as attachment (`ids`, `mode=original\|reduced`); single file or streamed zip |
+
 #### Enhance (3 routes)
 
 | Method | Endpoint | Description |

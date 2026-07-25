@@ -58,6 +58,7 @@ Find out more about the motivations behind Photonarium in [`BACKGROUND.md`](docs
 - **Setup assistant** - a guided first-run flow that configures Photonarium for your hardware and preferred search language, then downloads the required AI models. Choose from hardware presets (NAS, laptop, desktop) and language options (English or multilingual) without touching config files.
 - **Camera data and histogram** - full EXIF metadata extraction with image histogram display. Search and filter by camera, lens, ISO, aperture, shutter speed, and more.
 - **Slideshow** mode in the full-screen viewer with smooth cross-fade transitions, linear or shuffled playback, configurable timing, and video autoplay
+- **Share** - download selected photos and videos to whatever device you are browsing from (as a zip when you pick several), at original size or resized for emailing, or hand them straight to your phone's share sheet
 
 Once you have run the model downloader, the models stay on your machine. Everything runs locally.
 

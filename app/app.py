@@ -61,6 +61,7 @@ import threading
 import time
 import traceback
 import uuid
+import zipfile
 from concurrent.futures import ThreadPoolExecutor
 from concurrent.futures import TimeoutError as FuturesTimeoutError
 from dataclasses import fields as dc_fields
@@ -70,7 +71,7 @@ from pathlib import Path
 import numpy as np
 import orjson
 from flask import Flask, Response, abort, request, send_file
-from PIL import Image, ImageDraw
+from PIL import Image, ImageDraw, ImageOps
 from werkzeug.exceptions import HTTPException
 
 # flask_cors not needed — frontend is served from the same origin
@@ -1033,6 +1034,243 @@ def get_full_image(image_id):
             return error_response('Failed to decode RAW image', 500)
 
     return send_file(path)
+
+
+# =============================================================================
+# Share / Download Endpoints
+# =============================================================================
+
+# Longest edge for 'reduced size' photo re-encodes (email-friendly)
+SHARE_REDUCED_MAX_DIM = 2048
+# JPEG quality for reduced photo re-encodes
+SHARE_REDUCED_QUALITY = 85
+# Read/flush granularity when streaming originals into a zip
+_SHARE_CHUNK = 256 * 1024
+
+
+class _ZipStreamSink:
+    """Write-only sink that lets ``zipfile`` stream an archive incrementally.
+
+    Deliberately implements neither ``tell`` nor ``seek``: ``zipfile``
+    detects this, wraps the sink in its internal ``_Tellable`` and switches
+    to data-descriptor mode, so entry headers never need patching in place.
+    The archive can therefore be flushed to the HTTP response as it grows —
+    no temp file and no full-archive buffering, which matters when the
+    selection includes multi-gigabyte videos.
+    """
+
+    def __init__(self):
+        self._chunks = []
+        self._pending = 0
+
+    def write(self, data):
+        self._chunks.append(bytes(data))
+        self._pending += len(data)
+        return len(data)
+
+    def flush(self):
+        pass
+
+    def pending(self):
+        """Number of buffered bytes not yet drained."""
+        return self._pending
+
+    def drain(self):
+        """Return and clear all buffered bytes."""
+        chunks, self._chunks = self._chunks, []
+        self._pending = 0
+        return b''.join(chunks)
+
+
+def _share_reduced_jpeg(path):
+    """Re-encode a photo as an email-friendly JPEG, returning the bytes.
+
+    For ordinary formats the image is shrunk *before* the EXIF orientation
+    is applied: ``thumbnail()`` on a not-yet-decoded JPEG uses draft-mode
+    pre-scaling (a large win on very high-megapixel sources), and rotating
+    the ~2048px result costs a fraction of rotating the full-resolution
+    original.  RAW formats go through the unified opener, which decodes and
+    orients at full resolution by necessity.
+
+    No EXIF is copied to the output: orientation is baked into the pixels
+    (copying the tag would double-rotate), and dropping the rest strips GPS
+    coordinates from files that are about to leave the machine.
+
+    Thread-safe (pure function of the path) — the zip streamer calls this
+    from a worker pool.
+    """
+    if is_raw_format(path):
+        img = raw_open_image(path).convert('RGB')
+        img.thumbnail((SHARE_REDUCED_MAX_DIM, SHARE_REDUCED_MAX_DIM), Image.LANCZOS)
+    else:
+        img = Image.open(path)
+        # thumbnail() only ever shrinks, so smaller photos pass through unscaled
+        img.thumbnail((SHARE_REDUCED_MAX_DIM, SHARE_REDUCED_MAX_DIM), Image.LANCZOS)
+        img = ImageOps.exif_transpose(img)
+        img = img.convert('RGB')
+    buf = io.BytesIO()
+    img.save(buf, 'JPEG', quality=SHARE_REDUCED_QUALITY)
+    return buf.getvalue()
+
+
+def _share_arcname(image, mode, used_names):
+    """Choose the download filename for one shared item, avoiding collisions.
+
+    Reduced-mode photos become ``.jpg`` regardless of source format.
+    Basenames can collide across folders, so duplicates get a `` (2)``-style
+    suffix, matching what browsers do for repeated downloads.
+    """
+    name = image['basename']
+    if mode == 'reduced' and image.get('media_type') != 'video':
+        name = os.path.splitext(name)[0] + '.jpg'
+    stem, ext = os.path.splitext(name)
+    candidate, serial = name, 2
+    while candidate.lower() in used_names:
+        candidate = f'{stem} ({serial}){ext}'
+        serial += 1
+    used_names.add(candidate.lower())
+    return candidate
+
+
+def _stream_share_zip(items, mode):
+    """Generator yielding an uncompressed zip of the given images.
+
+    ZIP_STORED throughout — photos and videos are already compressed, so
+    deflating them would burn CPU for no size win.  Originals are copied
+    through in chunks and the sink drained as it fills, keeping peak memory
+    flat regardless of file sizes.
+
+    Reduced-mode re-encodes are CPU-bound (decode + resample + encode of
+    every photo), so they run on a small worker pool that stays a bounded
+    window ahead of the stream cursor — entries are still written in
+    selection order, but the download is no longer serialised behind one
+    core.  The window bound caps the finished-but-unwritten results held
+    in memory.
+    """
+    sink = _ZipStreamSink()
+    used_names = set()
+    # Arcname reservation must follow selection order, so plan up front
+    plans = []
+    for image in items:
+        arcname = _share_arcname(image, mode, used_names)
+        reduce_photo = mode == 'reduced' and image.get('media_type') != 'video'
+        plans.append((image, arcname, reduce_photo))
+
+    workers = min(4, os.cpu_count() or 1)
+    window = workers * 2
+    futures = {}  # plan index -> in-flight/completed re-encode
+    next_submit = 0
+
+    with ThreadPoolExecutor(max_workers=workers) as pool:
+
+        def submit_ahead(upto):
+            """Queue re-encode jobs for plan indices below ``upto``."""
+            nonlocal next_submit
+            while next_submit < min(upto, len(plans)):
+                image, _, reduce_photo = plans[next_submit]
+                if reduce_photo:
+                    futures[next_submit] = pool.submit(_share_reduced_jpeg, image['path'])
+                next_submit += 1
+
+        with zipfile.ZipFile(sink, 'w', zipfile.ZIP_STORED) as zf:
+            for index, (image, arcname, reduce_photo) in enumerate(plans):
+                submit_ahead(index + 1 + window)
+                path = image['path']
+                if reduce_photo:
+                    try:
+                        zf.writestr(_zip_entry_info(arcname, path), futures.pop(index).result())
+                        yield sink.drain()
+                        continue
+                    except Exception as e:
+                        # Fall back to the original bytes — a decode failure
+                        # should not remove the photo from the archive.  The
+                        # reserved '.jpg' arcname no longer matches what is
+                        # being sent, so pick a fresh name with the source
+                        # extension
+                        logger.warning(f'Share: reduced re-encode failed for {path}, sending original: {e}')
+                        arcname = _share_arcname(image, 'original', used_names)
+                try:
+                    info = zipfile.ZipInfo.from_file(path, arcname)
+                    with zf.open(info, 'w') as dest, open(path, 'rb') as src:
+                        while chunk := src.read(_SHARE_CHUNK):
+                            dest.write(chunk)
+                            if sink.pending() >= _SHARE_CHUNK:
+                                yield sink.drain()
+                except OSError as e:
+                    # File vanished or became unreadable mid-stream: too late
+                    # to signal an HTTP error, so log and continue with the
+                    # rest
+                    logger.warning(f'Share: could not read {path}, skipping: {e}')
+                yield sink.drain()
+        yield sink.drain()
+
+
+def _zip_entry_info(arcname, source_path):
+    """Build a ZipInfo carrying the source file's modification time."""
+    try:
+        mtime = time.localtime(os.path.getmtime(source_path))
+    except OSError:
+        mtime = time.localtime()
+    return zipfile.ZipInfo(arcname, date_time=mtime[:6])
+
+
+@app.route('/api/share/download', methods=['GET', 'POST'])
+def share_download():
+    """Download selected images/videos as an attachment (single file or zip).
+
+    Accepts a form POST (``ids`` comma-separated, ``mode``) so the frontend
+    can submit a hidden form and let the browser stream the response straight
+    to disk — no blob-in-RAM limit and no URL-length cap on large selections.
+    GET with the same query parameters is supported for programmatic fetches
+    (the Web Share path retrieves files one at a time).
+
+    Modes: ``original`` sends files verbatim; ``reduced`` re-encodes photos
+    to fit 2048px JPEG (videos are always sent unchanged).
+
+    Returns:
+        The file itself for a single item, or an uncompressed streamed zip
+        for multiple items.  404 if none of the requested files exist.
+    """
+    source = request.form if request.method == 'POST' else request.args
+    ids = [i.strip() for i in source.get('ids', '').split(',') if i.strip()]
+    mode = source.get('mode', 'original')
+    if not ids:
+        return error_response('No images specified')
+    if mode not in ('original', 'reduced'):
+        return error_response(f'Invalid mode: {mode}')
+
+    db = get_db()
+    items = []
+    for image_id in ids:
+        image = db.get_image(image_id)
+        if image is None:
+            logger.warning(f'Share: unknown image id {image_id}, skipping')
+        elif not os.path.exists(image['path']):
+            logger.warning(f'Share: file missing on disk, skipping: {image["path"]}')
+        else:
+            items.append(image)
+    if not items:
+        return error_response('None of the requested files were found', 404)
+
+    if len(items) == 1:
+        image = items[0]
+        name = _share_arcname(image, mode, set())
+        if mode == 'reduced' and image.get('media_type') != 'video':
+            try:
+                return send_file(
+                    io.BytesIO(_share_reduced_jpeg(image['path'])),
+                    mimetype='image/jpeg',
+                    as_attachment=True,
+                    download_name=name,
+                )
+            except Exception as e:
+                logger.warning(f'Share: reduced re-encode failed for {image["path"]}, sending original: {e}')
+        return send_file(image['path'], as_attachment=True, download_name=image['basename'])
+
+    zip_name = f'photonarium-{datetime.now().strftime("%Y-%m-%d")}.zip'
+    response = Response(_stream_share_zip(items, mode), mimetype='application/zip')
+    response.headers['Content-Disposition'] = f'attachment; filename="{zip_name}"'
+    return response
 
 
 @app.route('/api/images/<image_id>/scenes', methods=['GET'])

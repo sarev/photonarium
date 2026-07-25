@@ -156,6 +156,9 @@
                     <button id="btn-reveal-folder" class="toolbar-btn" title="Open containing folder" disabled>
                         <span class="icon" data-icon="folder_open">📂</span>
                     </button>
+                    <button id="btn-share" class="toolbar-btn" title="Share / download selected" disabled>
+                        <span class="icon" data-icon="share">📤</span>
+                    </button>
                     <button id="btn-rotate-ccw" class="toolbar-btn" title="Rotate left" disabled>
                         <span class="icon" data-icon="rotate_left">⟲</span>
                     </button>
@@ -200,6 +203,9 @@
                     </button>
                     <button id="btn-vid-reveal-folder" class="toolbar-btn" title="Open containing folder" disabled>
                         <span class="icon" data-icon="folder_open">📂</span>
+                    </button>
+                    <button id="btn-vid-share" class="toolbar-btn" title="Share / download selected" disabled>
+                        <span class="icon" data-icon="share">📤</span>
                     </button>
                     <button id="btn-vid-trash" class="toolbar-btn" title="Move to trash" disabled>
                         <span class="icon" data-icon="delete">🗑</span>
@@ -968,6 +974,32 @@
             </div>
         </dialog>
 
+        <!-- Share dialog: download (or natively share) the selected items -->
+        <dialog id="dialog-share">
+            <div class="dialog-content">
+                <h3>Share</h3>
+                <p id="dialog-share-summary" class="dialog-subtitle"></p>
+                <div class="dialog-radio-group">
+                    <label class="dialog-radio" title="Send the files exactly as they are stored">
+                        <input type="radio" name="share-mode" value="original" checked>
+                        <span>Original files</span>
+                    </label>
+                    <label class="dialog-radio" title="Smaller files for emailing or messaging — photos are resized to fit 2048 pixels">
+                        <input type="radio" name="share-mode" value="reduced">
+                        <span>Reduced size</span>
+                    </label>
+                </div>
+                <p id="dialog-share-note" class="dialog-hint" hidden></p>
+                <div class="dialog-actions">
+                    <button id="dialog-share-cancel" class="action-btn">Cancel</button>
+                    <button id="dialog-share-native" class="action-btn" hidden
+                            title="Send to another app using this device's share menu">Share&hellip;</button>
+                    <button id="dialog-share-download" class="action-btn primary"
+                            title="Download to this device">Download</button>
+                </div>
+            </div>
+        </dialog>
+
         <!-- Enhance dialog -->
         <dialog id="dialog-enhance">
             <div class="dialog-content">
@@ -1297,5 +1329,6 @@
     <script src="face-tuning.js"></script>
     <script src="videos.js"></script>
     <script src="onthisday.js"></script>
+    <script src="share.js"></script>
 </body>
 </html>

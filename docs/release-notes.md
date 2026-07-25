@@ -27,6 +27,17 @@ The new arbiter (`app/arbiter/`) is the GPU analogue of the single-writer databa
 - Face-detection preview remains on CPU by design (fast, isolated, and parameterised per call).
 - The sealed `app/arbiter/` package has no inbound dependencies on the rest of the application and is covered by a standalone unit and concurrency-stress test suite.
 
+### Share
+
+The Gallery and Videos screens gain a Share toolbar button (enabled whenever items are selected) for getting copies of photos and videos out of the catalogue and onto the current device — particularly useful when browsing from a phone or another machine on the network. A small dialog summarises the selection (counts and total size, so a multi-gigabyte pull over Wi-Fi is never an accident) and offers two forms:
+
+- **Original files** — sent exactly as stored, including camera RAW files.
+- **Reduced size** — photos re-encoded to fit 2048px JPEG for emailing or messaging, with camera metadata (including GPS location) stripped; videos are always sent at original size.
+
+A single item downloads as itself; multiple items arrive as one zip, streamed as it is built so downloads start instantly regardless of selection size (the archive is uncompressed — photos and videos are already compressed, so zipping them again would only burn CPU). Reduced-size re-encodes run on a small worker pool ahead of the stream, so large selections of high-megapixel photos are not serialised behind a single core. The last-used choice is remembered.
+
+On browsers that support sharing files from a web page (a secure context is required, so `https` or `localhost`), an additional **Share…** button hands the files straight to the device's native share sheet — mail, messaging apps, and so on.
+
 ### Quick Rating Widget
 
 Images and videos can now be rated directly from the fullscreen viewer, without having to judge a low-resolution gallery thumbnail. A trigger in the bottom-left corner shows the current rating; hovering it opens a small palette of star runs (★–★★★) and sentiment icons (faces, thumbs, heart).

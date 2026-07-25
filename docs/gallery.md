@@ -34,6 +34,7 @@ Videos play inline in the full-screen viewer. See the [Full-screen viewer](fulls
 - **Delete / Backspace** moves selected items to the trash directory (with a confirmation).
 - **Rotate left / rotate right** fixes images that are sideways (not available for videos).
 - **Reveal in folder** opens your file manager at the file location (only available when exactly one item is selected).
+- **Share** downloads copies of the selected items to the device you are browsing from — a single file directly, several as one zip. Choose original files, or a reduced size for emailing (photos resized to fit 2048 pixels, camera metadata removed; videos are always sent at original size). On browsers that support it (requires `https` or `localhost`), a **Share…** button also hands the files to your device's native share menu.
 
 ## Info panel
 

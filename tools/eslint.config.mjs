@@ -29,6 +29,7 @@ export default [
                 Faces: 'readonly',
                 OnThisDay: 'readonly',
                 SetupWizard: 'readonly',
+                Share: 'readonly',
                 isCodecBrowserCompatible: 'readonly',
                 openTranscodeDialog: 'readonly',
             },

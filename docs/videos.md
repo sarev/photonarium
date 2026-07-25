@@ -29,6 +29,8 @@ When a search is active, videos are sorted by match score so the most relevant v
 
 The thumbnail size can be adjusted independently from the Gallery using the +/- buttons in the Videos toolbar.
 
+Selected videos can be downloaded to the device you are browsing from with the **Share** toolbar button — a single video directly, several as one zip. Videos are always shared at original size; see the [Gallery guide](gallery.md) for the full details.
+
 ## Scene timeline
 
 When you select a single video, the bottom panel shows its scenes as a horizontal strip of keyframe thumbnails. If no video or multiple videos are selected, the timeline smoothly collapses out of view. Each scene is **proportionally sized by duration** - a 30-second scene takes up more space than a 5-second scene - giving you an intuitive sense of the video's structure at a glance.

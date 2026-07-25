@@ -1171,6 +1171,7 @@ const App = {
         this._bindBtn('btn-slideshow', () => this._startGallerySlideshow(false));
         this._bindBtn('btn-shuffle', () => this._startGallerySlideshow(true));
         this._bindBtn('btn-reveal-folder', () => this._handleRevealFolderClick());
+        this._bindBtn('btn-share', () => { if (typeof Share !== 'undefined') Share.open(); });
         this._bindBtn('btn-rotate-ccw', () => this._handleRotateClick(270));
         this._bindBtn('btn-rotate-cw', () => this._handleRotateClick(90));
         this._bindBtn('btn-trash', () => this.emit('trashSelected'));
@@ -1200,6 +1201,7 @@ const App = {
         this._bindBtn('btn-vid-slideshow', () => this._startGallerySlideshow(false));
         this._bindBtn('btn-vid-shuffle', () => this._startGallerySlideshow(true));
         this._bindBtn('btn-vid-reveal-folder', () => this._handleRevealFolderClick());
+        this._bindBtn('btn-vid-share', () => { if (typeof Share !== 'undefined') Share.open(); });
         this._bindBtn('btn-vid-trash', () => this.emit('trashSelected'));
         this._bindBtn('btn-vid-select-all', () => this.emit('selectAll'));
         this._bindBtn('btn-vid-clear-selection', () => this.clearSelection());
@@ -1463,6 +1465,12 @@ const App = {
             trashBtn.disabled = selCount === 0;
         }
 
+        // Share button: enabled when at least one image is selected
+        const shareBtn = document.getElementById('btn-share');
+        if (shareBtn) {
+            shareBtn.disabled = selCount === 0;
+        }
+
         // Slideshow buttons: enabled when the effective image list has > 1 images
         const slideshowBtn = document.getElementById('btn-slideshow');
         const shuffleBtn = document.getElementById('btn-shuffle');
@@ -1478,6 +1486,8 @@ const App = {
         if (vidReveal) vidReveal.disabled = selCount !== 1;
         const vidTrash = document.getElementById('btn-vid-trash');
         if (vidTrash) vidTrash.disabled = selCount === 0;
+        const vidShare = document.getElementById('btn-vid-share');
+        if (vidShare) vidShare.disabled = selCount === 0;
         const vidSlideshow = document.getElementById('btn-vid-slideshow');
         const vidShuffle = document.getElementById('btn-vid-shuffle');
         if (vidSlideshow) vidSlideshow.disabled = !canSlideshow;
@@ -2805,6 +2815,9 @@ const App = {
 
         // Initialise On This Day overlay
         if (typeof OnThisDay !== 'undefined') OnThisDay.init();
+
+        // Initialise Share dialog
+        if (typeof Share !== 'undefined') Share.init();
 
         // Determine initial screen
         this._determineInitialScreen();

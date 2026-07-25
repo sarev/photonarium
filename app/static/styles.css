@@ -659,7 +659,9 @@ a:hover {
     }
 
     #btn-reveal-folder:hover,
-    #btn-vid-reveal-folder:hover {
+    #btn-vid-reveal-folder:hover,
+    #btn-share:hover,
+    #btn-vid-share:hover {
         background-color: var(--color-pastel-green-bg);
         color: var(--color-pastel-green-fg);
     }
