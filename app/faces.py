@@ -3087,6 +3087,110 @@ def batch_identify_faces(
     }
 
 
+def _match_candidates_to_people(
+    similarities: np.ndarray,
+    known_ids: list[tuple[str, str]],
+    candidate_ids: list[str],
+    candidate_person_ids: dict[str, str | None],
+    person_thresholds: dict[str, float | None],
+    ignored_person_ids: set[str],
+    threshold: float,
+) -> tuple[list[tuple[str, str, float]], list[str], dict[str, Any]]:
+    """Decide the person (if any) for each candidate face from a similarity matrix.
+
+    The single matching policy shared by the synchronous and asynchronous
+    reassessment paths — previously the async path used a bare argmax over all
+    known faces, so the same sweep could produce different assignments depending
+    on which code path triggered it.
+
+    Policy: for each candidate, take the best similarity per person, then try
+    people in descending order of similarity until one meets its per-person
+    threshold.  Named people are always tried before ignored people
+    (name == '-'): the '-' person is a holding pen, so a real named match is
+    preferred regardless of raw similarity.  A candidate already assigned to
+    the person that wins needs no change; an assigned candidate for whom nobody
+    wins is ejected back to unknown.
+
+    Args:
+        similarities: (num_candidates, num_known) cosine-similarity matrix.
+        known_ids: (face_id, person_id) per column of *similarities*.
+        candidate_ids: face_id per row of *similarities*.
+        candidate_person_ids: face_id -> currently assigned person (or None).
+        person_thresholds: person_id -> custom threshold (None = use global).
+        ignored_person_ids: ids of '-' people.
+        threshold: Global similarity threshold.
+
+    Returns:
+        (matched, unmatched, diagnostics) where matched is a list of
+        (face_id, person_id, similarity) assignments to apply, unmatched lists
+        currently-assigned faces that no longer meet any threshold, and
+        diagnostics holds {'retained': n, 'no_match_best': x} — the count of
+        candidates already correctly assigned, and the closest similarity among
+        candidates that matched nobody (for honest "no changes" logging).
+    """
+    # Pre-compute person -> known face indices for efficient per-person grouping
+    person_face_indices: dict[str, list[int]] = {}
+    for j, (_, pid) in enumerate(known_ids):
+        person_face_indices.setdefault(pid, []).append(j)
+
+    # Minimum possible threshold across all persons (cheap pre-filter)
+    custom_thresholds = [pt for pt in person_thresholds.values() if pt is not None]
+    min_threshold = min(custom_thresholds) if custom_thresholds else threshold
+    min_threshold = min(min_threshold, threshold)
+
+    matched: list[tuple[str, str, float]] = []
+    unmatched: list[str] = []
+    retained = 0
+    no_match_best = 0.0
+    for i, candidate_face_id in enumerate(candidate_ids):
+        # Yield GIL periodically so other threads (Flask request handlers)
+        # aren't starved during large reassessments.
+        if i % 200 == 199:
+            time.sleep(0)
+
+        current_person_id = candidate_person_ids.get(candidate_face_id)
+        row = similarities[i]
+
+        # Get best similarity per person
+        named_best: list[tuple[str, float]] = []
+        ignored_best: list[tuple[str, float]] = []
+        for pid, indices in person_face_indices.items():
+            best_sim = float(np.max(row[indices]))
+            if best_sim >= min_threshold:
+                if pid in ignored_person_ids:
+                    ignored_best.append((pid, best_sim))
+                else:
+                    named_best.append((pid, best_sim))
+
+        # Sort each group by similarity descending, named first
+        named_best.sort(key=lambda x: x[1], reverse=True)
+        ignored_best.sort(key=lambda x: x[1], reverse=True)
+
+        # Try named people first, then ignored as fallback
+        matched_this = False
+        for pid, best_sim in named_best + ignored_best:
+            pt = person_thresholds.get(pid)
+            eff_threshold = pt if pt is not None else threshold
+            if best_sim >= eff_threshold:
+                if current_person_id != pid:
+                    matched.append((candidate_face_id, pid, best_sim))
+                else:
+                    retained += 1
+                matched_this = True
+                break
+
+        if not matched_this:
+            if current_person_id is not None:
+                unmatched.append(candidate_face_id)
+            # Track the closest miss so "no changes" logging can report how
+            # near the best unmatched candidate came, rather than a matrix-wide
+            # maximum dominated by already-correct assignments.
+            if row.size:
+                no_match_best = max(no_match_best, float(np.max(row)))
+
+    return matched, unmatched, {'retained': retained, 'no_match_best': no_match_best}
+
+
 def reassess_unknown_faces(
     conn: SafeConnection,
     threshold: float = FACE_RECOGNITION_DEFAULT_THRESHOLD,
@@ -3123,13 +3227,19 @@ def reassess_unknown_faces(
         if row['name'] == '-':
             ignored_person_ids.add(row['id'])
 
-    # Get known embeddings
+    # Get known embeddings.  Reference faces are MANUALLY TAGGED ONLY — same
+    # anti-snowball rule as the full sweep.  Without this filter, a sequence of
+    # per-person sweeps (one fires after every manual tag) chains outward
+    # through its own auto-assignments: each sweep's conquests become the next
+    # sweep's reference faces, dragging in faces ever further from anything
+    # the user actually vouched for.
     if person_id:
         cursor = conn.execute(
             """SELECT f.id, f.person_id, f.embedding
                FROM faces f
                JOIN images i ON f.image_id = i.id
-               WHERE f.person_id = ? AND f.suppressed = 0 AND i.deleted = 0""",
+               WHERE f.person_id = ? AND f.suppressed = 0
+                 AND f.manually_tagged = 1 AND i.deleted = 0""",
             (person_id,),
         )
         known_embeddings = []
@@ -3231,68 +3341,17 @@ def reassess_unknown_faces(
     # Embeddings are L2-normalised, so dot product = cosine similarity
     similarities = candidate_matrix @ known_matrix.T
 
-    # Pre-compute person -> known face indices for efficient per-person grouping
-    person_face_indices: dict[str, list[int]] = {}
-    for j, (_, pid) in enumerate(known_ids):
-        person_face_indices.setdefault(pid, []).append(j)
-
-    # Minimum possible threshold across all persons (for early termination)
-    custom_thresholds = [pt for pt in person_thresholds.values() if pt is not None]
-    min_threshold = min(custom_thresholds) if custom_thresholds else threshold
-    min_threshold = min(min_threshold, threshold)
-
-    # Find best match for each candidate face.
-    # For each candidate, group similarities by person and try each person
-    # in descending order until one meets its per-person threshold.  This
-    # prevents a high-threshold person from "blocking" a lower-threshold
-    # person who would have matched.
-    #
-    # Named people are always tried before ignored people (name == '-').
-    # The '-' person is a holding pen for unsorted faces, so a real named
-    # match is always preferred.  Ignored people are only matched as a
-    # fallback when no named person meets their threshold.
-    matched = []
-    unmatched = []  # Faces that need to be unassigned (below all thresholds)
-    for i, candidate_face_id in enumerate(candidate_ids):
-        # Yield GIL periodically so other threads (Flask request handlers)
-        # aren't starved during large reassessments.
-        if i % 200 == 199:
-            time.sleep(0)
-
-        current_person_id = candidate_person_ids.get(candidate_face_id)
-        row = similarities[i]
-
-        # Get best similarity per person
-        named_best: list[tuple[str, float]] = []
-        ignored_best: list[tuple[str, float]] = []
-        for pid, indices in person_face_indices.items():
-            best_sim = float(np.max(row[indices]))
-            if best_sim >= min_threshold:
-                if pid in ignored_person_ids:
-                    ignored_best.append((pid, best_sim))
-                else:
-                    named_best.append((pid, best_sim))
-
-        # Sort each group by similarity descending, named first
-        named_best.sort(key=lambda x: x[1], reverse=True)
-        ignored_best.sort(key=lambda x: x[1], reverse=True)
-
-        # Try named people first, then ignored as fallback
-        matched_this = False
-        for pid, best_sim in named_best + ignored_best:
-            pt = person_thresholds.get(pid)
-            eff_threshold = pt if pt is not None else threshold
-            if best_sim >= eff_threshold:
-                if current_person_id != pid:
-                    matched.append((candidate_face_id, pid, best_sim))
-                matched_this = True
-                break
-
-        if not matched_this and current_person_id is not None:
-            unmatched.append(candidate_face_id)
-
-    # Compute overall max similarity for diagnostics (useful when no matches)
-    overall_max_similarity = float(np.max(similarities)) if similarities.size > 0 else 0.0
+    # Decide assignments (named-before-ignored policy, per-person thresholds) —
+    # shared with the async path so both produce identical decisions.
+    matched, unmatched, diag = _match_candidates_to_people(
+        similarities,
+        known_ids,
+        candidate_ids,
+        candidate_person_ids,
+        person_thresholds,
+        ignored_person_ids,
+        threshold,
+    )
 
     # Log summary (single INFO line)
     if matched or unmatched:
@@ -3306,10 +3365,14 @@ def reassess_unknown_faces(
             f'Face reassessment: {", ".join(log_parts)} of {len(candidate_ids)} candidates (threshold={threshold:.2f})'
         )
     else:
+        # The "closest non-match" is the best similarity among candidates that
+        # matched nobody — NOT a matrix-wide maximum, which is dominated by
+        # already-correct assignments and reads like a missed match.
         logger.info(
-            f'Face reassessment: no matches from {len(candidate_ids)} candidates '
+            f'Face reassessment: no changes needed for {len(candidate_ids)} candidates '
             f'against {len(known_ids)} known faces '
-            f'(best similarity: {overall_max_similarity:.3f}, threshold: {threshold:.2f})'
+            f'({diag["retained"]} already correctly assigned; '
+            f'closest non-match: {diag["no_match_best"]:.3f}, threshold: {threshold:.2f})'
         )
 
     # ── WRITE phase (lock): apply matches in a single batched transaction ──
@@ -3654,20 +3717,26 @@ def reassess_unknown_faces_async(
             # (concurrent under WAL, no lock needed).
             logger.debug('Async reassessment: READ phase started')
 
-            # Load per-person thresholds
+            # Load per-person thresholds and identify ignored people (name == '-')
             person_thresholds: dict[str, float | None] = {}
-            cursor = db.safe_conn.execute('SELECT id, recognition_threshold FROM people')
+            ignored_person_ids: set[str] = set()
+            cursor = db.safe_conn.execute('SELECT id, name, recognition_threshold FROM people')
             for row in cursor.fetchall():
                 person_thresholds[row['id']] = row['recognition_threshold']
+                if row['name'] == '-':
+                    ignored_person_ids.add(row['id'])
 
-            # Get known embeddings
+            # Get known embeddings.  Reference faces are MANUALLY TAGGED ONLY —
+            # same anti-snowball rule as the full sweep (see
+            # reassess_unknown_faces): without the filter, the sweep that fires
+            # after each manual tag chains through its own auto-assignments.
             if person_id:
                 cursor = db.safe_conn.execute(
                     """SELECT f.id, f.person_id, f.embedding
                        FROM faces f
                        JOIN images i ON f.image_id = i.id
                        WHERE f.person_id = ? AND f.suppressed = 0
-                         AND i.deleted = 0""",
+                         AND f.manually_tagged = 1 AND i.deleted = 0""",
                     (person_id,),
                 )
                 known_embeddings = []
@@ -3756,53 +3825,29 @@ def reassess_unknown_faces_async(
             _compute_start = time.time()  # [PERF-LOG]
             similarities = candidate_matrix @ known_matrix.T
 
-            # Vectorized best-match finding.  Replaces a pure-Python loop over
-            # all candidates (50K+ at scale) with bulk numpy operations that
-            # release the GIL during computation.
             n_candidates = len(candidate_ids)
             n_known = len(known_ids)
 
-            # Best match index and score for every candidate (one numpy call)
-            best_indices = np.argmax(similarities, axis=1)  # shape: (N,)
-            best_scores = similarities[np.arange(n_candidates), best_indices]  # shape: (N,)
+            # Decide assignments with the same policy as the synchronous path
+            # (named people before ignored, per-person thresholds).  Previously
+            # this was a bare argmax over all known faces, so the async sweep
+            # could e.g. hand a face to '-' that the pipeline sweep would give
+            # to a named person — the two paths fought each other.
+            matched, unmatched, _diag = _match_candidates_to_people(
+                similarities,
+                known_ids,
+                candidate_ids,
+                candidate_person_ids,
+                person_thresholds,
+                ignored_person_ids,
+                threshold,
+            )
 
-            # Build per-known-face threshold vector (one entry per column in
-            # similarities).  Looked up from person_thresholds dict, falling
-            # back to global threshold.  Built once, O(M) where M = known faces.
-            known_thresholds = np.array(
-                [threshold if person_thresholds.get(pid) is None else person_thresholds[pid] for _, pid in known_ids],
-                dtype=np.float32,
-            )  # shape: (M,)
-
-            # Look up effective threshold for each candidate's best match
-            effective_thresholds = known_thresholds[best_indices]  # shape: (N,) — numpy fancy indexing
-
-            # Filter: which candidates beat their threshold?
-            above = best_scores >= effective_thresholds
-            match_indices = np.where(above)[0]
-
-            matched = []
-            for i in match_indices:
-                face_id = candidate_ids[i]
-                new_person_id = known_ids[best_indices[i]][1]
-                current_person_id = candidate_person_ids.get(face_id)
-                # Skip if already assigned to this person (no change needed)
-                if current_person_id == new_person_id:
-                    continue
-                matched.append((face_id, new_person_id, float(best_scores[i])))
-
-            # Build list of faces that need to be unassigned (currently assigned but
-            # no longer meet any threshold). Only applicable for full sweep.
-            unmatched = []
-            if not person_id:  # Full sweep mode
-                below = ~above
-                below_indices = np.where(below)[0]
-                for i in below_indices:
-                    face_id = candidate_ids[i]
-                    current_person_id = candidate_person_ids.get(face_id)
-                    # Only unassign if currently assigned to someone
-                    if current_person_id is not None:
-                        unmatched.append(face_id)
+            # Person-scoped sweeps only pull faces toward the person — they
+            # must not eject other people's faces, whose thresholds were not
+            # meaningfully evaluated against a single-person reference set.
+            if person_id:
+                unmatched = []
 
             # [PERF-LOG] COMPUTE phase timing and stats
             _compute_elapsed = time.time() - _compute_start
