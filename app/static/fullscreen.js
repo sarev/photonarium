@@ -257,11 +257,27 @@ const Fullscreen = {
         // Build the quick-rating palette once (its contents never change)
         this._buildRatingGrid();
 
-        // Clear the "dismissed" state when the pointer leaves the rating widget,
-        // so hovering again reopens the popup.  It is force-closed on select,
-        // navigation and exit (see _dismissRatingPopup).
+        // Clear the "dismissed" state (set on select and navigation — see
+        // _dismissRatingPopup) so the popup can reopen.  Two triggers:
+        //
+        // * mouseleave — the natural "come back later" reset.
+        // * mousemove WITHIN the widget — essential, not an optimisation:
+        //   navigation arms the dismissal while the pointer is parked on the
+        //   trigger, and if the pointer then moves onto the trigger without
+        //   ever crossing the widget boundary, no mouseleave ever fires and
+        //   the popup is stuck closed under an actively hovering pointer.
+        //   Motion inside the widget signals fresh intent; a genuinely parked
+        //   pointer generates no mousemoves, so rapid arrow-key flipping still
+        //   doesn't flash the popup.  Moves over the popup itself are ignored
+        //   — after a selection the popup fades out under the pointer, and
+        //   the click's own micro-jitter must not instantly reopen it.
         this._els.rating?.addEventListener('mouseleave', () => {
             this._els.rating.classList.remove('fs-rating-dismissed');
+        });
+        this._els.rating?.addEventListener('mousemove', (e) => {
+            if (!this._els.ratingPopup?.contains(e.target)) {
+                this._els.rating.classList.remove('fs-rating-dismissed');
+            }
         });
 
         // Bind button clicks (permanent, not per-session)
@@ -411,7 +427,17 @@ const Fullscreen = {
     _dismissRatingPopup() {
         const el = this._els.rating;
         if (!el) return;
-        el.classList.add('fs-rating-dismissed');
+        // The dismissed class exists solely to stop the popup hanging open
+        // under a pointer parked on the widget — so only arm it when the
+        // pointer is actually inside.  Arming it unconditionally left the
+        // popup suppressed after keyboard/swipe navigation (nothing fires the
+        // clearing mouseleave until the pointer visits and leaves the widget),
+        // which is why hovering seemed to need a mouse-off/mouse-on dance.
+        if (el.matches(':hover')) {
+            el.classList.add('fs-rating-dismissed');
+        } else {
+            el.classList.remove('fs-rating-dismissed');
+        }
         if (el.contains(document.activeElement)) {
             document.activeElement.blur();
         }
@@ -832,7 +858,13 @@ const Fullscreen = {
             ? knownIndex
             : this.state.imageList.findIndex(i => i.id === imageId);
 
-        const metadata = img.basename ? img : (AppState.images.getById(imageId) || img);
+        // Always prefer the live AppState object over the imageList entry: the
+        // list holds references captured at open, and delta sync REPLACES cache
+        // objects — so a list entry goes stale the moment any backend event
+        // lands, and mutable fields (rating, description) read from it show
+        // pre-edit values.  The list entry is only a fallback for images not
+        // (yet) in the cache.
+        const metadata = AppState.images.getById(imageId) || img;
         const isVideo = metadata.media_type === 'video';
 
         if (isVideo) {
